@@ -22,8 +22,8 @@
       </div>
       <label>Folder or drive</label>
       <div class="path-row">
-        <input id="importPath" placeholder="Choose a folder…">
-        <button id="browseImport" class="secondary">Browse</button>
+        <input id="importPath" placeholder="Paste a path, e.g. C:\Users\you\Pictures">
+        <button id="chooseImport" class="secondary">Choose…</button>
       </div>
       <label>Source name <span>optional</span></label>
       <input id="sourceName" placeholder="Old laptop, Phone backup, Photos…">
@@ -31,11 +31,22 @@
     </section>
 
     <section class="card backup-card">
-      <div class="section-title row">
-        <div><h2>Backup drives</h2><p>Offline disaster-recovery copies managed by Mochimono.</p></div>
-        <button id="refreshDrives" class="secondary small">Refresh</button>
+      <div class="section-title">
+        <div><h2>Backup locations</h2><p>Use any writable folder — including a folder on C: for testing.</p></div>
       </div>
-      <div id="drives" class="drives"><div class="muted">Looking for drives…</div></div>
+      <label>New backup folder</label>
+      <div class="path-row">
+        <input id="backupLocation" placeholder="Paste a path, e.g. C:\MochimonoBackup">
+        <button id="chooseBackup" class="secondary">Choose…</button>
+      </div>
+      <button id="addBackup" class="primary wide">Use this folder as a backup</button>
+      <p class="safe-note"><b>Safe by design:</b> Mochimono never formats, partitions, or erases a drive. It only creates a <code>.mochimono</code> folder inside the location you choose.</p>
+
+      <div class="section-title row backup-list-title">
+        <div><h3>Your backup locations</h3></div>
+        <button id="refreshBackups" class="secondary small">Refresh</button>
+      </div>
+      <div id="backups" class="drives"><div class="muted">Looking for backups…</div></div>
     </section>
 
     <section class="card activity-card">
@@ -58,29 +69,14 @@
     </section>
   </main>
 
-  <dialog id="folderDialog">
-    <div class="dialog-head">
-      <div><h3>Choose folder</h3><div id="pickerPath" class="picker-path"></div></div>
-      <button class="icon" data-close>×</button>
-    </div>
-    <div id="pickerRoots" class="root-pills"></div>
-    <div id="pickerDirs" class="folder-list"></div>
-    <div class="dialog-actions">
-      <button id="pickerUp" class="secondary">Up</button>
-      <div class="spacer"></div>
-      <button data-close class="secondary">Cancel</button>
-      <button id="pickerChoose" class="primary">Choose this folder</button>
-    </div>
-  </dialog>
-
   <dialog id="backupDialog">
     <div class="dialog-head">
       <div><h3>Initialize backup</h3><div id="backupPathLabel" class="picker-path"></div></div>
       <button class="icon" data-close>×</button>
     </div>
     <label>Name</label>
-    <input id="backupName" placeholder="8TB Backup">
-    <label>What should this drive protect?</label>
+    <input id="backupName" placeholder="Test Backup">
+    <label>What should this backup protect?</label>
     <label class="check"><input id="backupEverything" type="checkbox" checked> Everything</label>
     <div id="backupTypes" class="type-grid disabled">
       <label class="check"><input type="checkbox" value="image"> Photos / images</label>
@@ -90,6 +86,7 @@
       <label class="check"><input type="checkbox" value="application"> Documents / apps</label>
       <label class="check"><input type="checkbox" value="other"> Other</label>
     </div>
+    <p class="safe-note compact">This does not format or erase anything. Mochimono only writes inside <code>.mochimono</code> in this folder.</p>
     <div class="dialog-actions">
       <div class="spacer"></div>
       <button data-close class="secondary">Cancel</button>
