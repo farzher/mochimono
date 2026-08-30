@@ -6,11 +6,11 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; }
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 button { border: 0; border-radius: 10px; padding: 10px 14px; background: #171717; color: white; cursor: pointer; }
 button.quiet { background: #ebe9e2; color: #333; }
 button.danger { background: #a73b32; }
-input { border: 1px solid #d8d5cb; border-radius: 10px; padding: 10px 12px; background: white; min-width: 240px; }
+input, select { border: 1px solid #d8d5cb; border-radius: 10px; padding: 10px 12px; background: white; min-width: 240px; color: #171717; }
 .shell { width: min(1240px, calc(100% - 32px)); margin: 0 auto; padding: 36px 0 80px; }
 header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 28px; }
 h1 { margin: 0; font-size: 30px; letter-spacing: -0.04em; }
@@ -30,7 +30,9 @@ header p { margin: 4px 0 0; }
 .section-head { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 12px; }
 .section-head p { margin: 4px 0 0; font-size: 13px; }
 .library-head input { width: min(380px, 45vw); }
-.toolbar { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 8px 0 15px; border-bottom: 1px solid #efede7; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 0 15px; border-bottom: 1px solid #efede7; }
+.library-filters { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-width: 0; }
+.library-filters select { min-width: 180px; max-width: 320px; padding: 7px 30px 7px 10px; font-size: 12px; background: #f8f7f3; }
 .segmented { display: flex; flex-wrap: wrap; gap: 5px; }
 .segmented button { background: #f1efe9; color: #605d56; padding: 7px 10px; font-size: 12px; }
 .segmented button.active { background: #222; color: #fff; }
@@ -89,7 +91,8 @@ dialog::backdrop { background: rgba(28,26,23,.44); }
 @media (max-width: 780px) {
   .stats { grid-template-columns: repeat(2, 1fr); }
   .section-head { align-items: stretch; flex-direction: column; }
-  .section-head input, .library-head input { width: 100%; min-width: 0; }
+  .section-head input, .library-head input, .library-filters select { width: 100%; max-width: none; min-width: 0; }
+  .library-filters { align-items: stretch; flex-direction: column; }
   .files.grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .thumb { height: 130px; }
   .file-row { grid-template-columns: 62px minmax(0, 1fr) 70px; }
