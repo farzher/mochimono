@@ -28,7 +28,6 @@ const settings = {
   device: String(saved.device || DEVICE),
   folders: Array.isArray(saved.folders) ? saved.folders.map(item => ({
     path: resolve(String(item.path || item)),
-    device: String(item.device || saved.device || DEVICE),
     importId: Number(item.importId) || null,
     lastSynced: item.lastSynced ? String(item.lastSynced) : null
   })) : [],
@@ -225,7 +224,7 @@ async function uploadFile(record, onProgress) {
   canceled();
 }
 
-async function syncFiles(folder, device, update, importId = null) {
+async function syncFiles(folder, update, importId = null) {
   const root = resolve(folder);
   const info = await stat(root);
   if (!info.isDirectory()) throw new Error(`${root} is not a directory`);
@@ -305,7 +304,7 @@ async function syncFiles(folder, device, update, importId = null) {
   }
 
   update({ phase: 'Saving', path: root, indeterminate: true, current: '' });
-  const source = String(device || settings.device || DEVICE);
+  const source = settings.device;
   const created = importId ? { id: importId } : await api('/api/imports', { method: 'POST', body: { sourceName: source } });
   const accepted = hashed.filter(record => !ignored.has(record.hash));
 
@@ -341,7 +340,7 @@ async function syncFiles(folder, device, update, importId = null) {
 }
 
 async function syncFolder(folder, update) {
-  const result = await syncFiles(folder.path, folder.device, update, folder.importId);
+  const result = await syncFiles(folder.path, update, folder.importId);
   folder.importId = result.importId;
   folder.lastSynced = now();
   await persistSettings();
@@ -793,10 +792,17 @@ async function handleApi(req, res, url) {
     settings.server = String(body.server || settings.server).trim().replace(/\/$/, '');
     if (body.token !== undefined && body.token !== '') settings.token = String(body.token);
     if (body.device !== undefined) {
-      settings.device = String(body.device || DEVICE).trim() || DEVICE;
-      settings.folders.forEach(folder => { folder.device = settings.device; });
+      const device = String(body.device || DEVICE).trim() || DEVICE;
+      const changed = device !== settings.device;
+      settings.device = device;
+      await persistSettings();
+      if (changed && settings.token) {
+        const ids = [...new Set(settings.folders.map(folder => folder.importId).filter(Boolean))];
+        await Promise.allSettled(ids.map(id => api(`/api/imports/${id}`, { method: 'POST', body: { sourceName: device } })));
+      }
+    } else {
+      await persistSettings();
     }
-    await persistSettings();
     if (settings.token) settings.folders.forEach(folder => queueFolderSync(folder.path));
     return json(res, 200, { ok: true });
   }
@@ -817,13 +823,9 @@ async function handleApi(req, res, url) {
     try { info = await stat(root); } catch { return json(res, 400, { error: 'Folder not found' }); }
     if (!info.isDirectory()) return json(res, 400, { error: 'Choose a folder' });
 
-    const device = String(body.device || settings.device || DEVICE).trim() || DEVICE;
-    settings.device = device;
     let folder = folderFor(root);
-    if (folder) {
-      folder.device = device;
-    } else {
-      folder = { path: root, device, importId: null, lastSynced: null };
+    if (!folder) {
+      folder = { path: root, importId: null, lastSynced: null };
       settings.folders.push(folder);
     }
     await persistSettings();
