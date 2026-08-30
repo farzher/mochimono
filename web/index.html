@@ -54,6 +54,7 @@
           </details>
           <div id="activeFilters" class="active-filters"></div>
           <div id="mediaSizeControl" class="media-sizes" aria-label="Preview size">
+            <input id="mediaSize" type="range" min="96" max="300" value="158" hidden>
             <button data-media-size="112" title="Small">S</button>
             <button data-media-size="158" title="Medium" class="active">M</button>
             <button data-media-size="220" title="Large">L</button>
@@ -100,5 +101,6 @@
   </div>
 
   <script type="module" src="/app.js"></script>
+  <script type="module" src="/gallery.js"></script>
 </body>
 </html>
