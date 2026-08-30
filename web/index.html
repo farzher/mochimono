@@ -28,7 +28,7 @@
     </section>
 
     <div id="app" hidden>
-      <section id="library-card" class="library">
+      <section class="library">
         <div class="commandbar">
           <input id="search" class="search" type="search" placeholder="Search">
           <select id="source" aria-label="Source"><option value="">All sources</option></select>
@@ -40,13 +40,22 @@
             <option value="application">Docs</option>
             <option value="other">Other</option>
           </select>
-          <button id="inbox" class="chip">Inbox</button>
-          <button id="unbacked" class="chip">Unbacked</button>
           <select id="sort" aria-label="Sort">
             <option value="date-desc">Newest</option>
             <option value="date-asc">Oldest</option>
             <option value="size-desc">Largest</option>
           </select>
+          <details id="filterMenu" class="filter-menu">
+            <summary>Filter</summary>
+            <div class="filter-popover">
+              <label><input id="filterInbox" type="checkbox"><span id="filterInboxLabel">Inbox</span></label>
+              <label><input id="filterUnprotected" type="checkbox"><span id="filterUnprotectedLabel">Unprotected</span></label>
+            </div>
+          </details>
+          <div id="activeFilters" class="active-filters"></div>
+          <label id="mediaSizeControl" class="media-size" title="Preview size">
+            <span>−</span><input id="mediaSize" type="range" min="96" max="260" step="2" value="158" aria-label="Preview size"><span>+</span>
+          </label>
           <div id="views" class="views" aria-label="View">
             <button data-view="grid" class="active" title="Grid" aria-label="Grid">▦</button>
             <button data-view="list" title="List" aria-label="List">☷</button>
