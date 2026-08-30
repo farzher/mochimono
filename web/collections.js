@@ -160,19 +160,18 @@ function applySmartSpec(spec = {}) {
   window.mochimonoSetCollectionHashes?.(null);
   if (currentView() === 'folders') views.querySelector('[data-view="grid"]')?.click();
 
-  const normalize = window.mochimonoSearch?.normalize || (value => String(value || '').toLowerCase().trim());
-  const wantedSource = normalize(spec.sourceName || '');
-  const sourceOption = wantedSource
-    ? [...source.options].find(option => option.value && normalize(option.textContent) === wantedSource)
-    : null;
-  source.value = sourceOption?.value || '';
+  // Keep Smart Collection source rules inside the query. This makes them
+  // independent of when source dropdown options happen to finish loading.
+  source.value = '';
   source.dispatchEvent(new Event('change', { bubbles: true }));
-
   typeFilter.value = ['', 'media', 'image', 'video', 'audio', 'application', 'other'].includes(spec.type) ? spec.type : '';
   typeFilter.dispatchEvent(new Event('change', { bubbles: true }));
   sort.value = ['date-desc', 'date-asc', 'size-desc'].includes(spec.sort) ? spec.sort : 'date-desc';
   sort.dispatchEvent(new Event('change', { bubbles: true }));
-  window.mochimonoSearch?.setRaw?.(spec.query || '', true);
+
+  const sourceName = String(spec.sourceName || '').replace(/["']/g, ' ').replace(/\s+/g, ' ').trim();
+  const query = [spec.query || '', sourceName ? `source:"${sourceName}"` : ''].filter(Boolean).join(' ').trim();
+  window.mochimonoSearch?.setRaw?.(query, true);
   applyingSmart = false;
 }
 
