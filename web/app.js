@@ -19,6 +19,7 @@ let searchIndex = new Map();
 let renderOffset = 0;
 let renderLimit = PAGE;
 let hasMore = false;
+let hasPrevious = false;
 let type = '';
 let importId = '';
 let inboxOnly = false;
@@ -41,6 +42,12 @@ let thumbBusy = false;
 const thumbQueue = [];
 const thumbQueued = new Set();
 const thumbUrls = new Map();
+
+const topScrollSentinel = document.createElement('div');
+topScrollSentinel.id = 'top-scroll-sentinel';
+topScrollSentinel.style.height = '1px';
+topScrollSentinel.hidden = true;
+$('#files').before(topScrollSentinel);
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
@@ -402,7 +409,13 @@ function sortFiles(files) {
 
 function updateWindow() {
   loaded = filtered.slice(renderOffset, renderOffset + renderLimit);
+  hasPrevious = renderOffset > 0;
   hasMore = renderOffset + renderLimit < filtered.length;
+}
+
+function syncSentinels() {
+  topScrollSentinel.hidden = !hasPrevious || view === 'folders';
+  $('#scroll-sentinel').hidden = !hasMore || view === 'folders';
 }
 
 function renderActiveFilters() {
@@ -438,12 +451,16 @@ function cardsHtml(files) {
   return files.map(file => view === 'grid' ? gridCard(file) : listRow(file)).join('');
 }
 
+function groupHtml(group) {
+  return `<section class="date-group" data-date-group="${group.key}"><h3 class="date-heading">${escapeHtml(group.label)}</h3><div class="${view === 'grid' ? 'date-grid' : 'date-list'}">${cardsHtml(group.files)}</div></section>`;
+}
+
 function renderFiles() {
   if (view === 'folders') return renderFolder();
   const element = $('#files');
   element.className = `files ${view}`;
   $('#folderbar').hidden = true;
-  $('#scroll-sentinel').hidden = !hasMore;
+  syncSentinels();
   if (!loaded.length) {
     const message = inboxOnly ? 'Inbox empty.' : unprotectedOnly ? 'All protected.' : 'No files.';
     element.innerHTML = `<div class="empty">${message}</div>`;
@@ -451,11 +468,7 @@ function renderFiles() {
     return;
   }
   if (sort.startsWith('date-')) {
-    element.innerHTML = dateGroups(loaded).map(group => `
-      <section class="date-group" data-date-group="${group.key}">
-        <h3 class="date-heading">${escapeHtml(group.label)}</h3>
-        <div class="${view === 'grid' ? 'date-grid' : 'date-list'}">${cardsHtml(group.files)}</div>
-      </section>`).join('');
+    element.innerHTML = dateGroups(loaded).map(groupHtml).join('');
   } else {
     element.innerHTML = view === 'grid'
       ? `<div class="date-grid flat-grid">${cardsHtml(loaded)}</div>`
@@ -472,8 +485,9 @@ function appendMore() {
   const next = filtered.slice(start, end);
   renderLimit += next.length;
   loaded = filtered.slice(renderOffset, renderOffset + renderLimit);
+  hasPrevious = renderOffset > 0;
   hasMore = renderOffset + renderLimit < filtered.length;
-  $('#scroll-sentinel').hidden = !hasMore;
+  syncSentinels();
   if (!next.length) return;
 
   if (sort.startsWith('date-')) {
@@ -482,7 +496,7 @@ function appendMore() {
       if (last?.dataset.dateGroup === group.key) {
         last.querySelector(view === 'grid' ? '.date-grid' : '.date-list').insertAdjacentHTML('beforeend', cardsHtml(group.files));
       } else {
-        $('#files').insertAdjacentHTML('beforeend', `<section class="date-group" data-date-group="${group.key}"><h3 class="date-heading">${escapeHtml(group.label)}</h3><div class="${view === 'grid' ? 'date-grid' : 'date-list'}">${cardsHtml(group.files)}</div></section>`);
+        $('#files').insertAdjacentHTML('beforeend', groupHtml(group));
       }
     }
   } else if (view === 'grid') {
@@ -492,6 +506,49 @@ function appendMore() {
   }
   loadThumbs(next).catch(console.warn);
   updateRailActive();
+}
+
+function prependMore() {
+  if (!hasPrevious || view === 'folders') return;
+  const element = $('#files');
+  const anchor = element.querySelector('[data-hash]');
+  const anchorHash = anchor?.dataset.hash;
+  const anchorTop = anchor?.getBoundingClientRect().top ?? 0;
+  const oldOffset = renderOffset;
+  const start = Math.max(0, oldOffset - PAGE);
+  const previous = filtered.slice(start, oldOffset);
+  if (!previous.length) return;
+
+  renderOffset = start;
+  renderLimit += previous.length;
+  loaded = filtered.slice(renderOffset, renderOffset + renderLimit);
+  hasPrevious = renderOffset > 0;
+  hasMore = renderOffset + renderLimit < filtered.length;
+  syncSentinels();
+
+  if (sort.startsWith('date-')) {
+    const groups = dateGroups(previous);
+    const first = element.querySelector('.date-group:first-of-type');
+    const tail = groups.at(-1);
+    if (first && tail?.key === first.dataset.dateGroup) {
+      groups.pop();
+      first.querySelector(view === 'grid' ? '.date-grid' : '.date-list').insertAdjacentHTML('afterbegin', cardsHtml(tail.files));
+    }
+    if (groups.length) element.insertAdjacentHTML('afterbegin', groups.map(groupHtml).join(''));
+  } else if (view === 'grid') {
+    element.querySelector('.flat-grid')?.insertAdjacentHTML('afterbegin', cardsHtml(previous));
+  } else {
+    element.insertAdjacentHTML('afterbegin', cardsHtml(previous));
+  }
+
+  loadThumbs(previous).catch(console.warn);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (anchorHash) {
+      const restored = element.querySelector(`[data-hash="${CSS.escape(anchorHash)}"]`);
+      if (restored) window.scrollBy(0, restored.getBoundingClientRect().top - anchorTop);
+    }
+    updateRailActive();
+  }));
 }
 
 function jumpToIndex(index, smooth = true) {
@@ -656,6 +713,7 @@ function folderBreadcrumb() {
 function renderFolder() {
   const element = $('#files');
   element.className = 'files folders';
+  topScrollSentinel.hidden = true;
   $('#scroll-sentinel').hidden = true;
   $('#dateRail').hidden = true;
   document.documentElement.classList.remove('library-scroll');
@@ -946,6 +1004,10 @@ $('#files').addEventListener('load', event => {
 $('#files').addEventListener('loadeddata', event => {
   if (event.target instanceof HTMLVideoElement) learnMedia(event.target, event.target.videoWidth, event.target.videoHeight);
 }, true);
+
+new IntersectionObserver(entries => {
+  if (entries.some(entry => entry.isIntersecting)) prependMore();
+}, { rootMargin: '700px 0px' }).observe(topScrollSentinel);
 
 new IntersectionObserver(entries => {
   if (entries.some(entry => entry.isIntersecting)) appendMore();
