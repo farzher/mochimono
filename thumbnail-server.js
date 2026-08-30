@@ -16,6 +16,7 @@ const THUMB_VERSION = 1;
 const MAX_THUMB_BYTES = 5 * 1024 * 1024;
 const PRIORITY_WINDOW_MS = 20_000;
 const db = openCatalog(join(DATA_DIR, 'catalog.sqlite'));
+const uploadLocks = new Map();
 
 const thumbPath = hash => join(DATA_DIR, 'thumbs', hash.slice(0, 2), `${hash}.webp`);
 const now = () => new Date().toISOString();
@@ -125,15 +126,16 @@ async function serveThumbnail(req, res, hash) {
   }
 
   const etag = `"${hash}-thumb-${THUMB_VERSION}"`;
+  const cacheControl = 'private, max-age=31536000, immutable';
   if (req.headers['if-none-match'] === etag) {
-    res.writeHead(304, { etag, 'cache-control': 'private, max-age=86400' });
+    res.writeHead(304, { etag, 'cache-control': cacheControl });
     return res.end();
   }
 
   res.writeHead(200, {
     'content-type': row.mime,
     'content-length': info.size,
-    'cache-control': 'private, max-age=86400',
+    'cache-control': cacheControl,
     etag,
     'x-mochimono-width': row.width,
     'x-mochimono-height': row.height,
@@ -297,30 +299,40 @@ async function uploadThumbnail(req, res, hash) {
   const mime = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
   if (mime !== 'image/webp') return json(res, 415, { error: 'Thumbnail must be image/webp' });
 
-  const path = thumbPath(hash);
-  const size = await writeThumbnail(req, path);
-  const width = integerHeader(req, 'x-mochimono-width');
-  const height = integerHeader(req, 'x-mochimono-height');
-  const duration = durationHeader(req);
-  db.prepare(`
-    INSERT INTO thumbnails(object_hash, version, mime, size, width, height, duration, created_at)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(object_hash) DO UPDATE SET
-      version = excluded.version,
-      mime = excluded.mime,
-      size = excluded.size,
-      width = excluded.width,
-      height = excluded.height,
-      duration = excluded.duration,
-      created_at = excluded.created_at
-  `).run(hash, THUMB_VERSION, mime, size, width, height, duration, now());
-  db.prepare('DELETE FROM thumbnail_requests WHERE object_hash = ?').run(hash);
+  const previous = uploadLocks.get(hash) || Promise.resolve();
+  const operation = previous.catch(() => {}).then(async () => {
+    const path = thumbPath(hash);
+    const size = await writeThumbnail(req, path);
+    const width = integerHeader(req, 'x-mochimono-width');
+    const height = integerHeader(req, 'x-mochimono-height');
+    const duration = durationHeader(req);
+    db.prepare(`
+      INSERT INTO thumbnails(object_hash, version, mime, size, width, height, duration, created_at)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(object_hash) DO UPDATE SET
+        version = excluded.version,
+        mime = excluded.mime,
+        size = excluded.size,
+        width = excluded.width,
+        height = excluded.height,
+        duration = excluded.duration,
+        created_at = excluded.created_at
+    `).run(hash, THUMB_VERSION, mime, size, width, height, duration, now());
+    db.prepare('DELETE FROM thumbnail_requests WHERE object_hash = ?').run(hash);
 
-  const sourceMime = String(req.headers['x-mochimono-source-mime'] || '').slice(0, 200);
-  if (sourceMime && sourceMime !== 'application/octet-stream') {
-    db.prepare("UPDATE objects SET mime = ? WHERE hash = ? AND mime = 'application/octet-stream'").run(sourceMime, hash);
+    const sourceMime = String(req.headers['x-mochimono-source-mime'] || '').slice(0, 200);
+    if (sourceMime && sourceMime !== 'application/octet-stream') {
+      db.prepare("UPDATE objects SET mime = ? WHERE hash = ? AND mime = 'application/octet-stream'").run(sourceMime, hash);
+    }
+    return { size, width, height, duration };
+  });
+  uploadLocks.set(hash, operation);
+  try {
+    const result = await operation;
+    return json(res, 201, { ok: true, hash, version: THUMB_VERSION, ...result });
+  } finally {
+    if (uploadLocks.get(hash) === operation) uploadLocks.delete(hash);
   }
-  return json(res, 201, { ok: true, hash, version: THUMB_VERSION, size, width, height, duration });
 }
 
 async function cleanupThumbnail(hash) {
