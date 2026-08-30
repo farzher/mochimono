@@ -5,6 +5,16 @@ const views = document.querySelector('#views');
 
 let restoring = false;
 let syncFrame = 0;
+let scopeCanceled = false;
+
+function currentView() {
+  return views.querySelector('[data-view].active')?.dataset.view || 'grid';
+}
+
+function clearFolderUi() {
+  folderbar.hidden = true;
+  folderbar.replaceChildren();
+}
 
 function folderState() {
   if (folderbar.hidden) return null;
@@ -32,7 +42,13 @@ function replaceFolderParams(state) {
 
 function syncUrl() {
   syncFrame = 0;
-  if (!restoring) replaceFolderParams(folderState());
+  if (restoring) return;
+  if (scopeCanceled && currentView() !== 'folders') {
+    clearFolderUi();
+    replaceFolderParams(null);
+    return;
+  }
+  replaceFolderParams(folderState());
 }
 
 function scheduleSync() {
@@ -59,9 +75,10 @@ async function restoreFolder() {
   const parts = String(url.searchParams.get('path') || '').split('/').filter(Boolean);
 
   restoring = true;
+  scopeCanceled = false;
   try {
     const option = await waitFor(() => [...source.options].find(item => item.textContent === wantedSource));
-    const desiredView = views.querySelector('[data-view].active')?.dataset.view || 'grid';
+    const desiredView = currentView();
     if (desiredView !== 'folders') views.querySelector('[data-view="folders"]')?.click();
 
     source.value = option.value;
@@ -85,11 +102,27 @@ async function restoreFolder() {
 }
 
 new MutationObserver(scheduleSync).observe(folderbar, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
-source.addEventListener('change', () => setTimeout(scheduleSync));
-views.addEventListener('click', () => setTimeout(scheduleSync));
-files.addEventListener('click', event => {
-  if (event.target.closest('[data-folder-source], [data-folder-name]')) setTimeout(scheduleSync);
+source.addEventListener('change', () => {
+  if (!restoring && currentView() !== 'folders') {
+    scopeCanceled = true;
+    clearFolderUi();
+    replaceFolderParams(null);
+  }
+  setTimeout(scheduleSync);
 });
-folderbar.addEventListener('click', () => setTimeout(scheduleSync));
+views.addEventListener('click', event => {
+  if (event.target.closest('[data-view="folders"]')) scopeCanceled = false;
+  setTimeout(scheduleSync);
+});
+files.addEventListener('click', event => {
+  if (event.target.closest('[data-folder-source], [data-folder-name]')) {
+    scopeCanceled = false;
+    setTimeout(scheduleSync);
+  }
+});
+folderbar.addEventListener('click', () => {
+  scopeCanceled = false;
+  setTimeout(scheduleSync);
+});
 
 restoreFolder().catch(console.warn);
