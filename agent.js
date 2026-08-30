@@ -494,16 +494,94 @@ function commandOutput(command, args) {
   });
 }
 
+const WINDOWS_FOLDER_PICKER = String.raw`
+$source = @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace Mochimono {
+  public static class FolderPicker {
+    private static readonly Guid FileOpenDialogClsid = new Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7");
+    private const uint PickFolders = 0x00000020;
+    private const uint ForceFileSystem = 0x00000040;
+    private const uint PathMustExist = 0x00000800;
+    private const uint FileSystemPath = 0x80058000;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct FilterSpec {
+      [MarshalAs(UnmanagedType.LPWStr)] public string Name;
+      [MarshalAs(UnmanagedType.LPWStr)] public string Spec;
+    }
+
+    [ComImport, Guid("42F85136-DB7E-439C-85F1-E4075D135FC8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IFileDialog {
+      [PreserveSig] int Show(IntPtr owner);
+      void SetFileTypes(uint count, [MarshalAs(UnmanagedType.LPArray)] FilterSpec[] filters);
+      void SetFileTypeIndex(uint index);
+      void GetFileTypeIndex(out uint index);
+      void Advise(IntPtr events, out uint cookie);
+      void Unadvise(uint cookie);
+      void SetOptions(uint options);
+      void GetOptions(out uint options);
+      void SetDefaultFolder(IShellItem folder);
+      void SetFolder(IShellItem folder);
+      void GetFolder(out IShellItem folder);
+      void GetCurrentSelection(out IShellItem item);
+      void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string name);
+      void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string name);
+      void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string title);
+      void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string text);
+      void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string label);
+      void GetResult(out IShellItem item);
+      void AddPlace(IShellItem item, uint alignment);
+      void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string extension);
+      void Close(int result);
+      void SetClientGuid(ref Guid guid);
+      void ClearClientData();
+      void SetFilter(IntPtr filter);
+    }
+
+    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellItem {
+      void BindToHandler(IntPtr bindContext, ref Guid bhid, ref Guid riid, out IntPtr result);
+      void GetParent(out IShellItem parent);
+      void GetDisplayName(uint format, out IntPtr name);
+      void GetAttributes(uint mask, out uint attributes);
+      void Compare(IShellItem item, uint hint, out int order);
+    }
+
+    public static string Pick() {
+      IFileDialog dialog = null;
+      IShellItem item = null;
+      IntPtr pathPointer = IntPtr.Zero;
+      try {
+        dialog = (IFileDialog)Activator.CreateInstance(Type.GetTypeFromCLSID(FileOpenDialogClsid));
+        uint options;
+        dialog.GetOptions(out options);
+        dialog.SetOptions(options | PickFolders | ForceFileSystem | PathMustExist);
+        dialog.SetTitle("Choose a folder for Mochimono");
+        dialog.SetOkButtonLabel("Select Folder");
+        if (dialog.Show(IntPtr.Zero) != 0) return null;
+        dialog.GetResult(out item);
+        item.GetDisplayName(FileSystemPath, out pathPointer);
+        return Marshal.PtrToStringUni(pathPointer);
+      } finally {
+        if (pathPointer != IntPtr.Zero) Marshal.FreeCoTaskMem(pathPointer);
+        if (item != null) Marshal.FinalReleaseComObject(item);
+        if (dialog != null) Marshal.FinalReleaseComObject(dialog);
+      }
+    }
+  }
+}
+'@
+Add-Type -TypeDefinition $source
+$path = [Mochimono.FolderPicker]::Pick()
+if ($path) { [Console]::Out.Write($path) }
+`;
+
 async function pickFolder() {
   if (platform() === 'win32') {
-    const script = [
-      'Add-Type -AssemblyName System.Windows.Forms',
-      '$d = New-Object System.Windows.Forms.FolderBrowserDialog',
-      '$d.Description = "Choose a folder for Mochimono"',
-      '$d.ShowNewFolderButton = $true',
-      'if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }'
-    ].join('; ');
-    return await commandOutput('powershell.exe', ['-NoProfile', '-STA', '-Command', script]) || null;
+    return await commandOutput('powershell.exe', ['-NoProfile', '-STA', '-Command', WINDOWS_FOLDER_PICKER]) || null;
   }
   if (platform() === 'darwin') {
     try { return await commandOutput('osascript', ['-e', 'POSIX path of (choose folder with prompt "Choose a folder for Mochimono")']) || null; }
