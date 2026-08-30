@@ -3,15 +3,19 @@ const $$ = selector => [...document.querySelectorAll(selector)];
 const login = $('#login');
 const app = $('#app');
 const logout = $('#logout');
-const PAGE = 120;
+const PAGE = 180;
+const CACHE_NAME = 'mochimono-catalog';
+const CACHE_VERSION = 1;
 
 let searchTimer;
+let catalog = [];
+let filtered = [];
 let loaded = [];
 let imports = [];
-let offset = 0;
+let sourceNames = new Map();
+let searchIndex = new Map();
+let displayCount = PAGE;
 let hasMore = false;
-let loadingMore = false;
-let fileLoadGeneration = 0;
 let type = '';
 let importId = '';
 let inboxOnly = false;
@@ -23,6 +27,8 @@ let folderImportId = '';
 let folderPath = '';
 let folderData = null;
 let dateScrollFrame = 0;
+let cacheMeta = null;
+let cacheDbPromise;
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
@@ -37,6 +43,83 @@ async function request(path, options = {}) {
     throw new Error(message);
   }
   return response.json();
+}
+
+const idbRequest = request => new Promise((resolve, reject) => {
+  request.onsuccess = () => resolve(request.result);
+  request.onerror = () => reject(request.error);
+});
+const idbDone = transaction => new Promise((resolve, reject) => {
+  transaction.oncomplete = resolve;
+  transaction.onerror = () => reject(transaction.error);
+  transaction.onabort = () => reject(transaction.error);
+});
+
+function openCache() {
+  if (!('indexedDB' in window)) return Promise.resolve(null);
+  if (!cacheDbPromise) {
+    cacheDbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(CACHE_NAME, CACHE_VERSION);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'hash' });
+        if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    }).catch(error => {
+      console.warn('IndexedDB unavailable', error);
+      return null;
+    });
+  }
+  return cacheDbPromise;
+}
+
+async function readCache() {
+  const db = await openCache();
+  if (!db) return null;
+  const transaction = db.transaction(['files', 'meta']);
+  const files = await idbRequest(transaction.objectStore('files').getAll());
+  const meta = await idbRequest(transaction.objectStore('meta').get('catalog'));
+  await idbDone(transaction);
+  return meta ? { files, meta } : null;
+}
+
+async function writeCache(files, meta) {
+  const db = await openCache();
+  if (!db) return;
+  const transaction = db.transaction(['files', 'meta'], 'readwrite');
+  const store = transaction.objectStore('files');
+  store.clear();
+  for (const file of files) store.put(file);
+  transaction.objectStore('meta').put({ key: 'catalog', ...meta });
+  await idbDone(transaction);
+}
+
+async function cachePut(file) {
+  const db = await openCache();
+  if (!db) return;
+  const transaction = db.transaction('files', 'readwrite');
+  transaction.objectStore('files').put(file);
+  await idbDone(transaction);
+}
+
+async function cacheDelete(hash) {
+  const db = await openCache();
+  if (!db) return;
+  const transaction = db.transaction('files', 'readwrite');
+  transaction.objectStore('files').delete(hash);
+  await idbDone(transaction);
+}
+
+async function cacheImports(nextImports) {
+  if (!cacheMeta) return;
+  cacheMeta = { ...cacheMeta, imports: nextImports };
+  const db = await openCache();
+  if (!db) return;
+  const transaction = db.transaction('meta', 'readwrite');
+  transaction.objectStore('meta').put({ key: 'catalog', ...cacheMeta });
+  await idbDone(transaction);
 }
 
 function formatBytes(bytes) {
@@ -61,6 +144,14 @@ function typeLabel(file) {
   return value === 'other' ? 'file' : value;
 }
 
+function matchesType(file) {
+  if (!type) return true;
+  const value = kind(file);
+  if (type === 'application') return value === 'application' || value === 'text';
+  if (type === 'other') return !['image', 'video', 'audio', 'text', 'application'].includes(value);
+  return value === type;
+}
+
 function preview(file, large = false) {
   const url = `/api/objects/${file.hash}`;
   if (kind(file) === 'image') return `<img ${large ? '' : 'loading="lazy"'} src="${url}" alt="${escapeHtml(file.filename)}">`;
@@ -68,9 +159,31 @@ function preview(file, large = false) {
   return `<div class="file-icon ${escapeHtml(kind(file))}">${icon}</div>`;
 }
 
+function normalizeFile(file) {
+  const importIds = Array.isArray(file.importIds)
+    ? file.importIds.map(Number).filter(Boolean)
+    : String(file.importIds || '').split(',').map(Number).filter(Boolean);
+  const date = new Date(file.fileDate || file.createdAt || 0);
+  return {
+    ...file,
+    size: Number(file.size) || 0,
+    importIds,
+    reviewed: Boolean(file.reviewed),
+    backupCount: Number(file.backupCount) || 0,
+    dateMs: Number.isNaN(date.getTime()) ? 0 : date.getTime()
+  };
+}
+
+function rebuildIndexes() {
+  sourceNames = new Map(imports.map(item => [Number(item.id), String(item.sourceName || '')]));
+  searchIndex = new Map(catalog.map(file => {
+    const names = file.importIds.map(id => sourceNames.get(id) || '').join(' ');
+    return [file.hash, `${file.filename || ''} ${file.originalPath || ''} ${file.searchText || ''} ${names}`.toLowerCase()];
+  }));
+}
+
 function dateValue(file) {
-  const value = new Date(file.fileDate || file.createdAt || 0);
-  return Number.isNaN(value.getTime()) ? new Date(0) : value;
+  return new Date(file.dateMs || 0);
 }
 
 function shortDate(file) {
@@ -87,15 +200,26 @@ function monthLabel(key) {
   return new Date(year, month - 1, 1).toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
 }
 
-function dateGroups() {
+function dateGroups(files) {
   const groups = [];
-  for (const file of loaded) {
+  for (const file of files) {
     const key = monthKey(file);
     const last = groups.at(-1);
     if (last?.key === key) last.files.push(file);
     else groups.push({ key, label: monthLabel(key), files: [file] });
   }
   return groups;
+}
+
+function timelineGroups() {
+  const result = [];
+  let previous;
+  filtered.forEach((file, index) => {
+    const key = monthKey(file);
+    if (key !== previous) result.push({ key, label: monthLabel(key), index });
+    previous = key;
+  });
+  return result;
 }
 
 function gridCard(file) {
@@ -111,21 +235,18 @@ function listRow(file) {
   return `
     <button class="file-row" data-hash="${file.hash}">
       <span class="type ${file.reviewed ? '' : 'inbox-type'}">${file.reviewed ? escapeHtml(typeLabel(file)) : 'inbox'}</span>
-      <div class="file-main">
-        <strong>${escapeHtml(file.filename)}</strong>
-        <span>${escapeHtml(file.originalPath || '')}</span>
-      </div>
+      <div class="file-main"><strong>${escapeHtml(file.filename)}</strong><span>${escapeHtml(file.originalPath || '')}</span></div>
       <span class="refs">${escapeHtml(shortDate(file))}</span>
       <span class="size">${formatBytes(file.size)}</span>
     </button>`;
 }
 
-function renderDateRail(groups) {
+function renderDateRail() {
   const rail = $('#dateRail');
-  const dateSorted = sort.startsWith('date-') && view !== 'folders';
-  rail.hidden = !dateSorted || !groups.length;
+  const groups = sort.startsWith('date-') && view !== 'folders' ? timelineGroups() : [];
+  rail.hidden = !groups.length;
   if (rail.hidden) return;
-  rail.innerHTML = groups.map(group => `<button data-date-jump="${group.key}">${escapeHtml(group.label.replace(' ', ' '))}</button>`).join('');
+  rail.innerHTML = groups.map(group => `<button data-date-jump="${group.key}" data-index="${group.index}">${escapeHtml(group.label.replace(' ', ' '))}</button>`).join('');
   updateDateRailActive();
 }
 
@@ -143,29 +264,51 @@ function updateDateRailActive() {
   $$('[data-date-jump]').forEach(button => button.classList.toggle('active', button.dataset.dateJump === active.dataset.dateGroup));
 }
 
-async function loadStats() {
-  const s = await request('/api/stats');
-  const percent = s.capacityBytes ? Math.min(100, (s.bytes / s.capacityBytes) * 100) : 0;
-  const width = s.bytes ? `max(2px, ${percent}%)` : '0';
-  $('#stats').innerHTML = `
-    <article class="storage-usage">
-      <div class="storage-copy"><strong>${formatBytes(s.bytes)} <span>of ${formatBytes(s.capacityBytes)}</span></strong></div>
-      <div class="storage-bar"><i style="width:${width}"></i></div>
-    </article>`;
-  $('#inbox').textContent = s.unreviewed ? `Inbox · ${s.unreviewed.toLocaleString()}` : 'Inbox';
-  $('#unbacked').textContent = s.unbacked ? `Unbacked · ${s.unbacked.toLocaleString()}` : 'Unbacked';
-}
-
-async function loadImports() {
-  const data = await request('/api/imports');
-  imports = data.imports;
+function renderImports() {
   const source = $('#source');
-  source.innerHTML = '<option value="">All sources</option>' + imports.map(item => {
-    const date = new Date(item.createdAt).toLocaleDateString();
-    return `<option value="${item.id}">${escapeHtml(item.sourceName)} · ${item.files.toLocaleString()} · ${escapeHtml(date)}</option>`;
-  }).join('');
+  source.innerHTML = '<option value="">All sources</option>' + imports.map(item => `<option value="${item.id}">${escapeHtml(item.sourceName)}</option>`).join('');
   source.value = importId;
   if (view === 'folders' && !folderImportId) renderFolder();
+}
+
+function sortFiles(files) {
+  if (sort === 'date-asc') return files.sort((a, b) => a.dateMs - b.dateMs || a.hash.localeCompare(b.hash));
+  if (sort === 'name') return files.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { sensitivity: 'base' }) || a.hash.localeCompare(b.hash));
+  if (sort === 'size-desc') return files.sort((a, b) => b.size - a.size || a.filename.localeCompare(b.filename));
+  return files.sort((a, b) => b.dateMs - a.dateMs || a.hash.localeCompare(b.hash));
+}
+
+function applyFilters(reset = true) {
+  if (view === 'folders') return loadFolder();
+  const query = $('#search').value.trim().toLowerCase();
+  const terms = query.split(/\s+/).filter(Boolean);
+  const sourceId = Number(importId) || 0;
+
+  filtered = sortFiles(catalog.filter(file => {
+    if (!matchesType(file)) return false;
+    if (inboxOnly && file.reviewed) return false;
+    if (noBackupOnly && file.backupCount > 0) return false;
+    if (sourceId && !file.importIds.includes(sourceId)) return false;
+    if (terms.length) {
+      const haystack = searchIndex.get(file.hash) || '';
+      if (!terms.every(term => haystack.includes(term))) return false;
+    }
+    return true;
+  }));
+
+  if (reset) displayCount = PAGE;
+  displayCount = Math.min(displayCount, filtered.length);
+  loaded = filtered.slice(0, displayCount);
+  hasMore = displayCount < filtered.length;
+  renderFiles();
+}
+
+function showMore() {
+  if (!hasMore || view === 'folders') return;
+  displayCount = Math.min(filtered.length, displayCount + PAGE);
+  loaded = filtered.slice(0, displayCount);
+  hasMore = displayCount < filtered.length;
+  renderFiles();
 }
 
 function renderFiles() {
@@ -178,53 +321,73 @@ function renderFiles() {
   if (!loaded.length) {
     const message = inboxOnly ? 'Inbox empty.' : noBackupOnly ? 'All backed up.' : 'No files.';
     element.innerHTML = `<div class="empty">${message}</div>`;
-    renderDateRail([]);
+    renderDateRail();
     return;
   }
 
   if (sort.startsWith('date-')) {
-    const groups = dateGroups();
-    element.innerHTML = groups.map(group => `
+    element.innerHTML = dateGroups(loaded).map(group => `
       <section class="date-group" data-date-group="${group.key}">
         <h3 class="date-heading">${escapeHtml(group.label)}</h3>
-        <div class="${view === 'grid' ? 'date-grid' : 'date-list'}">
-          ${group.files.map(file => view === 'grid' ? gridCard(file) : listRow(file)).join('')}
-        </div>
+        <div class="${view === 'grid' ? 'date-grid' : 'date-list'}">${group.files.map(file => view === 'grid' ? gridCard(file) : listRow(file)).join('')}</div>
       </section>`).join('');
-    renderDateRail(groups);
   } else {
     element.innerHTML = view === 'grid'
       ? `<div class="date-grid flat-grid">${loaded.map(gridCard).join('')}</div>`
       : loaded.map(listRow).join('');
-    renderDateRail([]);
   }
+  renderDateRail();
 }
 
-async function loadFiles(reset = true) {
-  if (view === 'folders') return loadFolder();
-  if (!reset && (!hasMore || loadingMore)) return;
-  if (reset) {
-    fileLoadGeneration++;
-    loaded = [];
-    offset = 0;
-    hasMore = false;
-  }
-
-  const generation = fileLoadGeneration;
-  if (!reset) loadingMore = true;
-  try {
-    const q = $('#search').value.trim();
-    const review = inboxOnly ? 'unreviewed' : '';
-    const backup = noBackupOnly ? 'missing' : '';
-    const data = await request(`/api/files?limit=${PAGE}&offset=${offset}&type=${encodeURIComponent(type)}&review=${review}&backup=${backup}&import=${encodeURIComponent(importId)}&q=${encodeURIComponent(q)}&sort=${encodeURIComponent(sort)}`);
-    if (generation !== fileLoadGeneration || view === 'folders') return;
-    loaded.push(...data.files);
-    offset += data.files.length;
-    hasMore = data.hasMore;
+async function jumpToMonth(key, index) {
+  if (index >= displayCount) {
+    displayCount = Math.min(filtered.length, index + PAGE);
+    loaded = filtered.slice(0, displayCount);
+    hasMore = displayCount < filtered.length;
     renderFiles();
-  } finally {
-    if (!reset && generation === fileLoadGeneration) loadingMore = false;
   }
+  requestAnimationFrame(() => document.querySelector(`[data-date-group="${CSS.escape(key)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+}
+
+async function loadStats() {
+  const s = await request('/api/stats');
+  const percent = s.capacityBytes ? Math.min(100, s.bytes / s.capacityBytes * 100) : 0;
+  const width = s.bytes ? `max(2px, ${percent}%)` : '0';
+  $('#stats').innerHTML = `<span>${formatBytes(s.bytes)} <small>of ${formatBytes(s.capacityBytes)}</small></span><i><b style="width:${width}"></b></i>`;
+  $('#inbox').textContent = s.unreviewed ? `Inbox ${s.unreviewed.toLocaleString()}` : 'Inbox';
+  $('#unbacked').textContent = s.unbacked ? `Unbacked ${s.unbacked.toLocaleString()}` : 'Unbacked';
+}
+
+async function fetchCatalog() {
+  let latest;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const start = await request('/api/catalog/version');
+    const importsPromise = request('/api/imports');
+    const files = [];
+    let after = '';
+    do {
+      const page = await request(`/api/catalog?limit=5000&after=${encodeURIComponent(after)}`);
+      files.push(...page.files.map(normalizeFile));
+      after = page.nextAfter || '';
+    } while (after);
+    const [importsData, end] = await Promise.all([importsPromise, request('/api/catalog/version')]);
+    latest = { version: end.version, imports: importsData.imports, files };
+    if (start.version === end.version) break;
+  }
+  return latest;
+}
+
+async function syncCatalog(force = false) {
+  const remote = await request('/api/catalog/version');
+  if (!force && cacheMeta?.version === remote.version) return;
+  const fresh = await fetchCatalog();
+  catalog = fresh.files;
+  imports = fresh.imports;
+  cacheMeta = { version: fresh.version, imports };
+  rebuildIndexes();
+  renderImports();
+  applyFilters(true);
+  writeCache(catalog, cacheMeta).catch(console.warn);
 }
 
 function currentFolderSource() {
@@ -270,23 +433,13 @@ function renderFolder() {
 
   const rows = [];
   for (const folder of folderData.folders) {
-    rows.push(`
-      <button class="folder-row" data-folder-name="${escapeHtml(folder.name)}">
-        <span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(folder.name)}</strong></span>
-        <span>${folder.files.toLocaleString()}</span>
-        <span>Folder</span>
-      </button>`);
+    rows.push(`<button class="folder-row" data-folder-name="${escapeHtml(folder.name)}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(folder.name)}</strong></span><span>${folder.files.toLocaleString()}</span><span>Folder</span></button>`);
   }
   for (const file of folderData.files) {
-    rows.push(`
-      <button class="folder-row file-folder-row" data-hash="${file.hash}">
-        <span class="folder-name"><i class="document-icon"></i><strong>${escapeHtml(file.filename)}</strong>${file.reviewed ? '' : '<em>Inbox</em>'}</span>
-        <span>${formatBytes(file.size)} · ${file.backupCount ? `${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : 'unbacked'}</span>
-        <span>${escapeHtml(typeLabel(file))}</span>
-      </button>`);
+    rows.push(`<button class="folder-row file-folder-row" data-hash="${file.hash}"><span class="folder-name"><i class="document-icon"></i><strong>${escapeHtml(file.filename)}</strong>${file.reviewed ? '' : '<em>Inbox</em>'}</span><span>${formatBytes(file.size)}</span><span>${escapeHtml(typeLabel(file))}</span></button>`);
   }
   element.innerHTML = rows.length
-    ? `<div class="folder-list-head"><span>Name</span><span>Details</span><span>Type</span></div>${rows.join('')}`
+    ? `<div class="folder-list-head"><span>Name</span><span>Size</span><span>Type</span></div>${rows.join('')}`
     : '<div class="empty">Empty.</div>';
 }
 
@@ -300,8 +453,8 @@ async function loadFolder() {
 
 function setView(next) {
   view = next;
-  $('#library-card').classList.toggle('folder-mode', view === 'folders');
   $('#sort').hidden = view === 'folders';
+  $('#typeFilter').hidden = view === 'folders';
   $$('#views button').forEach(item => item.classList.toggle('active', item.dataset.view === view));
   if (view === 'folders') {
     folderImportId = importId;
@@ -311,7 +464,7 @@ function setView(next) {
     folderImportId = '';
     folderPath = '';
     $('#folderbar').hidden = true;
-    loadFiles(true).catch(console.error);
+    applyFilters(true);
   }
 }
 
@@ -319,11 +472,11 @@ function renderReviewState() {
   const reviewed = Boolean(selected?.reviewed);
   $('#review-status').textContent = reviewed ? 'Kept' : 'Inbox';
   $('#review-toggle').textContent = reviewed ? 'Inbox' : 'Keep';
-  $('#review-toggle').className = reviewed ? 'quiet' : '';
+  $('#review-toggle').className = reviewed ? 'text-button' : '';
 }
 
 function detailItems() {
-  return view === 'folders' ? folderData?.files || [] : loaded;
+  return view === 'folders' ? folderData?.files || [] : filtered;
 }
 
 function updateDetailNav() {
@@ -341,11 +494,11 @@ async function navigateDetails(step) {
 }
 
 async function openDetails(hash, fallback = null) {
-  selected = loaded.find(file => file.hash === hash) || folderData?.files?.find(file => file.hash === hash) || fallback;
+  selected = catalog.find(file => file.hash === hash) || folderData?.files?.find(file => file.hash === hash) || fallback;
   if (!selected) return;
 
   $('#detail-name').textContent = selected.filename;
-  $('#detail-meta').textContent = `${shortDate(selected)} · ${formatBytes(selected.size)}`;
+  $('#detail-meta').textContent = `${shortDate(normalizeFile(selected))} · ${formatBytes(selected.size)}`;
   $('#detail-open').href = `/api/objects/${selected.hash}`;
   $('#detail-preview').innerHTML = preview(selected, true);
   $('#detail-sources').innerHTML = '<div class="empty small-empty">Loading…</div>';
@@ -359,17 +512,9 @@ async function openDetails(hash, fallback = null) {
     selected.reviewed = Boolean(data.object.reviewed);
     renderReviewState();
     $('#detail-sources').innerHTML = data.sources.length ? data.sources.map(source => `
-      <article>
-        <strong>${escapeHtml(source.sourceName)}</strong>
-        <span>${escapeHtml(source.path)}</span>
-        <small>${source.mtime ? new Date(source.mtime).toLocaleString() : ''}</small>
-      </article>`).join('') : '<div class="empty small-empty">None.</div>';
-
+      <article><strong>${escapeHtml(source.sourceName)}</strong><span>${escapeHtml(source.path)}</span><small>${source.mtime ? new Date(source.mtime).toLocaleString() : ''}</small></article>`).join('') : '<div class="empty small-empty">None.</div>';
     $('#detail-backups').innerHTML = data.backups.length ? data.backups.map(backup => `
-      <article>
-        <strong>${escapeHtml(backup.name)}</strong>
-        <small>${backup.verifiedAt ? new Date(backup.verifiedAt).toLocaleString() : new Date(backup.lastSeen).toLocaleString()}</small>
-      </article>`).join('') : '<div class="empty small-empty warning">None.</div>';
+      <article><strong>${escapeHtml(backup.name)}</strong><small>${backup.verifiedAt ? new Date(backup.verifiedAt).toLocaleString() : new Date(backup.lastSeen).toLocaleString()}</small></article>`).join('') : '<div class="empty small-empty">None.</div>';
   } catch (error) {
     const html = `<div class="error">${escapeHtml(error.message)}</div>`;
     $('#detail-sources').innerHTML = html;
@@ -377,50 +522,51 @@ async function openDetails(hash, fallback = null) {
   }
 }
 
-async function refreshLibrary() {
-  await loadStats();
-  if (view === 'folders') await loadFolder();
-  else await loadFiles(true);
-}
-
 async function toggleReviewed() {
   if (!selected) return;
   const reviewed = !Boolean(selected.reviewed);
   await request(`/api/objects/${selected.hash}/review`, { method: 'POST', body: { reviewed } });
+  selected.reviewed = reviewed;
+  const cached = catalog.find(file => file.hash === selected.hash);
+  if (cached) cached.reviewed = reviewed;
+  cachePut(cached || selected).catch(console.warn);
   $('#details').close();
   selected = null;
-  await refreshLibrary();
+  await loadStats();
+  if (view === 'folders') await loadFolder();
+  else applyFilters(true);
+}
+
+async function refreshImports() {
+  imports = (await request('/api/imports')).imports;
+  rebuildIndexes();
+  renderImports();
+  cacheImports(imports).catch(console.warn);
 }
 
 async function removeSelected(ignore) {
   if (!selected) return;
   const text = ignore ? 'Delete + ignore on future imports?' : 'Delete this file?';
   if (!confirm(text)) return;
-  await request(`/api/objects/${selected.hash}/delete`, { method: 'POST', body: { ignore } });
+  const hash = selected.hash;
+  await request(`/api/objects/${hash}/delete`, { method: 'POST', body: { ignore } });
+  catalog = catalog.filter(file => file.hash !== hash);
+  searchIndex.delete(hash);
+  cacheDelete(hash).catch(console.warn);
   $('#details').close();
   selected = null;
-  await Promise.all([loadStats(), loadImports(), loadDrives()]);
+  await Promise.all([loadStats(), refreshImports()]);
   if (view === 'folders') await loadFolder();
-  else await loadFiles(true);
+  else applyFilters(true);
 }
 
 async function loadDrives() {
   const data = await request('/api/drives');
-  if (!data.drives.length) {
-    $('#drives').innerHTML = '<div class="empty">No backups.</div>';
-    return;
-  }
   $('#drives').innerHTML = data.drives.map(drive => {
-    const ratio = drive.desiredBytes ? Math.min(100, (drive.protectedBytes / drive.desiredBytes) * 100) : 100;
+    const ratio = drive.desiredBytes ? Math.min(100, drive.protectedBytes / drive.desiredBytes * 100) : 100;
     const missing = Math.max(0, drive.desiredBytes - drive.protectedBytes);
-    return `
-      <article class="drive">
-        <div class="drive-head"><strong>${escapeHtml(drive.name)}</strong><span>${ratio.toFixed(1)}%</span></div>
-        <div class="meter"><i style="width:${ratio}%"></i></div>
-        <p>${formatBytes(drive.protectedBytes)} / ${formatBytes(drive.desiredBytes)}${missing ? ` · ${formatBytes(missing)} missing` : ''}</p>
-        <p>${drive.protectedCount.toLocaleString()} / ${drive.desiredCount.toLocaleString()} files · ${drive.policy.all ? 'Everything' : drive.policy.types.map(escapeHtml).join(', ')} · ${new Date(drive.lastSeen).toLocaleString()}</p>
-      </article>`;
-  }).join('');
+    return `<article class="drive"><div class="drive-head"><strong>${escapeHtml(drive.name)}</strong><span>${ratio.toFixed(0)}%</span></div><div class="meter"><i style="width:${ratio}%"></i></div><p>${formatBytes(drive.protectedBytes)} / ${formatBytes(drive.desiredBytes)}${missing ? ` · ${formatBytes(missing)} missing` : ''}</p></article>`;
+  }).join('') || '<div class="empty">No backups.</div>';
 }
 
 async function boot() {
@@ -429,7 +575,21 @@ async function boot() {
     login.hidden = true;
     app.hidden = false;
     logout.hidden = false;
-    await Promise.all([loadStats(), loadImports(), loadFiles(true), loadDrives()]);
+    $('#files').innerHTML = '<div class="empty">Loading…</div>';
+
+    const cached = await readCache().catch(() => null);
+    if (cached) {
+      cacheMeta = cached.meta;
+      catalog = cached.files.map(normalizeFile);
+      imports = cached.meta.imports || [];
+      rebuildIndexes();
+      renderImports();
+      applyFilters(true);
+    }
+
+    await Promise.all([loadStats(), loadDrives()]);
+    if (cached) syncCatalog(false).catch(console.error);
+    else await syncCatalog(true);
   } catch (error) {
     if (error.unauthorized) {
       login.hidden = false;
@@ -458,46 +618,38 @@ logout.addEventListener('click', async () => {
 
 $('#search').addEventListener('input', () => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => loadFiles(true).catch(console.error), 200);
+  searchTimer = setTimeout(() => applyFilters(true), 70);
 });
 
 $('#source').addEventListener('change', event => {
   importId = event.target.value;
-  view = $('#views button.active')?.dataset.view || view;
   if (view === 'folders') {
     folderImportId = importId;
     folderPath = '';
     loadFolder().catch(console.error);
-  } else {
-    folderImportId = '';
-    folderPath = '';
-    loadFiles(true).catch(console.error);
-  }
+  } else applyFilters(true);
+});
+
+$('#typeFilter').addEventListener('change', event => {
+  type = event.target.value;
+  applyFilters(true);
 });
 
 $('#sort').addEventListener('change', event => {
   sort = event.target.value;
-  loadFiles(true).catch(console.error);
+  applyFilters(true);
 });
 
 $('#inbox').addEventListener('click', () => {
   inboxOnly = !inboxOnly;
   $('#inbox').classList.toggle('active', inboxOnly);
-  loadFiles(true).catch(console.error);
+  applyFilters(true);
 });
 
 $('#unbacked').addEventListener('click', () => {
   noBackupOnly = !noBackupOnly;
   $('#unbacked').classList.toggle('active', noBackupOnly);
-  loadFiles(true).catch(console.error);
-});
-
-$('#filters').addEventListener('click', event => {
-  const button = event.target.closest('[data-type]');
-  if (!button) return;
-  type = button.dataset.type;
-  $$('#filters button').forEach(item => item.classList.toggle('active', item === button));
-  loadFiles(true).catch(console.error);
+  applyFilters(true);
 });
 
 $('#views').addEventListener('click', event => {
@@ -507,8 +659,7 @@ $('#views').addEventListener('click', event => {
 
 $('#dateRail').addEventListener('click', event => {
   const button = event.target.closest('[data-date-jump]');
-  if (!button) return;
-  document.querySelector(`[data-date-group="${CSS.escape(button.dataset.dateJump)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (button) jumpToMonth(button.dataset.dateJump, Number(button.dataset.index));
 });
 
 $('#folderbar').addEventListener('click', event => {
@@ -548,8 +699,8 @@ $('#files').addEventListener('click', event => {
 });
 
 new IntersectionObserver(entries => {
-  if (entries.some(entry => entry.isIntersecting) && hasMore && view !== 'folders') loadFiles(false).catch(console.error);
-}, { rootMargin: '600px 0px' }).observe($('#scroll-sentinel'));
+  if (entries.some(entry => entry.isIntersecting)) showMore();
+}, { rootMargin: '700px 0px' }).observe($('#scroll-sentinel'));
 
 window.addEventListener('scroll', () => {
   if (dateScrollFrame) return;
