@@ -172,10 +172,36 @@ let viewerSwipe = null;
 let viewerPan = null;
 let viewerPinch = null;
 let lastViewerTap = null;
+let viewerTapTimer = 0;
+let viewerNavBeforeZoom = null;
 let viewerZoom = { scale: 1, x: 0, y: 0 };
+const DOUBLE_TAP_MS = 300;
 
 function viewerImage() {
   return viewerMedia.querySelector('img');
+}
+
+function viewerZoomed() {
+  return viewerZoom.scale > 1.01;
+}
+
+function clearViewerTap() {
+  clearTimeout(viewerTapTimer);
+  viewerTapTimer = 0;
+  lastViewerTap = null;
+}
+
+function lockViewerNavigation(zoomed) {
+  if (zoomed) {
+    if (!viewerNavBeforeZoom) viewerNavBeforeZoom = { prev: viewerPrev.disabled, next: viewerNext.disabled };
+    viewerPrev.disabled = true;
+    viewerNext.disabled = true;
+    return;
+  }
+  if (!viewerNavBeforeZoom) return;
+  viewerPrev.disabled = viewerNavBeforeZoom.prev;
+  viewerNext.disabled = viewerNavBeforeZoom.next;
+  viewerNavBeforeZoom = null;
 }
 
 function clampViewerPan(scale = viewerZoom.scale, x = viewerZoom.x, y = viewerZoom.y) {
@@ -193,8 +219,9 @@ function clampViewerPan(scale = viewerZoom.scale, x = viewerZoom.x, y = viewerZo
 
 function applyViewerZoom(animate = false) {
   const image = viewerImage();
-  const zoomed = viewerZoom.scale > 1.01;
+  const zoomed = viewerZoomed();
   viewerStage.classList.toggle('viewer-zoomed', zoomed);
+  lockViewerNavigation(zoomed);
   if (!image) return;
   const clamped = clampViewerPan();
   viewerZoom.x = clamped.x;
@@ -214,6 +241,7 @@ function resetViewerZoom(animate = false) {
   viewerPan = null;
   viewerPinch = null;
   viewerPointers.clear();
+  clearViewerTap();
   applyViewerZoom(animate);
 }
 
@@ -230,7 +258,7 @@ function zoomScaleForImage(image) {
 function toggleViewerZoom(clientX, clientY) {
   const image = viewerImage();
   if (!image) return;
-  if (viewerZoom.scale > 1.01) {
+  if (viewerZoomed()) {
     resetViewerZoom(true);
     return;
   }
@@ -282,6 +310,45 @@ function clearViewerPointer(event) {
   if (viewerPointers.size < 2) viewerPinch = null;
 }
 
+function sideNavigation(clientX) {
+  if (clientX < innerWidth * .36) return viewerPrev;
+  if (clientX > innerWidth * .64) return viewerNext;
+  return null;
+}
+
+function activateSideNavigation(clientX, delayed) {
+  if (viewerZoomed()) return;
+  const button = sideNavigation(clientX);
+  if (!button || button.disabled) return;
+  const activate = () => {
+    viewerTapTimer = 0;
+    if (!viewer.hidden && !viewerZoomed() && !button.disabled) button.click();
+  };
+  if (delayed) viewerTapTimer = setTimeout(activate, DOUBLE_TAP_MS + 15);
+  else activate();
+}
+
+function handleViewerTap(event, imageHit, zoomedAtTap) {
+  const now = performance.now();
+  const doubleTap = lastViewerTap &&
+    now - lastViewerTap.time <= DOUBLE_TAP_MS &&
+    Math.hypot(event.clientX - lastViewerTap.x, event.clientY - lastViewerTap.y) <= 44;
+
+  if (doubleTap && (imageHit || zoomedAtTap)) {
+    clearTimeout(viewerTapTimer);
+    viewerTapTimer = 0;
+    lastViewerTap = null;
+    toggleViewerZoom(event.clientX, event.clientY);
+    event.preventDefault();
+    return;
+  }
+
+  clearTimeout(viewerTapTimer);
+  viewerTapTimer = 0;
+  lastViewerTap = (imageHit || zoomedAtTap) ? { time: now, x: event.clientX, y: event.clientY } : null;
+  if (!zoomedAtTap) activateSideNavigation(event.clientX, imageHit);
+}
+
 viewerStage.addEventListener('pointerdown', event => {
   if (viewer.hidden || (event.pointerType !== 'touch' && event.pointerType !== 'pen')) return;
   if (event.target.closest('.viewer-nav')) return;
@@ -295,7 +362,7 @@ viewerStage.addEventListener('pointerdown', event => {
     return;
   }
 
-  if (viewerZoom.scale > 1.01) {
+  if (viewerZoomed()) {
     viewerPan = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, startX: viewerZoom.x, startY: viewerZoom.y };
     event.preventDefault();
   } else {
@@ -316,7 +383,7 @@ viewerStage.addEventListener('pointermove', event => {
     return;
   }
 
-  if (viewerPan?.pointerId === event.pointerId && viewerZoom.scale > 1.01) {
+  if (viewerPan?.pointerId === event.pointerId && viewerZoomed()) {
     viewerZoom.x = viewerPan.startX + event.clientX - viewerPan.x;
     viewerZoom.y = viewerPan.startY + event.clientY - viewerPan.y;
     applyViewerZoom(false);
@@ -330,6 +397,8 @@ viewerStage.addEventListener('pointerup', event => {
   const swipe = viewerSwipe?.pointerId === event.pointerId ? viewerSwipe : null;
   const wasPinching = Boolean(viewerPinch) || viewerPointers.size > 1;
   const wasPanning = viewerPan?.pointerId === event.pointerId;
+  const zoomedAtRelease = viewerZoomed();
+  const imageHit = Boolean(event.target.closest('#viewer-media img'));
   const dx = event.clientX - point.startX;
   const dy = event.clientY - point.startY;
   const travel = Math.hypot(dx, dy);
@@ -338,10 +407,21 @@ viewerStage.addEventListener('pointerup', event => {
   try { viewerStage.releasePointerCapture(event.pointerId); } catch {}
 
   if (wasPinching) {
+    clearViewerTap();
     if (viewerZoom.scale <= 1.03) resetViewerZoom(true);
     return;
   }
-  if (wasPanning || viewerZoom.scale > 1.01) return;
+
+  if (zoomedAtRelease) {
+    if (travel > 12) {
+      clearViewerTap();
+      return;
+    }
+    handleViewerTap(event, imageHit, true);
+    return;
+  }
+
+  if (wasPanning) return;
 
   if (swipe) {
     const horizontal = Math.abs(dx) > Math.abs(dy) * 1.08;
@@ -349,7 +429,7 @@ viewerStage.addEventListener('pointerup', event => {
     const deliberate = Math.abs(dx) >= 26;
     const quickFlick = Math.abs(dx) >= 16 && velocity >= .18;
     if (horizontal && (deliberate || quickFlick)) {
-      lastViewerTap = null;
+      clearViewerTap();
       if (dx < 0) {
         if (!viewerNext.disabled) viewerNext.click();
       } else if (!viewerPrev.disabled) {
@@ -359,23 +439,17 @@ viewerStage.addEventListener('pointerup', event => {
     }
   }
 
-  if (travel > 12 || !swipe?.image) {
-    lastViewerTap = null;
+  if (travel > 12) {
+    clearViewerTap();
     return;
   }
 
-  const now = performance.now();
-  if (lastViewerTap && now - lastViewerTap.time <= 320 && Math.hypot(event.clientX - lastViewerTap.x, event.clientY - lastViewerTap.y) <= 44) {
-    toggleViewerZoom(event.clientX, event.clientY);
-    lastViewerTap = null;
-    event.preventDefault();
-  } else {
-    lastViewerTap = { time: now, x: event.clientX, y: event.clientY };
-  }
+  handleViewerTap(event, Boolean(swipe?.image), false);
 });
 
 viewerStage.addEventListener('pointercancel', event => {
   clearViewerPointer(event);
+  clearViewerTap();
   if (!viewerPointers.size && viewerZoom.scale <= 1.03) resetViewerZoom(false);
 });
 
@@ -384,8 +458,144 @@ new MutationObserver(() => {
   if (viewer.hidden) resetViewerZoom(false);
 }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 window.addEventListener('resize', () => {
-  if (viewerZoom.scale > 1.01) applyViewerZoom(false);
+  if (viewerZoomed()) applyViewerZoom(false);
 }, { passive: true });
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    const dialogs = [...document.querySelectorAll('dialog[open]')];
+    const dialog = dialogs.at(-1);
+    if (dialog) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      dialog.close();
+      return;
+    }
+  }
+  if (!viewer.hidden && viewerZoomed() && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+}, true);
+
+const hoverFine = matchMedia('(hover:hover) and (pointer:fine)');
+const hoverInfo = document.createElement('div');
+hoverInfo.className = 'grid-hover-info';
+hoverInfo.hidden = true;
+document.body.append(hoverInfo);
+const hoverCache = new Map();
+let hoverTimer = 0;
+let hoverCard = null;
+let hoverGeneration = 0;
+
+function hoverBytes(bytes) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = Number(bytes || 0);
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
+  return `${value < 10 && unit ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+function hoverDate(value) {
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function hoverFullPath(source) {
+  if (!source) return '';
+  const relative = String(source.path || '');
+  const root = String(source.rootPath || '').replace(/[\\/]+$/, '');
+  if (!root) return relative;
+  const separator = root.includes('\\') ? '\\' : '/';
+  return `${root}${separator}${relative.replace(/[\\/]+/g, separator)}`;
+}
+
+function positionHoverInfo(card) {
+  const rect = card.getBoundingClientRect();
+  const box = hoverInfo.getBoundingClientRect();
+  const left = Math.max(8, Math.min(innerWidth - box.width - 8, rect.left));
+  let top = rect.bottom + 8;
+  if (top + box.height > innerHeight - 8) top = Math.max(8, rect.top - box.height - 8);
+  hoverInfo.style.left = `${left}px`;
+  hoverInfo.style.top = `${top}px`;
+}
+
+function renderHoverInfo(card, data) {
+  const primary = data.sources?.[0] || {};
+  const filename = primary.filename || card.title || 'File';
+  const copies = data.sources?.length || 0;
+  const source = primary.deviceName || primary.sourceName || '';
+  const path = hoverFullPath(primary);
+  const date = hoverDate(data.date?.fileDate);
+  const embedded = /^exif\.|^video\./.test(String(data.date?.dateSource || ''));
+
+  const name = document.createElement('strong');
+  name.textContent = filename;
+  const meta = document.createElement('div');
+  meta.className = 'grid-hover-meta';
+  meta.textContent = [date ? `${embedded ? 'Taken' : 'Date'} ${date}` : '', hoverBytes(data.object?.size)].filter(Boolean).join(' · ');
+  hoverInfo.replaceChildren(name, meta);
+  if (source || copies > 1) {
+    const sourceLine = document.createElement('div');
+    sourceLine.className = 'grid-hover-source';
+    sourceLine.textContent = [source, copies > 1 ? `${copies} source copies` : ''].filter(Boolean).join(' · ');
+    hoverInfo.append(sourceLine);
+  }
+  if (path) {
+    const pathLine = document.createElement('div');
+    pathLine.className = 'grid-hover-path';
+    pathLine.textContent = path;
+    pathLine.title = path;
+    hoverInfo.append(pathLine);
+  }
+  hoverInfo.style.visibility = 'hidden';
+  hoverInfo.hidden = false;
+  positionHoverInfo(card);
+  hoverInfo.style.visibility = '';
+}
+
+function hideHoverInfo() {
+  clearTimeout(hoverTimer);
+  hoverTimer = 0;
+  hoverCard = null;
+  hoverGeneration++;
+  hoverInfo.hidden = true;
+}
+
+async function showHoverInfo(card, generation) {
+  if (hoverCard !== card || generation !== hoverGeneration || !card.isConnected) return;
+  const hash = card.dataset.hash;
+  let data = hoverCache.get(hash);
+  if (!data) {
+    try {
+      const response = await fetch(`/api/provenance/${hash}`);
+      if (!response.ok) return;
+      data = await response.json();
+      hoverCache.set(hash, data);
+    } catch { return; }
+  }
+  if (hoverCard !== card || generation !== hoverGeneration || !card.isConnected) return;
+  renderHoverInfo(card, data);
+}
+
+files.addEventListener('pointerover', event => {
+  if (!hoverFine.matches || event.pointerType && event.pointerType !== 'mouse') return;
+  const card = event.target.closest('.file-card.media-card[data-hash]');
+  if (!card || card.contains(event.relatedTarget) || hoverCard === card) return;
+  hideHoverInfo();
+  hoverCard = card;
+  const generation = hoverGeneration;
+  hoverTimer = setTimeout(() => showHoverInfo(card, generation), 450);
+});
+
+files.addEventListener('pointerout', event => {
+  const card = event.target.closest('.file-card.media-card[data-hash]');
+  if (!card || card.contains(event.relatedTarget)) return;
+  if (hoverCard === card) hideHoverInfo();
+});
+window.addEventListener('scroll', hideHoverInfo, { passive: true });
+window.addEventListener('resize', hideHoverInfo, { passive: true });
 
 let press = null;
 let dispatchingLongPress = false;
