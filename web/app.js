@@ -322,6 +322,24 @@ function renderReviewState() {
   $('#review-toggle').className = reviewed ? 'quiet' : '';
 }
 
+function detailItems() {
+  return view === 'folders' ? folderData?.files || [] : loaded;
+}
+
+function updateDetailNav() {
+  const items = detailItems();
+  const index = items.findIndex(file => file.hash === selected?.hash);
+  $('#detail-prev').disabled = index <= 0;
+  $('#detail-next').disabled = index < 0 || index >= items.length - 1;
+}
+
+async function navigateDetails(step) {
+  const items = detailItems();
+  const index = items.findIndex(file => file.hash === selected?.hash);
+  const next = items[index + step];
+  if (next) await openDetails(next.hash, next);
+}
+
 async function openDetails(hash, fallback = null) {
   selected = loaded.find(file => file.hash === hash) || folderData?.files?.find(file => file.hash === hash) || fallback;
   if (!selected) return;
@@ -333,7 +351,8 @@ async function openDetails(hash, fallback = null) {
   $('#detail-sources').innerHTML = '<div class="empty small-empty">Loading…</div>';
   $('#detail-backups').innerHTML = '<div class="empty small-empty">Loading…</div>';
   renderReviewState();
-  $('#details').showModal();
+  updateDetailNav();
+  if (!$('#details').open) $('#details').showModal();
 
   try {
     const data = await request(`/api/files/${selected.hash}/details`);
@@ -540,7 +559,15 @@ window.addEventListener('scroll', () => {
   });
 }, { passive: true });
 
+document.addEventListener('keydown', event => {
+  if (!$('#details').open) return;
+  if (event.key === 'ArrowLeft') { event.preventDefault(); navigateDetails(-1).catch(console.error); }
+  if (event.key === 'ArrowRight') { event.preventDefault(); navigateDetails(1).catch(console.error); }
+});
+
 $('#close-details').onclick = () => $('#details').close();
+$('#detail-prev').onclick = () => navigateDetails(-1).catch(console.error);
+$('#detail-next').onclick = () => navigateDetails(1).catch(console.error);
 $('#review-toggle').onclick = () => toggleReviewed().catch(console.error);
 $('#delete').onclick = () => removeSelected(false).catch(console.error);
 $('#delete-ignore').onclick = () => removeSelected(true).catch(console.error);
