@@ -21,7 +21,8 @@ Runtime integrity checks that are part of Mochimono itself, such as verifying st
 
 - SHA-256 whole-file identity and exact deduplication
 - import provenance: import/source, original path, filename, and mtime
-- browser library with search, grid/list views, image previews, paging, file details, and every known source location
+- browser library with search, server-side type filtering, grid/list views, image previews, paging, and file details
+- per-file visibility into every known source path and every backup location that reports a copy
 - open/download and HTTP byte-range streaming
 - separate **Delete** and **Delete & Ignore** behavior
 - local Agent web UI for importing folders and managing backup locations
@@ -30,7 +31,7 @@ Runtime integrity checks that are part of Mochimono itself, such as verifying st
 - unreadable folders/files do not abort an entire large import
 - any writable folder can be a backup location, including a folder on the local C: drive for testing
 - managed backups with independent SQLite inventories
-- backup policies for everything or broad MIME classes (`image`, `video`, `audio`, `text`, `application`, `other`)
+- editable backup policies for everything or broad MIME classes (`image`, `video`, `audio`, `text`, `application`, `other`)
 - server-side backup coverage by location
 - reconnect/resume: only missing objects are copied
 - SHA-256 verification while writing primary and backup copies
@@ -44,7 +45,25 @@ Not implemented yet: generated thumbnails, AI, encryption/private vaults, chunki
 
 Node.js 22.16+.
 
-## Run the server
+## Fast local development
+
+For normal V1 iteration, run everything locally with one command:
+
+```bash
+npm run dev
+```
+
+This starts both the server and Agent already connected to each other:
+
+```text
+Library  http://127.0.0.1:8642   token: dev
+Agent    http://127.0.0.1:8643
+Data     ./dev-data/
+```
+
+`dev-data/` is intentionally disposable and ignored by Git. Stop both processes with Ctrl+C. Set `MOCHIMONO_TOKEN` before `npm run dev` if you want a different local token.
+
+## Run the server separately
 
 ```bash
 export MOCHIMONO_TOKEN='use-a-long-random-secret'
@@ -68,7 +87,7 @@ $MOCHIMONO_DATA/
       ab...full-sha256...
 ```
 
-## Run the local Agent
+## Run the local Agent separately
 
 On the computer that has the folders and backup locations you want Mochimono to use:
 
@@ -85,7 +104,7 @@ Use the Agent UI to:
 - name the import source
 - watch hashing/upload progress
 - choose any writable folder as a Mochimono backup location
-- choose whether a backup protects everything or selected broad file classes
+- configure what each backup protects and change that policy later
 - update a backup with only missing objects
 - see local backup contents and server-known coverage
 - optionally verify a backup
