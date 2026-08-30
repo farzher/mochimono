@@ -55,7 +55,7 @@ async function state() {
     activity(current.job);
     if (current.job && current.job.status !== 'running' && lastFinished !== current.job.id) {
       lastFinished = current.job.id;
-      toast(current.job.status === 'done' ? 'Operation complete' : current.job.error);
+      toast(current.job.status === 'done' ? 'Operation complete' : current.job.status === 'canceled' ? 'Operation canceled' : current.job.error);
       backups();
     }
   } catch (error) {
@@ -83,14 +83,23 @@ function activity(job) {
   if (progress.uploaded) metrics.push(`<span class="metric"><b>${esc(progress.uploaded)}</b> uploaded</span>`);
   if (progress.copiedSize) metrics.push(`<span class="metric"><b>${esc(progress.copiedSize)}</b> copied</span>`);
 
+  const phase = job.status === 'running'
+    ? (job.cancelRequested ? 'Canceling…' : progress.phase || 'Working…')
+    : job.status === 'done' ? 'Done'
+      : job.status === 'canceled' ? 'Canceled'
+        : job.error;
+
   element.className = 'activity';
   element.innerHTML = `
     <div class="activity-top">
       <div>
         <div class="activity-title">${esc(job.label)}</div>
-        <div class="activity-phase ${job.status}">${esc(job.status === 'running' ? progress.phase || 'Working…' : job.status === 'done' ? 'Done' : job.error)}</div>
+        <div class="activity-phase ${job.status}">${esc(phase)}</div>
       </div>
-      <span class="badge">${job.status}</span>
+      <div class="activity-actions">
+        ${job.status === 'running' ? `<button class="secondary small" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>${job.cancelRequested ? 'Canceling…' : 'Cancel'}</button>` : ''}
+        <span class="badge">${esc(job.status)}</span>
+      </div>
     </div>
     ${progress.current ? `<div class="drive-path">${esc(progress.current)}</div>` : ''}
     <div class="metrics">${metrics.join('')}</div>`;
@@ -103,6 +112,13 @@ async function backups() {
     const { backups: locations } = await req('/api/backups');
     element.innerHTML = locations.map((location, index) => {
       const policy = location.meta.policy?.all ? 'Everything' : (location.meta.policy?.types || []).join(', ');
+      const remote = location.remote;
+      const ratio = remote?.desiredBytes ? Math.min(100, (remote.protectedBytes / remote.desiredBytes) * 100) : remote ? 100 : null;
+      const missing = remote ? Math.max(0, remote.desiredBytes - remote.protectedBytes) : null;
+      const coverage = remote ? `
+        <div class="coverage"><div class="coverage-bar"><i style="width:${ratio}%"></i></div>
+        <div class="coverage-copy"><span>${bytes(remote.protectedBytes)} of ${bytes(remote.desiredBytes)} protected</span><b>${missing ? `${bytes(missing)} missing` : 'Complete'}</b></div></div>` :
+        '<div class="coverage-copy offline-copy"><span>Server offline</span><b>Local inventory only</b></div>';
       return `
         <div class="drive">
           <div class="drive-head">
@@ -110,12 +126,12 @@ async function backups() {
               <div class="drive-name">${esc(location.meta.name)}</div>
               <div class="drive-path">${esc(location.path)}</div>
             </div>
-            <span class="badge managed">Mochimono backup</span>
+            <span class="badge managed">Backup</span>
           </div>
-          <div class="drive-meta">${bytes(location.freeBytes)} free of ${bytes(location.totalBytes)} · protects ${esc(policy)}</div>
+          ${coverage}
+          <div class="drive-meta">${location.local.count.toLocaleString()} objects · ${bytes(location.local.bytes)} stored · ${bytes(location.freeBytes)} free · protects ${esc(policy)}</div>
           <div class="drive-actions">
             <button class="primary small" data-update="${index}">Update</button>
-            <button class="secondary small" data-status="${index}">Status</button>
             <button class="secondary small" data-configure="${index}">Configure</button>
             <button class="secondary small" data-restore="${index}">Restore</button>
             <button class="secondary small" data-verify="${index}">Verify</button>
@@ -131,19 +147,6 @@ async function backups() {
         const location = locations[Number(button.dataset.configure)];
         openBackupDialog(location.path, location.meta);
       };
-    });
-    $$('[data-status]').forEach(button => button.onclick = async () => {
-      try {
-        const location = locations[Number(button.dataset.status)];
-        const status = await req(`/api/backup/status?path=${encodeURIComponent(location.path)}`);
-        if (status.remote) {
-          toast(`${status.meta.name}: ${status.remote.protectedCount}/${status.remote.desiredCount} protected · ${status.local.count} objects physically present`);
-        } else {
-          toast(`${status.meta.name}: ${status.local.count} objects (${bytes(status.local.bytes)}) present locally · server offline`);
-        }
-      } catch (error) {
-        toast(error.message);
-      }
     });
   } catch (error) {
     element.innerHTML = `<div class="error">${esc(error.message)}</div>`;
@@ -186,6 +189,16 @@ $('#chooseRestore').onclick = () => chooseFolder($('#restoreDestination'));
 $('#refreshBackups').onclick = backups;
 $$('[data-close]').forEach(button => button.onclick = () => button.closest('dialog').close());
 $('#backupEverything').onchange = event => $('#backupTypes').classList.toggle('disabled', event.target.checked);
+
+$('#activity').addEventListener('click', async event => {
+  if (!event.target.closest('[data-cancel-job]')) return;
+  try {
+    await req('/api/job/cancel', { method: 'POST' });
+    state();
+  } catch (error) {
+    toast(error.message);
+  }
+});
 
 $('#startImport').onclick = async () => {
   const path = $('#importPath').value.trim();
