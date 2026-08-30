@@ -1,31 +1,20 @@
 const files = document.querySelector('#files');
-const CACHE_NAME = 'mochimono-catalog';
-const CACHE_VERSION = 2;
 const THUMB_VERSION = 3;
 const THUMB_EDGE = 768;
-const CHECK_BATCH = 500;
-const DOWNLOAD_WORKERS = 6;
-const MAX_MEMORY_THUMBS = 600;
 const PRIORITY_REFRESH = 5_000;
-const VISIBLE_CHECK_DELAY = 300;
 const IMAGE_FALLBACK_DELAY = 8_000;
 const VIDEO_FALLBACK_DELAY = 15_000;
+const MAX_FALLBACK_URLS = 40;
 
 const states = new Map();
-const urls = new Map();
-const checkQueue = new Map();
-const downloadPriority = new Map();
-const downloadBackground = new Map();
-const requested = new Set();
 const requestTimes = new Map();
+const requested = new Set();
+const retryTimers = new Map();
 const fallbackQueue = [];
 const fallbackQueued = new Set();
-let cachePromise;
+const fallbackUrls = new Map();
 let scanFrame = 0;
-let checkTimer = 0;
-let checking = false;
 let requestTimer = 0;
-let downloadActive = 0;
 let fallbackActive = false;
 
 const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff']);
@@ -41,107 +30,42 @@ function extension(name) {
   return String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
 }
 
-function kindFor(file, card) {
-  const base = String(file?.mime || '').split('/')[0];
-  if (base === 'image' || base === 'video') return base;
-  if (card?.classList.contains('video-card')) return 'video';
-  const ext = extension(file?.filename || card?.title || card?.querySelector('strong')?.textContent);
-  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
+function filenameFor(card) {
+  return card.title || card.querySelector('strong')?.textContent || '';
+}
+
+function kindForCard(card) {
+  if (card.classList.contains('video-card')) return 'video';
+  if (card.classList.contains('media-card')) return 'image';
+  const ext = extension(filenameFor(card));
   if (VIDEO_EXTENSIONS.has(ext)) return 'video';
-  if (card?.classList.contains('media-card')) return 'image';
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
   return '';
 }
 
-function sourceMime(file) {
-  if (file?.mime && file.mime !== 'application/octet-stream') return file.mime;
-  return MIME.get(extension(file?.filename)) || file?.mime || 'application/octet-stream';
+function sourceMime(record) {
+  return MIME.get(extension(record.filename)) || 'application/octet-stream';
 }
 
-function cache() {
-  if (!('indexedDB' in window)) return Promise.resolve(null);
-  if (!cachePromise) {
-    cachePromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(CACHE_NAME, CACHE_VERSION);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'hash' });
-        if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
-        if (!db.objectStoreNames.contains('thumbs')) db.createObjectStore('thumbs', { keyPath: 'hash' });
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    }).catch(error => {
-      console.warn('Preview cache unavailable', error);
-      return null;
-    });
-  }
-  return cachePromise;
+function recordFor(card, kind = kindForCard(card)) {
+  return {
+    hash: card.dataset.hash,
+    filename: filenameFor(card),
+    mime: kind ? `${kind}/unknown` : ''
+  };
 }
 
-const idb = request => new Promise((resolve, reject) => {
-  request.onsuccess = () => resolve(request.result);
-  request.onerror = () => reject(request.error);
-});
-
-const txDone = transaction => new Promise((resolve, reject) => {
-  transaction.oncomplete = resolve;
-  transaction.onerror = () => reject(transaction.error);
-  transaction.onabort = () => reject(transaction.error || new Error('IndexedDB transaction aborted'));
-});
-
-async function cachedRows(cards) {
-  const db = await cache();
-  if (!db) return cards.map(card => ({ card, file: null, thumb: null }));
-  const transaction = db.transaction(['files', 'thumbs']);
-  const done = txDone(transaction);
-  const fileStore = transaction.objectStore('files');
-  const thumbStore = transaction.objectStore('thumbs');
-  const requests = cards.map(card => ({
-    card,
-    file: fileStore.get(card.dataset.hash),
-    thumb: thumbStore.get(card.dataset.hash)
-  }));
-  const rows = await Promise.all(requests.map(async row => ({
-    card: row.card,
-    file: await idb(row.file),
-    thumb: await idb(row.thumb)
-  })));
-  await done;
-  return rows;
+function thumbUrl(hash) {
+  return `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
 }
 
-async function cacheThumb(hash, blob, width, height, source = 'server') {
-  const db = await cache();
-  if (db) {
-    const thumbTx = db.transaction('thumbs', 'readwrite');
-    const thumbDone = txDone(thumbTx);
-    thumbTx.objectStore('thumbs').put({ hash, blob, source, version: THUMB_VERSION });
-    await thumbDone;
-
-    if (width && height) {
-      const readTx = db.transaction('files');
-      const readDone = txDone(readTx);
-      const file = await idb(readTx.objectStore('files').get(hash));
-      await readDone;
-      if (file && (!file.width || !file.height || file.width !== width || file.height !== height)) {
-        file.width = width;
-        file.height = height;
-        const fileTx = db.transaction('files', 'readwrite');
-        const fileDone = txDone(fileTx);
-        fileTx.objectStore('files').put(file);
-        await fileDone;
-      }
-    }
-  }
+function visible(card) {
+  const rect = card.getBoundingClientRect();
+  return rect.bottom >= 0 && rect.top <= innerHeight;
 }
 
-async function deleteCachedThumb(hash) {
-  const db = await cache();
-  if (!db) return;
-  const transaction = db.transaction('thumbs', 'readwrite');
-  const done = txDone(transaction);
-  transaction.objectStore('thumbs').delete(hash);
-  await done;
+function cardsFor(hash) {
+  return files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"]`);
 }
 
 function mediaBox(card, kind) {
@@ -163,89 +87,51 @@ function pendingBox(box, hash) {
     pending = document.createElement('span');
     pending.className = 'video-thumb-pending';
     pending.dataset.videoThumb = hash;
-    const old = box.querySelector('img,video');
-    if (old) {
-      old.removeAttribute?.('src');
-      old.load?.();
-      old.replaceWith(pending);
-    } else box.prepend(pending);
+    box.prepend(pending);
   }
-}
-
-function trimMemoryUrls() {
-  if (urls.size <= MAX_MEMORY_THUMBS) return;
-  for (const [hash, entry] of urls) {
-    if (urls.size <= MAX_MEMORY_THUMBS) break;
-    if (hashVisible(hash)) continue;
-    URL.revokeObjectURL(entry.url);
-    urls.delete(hash);
-  }
-}
-
-function objectUrl(hash, blob) {
-  const current = urls.get(hash);
-  if (current?.blob === blob) {
-    urls.delete(hash);
-    urls.set(hash, current);
-    return current.url;
-  }
-  if (current) URL.revokeObjectURL(current.url);
-  const url = URL.createObjectURL(blob);
-  urls.set(hash, { blob, url });
-  trimMemoryUrls();
-  return url;
 }
 
 function applyDimensions(hash, width, height) {
   if (!width || !height) return;
   const ratio = Math.max(.65, Math.min(2.1, width / height));
-  for (const card of files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"].media-card`)) card.style.setProperty('--ratio', ratio);
+  for (const card of cardsFor(hash)) if (card.classList.contains('media-card')) card.style.setProperty('--ratio', ratio);
 }
 
-function applyBlob(hash, blob) {
-  const url = objectUrl(hash, blob);
-  for (const card of files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"]`)) {
-    const box = card.querySelector('.media-thumb');
-    if (!box) continue;
-    box.classList.remove('thumb-failed');
-    box.removeAttribute('title');
-    let image = box.querySelector('img.cached-thumb');
-    if (!image) {
-      image = document.createElement('img');
-      image.className = 'cached-thumb';
-      image.loading = 'lazy';
-      image.alt = card.title || card.querySelector('strong')?.textContent || '';
-      const old = box.querySelector('img,video,.video-thumb-pending');
-      if (old) old.replaceWith(image);
-      else box.prepend(image);
-    }
-    image.src = url;
+function clearRetry(hash) {
+  const timer = retryTimers.get(hash);
+  if (timer) clearTimeout(timer);
+  retryTimers.delete(hash);
+}
+
+function trimFallbackUrls() {
+  while (fallbackUrls.size > MAX_FALLBACK_URLS) {
+    const [hash, url] = fallbackUrls.entries().next().value;
+    URL.revokeObjectURL(url);
+    fallbackUrls.delete(hash);
   }
 }
 
-function nearViewport(card) {
-  const rect = card.getBoundingClientRect();
-  return rect.bottom > -600 && rect.top < innerHeight + 900;
-}
+function applyFallbackBlob(hash, blob, width, height) {
+  const old = fallbackUrls.get(hash);
+  if (old) URL.revokeObjectURL(old);
+  const url = URL.createObjectURL(blob);
+  fallbackUrls.set(hash, url);
+  trimFallbackUrls();
+  applyDimensions(hash, width, height);
 
-function visible(card) {
-  const rect = card.getBoundingClientRect();
-  return rect.bottom >= 0 && rect.top <= innerHeight;
-}
-
-function hashVisible(hash) {
-  return [...files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"]`)].some(visible);
-}
-
-function currentCard(hash) {
-  return files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
-}
-
-function scheduleRetry(hash, delay) {
-  const state = states.get(hash) || {};
-  state.next = performance.now() + delay;
-  states.set(hash, state);
-  setTimeout(scheduleScan, delay + 20);
+  for (const card of cardsFor(hash)) {
+    const kind = kindForCard(card);
+    const box = mediaBox(card, kind);
+    if (!box) continue;
+    box.classList.remove('thumb-failed');
+    box.removeAttribute('title');
+    const image = document.createElement('img');
+    image.className = 'cached-thumb';
+    image.decoding = 'async';
+    image.alt = filenameFor(card);
+    image.src = url;
+    box.querySelector('img,.video-thumb-pending')?.replaceWith(image) || box.prepend(image);
+  }
 }
 
 function queueRequest(hash) {
@@ -253,13 +139,12 @@ function queueRequest(hash) {
   if (time - (requestTimes.get(hash) || -Infinity) < PRIORITY_REFRESH) return;
   requestTimes.set(hash, time);
   requested.add(hash);
-  if (requestTimer) return;
-  requestTimer = setTimeout(flushRequests, 35);
+  if (!requestTimer) requestTimer = setTimeout(flushRequests, 25);
 }
 
 async function flushRequests() {
   requestTimer = 0;
-  const hashes = [...requested].slice(0, CHECK_BATCH);
+  const hashes = [...requested].slice(0, 500);
   hashes.forEach(hash => requested.delete(hash));
   if (!hashes.length) return;
   try {
@@ -269,191 +154,125 @@ async function flushRequests() {
       body: JSON.stringify({ hashes })
     });
   } catch {}
-  if (requested.size) requestTimer = setTimeout(flushRequests, 40);
+  if (requested.size) requestTimer = setTimeout(flushRequests, 30);
 }
 
-function queueCheck(file, card) {
-  const hash = file.hash;
+function queueFallback(record, kind) {
+  const state = states.get(record.hash) || {};
+  if (state.ready || fallbackQueued.has(record.hash) || (state.nextFallback || 0) > performance.now()) return;
+  fallbackQueued.add(record.hash);
+  fallbackQueue.push({ record, kind });
+  pumpFallback();
+}
+
+function handleMissing(card, kind) {
+  const hash = card.dataset.hash;
   const state = states.get(hash) || {};
-  if (state.ready || state.downloading || state.downloadQueued || (state.next || 0) > performance.now()) return;
-  const priority = visible(card);
-  const queued = checkQueue.get(hash);
-  if (!queued || priority) checkQueue.set(hash, { file, priority: priority || queued?.priority || false });
-  if (!checkTimer) checkTimer = setTimeout(flushChecks, 25);
-}
-
-function takeChecks() {
-  const entries = [...checkQueue.entries()]
-    .sort((a, b) => Number(b[1].priority) - Number(a[1].priority))
-    .slice(0, CHECK_BATCH);
-  for (const [hash] of entries) checkQueue.delete(hash);
-  return entries.map(([, job]) => job);
-}
-
-async function checkReady(hashes) {
-  const response = await fetch('/api/thumbs/check', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ hashes })
-  });
-  if (!response.ok) throw new Error(`Preview check failed: ${response.status}`);
-  return response.json();
-}
-
-async function flushChecks() {
-  checkTimer = 0;
-  if (checking) return;
-  const jobs = takeChecks();
-  if (!jobs.length) return;
-  checking = true;
-  try {
-    const data = await checkReady(jobs.map(job => job.file.hash));
-    const ready = new Map((data.thumbnails || []).map(row => [row.hash, row]));
-    for (const job of jobs) {
-      const row = ready.get(job.file.hash);
-      if (row) queueDownload(job.file, job.priority, row);
-      else handleMissing(job.file);
-    }
-  } catch {
-    for (const job of jobs) scheduleRetry(job.file.hash, 3000);
-  } finally {
-    checking = false;
-    if (checkQueue.size && !checkTimer) checkTimer = setTimeout(flushChecks, 30);
-  }
-}
-
-function handleMissing(file) {
-  const hash = file.hash;
-  const state = states.get(hash) || {};
-  const isVisible = hashVisible(hash);
   const now = performance.now();
-  state.firstMissingAt ||= now;
-  state.misses = (state.misses || 0) + 1;
+  state.loading = false;
+  state.missing = true;
+  state.missingSince ||= now;
   states.set(hash, state);
 
-  if (isVisible) {
+  const box = mediaBox(card, kind);
+  pendingBox(box, hash);
+  if (visible(card)) {
     queueRequest(hash);
-    const kind = kindFor(file, currentCard(hash));
     const fallbackDelay = kind === 'video' ? VIDEO_FALLBACK_DELAY : IMAGE_FALLBACK_DELAY;
-    if (now - state.firstMissingAt >= fallbackDelay) queueFallback(file, currentCard(hash));
+    if (now - state.missingSince >= fallbackDelay) queueFallback(recordFor(card, kind), kind);
   }
-  scheduleRetry(hash, isVisible ? VISIBLE_CHECK_DELAY : 4000);
+
+  if (!retryTimers.has(hash)) {
+    const elapsed = now - state.missingSince;
+    const delay = elapsed < 15_000 ? 500 : elapsed < 60_000 ? 1500 : 5000;
+    retryTimers.set(hash, setTimeout(() => {
+      retryTimers.delete(hash);
+      retryHash(hash);
+    }, delay));
+  }
 }
 
-function queueDownload(file, priority, metadata) {
-  const hash = file.hash;
+function canonicalLoaded(hash, image) {
   const state = states.get(hash) || {};
-  if (state.ready || state.downloading || state.downloadQueued) return;
-  state.downloadQueued = true;
+  state.ready = true;
+  state.loading = false;
+  state.missing = false;
+  state.missingSince = 0;
   states.set(hash, state);
-  if (priority) {
-    downloadBackground.delete(hash);
-    downloadPriority.set(hash, { file, metadata });
-  } else {
-    downloadBackground.set(hash, { file, metadata });
+  clearRetry(hash);
+  requestTimes.delete(hash);
+  applyDimensions(hash, image.naturalWidth, image.naturalHeight);
+
+  for (const card of cardsFor(hash)) {
+    const box = card.querySelector('.media-thumb');
+    if (!box) continue;
+    box.classList.remove('thumb-failed');
+    box.removeAttribute('title');
   }
-  pumpDownloads();
 }
 
-function nextDownload() {
-  const queue = downloadPriority.size ? downloadPriority : downloadBackground;
-  const entry = queue.entries().next().value;
-  if (!entry) return null;
-  queue.delete(entry[0]);
-  return entry[1];
-}
-
-async function downloadThumb(job) {
-  const { file, metadata } = job;
-  const hash = file.hash;
+function loadCanonical(card, force = false) {
+  const hash = card.dataset.hash;
+  const kind = kindForCard(card);
+  if (!hash || !kind) return;
   const state = states.get(hash) || {};
-  state.downloadQueued = false;
-  state.downloading = true;
+  if (state.ready && !force) return;
+
+  const box = mediaBox(card, kind);
+  if (!box) return;
+  let image = box.querySelector('img.server-thumb');
+  if (image && image.dataset.bound === '1') return;
+
+  if (!image) {
+    image = document.createElement('img');
+    image.className = 'cached-thumb server-thumb';
+    image.decoding = 'async';
+    image.alt = filenameFor(card);
+    const old = box.querySelector('img,video,.video-thumb-pending');
+    if (old) old.replaceWith(image);
+    else box.prepend(image);
+  }
+
+  image.dataset.bound = '1';
+  image.addEventListener('load', () => canonicalLoaded(hash, image), { once: true });
+  image.addEventListener('error', () => {
+    image.remove();
+    handleMissing(card, kind);
+  }, { once: true });
+  state.loading = true;
   states.set(hash, state);
-  try {
-    const response = await fetch(`/api/thumbs/${hash}?v=${THUMB_VERSION}`);
-    if (response.ok) {
-      const blob = await response.blob();
-      const width = Number(response.headers.get('x-mochimono-width')) || Number(metadata?.width) || 0;
-      const height = Number(response.headers.get('x-mochimono-height')) || Number(metadata?.height) || 0;
-      applyDimensions(hash, width, height);
-      applyBlob(hash, blob);
-      states.set(hash, { ready: true });
-      cacheThumb(hash, blob, width, height, 'server').catch(error => console.warn('Preview cache write failed', error));
-      return;
-    }
-    if (response.status === 404) handleMissing(file);
-    else scheduleRetry(hash, 3000);
-  } catch {
-    scheduleRetry(hash, 2500);
-  } finally {
-    const latest = states.get(hash);
-    if (latest && !latest.ready) {
-      latest.downloading = false;
-      latest.downloadQueued = false;
-    }
-  }
+  image.src = thumbUrl(hash);
 }
 
-function pumpDownloads() {
-  while (downloadActive < DOWNLOAD_WORKERS && (downloadPriority.size || downloadBackground.size)) {
-    const job = nextDownload();
-    if (!job) break;
-    downloadActive++;
-    downloadThumb(job).finally(() => {
-      downloadActive--;
-      pumpDownloads();
-    });
-  }
+function retryHash(hash) {
+  const state = states.get(hash);
+  if (state?.ready) return;
+  for (const card of cardsFor(hash)) loadCanonical(card, true);
 }
 
-async function scan() {
+function scan() {
   scanFrame = 0;
   if (document.hidden) return;
-  const cards = [...files.querySelectorAll('[data-hash]')].filter(card => nearViewport(card));
-  if (!cards.length) return;
-
-  const unresolved = [];
-  for (const card of cards) {
-    const hash = card.dataset.hash;
-    const existing = urls.get(hash);
-    if (existing && card.querySelector('.media-thumb')) {
-      applyBlob(hash, existing.blob);
-      continue;
-    }
-    unresolved.push(card);
-  }
-  if (!unresolved.length) return;
-
-  const rows = await cachedRows(unresolved).catch(() => unresolved.map(card => ({ card, file: null, thumb: null })));
-  for (const { card, file, thumb } of rows) {
-    if (!card.isConnected) continue;
-    const record = file || { hash: card.dataset.hash, filename: card.title || card.querySelector('strong')?.textContent || '', mime: '' };
-    const kind = kindFor(record, card);
+  for (const card of files.querySelectorAll('[data-hash]')) {
+    const kind = kindForCard(card);
     if (!kind) continue;
-    const box = mediaBox(card, kind);
-    if (!box) continue;
-
-    const existing = urls.get(record.hash);
-    if (existing) {
-      applyBlob(record.hash, existing.blob);
-      states.set(record.hash, { ready: true });
+    const state = states.get(card.dataset.hash);
+    if (state?.ready) {
+      if (!card.querySelector('.cached-thumb')) loadCanonical(card, true);
       continue;
     }
-    if (thumb?.blob && thumb.version === THUMB_VERSION) {
-      applyDimensions(record.hash, Number(file?.width) || 0, Number(file?.height) || 0);
-      applyBlob(record.hash, thumb.blob);
-      states.set(record.hash, { ready: true });
-      continue;
+    if (!state?.loading) loadCanonical(card);
+    if (state?.missing && visible(card)) {
+      queueRequest(card.dataset.hash);
+      const elapsed = performance.now() - (state.missingSince || performance.now());
+      const fallbackDelay = kind === 'video' ? VIDEO_FALLBACK_DELAY : IMAGE_FALLBACK_DELAY;
+      if (elapsed >= fallbackDelay) queueFallback(recordFor(card, kind), kind);
     }
-    if (thumb?.blob) deleteCachedThumb(record.hash).catch(() => {});
-    pendingBox(box, record.hash);
-    queueCheck(record, card);
   }
 }
 
 function scheduleScan() {
-  if (!scanFrame) scanFrame = requestAnimationFrame(() => scan().catch(console.warn));
+  if (!scanFrame) scanFrame = requestAnimationFrame(scan);
 }
 
 function waitFor(target, event, timeout = 8000) {
@@ -480,7 +299,9 @@ function canvasBlob(canvas) {
 }
 
 function makeCanvas(width, height) {
-  return typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(width, height) : Object.assign(document.createElement('canvas'), { width, height });
+  return typeof OffscreenCanvas !== 'undefined'
+    ? new OffscreenCanvas(width, height)
+    : Object.assign(document.createElement('canvas'), { width, height });
 }
 
 async function imageBitmap(blob) {
@@ -494,11 +315,10 @@ async function imageBitmap(blob) {
   });
 }
 
-async function imageFallback(file) {
-  const response = await fetch(`/api/objects/${file.hash}`);
+async function imageFallback(record) {
+  const response = await fetch(`/api/objects/${record.hash}`);
   if (!response.ok) throw new Error('Image unavailable');
-  const blob = await response.blob();
-  const bitmap = await imageBitmap(blob);
+  const bitmap = await imageBitmap(await response.blob());
   const sourceWidth = bitmap.width || bitmap.naturalWidth;
   const sourceHeight = bitmap.height || bitmap.naturalHeight;
   const scale = Math.min(1, THUMB_EDGE / Math.max(sourceWidth, sourceHeight));
@@ -519,7 +339,7 @@ function decodedFrame(video) {
       done = true;
       resolve();
     };
-    const timer = setTimeout(finish, 1200);
+    const timer = setTimeout(finish, 500);
     video.requestVideoFrameCallback(() => { clearTimeout(timer); finish(); });
   });
 }
@@ -540,12 +360,12 @@ function frameBlank(canvas) {
   return brightness / Math.max(1, count) < 5;
 }
 
-async function videoFallback(file) {
+async function videoFallback(record) {
   const video = document.createElement('video');
   video.muted = true;
   video.playsInline = true;
   video.preload = 'metadata';
-  video.src = `/api/objects/${file.hash}`;
+  video.src = `/api/objects/${record.hash}`;
   try {
     if (video.readyState < 1) await waitFor(video, 'loadedmetadata');
     const sourceWidth = video.videoWidth;
@@ -576,9 +396,9 @@ async function videoFallback(file) {
   }
 }
 
-async function uploadFallback(file, result) {
+async function uploadFallback(record, result) {
   if (!result.blob) throw new Error('Preview encoding failed');
-  const response = await fetch(`/api/thumbs/${file.hash}`, {
+  const response = await fetch(`/api/thumbs/${record.hash}`, {
     method: 'PUT',
     headers: {
       'content-type': 'image/webp',
@@ -586,74 +406,67 @@ async function uploadFallback(file, result) {
       'x-mochimono-width': String(result.width || 0),
       'x-mochimono-height': String(result.height || 0),
       ...(result.duration == null ? {} : { 'x-mochimono-duration': String(result.duration) }),
-      'x-mochimono-source-mime': sourceMime(file)
+      'x-mochimono-source-mime': sourceMime(record)
     },
     body: result.blob
   });
   if (!response.ok) throw new Error('Could not save preview');
 }
 
-function queueFallback(file, card) {
-  if (!file || fallbackQueued.has(file.hash) || states.get(file.hash)?.ready) return;
-  const state = states.get(file.hash) || {};
-  if ((state.nextFallback || 0) > performance.now()) return;
-  const kind = kindFor(file, card);
-  if (!kind) return;
-  fallbackQueued.add(file.hash);
-  fallbackQueue.push({ file, kind });
-  pumpFallback();
-}
-
-async function serverReadyBeforeFallback(file) {
+async function canonicalExists(hash) {
   try {
-    const data = await checkReady([file.hash]);
-    const row = data.thumbnails?.find(item => item.hash === file.hash);
-    if (!row) return false;
-    queueDownload(file, true, row);
-    return true;
+    const response = await fetch(thumbUrl(hash), { method: 'HEAD' });
+    return response.ok;
   } catch {
     return false;
   }
 }
 
 async function runFallback(job) {
-  const { file, kind } = job;
-  if (states.get(file.hash)?.ready) return;
-  if (await serverReadyBeforeFallback(file)) return;
+  const { record, kind } = job;
+  const state = states.get(record.hash) || {};
+  if (state.ready) return;
+  if (await canonicalExists(record.hash)) {
+    retryHash(record.hash);
+    return;
+  }
+
   try {
-    const result = kind === 'image' ? await imageFallback(file) : await videoFallback(file);
-    if (states.get(file.hash)?.ready) return;
-    if (await serverReadyBeforeFallback(file)) return;
-    await uploadFallback(file, result);
-    applyDimensions(file.hash, result.width, result.height);
-    applyBlob(file.hash, result.blob);
-    states.set(file.hash, { ready: true });
-    cacheThumb(file.hash, result.blob, result.width, result.height, 'browser').catch(error => console.warn('Preview cache write failed', error));
+    const result = kind === 'image' ? await imageFallback(record) : await videoFallback(record);
+    if (states.get(record.hash)?.ready) return;
+    if (await canonicalExists(record.hash)) {
+      retryHash(record.hash);
+      return;
+    }
+    await uploadFallback(record, result);
+    applyFallbackBlob(record.hash, result.blob, result.width, result.height);
+    states.set(record.hash, { ready: true });
+    clearRetry(record.hash);
   } catch (error) {
-    const state = states.get(file.hash) || {};
-    state.fallbackFailures = (state.fallbackFailures || 0) + 1;
-    state.nextFallback = performance.now() + Math.min(120_000, 30_000 * state.fallbackFailures);
-    state.next = Math.min(state.next || Infinity, performance.now() + 5000);
-    states.set(file.hash, state);
-    for (const box of files.querySelectorAll(`[data-hash="${CSS.escape(file.hash)}"] .media-thumb`)) {
+    const latest = states.get(record.hash) || {};
+    latest.fallbackFailures = (latest.fallbackFailures || 0) + 1;
+    latest.nextFallback = performance.now() + Math.min(120_000, 30_000 * latest.fallbackFailures);
+    states.set(record.hash, latest);
+    for (const card of cardsFor(record.hash)) {
+      const box = card.querySelector('.media-thumb');
+      if (!box) continue;
       box.classList.add('thumb-failed');
       box.title = `Preview unavailable: ${error.message}`;
     }
-    setTimeout(scheduleScan, Math.min(120_000, 30_000 * state.fallbackFailures) + 50);
   }
 }
 
 function pumpFallback() {
   if (fallbackActive || !fallbackQueue.length || document.hidden) return;
   const job = fallbackQueue.shift();
-  fallbackQueued.delete(job.file.hash);
+  fallbackQueued.delete(job.record.hash);
   fallbackActive = true;
   const run = () => runFallback(job).finally(() => {
     fallbackActive = false;
     pumpFallback();
   });
-  if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout: 1200 });
-  else setTimeout(run, 60);
+  if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout: 800 });
+  else setTimeout(run, 20);
 }
 
 new MutationObserver(scheduleScan).observe(files, { childList: true, subtree: true });
@@ -662,12 +475,12 @@ window.addEventListener('resize', scheduleScan, { passive: true });
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) { scheduleScan(); pumpFallback(); }
 });
-const rescan = setInterval(scheduleScan, 1500);
+const rescan = setInterval(scheduleScan, 3000);
 scheduleScan();
 
 window.addEventListener('beforeunload', () => {
   clearInterval(rescan);
-  clearTimeout(checkTimer);
   clearTimeout(requestTimer);
-  for (const entry of urls.values()) URL.revokeObjectURL(entry.url);
+  for (const timer of retryTimers.values()) clearTimeout(timer);
+  for (const url of fallbackUrls.values()) URL.revokeObjectURL(url);
 });
