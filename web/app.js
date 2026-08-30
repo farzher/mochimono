@@ -67,12 +67,12 @@ function preview(file, large = false) {
 async function loadStats() {
   const s = await request('/api/stats');
   $('#stats').innerHTML = `
-    <article><strong>${s.objects.toLocaleString()}</strong><span>unique files</span></article>
-    <article><strong>${formatBytes(s.bytes)}</strong><span>cloud library</span></article>
-    <article><strong>${s.sources.toLocaleString()}</strong><span>known locations</span></article>
-    <article><strong>${s.unreviewed.toLocaleString()}</strong><span>in Inbox</span></article>`;
+    <article><strong>${s.objects.toLocaleString()}</strong><span>files</span></article>
+    <article><strong>${formatBytes(s.bytes)}</strong><span>stored</span></article>
+    <article><strong>${s.sources.toLocaleString()}</strong><span>locations</span></article>
+    <article><strong>${s.unreviewed.toLocaleString()}</strong><span>inbox</span></article>`;
   $('#inbox').textContent = s.unreviewed ? `Inbox · ${s.unreviewed.toLocaleString()}` : 'Inbox';
-  $('#unbacked').textContent = s.unbacked ? `No backup copy · ${s.unbacked.toLocaleString()}` : 'No backup copy';
+  $('#unbacked').textContent = s.unbacked ? `Unbacked · ${s.unbacked.toLocaleString()}` : 'Unbacked';
 }
 
 async function loadImports() {
@@ -81,7 +81,7 @@ async function loadImports() {
   const source = $('#source');
   source.innerHTML = '<option value="">All sources</option>' + imports.map(item => {
     const date = new Date(item.createdAt).toLocaleDateString();
-    return `<option value="${item.id}">${escapeHtml(item.sourceName)} · ${item.files.toLocaleString()} files · ${escapeHtml(date)}</option>`;
+    return `<option value="${item.id}">${escapeHtml(item.sourceName)} · ${item.files.toLocaleString()} · ${escapeHtml(date)}</option>`;
   }).join('');
   source.value = importId;
   if (view === 'folders' && !folderImportId) renderFolder();
@@ -95,7 +95,7 @@ function renderFiles() {
   $('#more').hidden = !hasMore;
 
   if (!loaded.length) {
-    const message = inboxOnly ? 'Inbox is empty.' : noBackupOnly ? 'Every matching file has an offline backup copy.' : 'No files found.';
+    const message = inboxOnly ? 'Inbox empty.' : noBackupOnly ? 'All backed up.' : 'No files.';
     element.innerHTML = `<div class="empty">${message}</div>`;
   } else if (view === 'grid') {
     element.innerHTML = loaded.map(file => `
@@ -103,7 +103,7 @@ function renderFiles() {
         <div class="thumb">${preview(file)}${file.reviewed ? '' : '<span class="inbox-badge">Inbox</span>'}</div>
         <div class="card-copy">
           <strong title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</strong>
-          <span>${formatBytes(file.size)}${file.backupCount ? ` · ${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : ' · no offline backup'}</span>
+          <span>${formatBytes(file.size)}${file.backupCount ? ` · ${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : ' · unbacked'}</span>
         </div>
       </button>`).join('');
   } else {
@@ -114,7 +114,7 @@ function renderFiles() {
           <strong>${escapeHtml(file.filename)}</strong>
           <span>${escapeHtml(file.originalPath || '')}</span>
         </div>
-        <span class="refs">${file.backupCount ? `${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : 'no backup'}</span>
+        <span class="refs">${file.backupCount ? `${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : 'unbacked'}</span>
         <span class="size">${formatBytes(file.size)}</span>
       </button>`).join('');
   }
@@ -150,7 +150,7 @@ function folderBreadcrumb() {
     crumbs.push(`<span>›</span><button data-folder-depth="0">${escapeHtml(source.sourceName)}</button>`);
     parts.forEach((part, index) => crumbs.push(`<span>›</span><button data-folder-depth="${index + 1}">${escapeHtml(part)}</button>`));
   }
-  bar.innerHTML = `<div class="breadcrumbs">${crumbs.join('')}</div><span class="folder-note">Original imported structure</span>`;
+  bar.innerHTML = `<div class="breadcrumbs">${crumbs.join('')}</div>`;
 }
 
 function renderFolder() {
@@ -161,18 +161,18 @@ function renderFolder() {
 
   if (!folderImportId) {
     element.innerHTML = imports.length ? `
-      <div class="folder-list-head"><span>Name</span><span>Contents</span><span>Imported</span></div>
+      <div class="folder-list-head"><span>Name</span><span>Files</span><span>Imported</span></div>
       ${imports.map(item => `
         <button class="folder-row source-row" data-folder-source="${item.id}">
           <span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(item.sourceName)}</strong></span>
-          <span>${item.files.toLocaleString()} files · ${formatBytes(item.referencedBytes)}</span>
+          <span>${item.files.toLocaleString()} · ${formatBytes(item.referencedBytes)}</span>
           <span>${escapeHtml(new Date(item.createdAt).toLocaleDateString())}</span>
-        </button>`).join('')}` : '<div class="empty">No imported sources yet.</div>';
+        </button>`).join('')}` : '<div class="empty">No sources.</div>';
     return;
   }
 
   if (!folderData) {
-    element.innerHTML = '<div class="empty">Loading folder…</div>';
+    element.innerHTML = '<div class="empty">Loading…</div>';
     return;
   }
 
@@ -181,7 +181,7 @@ function renderFolder() {
     rows.push(`
       <button class="folder-row" data-folder-name="${escapeHtml(folder.name)}">
         <span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(folder.name)}</strong></span>
-        <span>${folder.files.toLocaleString()} file${folder.files === 1 ? '' : 's'}</span>
+        <span>${folder.files.toLocaleString()}</span>
         <span>Folder</span>
       </button>`);
   }
@@ -189,13 +189,13 @@ function renderFolder() {
     rows.push(`
       <button class="folder-row file-folder-row" data-hash="${file.hash}">
         <span class="folder-name"><i class="document-icon"></i><strong>${escapeHtml(file.filename)}</strong>${file.reviewed ? '' : '<em>Inbox</em>'}</span>
-        <span>${formatBytes(file.size)} · ${file.backupCount ? `${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : 'no backup'}</span>
+        <span>${formatBytes(file.size)} · ${file.backupCount ? `${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : 'unbacked'}</span>
         <span>${escapeHtml(typeLabel(file))}</span>
       </button>`);
   }
   element.innerHTML = rows.length
     ? `<div class="folder-list-head"><span>Name</span><span>Details</span><span>Type</span></div>${rows.join('')}`
-    : '<div class="empty">This folder is empty.</div>';
+    : '<div class="empty">Empty.</div>';
 }
 
 async function loadFolder() {
@@ -222,9 +222,8 @@ function setView(next) {
 
 function renderReviewState() {
   const reviewed = Boolean(selected?.reviewed);
-  $('#review-status').textContent = reviewed ? 'Reviewed' : 'Inbox';
-  $('#review-copy').textContent = reviewed ? 'You already decided to keep this content.' : 'New content stays here until you decide what to do with it.';
-  $('#review-toggle').textContent = reviewed ? 'Move to Inbox' : 'Keep';
+  $('#review-status').textContent = reviewed ? 'Kept' : 'Inbox';
+  $('#review-toggle').textContent = reviewed ? 'Inbox' : 'Keep';
   $('#review-toggle').className = reviewed ? 'quiet' : '';
 }
 
@@ -236,8 +235,8 @@ async function openDetails(hash, fallback = null) {
   $('#detail-meta').textContent = `${typeLabel(selected)} · ${formatBytes(selected.size)} · ${selected.hash.slice(0, 12)}…`;
   $('#detail-open').href = `/api/objects/${selected.hash}`;
   $('#detail-preview').innerHTML = preview(selected, true);
-  $('#detail-sources').innerHTML = '<div class="empty small-empty">Loading locations…</div>';
-  $('#detail-backups').innerHTML = '<div class="empty small-empty">Loading backups…</div>';
+  $('#detail-sources').innerHTML = '<div class="empty small-empty">Loading…</div>';
+  $('#detail-backups').innerHTML = '<div class="empty small-empty">Loading…</div>';
   renderReviewState();
   $('#details').showModal();
 
@@ -249,15 +248,14 @@ async function openDetails(hash, fallback = null) {
       <article>
         <strong>${escapeHtml(source.sourceName)}</strong>
         <span>${escapeHtml(source.path)}</span>
-        <small>${source.mtime ? `Modified ${new Date(source.mtime).toLocaleString()}` : ''}</small>
-      </article>`).join('') : '<div class="empty small-empty">No source locations recorded.</div>';
+        <small>${source.mtime ? new Date(source.mtime).toLocaleString() : ''}</small>
+      </article>`).join('') : '<div class="empty small-empty">None.</div>';
 
     $('#detail-backups').innerHTML = data.backups.length ? data.backups.map(backup => `
       <article>
         <strong>${escapeHtml(backup.name)}</strong>
-        <span>Known replica</span>
-        <small>${backup.verifiedAt ? `Verified ${new Date(backup.verifiedAt).toLocaleString()}` : `Last seen ${new Date(backup.lastSeen).toLocaleString()}`}</small>
-      </article>`).join('') : '<div class="empty small-empty warning">No offline backup location currently reports this file.</div>';
+        <small>${backup.verifiedAt ? new Date(backup.verifiedAt).toLocaleString() : new Date(backup.lastSeen).toLocaleString()}</small>
+      </article>`).join('') : '<div class="empty small-empty warning">None.</div>';
   } catch (error) {
     const html = `<div class="error">${escapeHtml(error.message)}</div>`;
     $('#detail-sources').innerHTML = html;
@@ -282,9 +280,7 @@ async function toggleReviewed() {
 
 async function removeSelected(ignore) {
   if (!selected) return;
-  const text = ignore
-    ? 'Delete this exact content from the live library and remember its hash so future imports keep ignoring it? Offline backup copies are not erased.'
-    : 'Delete this content from the live library? It can return if encountered in a future import. Offline backup copies are not erased.';
+  const text = ignore ? 'Delete + ignore on future imports?' : 'Delete this file?';
   if (!confirm(text)) return;
   await request(`/api/objects/${selected.hash}/delete`, { method: 'POST', body: { ignore } });
   $('#details').close();
@@ -297,7 +293,7 @@ async function removeSelected(ignore) {
 async function loadDrives() {
   const data = await request('/api/drives');
   if (!data.drives.length) {
-    $('#drives').innerHTML = '<div class="empty">No backups yet. Create one with the local Mochimono Agent.</div>';
+    $('#drives').innerHTML = '<div class="empty">No backups.</div>';
     return;
   }
   $('#drives').innerHTML = data.drives.map(drive => {
@@ -307,8 +303,8 @@ async function loadDrives() {
       <article class="drive">
         <div class="drive-head"><strong>${escapeHtml(drive.name)}</strong><span>${ratio.toFixed(1)}%</span></div>
         <div class="meter"><i style="width:${ratio}%"></i></div>
-        <p>${formatBytes(drive.protectedBytes)} protected of ${formatBytes(drive.desiredBytes)}${missing ? ` · ${formatBytes(missing)} missing` : ' · complete'}</p>
-        <p>${drive.protectedCount.toLocaleString()} / ${drive.desiredCount.toLocaleString()} objects · ${drive.policy.all ? 'Everything' : drive.policy.types.map(escapeHtml).join(', ')} · Last seen ${new Date(drive.lastSeen).toLocaleString()}</p>
+        <p>${formatBytes(drive.protectedBytes)} / ${formatBytes(drive.desiredBytes)}${missing ? ` · ${formatBytes(missing)} missing` : ''}</p>
+        <p>${drive.protectedCount.toLocaleString()} / ${drive.desiredCount.toLocaleString()} files · ${drive.policy.all ? 'Everything' : drive.policy.types.map(escapeHtml).join(', ')} · ${new Date(drive.lastSeen).toLocaleString()}</p>
       </article>`;
   }).join('');
 }
