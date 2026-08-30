@@ -174,11 +174,73 @@ document.addEventListener('keydown', event => {
 }, true);
 
 if (stage && viewer) {
-  // Direct interaction with a video always belongs to the native player.
-  for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) {
-    stage.addEventListener(type, event => {
-      if (event.target.closest('#viewer-media video')) event.stopImmediatePropagation();
+  // Video keeps the normal viewer gestures, but a stationary tap directly on
+  // the player gets a much smaller navigation zone. The native control strip
+  // at the bottom is never allowed to trigger previous/next.
+  const videoPointers = new Map();
+  let recentVideoGesture = null;
+  const VIDEO_TAP_EDGE = .22;
+
+  stage.addEventListener('pointerdown', event => {
+    if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+    const video = event.target.closest('#viewer-media video');
+    if (!video) return;
+    const rect = video.getBoundingClientRect();
+    const controlBand = Math.min(64, rect.height * .22);
+    videoPointers.set(event.pointerId, {
+      startX: event.clientX,
+      startY: event.clientY,
+      x: event.clientX,
+      y: event.clientY,
+      startedAt: performance.now(),
+      inControls: event.clientY >= rect.bottom - controlBand
     });
+  });
+
+  stage.addEventListener('pointermove', event => {
+    const point = videoPointers.get(event.pointerId);
+    if (!point) return;
+    point.x = event.clientX;
+    point.y = event.clientY;
+  });
+
+  stage.addEventListener('pointerup', event => {
+    const point = videoPointers.get(event.pointerId);
+    if (!point) return;
+    videoPointers.delete(event.pointerId);
+    point.x = event.clientX;
+    point.y = event.clientY;
+    const dx = point.x - point.startX;
+    const dy = point.y - point.startY;
+    const travel = Math.hypot(dx, dy);
+    const duration = Math.max(1, performance.now() - point.startedAt);
+    const horizontal = Math.abs(dx) > Math.abs(dy) * 1.08;
+    const velocity = Math.abs(dx) / duration;
+    const swipe = horizontal && (Math.abs(dx) >= 26 || (Math.abs(dx) >= 16 && velocity >= .18));
+    const edgeTap = travel <= 12 && (
+      event.clientX < innerWidth * VIDEO_TAP_EDGE ||
+      event.clientX > innerWidth * (1 - VIDEO_TAP_EDGE)
+    );
+    recentVideoGesture = {
+      allowNavigation: !point.inControls && (swipe || edgeTap),
+      until: performance.now() + 120
+    };
+  });
+
+  stage.addEventListener('pointercancel', event => {
+    videoPointers.delete(event.pointerId);
+    recentVideoGesture = null;
+  });
+
+  for (const button of [viewerPrev, viewerNext]) {
+    button?.addEventListener('click', event => {
+      if (event.isTrusted || !recentVideoGesture || performance.now() > recentVideoGesture.until) return;
+      const gesture = recentVideoGesture;
+      recentVideoGesture = null;
+      if (gesture.allowNavigation) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
   }
 
   // Desktop double-click uses the actual mouse gesture, not a media query about
