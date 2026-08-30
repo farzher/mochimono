@@ -202,6 +202,7 @@ function typeLabel(file) {
 function matchesType(file) {
   if (!type) return true;
   const value = kind(file);
+  if (type === 'media') return value === 'image' || value === 'video';
   if (type === 'application') return value === 'application' || value === 'text';
   if (type === 'other') return !['image', 'video', 'audio', 'text', 'application'].includes(value);
   return value === type;
