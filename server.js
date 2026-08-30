@@ -250,12 +250,13 @@ async function handleApi(req, res, url) {
              COALESCE(MIN(s.filename), o.hash) AS filename,
              COALESCE(MIN(s.original_path), '') AS originalPath,
              COALESCE(MAX(s.mtime), o.created_at) AS fileDate,
-             GROUP_CONCAT(DISTINCT s.import_id) AS importIds,
+             GROUP_CONCAT(DISTINCT (SELECT MIN(i2.id) FROM imports i2 WHERE i2.source_name = i.source_name)) AS importIds,
              COALESCE(GROUP_CONCAT(DISTINCT s.filename || ' ' || s.original_path), '') AS searchText,
              EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
              (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount
       FROM objects o
       LEFT JOIN sources s ON s.object_hash = o.hash
+      LEFT JOIN imports i ON i.id = s.import_id
       WHERE o.state = 'active' AND o.hash > ?
       GROUP BY o.hash
       ORDER BY o.hash
@@ -270,12 +271,14 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/api/imports') {
     const rows = db.prepare(`
-      SELECT i.id, i.source_name AS sourceName, i.created_at AS createdAt,
-             COUNT(o.hash) AS files, COALESCE(SUM(o.size), 0) AS referencedBytes
+      SELECT MIN(i.id) AS id, i.source_name AS sourceName, MIN(i.created_at) AS createdAt,
+             COUNT(DISTINCT o.hash) AS files, COALESCE(SUM(o.size), 0) AS referencedBytes
       FROM imports i
       LEFT JOIN sources s ON s.import_id = i.id
       LEFT JOIN objects o ON o.hash = s.object_hash AND o.state = 'active'
-      GROUP BY i.id ORDER BY i.id DESC LIMIT 100
+      GROUP BY i.source_name
+      ORDER BY MAX(i.id) DESC
+      LIMIT 100
     `).all();
     return json(res, 200, { imports: rows });
   }
@@ -311,7 +314,7 @@ async function handleApi(req, res, url) {
         SELECT substr(s.original_path, ? + 1) AS rest
         FROM sources s
         JOIN objects o ON o.hash = s.object_hash
-        WHERE s.import_id = ? AND o.state = 'active'
+        WHERE s.import_id IN (SELECT id FROM imports WHERE source_name = ?) AND o.state = 'active'
           AND substr(s.original_path, 1, ?) = ?
       )
       SELECT substr(rest, 1, instr(rest, '/') - 1) AS name, COUNT(*) AS files
@@ -319,20 +322,21 @@ async function handleApi(req, res, url) {
       WHERE instr(rest, '/') > 0
       GROUP BY name
       ORDER BY lower(name), name
-    `).all(prefixLength, importId, prefixLength, prefix);
+    `).all(prefixLength, source.sourceName, prefixLength, prefix);
 
     const files = db.prepare(`
       SELECT o.hash, o.size, o.mime, o.created_at AS createdAt,
-             s.filename, s.original_path AS originalPath, s.mtime,
+             MIN(s.filename) AS filename, MIN(s.original_path) AS originalPath, MAX(s.mtime) AS mtime,
              EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
              (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount
       FROM sources s
       JOIN objects o ON o.hash = s.object_hash
-      WHERE s.import_id = ? AND o.state = 'active'
+      WHERE s.import_id IN (SELECT id FROM imports WHERE source_name = ?) AND o.state = 'active'
         AND substr(s.original_path, 1, ?) = ?
         AND instr(substr(s.original_path, ? + 1), '/') = 0
-      ORDER BY lower(s.filename), s.filename
-    `).all(importId, prefixLength, prefix, prefixLength);
+      GROUP BY o.hash, s.original_path
+      ORDER BY lower(filename), filename
+    `).all(source.sourceName, prefixLength, prefix, prefixLength);
 
     return json(res, 200, { source, path, folders, files });
   }
@@ -442,7 +446,9 @@ async function handleApi(req, res, url) {
       WHERE o.state = 'active' AND ${filter.sql} AND ${reviewSql(review, 'o')}
         AND (? != 'missing' OR NOT EXISTS (SELECT 1 FROM replicas rb WHERE rb.object_hash = o.hash))
         AND (? = 0 OR EXISTS (
-          SELECT 1 FROM sources si WHERE si.object_hash = o.hash AND si.import_id = ?
+          SELECT 1 FROM sources si JOIN imports ii ON ii.id = si.import_id
+          WHERE si.object_hash = o.hash
+            AND ii.source_name = (SELECT source_name FROM imports WHERE id = ?)
         ))
         AND (? = '' OR EXISTS (
           SELECT 1 FROM sources sx JOIN imports ix ON ix.id = sx.import_id
