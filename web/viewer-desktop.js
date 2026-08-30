@@ -19,10 +19,10 @@ protectViewerImages();
 if (viewerDesktopMedia) {
   new MutationObserver(protectViewerImages).observe(viewerDesktopMedia, { childList: true, subtree: true });
   viewerDesktopMedia.addEventListener('dragstart', event => {
-    if (event.target.closest('img')) event.preventDefault();
+    if (event.target.closest?.('img')) event.preventDefault();
   });
   viewerDesktopMedia.addEventListener('selectstart', event => {
-    if (event.target.closest('img')) event.preventDefault();
+    if (event.target.closest?.('img')) event.preventDefault();
   });
 }
 
@@ -30,11 +30,22 @@ if (viewerDesktopStage) {
   let press = null;
   let lastClick = null;
   let lastClickTimer = 0;
+  let dispatchingResetDblclick = false;
+  let suppressNaturalDblclick = false;
+
+  // Loaded before browser-shortcuts.js so we can suppress the browser's native
+  // dblclick after sending one explicit reset dblclick into the zoom controller.
+  viewerDesktopStage.addEventListener('dblclick', event => {
+    if (dispatchingResetDblclick || !suppressNaturalDblclick) return;
+    suppressNaturalDblclick = false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
 
   viewerDesktopStage.addEventListener('pointerdown', event => {
     if (event.pointerType !== 'mouse' || event.button !== 0) return;
     if (!viewerDesktopStage.classList.contains('viewer-desktop-zoomed')) return;
-    if (!event.target.closest('#viewer-media img')) return;
+    if (!event.target.closest?.('#viewer-media img')) return;
     window.getSelection()?.removeAllRanges();
     press = {
       pointerId: event.pointerId,
@@ -70,13 +81,19 @@ if (viewerDesktopStage) {
     lastClick = null;
     window.getSelection()?.removeAllRanges();
     const image = viewerDesktopMedia?.querySelector('img');
-    image?.dispatchEvent(new MouseEvent('dblclick', {
+    if (!image) return;
+
+    suppressNaturalDblclick = true;
+    dispatchingResetDblclick = true;
+    image.dispatchEvent(new MouseEvent('dblclick', {
       bubbles: true,
       cancelable: true,
       button: 0,
       clientX: event.clientX,
       clientY: event.clientY
     }));
+    dispatchingResetDblclick = false;
+    setTimeout(() => { suppressNaturalDblclick = false; }, 500);
   }, true);
 
   viewerDesktopStage.addEventListener('pointercancel', event => {
