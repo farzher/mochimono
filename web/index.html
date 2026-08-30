@@ -64,9 +64,9 @@
             <button data-media-size="400" title="Extra large" aria-label="Extra large previews"><span class="size-glyph size-4"></span></button>
           </div>
           <div id="views" class="views" aria-label="View">
-            <button data-view="grid" class="active" title="Grid" aria-label="Grid">▦</button>
-            <button data-view="list" title="List" aria-label="List">☷</button>
-            <button data-view="folders" title="Folders" aria-label="Folders"><span class="view-folder-icon" aria-hidden="true"></span></button>
+            <button data-view="grid" class="active" title="Grid" aria-label="Grid"><svg class="view-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3.25" y="3.25" width="5.5" height="5.5" rx=".8"/><rect x="11.25" y="3.25" width="5.5" height="5.5" rx=".8"/><rect x="3.25" y="11.25" width="5.5" height="5.5" rx=".8"/><rect x="11.25" y="11.25" width="5.5" height="5.5" rx=".8"/></svg></button>
+            <button data-view="list" title="List" aria-label="List"><svg class="view-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5.25h1M8 5.25h8M4 10h1M8 10h8M4 14.75h1M8 14.75h8"/></svg></button>
+            <button data-view="folders" title="Folders" aria-label="Folders"><svg class="view-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.75 6.25h5l1.6-2h3.2l1.25 2h3.45v9.5H2.75z"/></svg></button>
           </div>
         </div>
         <div id="selectionBar" class="selection-bar" hidden>
@@ -112,6 +112,7 @@
   </div>
 
   <script type="module" src="/app.js"></script>
+  <script type="module" src="/video-thumbs.js"></script>
   <script type="module" src="/gallery.js"></script>
   <script type="module" src="/viewer-url.js"></script>
   <script type="module" src="/library-ui.js"></script>
