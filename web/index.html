@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/folders.css">
   <link rel="stylesheet" href="/library-ui.css">
   <link rel="stylesheet" href="/collections.css">
+  <link rel="stylesheet" href="/file-info.css">
 </head>
 <body>
   <main class="shell">
@@ -94,6 +95,7 @@
       <button id="viewer-close" class="viewer-icon" aria-label="Close">×</button>
       <div class="viewer-title"><strong id="viewer-name"></strong><span id="viewer-meta"></span></div>
       <div class="viewer-actions">
+        <button id="viewer-info-button" class="viewer-action" type="button">Info</button>
         <a id="viewer-open" class="viewer-action" target="_blank">Open</a>
         <details id="viewer-menu" class="viewer-menu">
           <summary aria-label="More">•••</summary>
@@ -107,6 +109,7 @@
       <div id="viewer-media" class="viewer-media"></div>
       <button id="viewer-next" class="viewer-nav viewer-next" aria-label="Next">›</button>
     </div>
+    <aside id="viewerInfo" class="viewer-info" hidden></aside>
   </div>
 
   <script type="module" src="/search-query.js"></script>
@@ -117,6 +120,7 @@
   <script type="module" src="/browser-ui.js"></script>
   <script type="module" src="/library-ui.js"></script>
   <script type="module" src="/collections.js"></script>
+  <script type="module" src="/file-info.js"></script>
   <script type="module" src="/folder-url.js"></script>
 </body>
 </html>
