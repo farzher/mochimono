@@ -40,6 +40,7 @@
         <div class="toolbar">
           <div class="library-filters">
             <select id="source" aria-label="Filter by source"><option value="">All sources</option></select>
+            <button id="inbox" class="inbox-toggle">Inbox</button>
             <div id="filters" class="segmented">
               <button data-type="" class="active">All</button>
               <button data-type="image">Images</button>
@@ -80,6 +81,10 @@
           <p id="detail-meta"></p>
         </div>
         <a id="detail-open" class="button-link" target="_blank">Open original</a>
+      </div>
+      <div class="review-zone">
+        <div><strong id="review-status"></strong><p id="review-copy"></p></div>
+        <button id="review-toggle"></button>
       </div>
       <h3>Known locations</h3>
       <div id="detail-sources" class="sources"></div>
