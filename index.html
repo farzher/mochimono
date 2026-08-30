@@ -3,18 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Mochimono turns folders and drives into one deduplicated library while preserving original paths and tracking offline backups.">
-  <meta name="theme-color" content="#fff8f2">
-  <title>Mochimono — keep the files, lose the filing</title>
+  <meta name="description" content="Mochimono is a cozy cloud home for all your stuff.">
+  <meta name="theme-color" content="#0d0c0e">
+  <title>Mochimono — a cozy home for all your stuff</title>
   <style>
-    :root{--ink:#302827;--muted:#756965;--paper:#fffaf5;--pink:#ef9188;--line:#eaded8}
-    *{box-sizing:border-box}body{margin:0;color:var(--ink);background:radial-gradient(circle at 12% 0,#ffe9e2 0,transparent 28rem),var(--paper);font-family:ui-rounded,"SF Pro Rounded","Segoe UI",system-ui,-apple-system,sans-serif;line-height:1.45}a{color:inherit}.wrap{width:min(900px,calc(100% - 32px));margin:auto}
-    nav{height:70px;display:flex;align-items:center;justify-content:space-between}.brand{display:flex;align-items:center;gap:10px;font-weight:850;text-decoration:none;letter-spacing:-.03em}.jp{font-size:11px;color:var(--muted);letter-spacing:.08em;margin-left:3px}.github{font-size:13px;font-weight:750;text-decoration:none;padding:8px 12px;border:1px solid var(--line);border-radius:999px;background:#fff}.mini{width:31px;height:25px;border:2px solid #d9c8c0;border-radius:50% 50% 43% 43%/60% 60% 40% 40%;background:white;position:relative}.mini:before,.mini:after{content:"";position:absolute;top:10px;width:3px;height:4px;border-radius:50%;background:#514642}.mini:before{left:8px}.mini:after{right:8px}
-    main{padding:58px 0 30px}.hero{display:grid;grid-template-columns:1.35fr .65fr;align-items:center;gap:48px}.eyebrow{font-size:12px;font-weight:850;letter-spacing:.1em;text-transform:uppercase;color:#a15652}h1{font-size:clamp(50px,7vw,74px);line-height:.96;letter-spacing:-.065em;margin:12px 0 20px}.lead{max-width:620px;margin:0;color:var(--muted);font-size:18px}.actions{display:flex;align-items:center;gap:14px;margin-top:25px;flex-wrap:wrap}.button{display:inline-flex;padding:11px 16px;border-radius:999px;background:var(--ink);color:white;text-decoration:none;font-size:14px;font-weight:800}.meaning{font-size:12px;color:#93837e}
-    .mascot{height:230px;display:grid;place-items:center;position:relative}.sun{position:absolute;width:205px;height:205px;background:linear-gradient(145deg,#ffd9d0,#fff1dc);border-radius:50%;box-shadow:inset 0 0 45px rgba(255,255,255,.5)}.character{position:relative;width:176px;height:150px;display:grid;place-items:end center;z-index:2;animation:bob 4.5s ease-in-out infinite}.mochi{width:155px;height:126px;position:relative;z-index:2;background:radial-gradient(circle at 33% 18%,#fff 0 7px,transparent 8px),linear-gradient(145deg,#fff,#fff8f1);border:2px solid #e8d9d2;border-radius:49% 51% 44% 44%/59% 58% 42% 41%;box-shadow:0 25px 45px rgba(104,73,65,.14),inset -10px -9px 20px rgba(232,214,204,.16)}.mochi:before,.mochi:after{content:"";position:absolute;top:51px;width:7px;height:10px;background:#4c413f;border-radius:50%}.mochi:before{left:47px}.mochi:after{right:47px}.mouth{position:absolute;left:50%;top:70px;width:17px;height:9px;margin-left:-8px;border-bottom:3px solid #8b6b66;border-radius:50%}.mouth:before,.mouth:after{content:"";position:absolute;top:-2px;width:19px;height:8px;border-radius:50%;background:rgba(239,145,136,.18)}.mouth:before{left:-43px}.mouth:after{right:-43px}.hair-flower{position:absolute;z-index:4;left:20px;top:25px;color:var(--pink);font-size:29px;line-height:1;transform:rotate(-14deg);filter:drop-shadow(0 2px 0 rgba(255,255,255,.85)) drop-shadow(0 3px 4px rgba(118,75,70,.12))}@keyframes bob{50%{transform:translateY(-5px)}}
-    .proof{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin-top:58px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.proof div{padding:19px 22px 20px 0}.proof div+div{padding-left:22px;border-left:1px solid var(--line)}.proof b{display:block;font-size:14px;margin-bottom:4px}.proof span{display:block;font-size:12px;color:var(--muted)}
-    @media(max-width:720px){main{padding-top:30px}.hero{grid-template-columns:1fr;text-align:center;gap:16px}.mascot{order:-1;height:180px}.sun{width:165px;height:165px}.character{transform:scale(.84);animation:none}.lead{margin:auto}.actions{justify-content:center}.proof{grid-template-columns:1fr;margin-top:42px}.proof div,.proof div+div{padding:15px 0;border-left:0;border-top:1px solid var(--line)}.proof div:first-child{border-top:0}h1{font-size:clamp(48px,13vw,66px)}}
-    @media(max-width:430px){.wrap{width:calc(100% - 22px)}.jp{display:none}.mascot{height:155px}.sun{width:140px;height:140px}.character{transform:scale(.72)}.actions{display:grid}.button{justify-content:center}}
+    :root{color-scheme:dark;--ink:#f6efeb;--muted:#a99e9a;--paper:#0d0c0e;--surface:#171417;--line:#30292e;--pink:#f2a19b;--pink-soft:#321d22}
+    *{box-sizing:border-box}html{background:var(--paper)}body{margin:0;color:var(--ink);background:radial-gradient(circle at 13% 4%,#30191f 0,transparent 29rem),radial-gradient(circle at 92% 30%,#21171d 0,transparent 25rem),var(--paper);font-family:ui-rounded,"SF Pro Rounded","Segoe UI",system-ui,-apple-system,sans-serif;line-height:1.45}a{color:inherit}.wrap{width:min(900px,calc(100% - 32px));margin:auto}
+    nav{height:72px;display:flex;align-items:center;justify-content:space-between}.brand{display:flex;align-items:center;gap:10px;font-weight:850;text-decoration:none;letter-spacing:-.03em}.jp{font-size:11px;color:var(--muted);letter-spacing:.08em;margin-left:3px}.github{font-size:13px;font-weight:750;text-decoration:none;padding:8px 12px;border:1px solid var(--line);border-radius:999px;background:#151216}.github:hover{border-color:#52444b;background:#1c181c}.mini{width:31px;height:25px;border:2px solid #6c5b61;border-radius:50% 50% 43% 43%/60% 60% 40% 40%;background:#faf4ef;position:relative}.mini:before,.mini:after{content:"";position:absolute;top:10px;width:3px;height:4px;border-radius:50%;background:#514642}.mini:before{left:8px}.mini:after{right:8px}
+    main{padding:76px 0 52px}.hero{display:grid;grid-template-columns:1.35fr .65fr;align-items:center;gap:54px}h1{max-width:650px;font-size:clamp(54px,7.8vw,82px);line-height:.94;letter-spacing:-.07em;margin:0}.actions{display:flex;align-items:center;gap:15px;margin-top:28px;flex-wrap:wrap}.button{display:inline-flex;padding:11px 16px;border-radius:999px;background:var(--ink);color:#171214;text-decoration:none;font-size:14px;font-weight:850}.button:hover{background:white}.meaning{font-size:12px;color:var(--muted)}
+    .mascot{height:245px;display:grid;place-items:center;position:relative}.sun{position:absolute;width:215px;height:215px;background:linear-gradient(145deg,#47262d,#2a1a20);border:1px solid #4e3037;border-radius:50%;box-shadow:inset 0 0 55px rgba(244,164,153,.05),0 25px 70px rgba(0,0,0,.25)}.character{position:relative;width:176px;height:150px;display:grid;place-items:end center;z-index:2;animation:bob 4.5s ease-in-out infinite}.mochi{width:155px;height:126px;position:relative;z-index:2;background:radial-gradient(circle at 33% 18%,#fff 0 7px,transparent 8px),linear-gradient(145deg,#fff,#f5ece6);border:2px solid #d9c9c3;border-radius:49% 51% 44% 44%/59% 58% 42% 41%;box-shadow:0 28px 55px rgba(0,0,0,.34),inset -10px -9px 20px rgba(183,153,145,.13)}.mochi:before,.mochi:after{content:"";position:absolute;top:51px;width:7px;height:10px;background:#4c413f;border-radius:50%}.mochi:before{left:47px}.mochi:after{right:47px}.mouth{position:absolute;left:50%;top:70px;width:17px;height:9px;margin-left:-8px;border-bottom:3px solid #8b6b66;border-radius:50%}.mouth:before,.mouth:after{content:"";position:absolute;top:-2px;width:19px;height:8px;border-radius:50%;background:rgba(239,145,136,.2)}.mouth:before{left:-43px}.mouth:after{right:-43px}.hair-flower{position:absolute;z-index:4;left:20px;top:25px;color:var(--pink);font-size:29px;line-height:1;transform:rotate(-14deg);filter:drop-shadow(0 2px 0 rgba(255,255,255,.55)) drop-shadow(0 4px 8px rgba(0,0,0,.28))}@keyframes bob{50%{transform:translateY(-5px)}}
+    .proof{display:grid;grid-template-columns:repeat(3,1fr);margin-top:74px;border-top:1px solid var(--line)}.proof div{padding:20px 22px 0 0}.proof div+div{padding-left:22px;border-left:1px solid var(--line)}.proof b{display:block;font-size:13px;letter-spacing:-.01em}.proof span{display:block;margin-top:3px;color:var(--muted);font-size:11px}
+    @media(max-width:720px){main{padding-top:34px}.hero{grid-template-columns:1fr;text-align:center;gap:18px}.mascot{order:-1;height:185px}.sun{width:170px;height:170px}.character{transform:scale(.86);animation:none}.actions{justify-content:center}.proof{grid-template-columns:1fr;margin-top:48px}.proof div,.proof div+div{padding:15px 0;border-left:0;border-top:1px solid var(--line)}.proof div:first-child{border-top:0}h1{font-size:clamp(50px,13vw,70px)}}
+    @media(max-width:430px){.wrap{width:calc(100% - 22px)}.jp{display:none}.mascot{height:155px}.sun{width:142px;height:142px}.character{transform:scale(.73)}.actions{display:grid}.button{justify-content:center}}
   </style>
 </head>
 <body>
@@ -27,12 +27,10 @@
     <main>
       <section class="hero">
         <div>
-          <div class="eyebrow">Personal archive</div>
-          <h1>Keep the files.<br>Lose the filing.</h1>
-          <p class="lead">Throw in folders and drives. Mochimono stores duplicates once, remembers every original path, and shows what’s actually backed up.</p>
+          <h1>A cozy home<br>for all your stuff.</h1>
           <div class="actions">
             <a class="button" href="https://github.com/farzher/mochimono">View on GitHub</a>
-            <span class="meaning">持ち物 — belongings</span>
+            <span class="meaning">持ち物 — your stuff</span>
           </div>
         </div>
         <div class="mascot" aria-label="Smiling mochi mascot">
@@ -41,10 +39,10 @@
         </div>
       </section>
 
-      <section class="proof" aria-label="What Mochimono keeps track of">
-        <div><b>One copy.</b><span>Exact duplicates collapse.</span></div>
-        <div><b>Every path.</b><span>Original folders stay remembered.</span></div>
-        <div><b>Backup truth.</b><span>See what’s protected. Restore offline.</span></div>
+      <section class="proof" aria-label="Mochimono at a glance">
+        <div><b>Everything together.</b><span>One library for all your stuff.</span></div>
+        <div><b>Structure remembered.</b><span>Your original folders stay yours.</span></div>
+        <div><b>Cloud first.</b><span>Available anywhere. Backups tracked.</span></div>
       </section>
     </main>
   </div>
