@@ -1,6 +1,8 @@
 const files = document.querySelector('#files');
 const views = document.querySelector('#views');
 const folderbar = document.querySelector('#folderbar');
+const viewer = document.querySelector('#viewer');
+const finePointer = matchMedia('(hover:hover) and (pointer:fine)');
 
 function currentView() {
   return views.querySelector('[data-view].active')?.dataset.view || 'grid';
@@ -25,6 +27,30 @@ folderbar.addEventListener('click', event => {
     folderbar.replaceChildren();
   });
 });
+
+let viewerUiTimer = 0;
+
+function showViewerUi() {
+  if (viewer.hidden || !finePointer.matches) return;
+  viewer.classList.remove('viewer-ui-hidden');
+  clearTimeout(viewerUiTimer);
+  viewerUiTimer = setTimeout(() => {
+    if (!viewer.hidden && finePointer.matches) viewer.classList.add('viewer-ui-hidden');
+  }, 500);
+}
+
+function syncViewerUi() {
+  clearTimeout(viewerUiTimer);
+  viewerUiTimer = 0;
+  viewer.classList.remove('viewer-ui-hidden');
+  if (!viewer.hidden && finePointer.matches) showViewerUi();
+}
+
+viewer.addEventListener('mousemove', showViewerUi, { passive: true });
+viewer.addEventListener('mouseenter', showViewerUi, { passive: true });
+new MutationObserver(syncViewerUi).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
+finePointer.addEventListener?.('change', syncViewerUi);
+syncViewerUi();
 
 let press = null;
 let dispatchingLongPress = false;
