@@ -113,14 +113,14 @@ async function serveThumbnail(req, res, hash) {
 
   const etag = `"${hash}-thumb-${THUMB_VERSION}"`;
   if (req.headers['if-none-match'] === etag) {
-    res.writeHead(304, { etag, 'cache-control': 'private, max-age=31536000, immutable' });
+    res.writeHead(304, { etag, 'cache-control': 'private, max-age=86400' });
     return res.end();
   }
 
   res.writeHead(200, {
     'content-type': row.mime,
     'content-length': info.size,
-    'cache-control': 'private, max-age=31536000, immutable',
+    'cache-control': 'private, max-age=86400',
     etag,
     'x-mochimono-width': row.width,
     'x-mochimono-height': row.height,
@@ -146,18 +146,16 @@ function missingThumbnails(res, url) {
   const extensionSql = mediaExtensions.map(extension => `lower(s.filename) LIKE '%${extension}'`).join(' OR ');
 
   const objects = db.prepare(`
-    SELECT o.hash, o.size, o.mime, r.requested_at AS requestedAt
-    FROM objects o
+    SELECT o.hash, o.size, o.mime, MAX(r.requested_at) AS requestedAt
+    FROM sources s
+    JOIN objects o ON o.hash = s.object_hash
     LEFT JOIN thumbnails t ON t.object_hash = o.hash AND t.version = ?
     LEFT JOIN thumbnail_requests r ON r.object_hash = o.hash
-    WHERE o.state = 'active'
+    WHERE s.import_id IN (${importMarks})
+      AND o.state = 'active'
       AND t.object_hash IS NULL
-      AND EXISTS (
-        SELECT 1 FROM sources s
-        WHERE s.object_hash = o.hash
-          AND s.import_id IN (${importMarks})
-          AND (o.mime LIKE 'image/%' OR o.mime LIKE 'video/%' OR ${extensionSql})
-      )
+      AND (o.mime LIKE 'image/%' OR o.mime LIKE 'video/%' OR ${extensionSql})
+    GROUP BY o.hash, o.size, o.mime
     ORDER BY (requestedAt IS NOT NULL) DESC, requestedAt DESC, o.size ASC, o.hash
     LIMIT ?
   `).all(THUMB_VERSION, ...imports, limit);
@@ -182,10 +180,21 @@ function missingThumbnails(res, url) {
     });
   }
 
+  const isMediaName = name => {
+    const lower = String(name || '').toLowerCase();
+    return mediaExtensions.some(extension => lower.endsWith(extension));
+  };
   const files = objects.map(object => {
     const candidates = sources.get(object.hash) || [];
-    const first = candidates[0] || {};
-    return { ...object, ...first, filename: first.filename || object.hash, sources: candidates };
+    const first = object.mime.startsWith('image/') || object.mime.startsWith('video/')
+      ? candidates[0]
+      : candidates.find(candidate => isMediaName(candidate.filename)) || candidates[0];
+    return {
+      ...object,
+      ...(first || {}),
+      filename: first?.filename || object.hash,
+      sources: candidates
+    };
   });
   return json(res, 200, { version: THUMB_VERSION, files });
 }
