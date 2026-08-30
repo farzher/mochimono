@@ -5,7 +5,8 @@ const app = $('#app');
 const logout = $('#logout');
 const PAGE = 180;
 const CACHE_NAME = 'mochimono-catalog';
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
+const THUMB_EDGE = 768;
 
 let searchTimer;
 let catalog = [];
@@ -21,19 +22,25 @@ let hasMore = false;
 let type = '';
 let importId = '';
 let inboxOnly = false;
-let noBackupOnly = false;
+let unprotectedOnly = false;
 let view = 'grid';
 let sort = 'date-desc';
 let selected = null;
 let folderImportId = '';
 let folderPath = '';
 let folderData = null;
-let dateScrollFrame = 0;
+let scrollFrame = 0;
 let cacheMeta = null;
 let cacheDbPromise;
 let viewerScrollY = 0;
 let viewerDirty = false;
 let viewerPreloads = [];
+let scrubbing = false;
+let lastScrubAt = 0;
+let thumbBusy = false;
+const thumbQueue = [];
+const thumbQueued = new Set();
+const thumbUrls = new Map();
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
@@ -69,6 +76,7 @@ function openCache() {
         const db = request.result;
         if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'hash' });
         if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('thumbs')) db.createObjectStore('thumbs', { keyPath: 'hash' });
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
@@ -117,10 +125,13 @@ async function cachePut(file) {
 async function cacheDelete(hash) {
   const db = await openCache();
   if (!db) return;
-  const transaction = db.transaction('files', 'readwrite');
+  const transaction = db.transaction(['files', 'thumbs'], 'readwrite');
   const done = idbDone(transaction);
   transaction.objectStore('files').delete(hash);
+  transaction.objectStore('thumbs').delete(hash);
   await done;
+  if (thumbUrls.has(hash)) URL.revokeObjectURL(thumbUrls.get(hash));
+  thumbUrls.delete(hash);
 }
 
 async function cacheImports(nextImports) {
@@ -132,6 +143,31 @@ async function cacheImports(nextImports) {
   const done = idbDone(transaction);
   transaction.objectStore('meta').put({ key: 'catalog', ...cacheMeta });
   await done;
+}
+
+async function loadThumbs(files) {
+  const wanted = files.filter(file => ['image', 'video'].includes(kind(file)) && !thumbUrls.has(file.hash));
+  if (!wanted.length) return;
+  const db = await openCache();
+  if (!db) return;
+  const transaction = db.transaction('thumbs');
+  const store = transaction.objectStore('thumbs');
+  const rows = await Promise.all(wanted.map(file => idbRequest(store.get(file.hash))));
+  await idbDone(transaction);
+  rows.filter(Boolean).forEach(row => {
+    if (!thumbUrls.has(row.hash)) thumbUrls.set(row.hash, URL.createObjectURL(row.blob));
+  });
+  for (const file of wanted) applyCachedThumb(file.hash);
+}
+
+async function saveThumb(hash, blob) {
+  const db = await openCache();
+  if (!db || !blob) return;
+  const transaction = db.transaction('thumbs', 'readwrite');
+  const done = idbDone(transaction);
+  transaction.objectStore('thumbs').put({ hash, blob });
+  await done;
+  if (!thumbUrls.has(hash)) thumbUrls.set(hash, URL.createObjectURL(blob));
 }
 
 function formatBytes(bytes) {
@@ -167,6 +203,10 @@ function matchesType(file) {
 const objectUrl = file => `/api/objects/${file.hash}`;
 
 function preview(file) {
+  const thumb = thumbUrls.get(file.hash);
+  if (thumb && ['image', 'video'].includes(kind(file))) {
+    return `<img class="cached-thumb" loading="lazy" src="${thumb}" alt="${escapeHtml(file.filename)}">${kind(file) === 'video' ? '<span class="play-badge">▶</span>' : ''}`;
+  }
   const url = objectUrl(file);
   if (kind(file) === 'image') return `<img loading="lazy" src="${url}" alt="${escapeHtml(file.filename)}">`;
   if (kind(file) === 'video') return `<video class="video-thumb" muted playsinline preload="metadata" src="${url}#t=0.1"></video><span class="play-badge">▶</span>`;
@@ -189,6 +229,8 @@ function normalizeFile(file) {
   return {
     ...file,
     size: Number(file.size) || 0,
+    width: Number(file.width) || 0,
+    height: Number(file.height) || 0,
     importIds,
     reviewed: Boolean(file.reviewed),
     backupCount: Number(file.backupCount) || 0,
@@ -244,10 +286,16 @@ function timelineGroups() {
   return result;
 }
 
+function mediaRatio(file) {
+  if (!file.width || !file.height) return 4 / 3;
+  return Math.max(.65, Math.min(2.1, file.width / file.height));
+}
+
 function gridCard(file) {
   const media = ['image', 'video'].includes(kind(file));
+  const ratio = mediaRatio(file);
   return `
-    <button class="file-card ${media ? 'media-card' : ''} ${kind(file) === 'video' ? 'video-card' : ''}" data-hash="${file.hash}" title="${escapeHtml(file.filename)}">
+    <button class="file-card ${media ? 'media-card' : ''} ${kind(file) === 'video' ? 'video-card' : ''}" data-hash="${file.hash}" style="${media ? `--ratio:${ratio}` : ''}" title="${escapeHtml(file.filename)}">
       <div class="thumb ${media ? 'media-thumb' : ''}">${preview(file)}${file.reviewed ? '' : '<span class="inbox-badge">Inbox</span>'}</div>
       ${media ? '' : `<div class="card-copy"><strong>${escapeHtml(file.filename)}</strong><span>${formatBytes(file.size)}</span></div>`}
     </button>`;
@@ -275,7 +323,6 @@ function railEntries() {
       major: i % 3 === 0 || i === indexes.length - 1
     }));
   }
-
   const groups = timelineGroups();
   const compact = groups.length > 18;
   let lastYear;
@@ -292,24 +339,44 @@ function railEntries() {
   });
 }
 
+function railLabel(index) {
+  const file = filtered[Math.max(0, Math.min(filtered.length - 1, index))];
+  if (!file) return '';
+  return sort === 'size-desc' ? formatBytes(file.size) : monthLabel(monthKey(file));
+}
+
+function setRailThumb(index) {
+  const thumb = $('#railThumb');
+  if (!thumb || !filtered.length) return;
+  const safe = Math.max(0, Math.min(filtered.length - 1, index));
+  const position = filtered.length === 1 ? 0 : safe / (filtered.length - 1);
+  thumb.style.top = `${position * 100}%`;
+  thumb.querySelector('span').textContent = railLabel(safe);
+}
+
 function renderRail() {
   const rail = $('#dateRail');
   const entries = railEntries();
   rail.hidden = !entries.length;
   document.documentElement.classList.toggle('library-scroll', Boolean(entries.length));
   if (!entries.length) return;
-  rail.innerHTML = entries.map(entry => `
-    <button data-index="${entry.index}" class="${entry.major ? 'major' : ''}" style="top:${(entry.position * 100).toFixed(3)}%" title="${escapeHtml(entry.label)}">
+  rail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `
+    <button data-index="${entry.index}" class="rail-tick ${entry.major ? 'major' : ''}" style="top:${(entry.position * 100).toFixed(3)}%" title="${escapeHtml(entry.label)}">
       <span>${escapeHtml(entry.short || entry.label)}</span><i></i>
-    </button>`).join('');
+    </button>`).join('')}<div id="railThumb" class="rail-thumb"><span></span><i></i></div>`;
   updateRailActive();
+}
+
+function visibleIndex() {
+  const visible = [...$('#files').querySelectorAll('[data-hash]')].find(item => item.getBoundingClientRect().bottom > 90);
+  return visible ? filteredIndex.get(visible.dataset.hash) ?? renderOffset : renderOffset;
 }
 
 function updateRailActive() {
   const rail = $('#dateRail');
-  if (rail.hidden || !loaded.length) return;
-  const visible = [...$('#files').querySelectorAll('[data-hash]')].find(item => item.getBoundingClientRect().bottom > 90);
-  const index = visible ? filteredIndex.get(visible.dataset.hash) ?? renderOffset : renderOffset;
+  if (rail.hidden || !filtered.length) return;
+  const index = visibleIndex();
+  setRailThumb(index);
   const buttons = [...rail.querySelectorAll('[data-index]')];
   let active = buttons[0];
   let distance = Infinity;
@@ -338,38 +405,37 @@ function updateWindow() {
   hasMore = renderOffset + renderLimit < filtered.length;
 }
 
+function renderActiveFilters() {
+  $('#filterInbox').checked = inboxOnly;
+  $('#filterUnprotected').checked = unprotectedOnly;
+  const active = [];
+  if (inboxOnly) active.push('<button data-clear-filter="inbox">Inbox ×</button>');
+  if (unprotectedOnly) active.push('<button data-clear-filter="unprotected">Unprotected ×</button>');
+  $('#activeFilters').innerHTML = active.join('');
+}
+
 function applyFilters(reset = true) {
   if (view === 'folders') return loadFolder();
   const query = $('#search').value.trim().toLowerCase();
   const terms = query.split(/\s+/).filter(Boolean);
   const sourceId = Number(importId) || 0;
-
   filtered = sortFiles(catalog.filter(file => {
     if (!matchesType(file)) return false;
     if (inboxOnly && file.reviewed) return false;
-    if (noBackupOnly && file.backupCount > 0) return false;
+    if (unprotectedOnly && file.backupCount > 0) return false;
     if (sourceId && !file.importIds.includes(sourceId)) return false;
-    if (terms.length) {
-      const haystack = searchIndex.get(file.hash) || '';
-      if (!terms.every(term => haystack.includes(term))) return false;
-    }
+    if (terms.length && !terms.every(term => (searchIndex.get(file.hash) || '').includes(term))) return false;
     return true;
   }));
   filteredIndex = new Map(filtered.map((file, index) => [file.hash, index]));
-
-  if (reset) {
-    renderOffset = 0;
-    renderLimit = PAGE;
-  }
+  if (reset) { renderOffset = 0; renderLimit = PAGE; }
   updateWindow();
+  renderActiveFilters();
   renderFiles();
 }
 
-function showMore() {
-  if (!hasMore || view === 'folders') return;
-  renderLimit += PAGE;
-  updateWindow();
-  renderFiles();
+function cardsHtml(files) {
+  return files.map(file => view === 'grid' ? gridCard(file) : listRow(file)).join('');
 }
 
 function renderFiles() {
@@ -378,44 +444,151 @@ function renderFiles() {
   element.className = `files ${view}`;
   $('#folderbar').hidden = true;
   $('#scroll-sentinel').hidden = !hasMore;
-
   if (!loaded.length) {
-    const message = inboxOnly ? 'Inbox empty.' : noBackupOnly ? 'All backed up.' : 'No files.';
+    const message = inboxOnly ? 'Inbox empty.' : unprotectedOnly ? 'All protected.' : 'No files.';
     element.innerHTML = `<div class="empty">${message}</div>`;
     renderRail();
     return;
   }
-
   if (sort.startsWith('date-')) {
     element.innerHTML = dateGroups(loaded).map(group => `
       <section class="date-group" data-date-group="${group.key}">
         <h3 class="date-heading">${escapeHtml(group.label)}</h3>
-        <div class="${view === 'grid' ? 'date-grid' : 'date-list'}">${group.files.map(file => view === 'grid' ? gridCard(file) : listRow(file)).join('')}</div>
+        <div class="${view === 'grid' ? 'date-grid' : 'date-list'}">${cardsHtml(group.files)}</div>
       </section>`).join('');
   } else {
     element.innerHTML = view === 'grid'
-      ? `<div class="date-grid flat-grid">${loaded.map(gridCard).join('')}</div>`
-      : loaded.map(listRow).join('');
+      ? `<div class="date-grid flat-grid">${cardsHtml(loaded)}</div>`
+      : cardsHtml(loaded);
   }
   renderRail();
+  loadThumbs(loaded).catch(console.warn);
 }
 
-function jumpToIndex(index) {
+function appendMore() {
+  if (!hasMore || view === 'folders') return;
+  const start = renderOffset + renderLimit;
+  const end = Math.min(filtered.length, start + PAGE);
+  const next = filtered.slice(start, end);
+  renderLimit += next.length;
+  loaded = filtered.slice(renderOffset, renderOffset + renderLimit);
+  hasMore = renderOffset + renderLimit < filtered.length;
+  $('#scroll-sentinel').hidden = !hasMore;
+  if (!next.length) return;
+
+  if (sort.startsWith('date-')) {
+    for (const group of dateGroups(next)) {
+      const last = $('#files .date-group:last-of-type');
+      if (last?.dataset.dateGroup === group.key) {
+        last.querySelector(view === 'grid' ? '.date-grid' : '.date-list').insertAdjacentHTML('beforeend', cardsHtml(group.files));
+      } else {
+        $('#files').insertAdjacentHTML('beforeend', `<section class="date-group" data-date-group="${group.key}"><h3 class="date-heading">${escapeHtml(group.label)}</h3><div class="${view === 'grid' ? 'date-grid' : 'date-list'}">${cardsHtml(group.files)}</div></section>`);
+      }
+    }
+  } else if (view === 'grid') {
+    $('#files .flat-grid').insertAdjacentHTML('beforeend', cardsHtml(next));
+  } else {
+    $('#files').insertAdjacentHTML('beforeend', cardsHtml(next));
+  }
+  loadThumbs(next).catch(console.warn);
+  updateRailActive();
+}
+
+function jumpToIndex(index, smooth = true) {
   if (!Number.isInteger(index) || !filtered[index]) return;
   if (index < renderOffset || index >= renderOffset + renderLimit) {
-    renderOffset = Math.max(0, index - PAGE);
-    renderLimit = PAGE * 3;
+    renderOffset = Math.max(0, index - Math.floor(PAGE / 2));
+    renderLimit = PAGE * 2;
     updateWindow();
     renderFiles();
   }
   const hash = filtered[index].hash;
-  requestAnimationFrame(() => document.querySelector(`[data-hash="${CSS.escape(hash)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  requestAnimationFrame(() => document.querySelector(`#files [data-hash="${CSS.escape(hash)}"]`)?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'center' }));
 }
 
-function setMediaRatio(element, width, height) {
-  if (!width || !height) return;
-  const card = element.closest('.media-card');
-  if (card) card.style.setProperty('--ratio', Math.max(.65, Math.min(2.1, width / height)));
+function scrubFromPointer(event, final = false) {
+  if (!filtered.length) return;
+  const rail = $('#dateRail');
+  const rect = rail.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+  const index = Math.round(ratio * (filtered.length - 1));
+  setRailThumb(index);
+  const now = performance.now();
+  if (final || now - lastScrubAt > 80) {
+    lastScrubAt = now;
+    jumpToIndex(index, false);
+  }
+}
+
+function applyCachedThumb(hash) {
+  const url = thumbUrls.get(hash);
+  if (!url) return;
+  for (const card of document.querySelectorAll(`#files [data-hash="${CSS.escape(hash)}"]`)) {
+    const box = card.querySelector('.media-thumb');
+    if (!box || box.querySelector('.cached-thumb')) continue;
+    const old = box.querySelector('img,video');
+    if (!old) continue;
+    const image = document.createElement('img');
+    image.className = 'cached-thumb';
+    image.loading = 'lazy';
+    image.src = url;
+    image.alt = card.title || '';
+    old.replaceWith(image);
+  }
+}
+
+function learnMedia(element, width, height) {
+  if (!width || !height || element.classList.contains('cached-thumb')) return;
+  const card = element.closest('[data-hash]');
+  if (!card) return;
+  const file = catalog.find(item => item.hash === card.dataset.hash);
+  if (file && (!file.width || !file.height)) {
+    file.width = width;
+    file.height = height;
+    cachePut(file).catch(console.warn);
+  }
+  queueThumb(element, card.dataset.hash, width, height);
+}
+
+function queueThumb(element, hash, width, height) {
+  if (thumbUrls.has(hash) || thumbQueued.has(hash)) return;
+  thumbQueued.add(hash);
+  thumbQueue.push({ element, hash, width, height });
+  pumpThumbs();
+}
+
+function idle(callback) {
+  if ('requestIdleCallback' in window) requestIdleCallback(callback, { timeout: 1200 });
+  else setTimeout(callback, 30);
+}
+
+function canvasBlob(canvas) {
+  return new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .82));
+}
+
+async function pumpThumbs() {
+  if (thumbBusy || !thumbQueue.length) return;
+  thumbBusy = true;
+  idle(async () => {
+    const job = thumbQueue.shift();
+    try {
+      if (job?.element?.isConnected && !thumbUrls.has(job.hash)) {
+        const scale = Math.min(1, THUMB_EDGE / Math.max(job.width, job.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(job.width * scale));
+        canvas.height = Math.max(1, Math.round(job.height * scale));
+        canvas.getContext('2d', { alpha: false }).drawImage(job.element, 0, 0, canvas.width, canvas.height);
+        const blob = await canvasBlob(canvas);
+        await saveThumb(job.hash, blob);
+      }
+    } catch (error) {
+      console.warn('Thumbnail failed', error);
+    } finally {
+      if (job) thumbQueued.delete(job.hash);
+      thumbBusy = false;
+      if (thumbQueue.length) pumpThumbs();
+    }
+  });
 }
 
 async function loadStats() {
@@ -423,8 +596,8 @@ async function loadStats() {
   const percent = s.capacityBytes ? Math.min(100, s.bytes / s.capacityBytes * 100) : 0;
   const width = s.bytes ? `max(2px, ${percent}%)` : '0';
   $('#stats').innerHTML = `<span>${formatBytes(s.bytes)} <small>of ${formatBytes(s.capacityBytes)}</small></span><i><b style="width:${width}"></b></i>`;
-  $('#inbox').textContent = s.unreviewed ? `Inbox ${s.unreviewed.toLocaleString()}` : 'Inbox';
-  $('#unbacked').textContent = s.unbacked ? `Unbacked ${s.unbacked.toLocaleString()}` : 'Unbacked';
+  $('#filterInboxLabel').textContent = s.unreviewed ? `Inbox · ${s.unreviewed.toLocaleString()}` : 'Inbox';
+  $('#filterUnprotectedLabel').textContent = s.unbacked ? `Unprotected · ${s.unbacked.toLocaleString()}` : 'Unprotected';
 }
 
 async function fetchCatalog() {
@@ -449,8 +622,12 @@ async function fetchCatalog() {
 async function syncCatalog(force = false) {
   const remote = await request('/api/catalog/version');
   if (!force && cacheMeta?.version === remote.version) return;
+  const localMedia = new Map(catalog.filter(file => file.width && file.height).map(file => [file.hash, [file.width, file.height]]));
   const fresh = await fetchCatalog();
-  catalog = fresh.files;
+  catalog = fresh.files.map(file => {
+    const dimensions = localMedia.get(file.hash);
+    return dimensions ? { ...file, width: dimensions[0], height: dimensions[1] } : file;
+  });
   imports = fresh.imports;
   cacheMeta = { version: fresh.version, imports };
   rebuildIndexes();
@@ -483,34 +660,17 @@ function renderFolder() {
   $('#dateRail').hidden = true;
   document.documentElement.classList.remove('library-scroll');
   folderBreadcrumb();
-
   if (!folderImportId) {
     element.innerHTML = imports.length ? `
       <div class="folder-list-head"><span>Name</span><span>Files</span><span>Imported</span></div>
-      ${imports.map(item => `
-        <button class="folder-row source-row" data-folder-source="${item.id}">
-          <span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(item.sourceName)}</strong></span>
-          <span>${item.files.toLocaleString()} · ${formatBytes(item.referencedBytes)}</span>
-          <span>${escapeHtml(new Date(item.createdAt).toLocaleDateString())}</span>
-        </button>`).join('')}` : '<div class="empty">No sources.</div>';
+      ${imports.map(item => `<button class="folder-row source-row" data-folder-source="${item.id}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(item.sourceName)}</strong></span><span>${item.files.toLocaleString()} · ${formatBytes(item.referencedBytes)}</span><span>${escapeHtml(new Date(item.createdAt).toLocaleDateString())}</span></button>`).join('')}` : '<div class="empty">No sources.</div>';
     return;
   }
-
-  if (!folderData) {
-    element.innerHTML = '<div class="empty">Loading…</div>';
-    return;
-  }
-
+  if (!folderData) { element.innerHTML = '<div class="empty">Loading…</div>'; return; }
   const rows = [];
-  for (const folder of folderData.folders) {
-    rows.push(`<button class="folder-row" data-folder-name="${escapeHtml(folder.name)}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(folder.name)}</strong></span><span>${folder.files.toLocaleString()}</span><span>Folder</span></button>`);
-  }
-  for (const file of folderData.files) {
-    rows.push(`<button class="folder-row file-folder-row" data-hash="${file.hash}"><span class="folder-name"><i class="document-icon"></i><strong>${escapeHtml(file.filename)}</strong>${file.reviewed ? '' : '<em>Inbox</em>'}</span><span>${formatBytes(file.size)}</span><span>${escapeHtml(typeLabel(file))}</span></button>`);
-  }
-  element.innerHTML = rows.length
-    ? `<div class="folder-list-head"><span>Name</span><span>Size</span><span>Type</span></div>${rows.join('')}`
-    : '<div class="empty">Empty.</div>';
+  for (const folder of folderData.folders) rows.push(`<button class="folder-row" data-folder-name="${escapeHtml(folder.name)}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(folder.name)}</strong></span><span>${folder.files.toLocaleString()}</span><span>Folder</span></button>`);
+  for (const file of folderData.files) rows.push(`<button class="folder-row file-folder-row" data-hash="${file.hash}"><span class="folder-name"><i class="document-icon"></i><strong>${escapeHtml(file.filename)}</strong>${file.reviewed ? '' : '<em>Inbox</em>'}</span><span>${formatBytes(file.size)}</span><span>${escapeHtml(typeLabel(file))}</span></button>`);
+  element.innerHTML = rows.length ? `<div class="folder-list-head"><span>Name</span><span>Size</span><span>Type</span></div>${rows.join('')}` : '<div class="empty">Empty.</div>';
 }
 
 async function loadFolder() {
@@ -523,10 +683,14 @@ async function loadFolder() {
 
 function setView(next) {
   view = next;
-  $('#sort').hidden = view === 'folders';
-  $('#typeFilter').hidden = view === 'folders';
+  const folderMode = view === 'folders';
+  $('#sort').hidden = folderMode;
+  $('#typeFilter').hidden = folderMode;
+  $('#filterMenu').hidden = folderMode;
+  $('#activeFilters').hidden = folderMode;
+  $('#mediaSizeControl').hidden = view !== 'grid';
   $$('#views button').forEach(item => item.classList.toggle('active', item.dataset.view === view));
-  if (view === 'folders') {
+  if (folderMode) {
     folderImportId = importId;
     folderPath = '';
     loadFolder().catch(console.error);
@@ -564,18 +728,8 @@ function preloadAround() {
   const items = viewerItems();
   const index = items.findIndex(file => file.hash === selected?.hash);
   viewerPreloads = [-1, 1].map(step => items[index + step]).filter(Boolean).map(file => {
-    if (kind(file) === 'image') {
-      const image = new Image();
-      image.src = objectUrl(file);
-      return image;
-    }
-    if (kind(file) === 'video') {
-      const video = document.createElement('video');
-      video.preload = 'metadata';
-      video.muted = true;
-      video.src = `${objectUrl(file)}#t=0.1`;
-      return video;
-    }
+    if (kind(file) === 'image') { const image = new Image(); image.src = objectUrl(file); return image; }
+    if (kind(file) === 'video') { const video = document.createElement('video'); video.preload = 'metadata'; video.muted = true; video.src = `${objectUrl(file)}#t=0.1`; return video; }
     return null;
   }).filter(Boolean);
 }
@@ -609,10 +763,7 @@ function navigateViewer(step) {
   const items = viewerItems();
   const index = items.findIndex(file => file.hash === selected?.hash);
   const next = items[index + step];
-  if (next) {
-    selected = normalizeFile(next);
-    renderViewerState();
-  }
+  if (next) { selected = normalizeFile(next); renderViewerState(); }
 }
 
 async function toggleReviewed() {
@@ -667,6 +818,9 @@ async function boot() {
     app.hidden = false;
     logout.hidden = false;
     $('#files').innerHTML = '<div class="empty">Loading…</div>';
+    const mediaSize = Math.max(96, Math.min(260, Number(localStorage.getItem('mochimono-media-size')) || 158));
+    $('#mediaSize').value = mediaSize;
+    document.documentElement.style.setProperty('--media-size', `${mediaSize}px`);
 
     const cached = await readCache().catch(() => null);
     if (cached) {
@@ -677,7 +831,6 @@ async function boot() {
       renderImports();
       applyFilters(true);
     }
-
     await Promise.all([loadStats(), loadDrives()]);
     if (cached) syncCatalog(false).catch(console.error);
     else await syncCatalog(true);
@@ -697,9 +850,7 @@ $('#login-form').addEventListener('submit', async event => {
     await request('/api/login', { method: 'POST', body: { token: $('#token').value } });
     $('#token').value = '';
     await boot();
-  } catch (error) {
-    $('#login-error').textContent = error.message;
-  }
+  } catch (error) { $('#login-error').textContent = error.message; }
 });
 
 logout.addEventListener('click', async () => {
@@ -714,33 +865,25 @@ $('#search').addEventListener('input', () => {
 
 $('#source').addEventListener('change', event => {
   importId = event.target.value;
-  if (view === 'folders') {
-    folderImportId = importId;
-    folderPath = '';
-    loadFolder().catch(console.error);
-  } else applyFilters(true);
+  if (view === 'folders') { folderImportId = importId; folderPath = ''; loadFolder().catch(console.error); }
+  else applyFilters(true);
 });
 
-$('#typeFilter').addEventListener('change', event => {
-  type = event.target.value;
+$('#typeFilter').addEventListener('change', event => { type = event.target.value; applyFilters(true); });
+$('#sort').addEventListener('change', event => { sort = event.target.value; applyFilters(true); });
+$('#filterInbox').addEventListener('change', event => { inboxOnly = event.target.checked; applyFilters(true); });
+$('#filterUnprotected').addEventListener('change', event => { unprotectedOnly = event.target.checked; applyFilters(true); });
+$('#activeFilters').addEventListener('click', event => {
+  const button = event.target.closest('[data-clear-filter]');
+  if (!button) return;
+  if (button.dataset.clearFilter === 'inbox') inboxOnly = false;
+  if (button.dataset.clearFilter === 'unprotected') unprotectedOnly = false;
   applyFilters(true);
 });
-
-$('#sort').addEventListener('change', event => {
-  sort = event.target.value;
-  applyFilters(true);
-});
-
-$('#inbox').addEventListener('click', () => {
-  inboxOnly = !inboxOnly;
-  $('#inbox').classList.toggle('active', inboxOnly);
-  applyFilters(true);
-});
-
-$('#unbacked').addEventListener('click', () => {
-  noBackupOnly = !noBackupOnly;
-  $('#unbacked').classList.toggle('active', noBackupOnly);
-  applyFilters(true);
+$('#mediaSize').addEventListener('input', event => {
+  const size = Number(event.target.value);
+  document.documentElement.style.setProperty('--media-size', `${size}px`);
+  localStorage.setItem('mochimono-media-size', String(size));
 });
 
 $('#views').addEventListener('click', event => {
@@ -748,19 +891,36 @@ $('#views').addEventListener('click', event => {
   if (button) setView(button.dataset.view);
 });
 
-$('#dateRail').addEventListener('click', event => {
-  const button = event.target.closest('[data-index]');
-  if (button) jumpToIndex(Number(button.dataset.index));
+document.addEventListener('click', event => {
+  if ($('#filterMenu').open && !event.target.closest('#filterMenu')) $('#filterMenu').open = false;
 });
+
+const rail = $('#dateRail');
+rail.addEventListener('pointerdown', event => {
+  if (rail.hidden) return;
+  scrubbing = true;
+  rail.setPointerCapture?.(event.pointerId);
+  rail.classList.add('dragging');
+  scrubFromPointer(event, false);
+  event.preventDefault();
+});
+rail.addEventListener('pointermove', event => {
+  if (!scrubbing) return;
+  scrubFromPointer(event, false);
+  event.preventDefault();
+});
+rail.addEventListener('pointerup', event => {
+  if (!scrubbing) return;
+  scrubbing = false;
+  rail.classList.remove('dragging');
+  scrubFromPointer(event, true);
+  rail.releasePointerCapture?.(event.pointerId);
+});
+rail.addEventListener('pointercancel', () => { scrubbing = false; rail.classList.remove('dragging'); });
 
 $('#folderbar').addEventListener('click', event => {
   if (event.target.closest('[data-folder-home]')) {
-    folderImportId = '';
-    folderPath = '';
-    importId = '';
-    $('#source').value = '';
-    loadFolder().catch(console.error);
-    return;
+    folderImportId = ''; folderPath = ''; importId = ''; $('#source').value = ''; loadFolder().catch(console.error); return;
   }
   const crumb = event.target.closest('[data-folder-depth]');
   if (!crumb) return;
@@ -772,40 +932,28 @@ $('#folderbar').addEventListener('click', event => {
 $('#files').addEventListener('click', event => {
   const sourceRow = event.target.closest('[data-folder-source]');
   if (sourceRow) {
-    folderImportId = sourceRow.dataset.folderSource;
-    importId = folderImportId;
-    $('#source').value = importId;
-    folderPath = '';
-    loadFolder().catch(console.error);
-    return;
+    folderImportId = sourceRow.dataset.folderSource; importId = folderImportId; $('#source').value = importId; folderPath = ''; loadFolder().catch(console.error); return;
   }
   const folderRow = event.target.closest('[data-folder-name]');
-  if (folderRow) {
-    folderPath = folderPath ? `${folderPath}/${folderRow.dataset.folderName}` : folderRow.dataset.folderName;
-    loadFolder().catch(console.error);
-    return;
-  }
+  if (folderRow) { folderPath = folderPath ? `${folderPath}/${folderRow.dataset.folderName}` : folderRow.dataset.folderName; loadFolder().catch(console.error); return; }
   const item = event.target.closest('[data-hash]');
   if (item) openViewer(item.dataset.hash);
 });
 
 $('#files').addEventListener('load', event => {
-  if (event.target instanceof HTMLImageElement) setMediaRatio(event.target, event.target.naturalWidth, event.target.naturalHeight);
+  if (event.target instanceof HTMLImageElement) learnMedia(event.target, event.target.naturalWidth, event.target.naturalHeight);
 }, true);
-$('#files').addEventListener('loadedmetadata', event => {
-  if (event.target instanceof HTMLVideoElement) setMediaRatio(event.target, event.target.videoWidth, event.target.videoHeight);
+$('#files').addEventListener('loadeddata', event => {
+  if (event.target instanceof HTMLVideoElement) learnMedia(event.target, event.target.videoWidth, event.target.videoHeight);
 }, true);
 
 new IntersectionObserver(entries => {
-  if (entries.some(entry => entry.isIntersecting)) showMore();
+  if (entries.some(entry => entry.isIntersecting)) appendMore();
 }, { rootMargin: '700px 0px' }).observe($('#scroll-sentinel'));
 
 window.addEventListener('scroll', () => {
-  if (dateScrollFrame) return;
-  dateScrollFrame = requestAnimationFrame(() => {
-    dateScrollFrame = 0;
-    updateRailActive();
-  });
+  if (scrollFrame || scrubbing) return;
+  scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; updateRailActive(); });
 }, { passive: true });
 
 document.addEventListener('keydown', event => {
