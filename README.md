@@ -63,6 +63,20 @@ MOCHIMONO_THUMBNAIL_WORKERS    optional local preview worker count
 
 The Agent stores its local settings in `~/.mochimono/agent.json`.
 
+## Previews
+
+Preview processing belongs on clients, not the storage server.
+
+- Images are auto-oriented, resized, and encoded to WebP in-process with Sharp/libvips.
+- Videos use a bundled FFmpeg binary with bounded, single-threaded workers.
+- Browser-visible missing previews jump ahead of background work.
+- Background discovery is throttled so large libraries stay cheap to coordinate.
+- The browser batch-checks preview availability and only downloads previews that exist.
+- IndexedDB is an optional local cache; cache failure never blocks display.
+- Browser generation is a last-resort fallback and uploads its result for reuse.
+
+The server does no image or video decoding. It stores small derived WebP files, metadata, and preview requests.
+
 ## Storage
 
 Primary storage:
@@ -74,8 +88,6 @@ $MOCHIMONO_DATA/
   thumbs/
 ```
 
-Thumbnail generation happens on clients. The server only stores and serves the small derived WebP previews.
-
 Backup folder:
 
 ```text
@@ -85,6 +97,8 @@ Backup folder:
   catalog.sqlite
   objects/
 ```
+
+Derived previews are disposable and are not copied into offline backup repositories.
 
 Mochimono never formats or partitions drives.
 
