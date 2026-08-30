@@ -1,6 +1,6 @@
 const search = document.querySelector('#search');
 const valueDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-const SEARCH_INDEX_VERSION = '5';
+const SEARCH_INDEX_VERSION = '6';
 const SEARCH_INDEX_KEY = 'mochimono-search-index-version';
 const nativeFetch = window.fetch.bind(window);
 
@@ -124,7 +124,9 @@ function sourceToken(text) {
   const exact = options.find(option => normalizeText(option.textContent) === wanted);
   if (exact) return `__sourceid__${exact.value}`;
   const matches = options.filter(option => normalizeText(option.textContent).includes(wanted));
-  return matches.length === 1 ? `__sourceid__${matches[0].value}` : wanted;
+  if (matches.length === 1) return `__sourceid__${matches[0].value}`;
+  if (options.length) return `__sourceid__missing_${encoded(wanted)}`;
+  return wanted;
 }
 
 function typeToken(text) {
@@ -189,17 +191,19 @@ function detailsHaystacks(details) {
   const sources = Array.isArray(details?.sources) ? details.sources : [];
   const names = sources.map(item => item.filename || '');
   const paths = sources.map(item => item.path || '');
-  const sourceNames = sources.map(item => item.sourceName || '');
+  const sourceNames = sources.map(item => normalizeText(item.sourceName || '')).filter(Boolean);
   const representative = names[0] || object.filename || '';
   const kind = fileKind({ filename: representative, mime: object.mime });
   const ext = extension(representative);
-  const date = sources.map(item => item.mtime).find(Boolean) || object.createdAt;
-  const year = date && !Number.isNaN(new Date(date).getTime()) ? String(new Date(date).getFullYear()) : '';
+  const dates = sources.map(item => new Date(item.mtime || 0).getTime()).filter(Number.isFinite);
+  const date = dates.length ? new Date(Math.max(...dates)) : new Date(object.createdAt || 0);
+  const year = Number.isNaN(date.getTime()) ? '' : String(date.getFullYear());
   return {
     all: normalizeText(`${names.join(' ')} ${paths.join(' ')} ${sourceNames.join(' ')}`),
     name: normalizeText(names.join(' ')),
     path: normalizeText(paths.join(' ')),
-    source: normalizeText(sourceNames.join(' ')),
+    source: sourceNames.join(' '),
+    sourceNames,
     type: normalizeText(kind),
     ext: normalizeText(ext),
     year
@@ -234,7 +238,7 @@ function matchesSmart(details, spec = {}) {
       if (!['application', 'text'].includes(hay.type)) return false;
     } else if (hay.type !== wanted) return false;
   }
-  if (spec.sourceName && !hay.source.includes(normalizeText(spec.sourceName))) return false;
+  if (spec.sourceName && !hay.sourceNames.includes(normalizeText(spec.sourceName))) return false;
   return queryMatchesDetails(spec.query || '', details);
 }
 
