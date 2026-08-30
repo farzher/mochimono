@@ -304,6 +304,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/files') {
     const q = String(url.searchParams.get('q') || '').slice(0, 200);
     const type = String(url.searchParams.get('type') || '');
+    const importId = Math.max(0, Number(url.searchParams.get('import') || 0) || 0);
     const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') || 100)));
     const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
     const filter = fileTypeSql(type, 'o');
@@ -317,14 +318,17 @@ async function handleApi(req, res, url) {
       FROM objects o
       LEFT JOIN sources s ON s.object_hash = o.hash
       WHERE o.state = 'active' AND ${filter.sql}
+        AND (? = 0 OR EXISTS (
+          SELECT 1 FROM sources si WHERE si.object_hash = o.hash AND si.import_id = ?
+        ))
         AND (? = '' OR EXISTS (
-          SELECT 1 FROM sources sx
-          WHERE sx.object_hash = o.hash AND (sx.filename LIKE ? OR sx.original_path LIKE ?)
+          SELECT 1 FROM sources sx JOIN imports ix ON ix.id = sx.import_id
+          WHERE sx.object_hash = o.hash AND (sx.filename LIKE ? OR sx.original_path LIKE ? OR ix.source_name LIKE ?)
         ))
       GROUP BY o.hash
       ORDER BY o.created_at DESC
       LIMIT ? OFFSET ?
-    `).all(...filter.params, q, like, like, limit, offset);
+    `).all(...filter.params, importId, importId, q, like, like, like, limit, offset);
     return json(res, 200, { files: rows, limit, offset, hasMore: rows.length === limit });
   }
 
