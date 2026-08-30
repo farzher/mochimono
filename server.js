@@ -152,7 +152,7 @@ async function serveStatic(res, pathname) {
     const info = await stat(path);
     if (!info.isFile()) return false;
     res.writeHead(200, { 'content-type': staticType(path), 'content-length': info.size, 'cache-control': 'no-cache' });
-    createReadStream(file).pipe(res);
+    createReadStream(path).pipe(res);
     return true;
   } catch { return false; }
 }
