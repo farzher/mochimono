@@ -5,6 +5,7 @@ const THUMB_VERSION = 1;
 const THUMB_EDGE = 768;
 const CHECK_BATCH = 500;
 const DOWNLOAD_WORKERS = 6;
+const MAX_MEMORY_THUMBS = 600;
 const IMAGE_FALLBACK_DELAY = 8_000;
 const VIDEO_FALLBACK_DELAY = 15_000;
 
@@ -168,12 +169,27 @@ function pendingBox(box, hash) {
   }
 }
 
+function trimMemoryUrls() {
+  if (urls.size <= MAX_MEMORY_THUMBS) return;
+  for (const [hash, entry] of urls) {
+    if (urls.size <= MAX_MEMORY_THUMBS) break;
+    if (hashVisible(hash)) continue;
+    URL.revokeObjectURL(entry.url);
+    urls.delete(hash);
+  }
+}
+
 function objectUrl(hash, blob) {
   const current = urls.get(hash);
-  if (current?.blob === blob) return current.url;
+  if (current?.blob === blob) {
+    urls.delete(hash);
+    urls.set(hash, current);
+    return current.url;
+  }
   if (current) URL.revokeObjectURL(current.url);
   const url = URL.createObjectURL(blob);
   urls.set(hash, { blob, url });
+  trimMemoryUrls();
   return url;
 }
 
@@ -268,6 +284,16 @@ function takeChecks() {
   return entries.map(([, job]) => job);
 }
 
+async function checkReady(hashes) {
+  const response = await fetch('/api/thumbs/check', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ hashes })
+  });
+  if (!response.ok) throw new Error(`Preview check failed: ${response.status}`);
+  return response.json();
+}
+
 async function flushChecks() {
   checkTimer = 0;
   if (checking) return;
@@ -275,13 +301,7 @@ async function flushChecks() {
   if (!jobs.length) return;
   checking = true;
   try {
-    const response = await fetch('/api/thumbs/check', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ hashes: jobs.map(job => job.file.hash) })
-    });
-    if (!response.ok) throw new Error(`Preview check failed: ${response.status}`);
-    const data = await response.json();
+    const data = await checkReady(jobs.map(job => job.file.hash));
     const ready = new Map((data.thumbnails || []).map(row => [row.hash, row]));
     for (const job of jobs) {
       const row = ready.get(job.file.hash);
@@ -345,7 +365,7 @@ async function downloadThumb(job) {
   state.downloading = true;
   states.set(hash, state);
   try {
-    const response = await fetch(`/api/thumbs/${hash}`);
+    const response = await fetch(`/api/thumbs/${hash}?v=${THUMB_VERSION}`);
     if (response.ok) {
       const blob = await response.blob();
       const width = Number(response.headers.get('x-mochimono-width')) || Number(metadata?.width) || 0;
@@ -568,7 +588,9 @@ async function uploadFallback(file, result) {
 }
 
 function queueFallback(file, card) {
-  if (!file || fallbackQueued.has(file.hash) || states.get(file.hash)?.fallbackDone || states.get(file.hash)?.ready) return;
+  if (!file || fallbackQueued.has(file.hash) || states.get(file.hash)?.ready) return;
+  const state = states.get(file.hash) || {};
+  if ((state.nextFallback || 0) > performance.now()) return;
   const kind = kindFor(file, card);
   if (!kind) return;
   fallbackQueued.add(file.hash);
@@ -576,26 +598,42 @@ function queueFallback(file, card) {
   pumpFallback();
 }
 
+async function serverReadyBeforeFallback(file) {
+  try {
+    const data = await checkReady([file.hash]);
+    const row = data.thumbnails?.find(item => item.hash === file.hash);
+    if (!row) return false;
+    queueDownload(file, true, row);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function runFallback(job) {
   const { file, kind } = job;
   if (states.get(file.hash)?.ready) return;
+  if (await serverReadyBeforeFallback(file)) return;
   try {
     const result = kind === 'image' ? await imageFallback(file) : await videoFallback(file);
     if (states.get(file.hash)?.ready) return;
+    if (await serverReadyBeforeFallback(file)) return;
     await uploadFallback(file, result);
     applyDimensions(file.hash, result.width, result.height);
     applyBlob(file.hash, result.blob);
-    states.set(file.hash, { ready: true, fallbackDone: true });
+    states.set(file.hash, { ready: true });
     cacheThumb(file.hash, result.blob, result.width, result.height, 'browser').catch(error => console.warn('Preview cache write failed', error));
   } catch (error) {
     const state = states.get(file.hash) || {};
-    state.fallbackDone = true;
-    state.next = performance.now() + 30_000;
+    state.fallbackFailures = (state.fallbackFailures || 0) + 1;
+    state.nextFallback = performance.now() + Math.min(120_000, 30_000 * state.fallbackFailures);
+    state.next = Math.min(state.next || Infinity, performance.now() + 5000);
     states.set(file.hash, state);
     for (const box of files.querySelectorAll(`[data-hash="${CSS.escape(file.hash)}"] .media-thumb`)) {
       box.classList.add('thumb-failed');
       box.title = `Preview unavailable: ${error.message}`;
     }
+    setTimeout(scheduleScan, Math.min(120_000, 30_000 * state.fallbackFailures) + 50);
   }
 }
 
