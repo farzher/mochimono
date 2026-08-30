@@ -2,6 +2,7 @@ const files = document.querySelector('#files');
 const views = document.querySelector('#views');
 const folderbar = document.querySelector('#folderbar');
 const viewer = document.querySelector('#viewer');
+const dateRail = document.querySelector('#dateRail');
 
 function currentView() {
   return views.querySelector('[data-view].active')?.dataset.view || 'grid';
@@ -26,6 +27,101 @@ folderbar.addEventListener('click', event => {
     folderbar.replaceChildren();
   });
 });
+
+const railTopHit = document.createElement('div');
+railTopHit.hidden = true;
+railTopHit.setAttribute('aria-hidden', 'true');
+Object.assign(railTopHit.style, {
+  position: 'fixed',
+  top: '0',
+  width: '0',
+  height: '0',
+  zIndex: '6',
+  background: 'transparent',
+  cursor: 'ns-resize',
+  touchAction: 'none',
+  userSelect: 'none'
+});
+document.body.append(railTopHit);
+
+function syncRailTopHit() {
+  if (dateRail.hidden) {
+    railTopHit.hidden = true;
+    return;
+  }
+  const rect = dateRail.getBoundingClientRect();
+  if (rect.top <= 0 || rect.width <= 0) {
+    railTopHit.hidden = true;
+    return;
+  }
+  railTopHit.hidden = false;
+  railTopHit.style.right = `${Math.max(0, innerWidth - rect.right)}px`;
+  railTopHit.style.width = `${rect.width}px`;
+  railTopHit.style.height = `${rect.top}px`;
+}
+
+function forwardRailPointer(type, event, forceTop = false) {
+  if (dateRail.hidden) return;
+  const rect = dateRail.getBoundingClientRect();
+  const clientY = forceTop ? rect.top : Math.max(rect.top, Math.min(rect.bottom, event.clientY));
+  const capture = dateRail.setPointerCapture;
+  const release = dateRail.releasePointerCapture;
+  dateRail.setPointerCapture = () => {};
+  dateRail.releasePointerCapture = () => {};
+  try {
+    dateRail.dispatchEvent(new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 1,
+      pointerType: event.pointerType || 'mouse',
+      isPrimary: true,
+      button: 0,
+      buttons: type === 'pointerup' || type === 'pointercancel' ? 0 : 1,
+      clientX: Math.max(rect.left, rect.right - 1),
+      clientY
+    }));
+  } finally {
+    if (capture) dateRail.setPointerCapture = capture;
+    else delete dateRail.setPointerCapture;
+    if (release) dateRail.releasePointerCapture = release;
+    else delete dateRail.releasePointerCapture;
+  }
+}
+
+let railTopPointer = null;
+railTopHit.addEventListener('pointerdown', event => {
+  if (dateRail.hidden) return;
+  railTopPointer = event.pointerId;
+  try { railTopHit.setPointerCapture(event.pointerId); } catch {}
+  forwardRailPointer('pointerdown', event, true);
+  event.preventDefault();
+});
+railTopHit.addEventListener('pointermove', event => {
+  if (event.pointerId !== railTopPointer) return;
+  forwardRailPointer('pointermove', event);
+  event.preventDefault();
+});
+railTopHit.addEventListener('pointerup', event => {
+  if (event.pointerId !== railTopPointer) return;
+  forwardRailPointer('pointerup', event);
+  try { railTopHit.releasePointerCapture(event.pointerId); } catch {}
+  railTopPointer = null;
+  event.preventDefault();
+});
+railTopHit.addEventListener('pointercancel', event => {
+  if (event.pointerId !== railTopPointer) return;
+  forwardRailPointer('pointercancel', event);
+  railTopPointer = null;
+});
+
+new MutationObserver(() => requestAnimationFrame(syncRailTopHit)).observe(dateRail, {
+  childList: true,
+  attributes: true,
+  attributeFilter: ['hidden', 'style', 'class']
+});
+window.addEventListener('resize', syncRailTopHit, { passive: true });
+views.addEventListener('click', () => requestAnimationFrame(syncRailTopHit));
+requestAnimationFrame(syncRailTopHit);
 
 let viewerUiTimer = 0;
 let lastPointerType = 'mouse';
