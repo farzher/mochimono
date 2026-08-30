@@ -46,15 +46,24 @@
               <button data-type="other">Other</button>
             </div>
           </div>
-          <div id="views" class="segmented compact">
-            <button data-view="grid" class="active">Grid</button>
-            <button data-view="list">List</button>
-            <button data-view="folders">Folders</button>
+          <div class="library-tools">
+            <select id="sort" aria-label="Sort">
+              <option value="date-desc">Newest</option>
+              <option value="date-asc">Oldest</option>
+              <option value="name">Name</option>
+              <option value="size-desc">Largest</option>
+            </select>
+            <div id="views" class="segmented compact">
+              <button data-view="grid" class="active">Grid</button>
+              <button data-view="list">List</button>
+              <button data-view="folders">Folders</button>
+            </div>
           </div>
         </div>
         <div id="folderbar" class="folderbar" hidden></div>
         <div id="files" class="files grid"></div>
         <div id="scroll-sentinel" style="height:1px" hidden></div>
+        <nav id="dateRail" class="date-rail" aria-label="Dates" hidden></nav>
       </section>
 
       <section class="card">
