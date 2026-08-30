@@ -19,18 +19,15 @@
 
   <main>
     <section class="folders-panel">
-      <div class="folders-head">
-        <h2>Folders</h2>
-        <details class="add-control">
-          <summary><span aria-hidden="true">＋</span> Add folder</summary>
-          <div class="add-popover path-row add-folder">
-            <input id="importPath" placeholder="Folder or drive">
-            <button id="chooseImport" class="secondary">Browse</button>
-            <button id="startImport" class="primary">Add</button>
-          </div>
-        </details>
-      </div>
       <div id="folders" class="sync-folders"><div class="muted">Loading…</div></div>
+      <details class="folder-add">
+        <summary><span class="folder-add-icon" aria-hidden="true"></span><strong>Add folder</strong></summary>
+        <div class="folder-add-form path-row">
+          <input id="importPath" placeholder="Folder or drive">
+          <button id="chooseImport" class="secondary">Browse</button>
+          <button id="startImport" class="primary">Add</button>
+        </div>
+      </details>
     </section>
 
     <section id="activityCard" class="activity-strip" hidden><div id="activity"></div></section>
