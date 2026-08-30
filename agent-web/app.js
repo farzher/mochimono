@@ -2,6 +2,7 @@ const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 
 let backupPath;
+let restorePath;
 let lastFinished;
 
 async function req(path, options = {}) {
@@ -28,7 +29,7 @@ function toast(text) {
   element.textContent = text;
   element.classList.add('show');
   clearTimeout(element.timer);
-  element.timer = setTimeout(() => element.classList.remove('show'), 2500);
+  element.timer = setTimeout(() => element.classList.remove('show'), 3000);
 }
 
 async function chooseFolder(target) {
@@ -72,8 +73,9 @@ function activity(job) {
   const progress = job.progress || {};
   const metrics = [];
   for (const [key, label] of [
-    ['scanned', 'scanned'], ['new', 'new'], ['duplicates', 'duplicates'], ['ignored', 'ignored'],
-    ['copied', 'copied'], ['already', 'already there'], ['checked', 'checked'], ['total', 'total'], ['bad', 'bad']
+    ['scanned', 'scanned'], ['new', 'new'], ['duplicates', 'duplicates'], ['ignored', 'ignored'], ['errors', 'errors'],
+    ['copied', 'copied'], ['already', 'already there'], ['checked', 'processed'], ['total', 'total'], ['bad', 'bad'],
+    ['restored', 'restored'], ['skipped', 'skipped'], ['missing', 'missing'], ['conflicts', 'conflicts']
   ]) {
     if (progress[key] != null) metrics.push(`<span class="metric"><b>${esc(progress[key])}</b> ${label}</span>`);
   }
@@ -111,17 +113,23 @@ async function backups() {
         <div class="drive-actions">
           <button class="primary small" data-update="${index}">Update</button>
           <button class="secondary small" data-status="${index}">Status</button>
+          <button class="secondary small" data-restore="${index}">Restore</button>
           <button class="secondary small" data-verify="${index}">Verify</button>
         </div>
       </div>`).join('') || '<div class="muted">No backup locations yet. Choose any folder above to create one.</div>';
 
     $$('[data-update]').forEach(button => button.onclick = () => runBackup(locations[Number(button.dataset.update)].path, 'update'));
     $$('[data-verify]').forEach(button => button.onclick = () => runBackup(locations[Number(button.dataset.verify)].path, 'verify'));
+    $$('[data-restore]').forEach(button => button.onclick = () => openRestoreDialog(locations[Number(button.dataset.restore)].path));
     $$('[data-status]').forEach(button => button.onclick = async () => {
       try {
         const location = locations[Number(button.dataset.status)];
         const status = await req(`/api/backup/status?path=${encodeURIComponent(location.path)}`);
-        toast(`${status.meta.name}: ${status.remote.protectedCount}/${status.remote.desiredCount} protected`);
+        if (status.remote) {
+          toast(`${status.meta.name}: ${status.remote.protectedCount}/${status.remote.desiredCount} protected · ${status.local.count} objects physically present`);
+        } else {
+          toast(`${status.meta.name}: ${status.local.count} objects (${bytes(status.local.bytes)}) present locally · server offline`);
+        }
       } catch (error) {
         toast(error.message);
       }
@@ -150,8 +158,16 @@ function openBackupDialog(path) {
   $('#backupDialog').showModal();
 }
 
+function openRestoreDialog(path) {
+  restorePath = path;
+  $('#restoreBackupLabel').textContent = path;
+  $('#restoreDestination').value = '';
+  $('#restoreDialog').showModal();
+}
+
 $('#chooseImport').onclick = () => chooseFolder($('#importPath'));
 $('#chooseBackup').onclick = () => chooseFolder($('#backupLocation'));
+$('#chooseRestore').onclick = () => chooseFolder($('#restoreDestination'));
 $('#refreshBackups').onclick = backups;
 $$('[data-close]').forEach(button => button.onclick = () => button.closest('dialog').close());
 $('#backupEverything').onchange = event => $('#backupTypes').classList.toggle('disabled', event.target.checked);
@@ -184,6 +200,21 @@ $('#initializeBackup').onclick = async () => {
     $('#backupLocation').value = '';
     toast(result.existing ? 'Existing backup added' : 'Backup folder initialized');
     backups();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+$('#startRestore').onclick = async () => {
+  const destination = $('#restoreDestination').value.trim();
+  if (!destination) return toast('Choose or paste a restore destination');
+  try {
+    await req('/api/backup/restore', {
+      method: 'POST',
+      body: JSON.stringify({ path: restorePath, destination })
+    });
+    $('#restoreDialog').close();
+    state();
   } catch (error) {
     toast(error.message);
   }
