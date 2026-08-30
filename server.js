@@ -277,6 +277,7 @@ async function handleApi(req, res, url) {
       LEFT JOIN sources s ON s.import_id = i.id
       LEFT JOIN objects o ON o.hash = s.object_hash AND o.state = 'active'
       GROUP BY i.source_name
+      HAVING COUNT(DISTINCT o.hash) > 0
       ORDER BY MAX(i.id) DESC
       LIMIT 100
     `).all();
