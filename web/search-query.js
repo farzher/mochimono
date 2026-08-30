@@ -1,6 +1,6 @@
 const search = document.querySelector('#search');
 const valueDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-const SEARCH_INDEX_VERSION = '3';
+const SEARCH_INDEX_VERSION = '4';
 const SEARCH_INDEX_KEY = 'mochimono-search-index-version';
 const nativeFetch = window.fetch.bind(window);
 
@@ -14,8 +14,16 @@ function normalizeText(text) {
     .trim();
 }
 
+function words(text) {
+  return normalizeText(text).split(' ').filter(Boolean);
+}
+
 function encoded(text) {
   return normalizeText(text).replaceAll(' ', '_');
+}
+
+function fieldWords(field, text) {
+  return words(text).map(word => `__${field}__${word}`);
 }
 
 function extension(name) {
@@ -43,8 +51,8 @@ function augmentCatalogFile(file) {
   const all = normalizeText(`${file.filename || ''} ${file.originalPath || ''} ${file.searchText || ''}`);
   const fields = [
     all,
-    `__name__${encoded(file.filename)}`,
-    `__path__${encoded(`${file.originalPath || ''} ${file.searchText || ''}`)}`,
+    ...fieldWords('name', file.filename),
+    ...fieldWords('path', `${file.originalPath || ''} ${file.searchText || ''}`),
     `__type__${encoded(fileKind(file))}`,
     `__ext__${encoded(extension(file.filename))}`,
     `__year__${encoded(yearFor(file))}`
@@ -124,11 +132,11 @@ function queryTerms(raw) {
   const result = [];
   for (const token of tokenize(raw)) {
     if (token.field === 'name') {
-      result.push(`__name__${encoded(token.text)}`);
+      result.push(...fieldWords('name', token.text));
       continue;
     }
     if (token.field === 'path') {
-      result.push(`__path__${encoded(pathTail(token.text, 3))}`);
+      result.push(...fieldWords('path', pathTail(token.text, 3)));
       continue;
     }
     if (token.field === 'source') {
@@ -149,7 +157,7 @@ function queryTerms(raw) {
     }
 
     const searchable = /[\\/]/.test(token.text) ? pathTail(token.text, 2) : token.text;
-    result.push(...normalizeText(searchable).split(' ').filter(Boolean));
+    result.push(...words(searchable));
   }
   return result.filter(Boolean);
 }
@@ -197,7 +205,7 @@ function queryMatchesDetails(raw, details) {
     if (token.field === 'type') wanted = typeToken(wanted);
     if (token.field === 'path') wanted = pathTail(wanted, 3);
     if (!token.field && /[\\/]/.test(wanted)) wanted = pathTail(wanted, 2);
-    const terms = normalizeText(wanted).split(' ').filter(Boolean);
+    const terms = words(wanted);
     const field = token.field && hay[token.field] !== undefined ? token.field : 'all';
     return terms.every(term => String(hay[field] || '').includes(term));
   });
