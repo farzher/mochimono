@@ -117,6 +117,12 @@ function fileTypeSql(type, alias = 'o') {
   return { sql: '1=0', params: [] };
 }
 
+function reviewSql(review, alias = 'o') {
+  if (review === 'unreviewed') return `NOT EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = ${alias}.hash)`;
+  if (review === 'reviewed') return `EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = ${alias}.hash)`;
+  return '1=1';
+}
+
 function staticType(path) {
   if (path.endsWith('.html')) return 'text/html; charset=utf-8';
   if (path.endsWith('.js')) return 'text/javascript; charset=utf-8';
@@ -208,8 +214,9 @@ async function handleApi(req, res, url) {
     const objects = db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes FROM objects WHERE state = 'active'").get();
     const sources = db.prepare("SELECT COUNT(*) AS count FROM sources s JOIN objects o ON o.hash = s.object_hash WHERE o.state = 'active'").get();
     const ignored = db.prepare('SELECT COUNT(*) AS count FROM ignored_hashes').get();
+    const unreviewed = db.prepare("SELECT COUNT(*) AS count FROM objects o WHERE o.state = 'active' AND NOT EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash)").get();
     const drives = db.prepare('SELECT COUNT(*) AS count FROM drives').get();
-    return json(res, 200, { objects: objects.count, bytes: objects.bytes, sources: sources.count, ignored: ignored.count, drives: drives.count });
+    return json(res, 200, { objects: objects.count, bytes: objects.bytes, sources: sources.count, ignored: ignored.count, unreviewed: unreviewed.count, drives: drives.count });
   }
 
   if (req.method === 'GET' && url.pathname === '/api/imports') {
@@ -265,12 +272,23 @@ async function handleApi(req, res, url) {
 
   if (objectMatch && (req.method === 'GET' || req.method === 'HEAD')) return serveObject(req, res, objectMatch[1]);
 
+  const reviewMatch = /^\/api\/objects\/([a-f0-9]{64})\/review$/.exec(url.pathname);
+  if (reviewMatch && req.method === 'POST') {
+    const hash = reviewMatch[1];
+    const body = await readJson(req);
+    if (!db.prepare("SELECT 1 FROM objects WHERE hash = ? AND state = 'active'").get(hash)) return json(res, 404, { error: 'Object not found' });
+    if (body.reviewed === false) db.prepare('DELETE FROM reviewed_hashes WHERE hash = ?').run(hash);
+    else db.prepare('INSERT OR REPLACE INTO reviewed_hashes(hash, reviewed_at) VALUES(?, ?)').run(hash, now());
+    return json(res, 200, { ok: true, reviewed: body.reviewed !== false });
+  }
+
   const deleteMatch = /^\/api\/objects\/([a-f0-9]{64})\/delete$/.exec(url.pathname);
   if (deleteMatch && req.method === 'POST') {
     const hash = deleteMatch[1];
     const body = await readJson(req);
     if (!db.prepare('SELECT 1 FROM objects WHERE hash = ?').get(hash)) return json(res, 404, { error: 'Object not found' });
     db.prepare("UPDATE objects SET state = 'deleted' WHERE hash = ?").run(hash);
+    db.prepare('DELETE FROM reviewed_hashes WHERE hash = ?').run(hash);
     if (body.ignore === true) db.prepare('INSERT OR IGNORE INTO ignored_hashes(hash, ignored_at) VALUES(?, ?)').run(hash, now());
     await removeObject(DATA_DIR, hash);
     return json(res, 200, { ok: true, ignored: body.ignore === true });
@@ -304,6 +322,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/files') {
     const q = String(url.searchParams.get('q') || '').slice(0, 200);
     const type = String(url.searchParams.get('type') || '');
+    const review = String(url.searchParams.get('review') || '');
     const importId = Math.max(0, Number(url.searchParams.get('import') || 0) || 0);
     const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') || 100)));
     const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
@@ -314,10 +333,11 @@ async function handleApi(req, res, url) {
              COALESCE(MIN(s.filename), o.hash) AS filename,
              COALESCE(MIN(s.original_path), '') AS originalPath,
              COUNT(s.id) AS referencesCount,
+             EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
              (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount
       FROM objects o
       LEFT JOIN sources s ON s.object_hash = o.hash
-      WHERE o.state = 'active' AND ${filter.sql}
+      WHERE o.state = 'active' AND ${filter.sql} AND ${reviewSql(review, 'o')}
         AND (? = 0 OR EXISTS (
           SELECT 1 FROM sources si WHERE si.object_hash = o.hash AND si.import_id = ?
         ))
@@ -335,7 +355,11 @@ async function handleApi(req, res, url) {
   const detailsMatch = /^\/api\/files\/([a-f0-9]{64})\/details$/.exec(url.pathname);
   if (detailsMatch && req.method === 'GET') {
     const hash = detailsMatch[1];
-    const object = db.prepare("SELECT hash, size, mime, created_at AS createdAt FROM objects WHERE hash = ? AND state = 'active'").get(hash);
+    const object = db.prepare(`
+      SELECT o.hash, o.size, o.mime, o.created_at AS createdAt,
+             EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed
+      FROM objects o WHERE o.hash = ? AND o.state = 'active'
+    `).get(hash);
     if (!object) return json(res, 404, { error: 'File not found' });
     const sources = db.prepare(`
       SELECT s.original_path AS path, s.filename, s.mtime, i.source_name AS sourceName, i.created_at AS importedAt
