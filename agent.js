@@ -239,17 +239,22 @@ async function registerBackup(meta) {
   return api('/api/drives/register', { method: 'POST', body: meta });
 }
 
-async function backupInit(path, name, types) {
+async function backupInit(path, name, types, configure = false) {
   const root = resolve(path);
   if (!(await stat(root)).isDirectory()) throw new Error(`${root} is not a directory`);
 
   // Backups are folders. Mochimono never formats, partitions, or erases the underlying drive.
   if (existsSync(driveMetaPath(root))) {
     const meta = await readBackup(root);
+    if (configure) {
+      if (String(name || '').trim()) meta.name = String(name).trim();
+      meta.policy = policy(types);
+      await writeFile(driveMetaPath(root), `${JSON.stringify(meta, null, 2)}\n`);
+    }
     await rememberBackup(root);
     let remote = null;
     try { remote = await registerBackup(meta); } catch {}
-    return { path: root, meta, remote, existing: true };
+    return { path: root, meta, remote, existing: true, configured: configure };
   }
 
   await mkdir(controlPath(root), { recursive: true });
@@ -516,7 +521,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/backup/init') {
     const body = await readJson(req);
     if (!body.path) return json(res, 400, { error: 'Choose or paste a backup folder' });
-    return json(res, 200, await backupInit(body.path, body.name, body.types));
+    return json(res, 200, await backupInit(body.path, body.name, body.types, body.configure === true));
   }
   if (req.method === 'POST' && url.pathname === '/api/backup/update') {
     const body = await readJson(req);
