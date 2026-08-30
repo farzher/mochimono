@@ -34,7 +34,7 @@ function hideViewerUiSoon() {
   clearTimeout(viewerUiTimer);
   viewerUiTimer = setTimeout(() => {
     if (!viewer.hidden && lastPointerType === 'mouse') viewer.classList.add('viewer-ui-hidden');
-  }, 500);
+  }, 1000);
 }
 
 function showViewerUi() {
