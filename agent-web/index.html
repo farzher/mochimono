@@ -13,18 +13,23 @@
       <span class="mini" aria-hidden="true"></span>
       <h1>Mochimono <span class="agent-label">Agent</span></h1>
     </div>
-    <div id="serverStatus" class="status">Connecting…</div>
+    <button id="serverStatus" class="status">Connecting…</button>
   </header>
 
   <main>
-    <section class="card import-card">
-      <h2>Import</h2>
-      <div class="path-row primary-row">
-        <input id="importPath" placeholder="Folder or drive">
-        <button id="chooseImport" class="secondary">Browse…</button>
+    <section class="card folders-card">
+      <h2>Folders</h2>
+      <div id="folders" class="sync-folders"><div class="muted">Loading…</div></div>
+      <div class="add-folder">
+        <div class="path-row">
+          <input id="importPath" placeholder="Folder or drive">
+          <button id="chooseImport" class="secondary">Browse…</button>
+        </div>
+        <div class="add-row">
+          <input id="deviceName" placeholder="Device">
+          <button id="startImport" class="primary">Add</button>
+        </div>
       </div>
-      <input id="sourceName" class="source-input" placeholder="Source (optional)">
-      <button id="startImport" class="primary wide">Import</button>
     </section>
 
     <section id="activityCard" class="activity-strip" hidden>
@@ -48,16 +53,22 @@
         </div>
       </div>
     </details>
-
-    <details class="drawer">
-      <summary>Settings</summary>
-      <div class="drawer-body settings-body">
-        <input id="serverUrl" placeholder="Server">
-        <input id="serverToken" type="password" placeholder="Token · unchanged if blank">
-        <button id="saveSettings" class="secondary">Save</button>
-      </div>
-    </details>
   </main>
+
+  <dialog id="connectionDialog">
+    <div class="dialog-head">
+      <h3>Server</h3>
+      <button class="icon" data-close>×</button>
+    </div>
+    <div class="connect-fields">
+      <input id="serverUrl" placeholder="Server">
+      <input id="serverToken" type="password" placeholder="Token">
+    </div>
+    <div class="dialog-actions">
+      <div class="spacer"></div>
+      <button id="saveSettings" class="primary">Connect</button>
+    </div>
+  </dialog>
 
   <dialog id="backupDialog">
     <div class="dialog-head">
