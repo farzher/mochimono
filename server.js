@@ -256,6 +256,15 @@ async function handleApi(req, res, url) {
     return json(res, 201, { id: Number(result.lastInsertRowid), sourceName });
   }
 
+  const importMatch = /^\/api\/imports\/(\d+)$/.exec(url.pathname);
+  if (importMatch && req.method === 'POST') {
+    const sourceName = String((await readJson(req)).sourceName || '').trim();
+    if (!sourceName) return json(res, 400, { error: 'sourceName is required' });
+    const result = db.prepare('UPDATE imports SET source_name = ? WHERE id = ?').run(sourceName, Number(importMatch[1]));
+    if (!result.changes) return json(res, 404, { error: 'Import not found' });
+    return json(res, 200, { ok: true, sourceName });
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/folders') {
     const importId = Number(url.searchParams.get('import'));
     if (!Number.isInteger(importId) || importId < 1) return json(res, 400, { error: 'Valid import is required' });
