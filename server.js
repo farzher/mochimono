@@ -123,6 +123,13 @@ function reviewSql(review, alias = 'o') {
   return '1=1';
 }
 
+function fileSortSql(sort) {
+  if (sort === 'date-asc') return 'fileDate ASC, o.hash';
+  if (sort === 'name') return 'filename COLLATE NOCASE ASC, o.hash';
+  if (sort === 'size-desc') return 'o.size DESC, filename COLLATE NOCASE ASC';
+  return 'fileDate DESC, o.hash';
+}
+
 function cleanRelativePath(value) {
   const parts = String(value || '').replaceAll('\\', '/').split('/').filter(Boolean);
   if (parts.some(part => part === '.' || part === '..')) throw Object.assign(new Error('Invalid folder path'), { status: 400 });
@@ -145,7 +152,7 @@ async function serveStatic(res, pathname) {
     const info = await stat(path);
     if (!info.isFile()) return false;
     res.writeHead(200, { 'content-type': staticType(path), 'content-length': info.size, 'cache-control': 'no-cache' });
-    createReadStream(path).pipe(res);
+    createReadStream(file).pipe(res);
     return true;
   } catch { return false; }
 }
@@ -374,15 +381,18 @@ async function handleApi(req, res, url) {
     const type = String(url.searchParams.get('type') || '');
     const review = String(url.searchParams.get('review') || '');
     const backup = String(url.searchParams.get('backup') || '');
+    const sort = String(url.searchParams.get('sort') || 'date-desc');
     const importId = Math.max(0, Number(url.searchParams.get('import') || 0) || 0);
     const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') || 100)));
     const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
     const filter = fileTypeSql(type, 'o');
     const like = `%${q}%`;
+    const order = fileSortSql(sort);
     const rows = db.prepare(`
       SELECT o.hash, o.size, o.mime, o.created_at AS createdAt,
              COALESCE(MIN(s.filename), o.hash) AS filename,
              COALESCE(MIN(s.original_path), '') AS originalPath,
+             COALESCE(MAX(s.mtime), o.created_at) AS fileDate,
              COUNT(s.id) AS referencesCount,
              EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
              (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount
@@ -398,7 +408,7 @@ async function handleApi(req, res, url) {
           WHERE sx.object_hash = o.hash AND (sx.filename LIKE ? OR sx.original_path LIKE ? OR ix.source_name LIKE ?)
         ))
       GROUP BY o.hash
-      ORDER BY o.created_at DESC
+      ORDER BY ${order}
       LIMIT ? OFFSET ?
     `).all(...filter.params, backup, importId, importId, q, like, like, like, limit, offset);
     return json(res, 200, { files: rows, limit, offset, hasMore: rows.length === limit });
