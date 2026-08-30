@@ -1,6 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, rm, stat } from 'node:fs/promises';
+import { mkdir, rm, stat, statfs } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
@@ -223,7 +223,10 @@ async function handleApi(req, res, url) {
     const unreviewed = db.prepare("SELECT COUNT(*) AS count FROM objects o WHERE o.state = 'active' AND NOT EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash)").get();
     const unbacked = db.prepare("SELECT COUNT(*) AS count FROM objects o WHERE o.state = 'active' AND NOT EXISTS (SELECT 1 FROM replicas r WHERE r.object_hash = o.hash)").get();
     const drives = db.prepare('SELECT COUNT(*) AS count FROM drives').get();
-    return json(res, 200, { objects: objects.count, bytes: objects.bytes, sources: sources.count, ignored: ignored.count, unreviewed: unreviewed.count, unbacked: unbacked.count, drives: drives.count });
+    const storage = await statfs(DATA_DIR);
+    const capacityBytes = Number(storage.blocks) * Number(storage.bsize);
+    const freeBytes = Number(storage.bavail) * Number(storage.bsize);
+    return json(res, 200, { objects: objects.count, bytes: objects.bytes, capacityBytes, freeBytes, sources: sources.count, ignored: ignored.count, unreviewed: unreviewed.count, unbacked: unbacked.count, drives: drives.count });
   }
 
   if (req.method === 'GET' && url.pathname === '/api/imports') {
