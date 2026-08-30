@@ -432,11 +432,13 @@ function applyFilters(reset = true) {
   const query = $('#search').value.trim().toLowerCase();
   const terms = query.split(/\s+/).filter(Boolean);
   const sourceId = Number(importId) || 0;
+  const folderHashes = folderImportId && folderData ? new Set(folderData.files.map(file => file.hash)) : null;
   filtered = sortFiles(catalog.filter(file => {
     if (!matchesType(file)) return false;
     if (inboxOnly && file.reviewed) return false;
     if (unprotectedOnly && file.backupCount > 0) return false;
     if (sourceId && !file.importIds.includes(sourceId)) return false;
+    if (folderHashes && !folderHashes.has(file.hash)) return false;
     if (terms.length && !terms.every(term => (searchIndex.get(file.hash) || '').includes(term))) return false;
     return true;
   }));
@@ -459,7 +461,8 @@ function renderFiles() {
   if (view === 'folders') return renderFolder();
   const element = $('#files');
   element.className = `files ${view}`;
-  $('#folderbar').hidden = true;
+  if (folderImportId) folderBreadcrumb();
+  else $('#folderbar').hidden = true;
   syncSentinels();
   if (!loaded.length) {
     const message = inboxOnly ? 'Inbox empty.' : unprotectedOnly ? 'All protected.' : 'No files.';
@@ -733,10 +736,17 @@ function renderFolder() {
 
 async function loadFolder() {
   folderData = null;
-  renderFolder();
-  if (!folderImportId) return;
+  if (view === 'folders') renderFolder();
+  if (!folderImportId) {
+    if (view !== 'folders') {
+      $('#folderbar').hidden = true;
+      applyFilters(true);
+    }
+    return;
+  }
   folderData = await request(`/api/folders?import=${encodeURIComponent(folderImportId)}&path=${encodeURIComponent(folderPath)}`);
-  renderFolder();
+  if (view === 'folders') renderFolder();
+  else applyFilters(true);
 }
 
 function setView(next) {
@@ -749,13 +759,12 @@ function setView(next) {
   $('#mediaSizeControl').hidden = view !== 'grid';
   $$('#views button').forEach(item => item.classList.toggle('active', item.dataset.view === view));
   if (folderMode) {
-    folderImportId = importId;
-    folderPath = '';
+    if (!folderImportId) {
+      folderImportId = importId;
+      folderPath = '';
+    }
     loadFolder().catch(console.error);
   } else {
-    folderImportId = '';
-    folderPath = '';
-    $('#folderbar').hidden = true;
     applyFilters(true);
   }
 }
@@ -876,7 +885,7 @@ async function boot() {
     app.hidden = false;
     logout.hidden = false;
     $('#files').innerHTML = '<div class="empty">Loading…</div>';
-    const mediaSize = Math.max(96, Math.min(260, Number(localStorage.getItem('mochimono-media-size')) || 158));
+    const mediaSize = Math.max(96, Math.min(420, Number(localStorage.getItem('mochimono-media-size')) || 170));
     $('#mediaSize').value = mediaSize;
     document.documentElement.style.setProperty('--media-size', `${mediaSize}px`);
 
@@ -923,8 +932,16 @@ $('#search').addEventListener('input', () => {
 
 $('#source').addEventListener('change', event => {
   importId = event.target.value;
-  if (view === 'folders') { folderImportId = importId; folderPath = ''; loadFolder().catch(console.error); }
-  else applyFilters(true);
+  folderImportId = '';
+  folderPath = '';
+  folderData = null;
+  if (view === 'folders') {
+    folderImportId = importId;
+    loadFolder().catch(console.error);
+  } else {
+    $('#folderbar').hidden = true;
+    applyFilters(true);
+  }
 });
 
 $('#typeFilter').addEventListener('change', event => { type = event.target.value; applyFilters(true); });
@@ -978,7 +995,14 @@ rail.addEventListener('pointercancel', () => { scrubbing = false; rail.classList
 
 $('#folderbar').addEventListener('click', event => {
   if (event.target.closest('[data-folder-home]')) {
-    folderImportId = ''; folderPath = ''; importId = ''; $('#source').value = ''; loadFolder().catch(console.error); return;
+    folderImportId = '';
+    folderPath = '';
+    folderData = null;
+    importId = '';
+    $('#source').value = '';
+    if (view === 'folders') loadFolder().catch(console.error);
+    else applyFilters(true);
+    return;
   }
   const crumb = event.target.closest('[data-folder-depth]');
   if (!crumb) return;
@@ -990,10 +1014,19 @@ $('#folderbar').addEventListener('click', event => {
 $('#files').addEventListener('click', event => {
   const sourceRow = event.target.closest('[data-folder-source]');
   if (sourceRow) {
-    folderImportId = sourceRow.dataset.folderSource; importId = folderImportId; $('#source').value = importId; folderPath = ''; loadFolder().catch(console.error); return;
+    folderImportId = sourceRow.dataset.folderSource;
+    importId = folderImportId;
+    $('#source').value = importId;
+    folderPath = '';
+    loadFolder().catch(console.error);
+    return;
   }
   const folderRow = event.target.closest('[data-folder-name]');
-  if (folderRow) { folderPath = folderPath ? `${folderPath}/${folderRow.dataset.folderName}` : folderRow.dataset.folderName; loadFolder().catch(console.error); return; }
+  if (folderRow) {
+    folderPath = folderPath ? `${folderPath}/${folderRow.dataset.folderName}` : folderRow.dataset.folderName;
+    loadFolder().catch(console.error);
+    return;
+  }
   const item = event.target.closest('[data-hash]');
   if (item) openViewer(item.dataset.hash);
 });
@@ -1031,9 +1064,6 @@ $('#viewer-next').onclick = () => navigateViewer(1);
 $('#viewer-review').onclick = () => toggleReviewed().catch(console.error);
 $('#delete').onclick = () => removeSelected(false).catch(console.error);
 $('#delete-ignore').onclick = () => removeSelected(true).catch(console.error);
-$('#viewer').addEventListener('click', event => {
-  if (event.target === $('#viewer') || event.target === $('#viewer-stage')) closeViewer();
-});
 $('#viewer').addEventListener('wheel', event => event.preventDefault(), { passive: false });
 
 boot().catch(error => {
