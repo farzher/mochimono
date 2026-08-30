@@ -6,6 +6,8 @@ const THUMB_EDGE = 768;
 const CHECK_BATCH = 500;
 const DOWNLOAD_WORKERS = 6;
 const MAX_MEMORY_THUMBS = 600;
+const PRIORITY_REFRESH = 5_000;
+const VISIBLE_CHECK_DELAY = 300;
 const IMAGE_FALLBACK_DELAY = 8_000;
 const VIDEO_FALLBACK_DELAY = 15_000;
 
@@ -15,6 +17,7 @@ const checkQueue = new Map();
 const downloadPriority = new Map();
 const downloadBackground = new Map();
 const requested = new Set();
+const requestTimes = new Map();
 const fallbackQueue = [];
 const fallbackQueued = new Set();
 let cachePromise;
@@ -246,6 +249,9 @@ function scheduleRetry(hash, delay) {
 }
 
 function queueRequest(hash) {
+  const time = performance.now();
+  if (time - (requestTimes.get(hash) || -Infinity) < PRIORITY_REFRESH) return;
+  requestTimes.set(hash, time);
   requested.add(hash);
   if (requestTimer) return;
   requestTimer = setTimeout(flushRequests, 35);
@@ -331,7 +337,7 @@ function handleMissing(file) {
     const fallbackDelay = kind === 'video' ? VIDEO_FALLBACK_DELAY : IMAGE_FALLBACK_DELAY;
     if (now - state.firstMissingAt >= fallbackDelay) queueFallback(file, currentCard(hash));
   }
-  scheduleRetry(hash, isVisible ? 1000 : 4000);
+  scheduleRetry(hash, isVisible ? VISIBLE_CHECK_DELAY : 4000);
 }
 
 function queueDownload(file, priority, metadata) {
