@@ -9,6 +9,8 @@ Mochimono syncs folders to one deduplicated library while remembering where ever
 - automatic one-way folder sync
 - exact SHA-256 deduplication
 - original device, path, filename, and mtime provenance
+- Agent-generated image and video previews
+- server-stored previews with browser caching and local fallback generation
 - browser metadata cache for instant search, filters, and sorting
 - grid, list, folder, timeline, and Inbox views
 - Keep, Delete, and Delete + Ignore
@@ -23,6 +25,7 @@ Local deletion never deletes the cloud copy.
 Requires Node.js 22.16+.
 
 ```bash
+npm install
 npm run dev
 ```
 
@@ -51,6 +54,13 @@ HOST
 PORT
 ```
 
+Agent preview settings:
+
+```text
+FFMPEG_PATH                    optional custom FFmpeg binary
+MOCHIMONO_THUMBNAIL_WORKERS    optional local preview worker count
+```
+
 The Agent stores its local settings in `~/.mochimono/agent.json`.
 
 ## Storage
@@ -61,7 +71,10 @@ Primary storage:
 $MOCHIMONO_DATA/
   catalog.sqlite
   objects/
+  thumbs/
 ```
+
+Thumbnail generation happens on clients. The server only stores and serves the small derived WebP previews.
 
 Backup folder:
 
