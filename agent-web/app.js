@@ -2,6 +2,7 @@ const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 
 let backupPath;
+let backupEditing = false;
 let restorePath;
 let lastFinished;
 
@@ -100,27 +101,37 @@ async function backups() {
   element.innerHTML = '<div class="muted">Looking for backups…</div>';
   try {
     const { backups: locations } = await req('/api/backups');
-    element.innerHTML = locations.map((location, index) => `
-      <div class="drive">
-        <div class="drive-head">
-          <div>
-            <div class="drive-name">${esc(location.meta.name)}</div>
-            <div class="drive-path">${esc(location.path)}</div>
+    element.innerHTML = locations.map((location, index) => {
+      const policy = location.meta.policy?.all ? 'Everything' : (location.meta.policy?.types || []).join(', ');
+      return `
+        <div class="drive">
+          <div class="drive-head">
+            <div>
+              <div class="drive-name">${esc(location.meta.name)}</div>
+              <div class="drive-path">${esc(location.path)}</div>
+            </div>
+            <span class="badge managed">Mochimono backup</span>
           </div>
-          <span class="badge managed">Mochimono backup</span>
-        </div>
-        <div class="drive-meta">${bytes(location.freeBytes)} free of ${bytes(location.totalBytes)}</div>
-        <div class="drive-actions">
-          <button class="primary small" data-update="${index}">Update</button>
-          <button class="secondary small" data-status="${index}">Status</button>
-          <button class="secondary small" data-restore="${index}">Restore</button>
-          <button class="secondary small" data-verify="${index}">Verify</button>
-        </div>
-      </div>`).join('') || '<div class="muted">No backup locations yet. Choose any folder above to create one.</div>';
+          <div class="drive-meta">${bytes(location.freeBytes)} free of ${bytes(location.totalBytes)} · protects ${esc(policy)}</div>
+          <div class="drive-actions">
+            <button class="primary small" data-update="${index}">Update</button>
+            <button class="secondary small" data-status="${index}">Status</button>
+            <button class="secondary small" data-configure="${index}">Configure</button>
+            <button class="secondary small" data-restore="${index}">Restore</button>
+            <button class="secondary small" data-verify="${index}">Verify</button>
+          </div>
+        </div>`;
+    }).join('') || '<div class="muted">No backup locations yet. Choose any folder above to create one.</div>';
 
     $$('[data-update]').forEach(button => button.onclick = () => runBackup(locations[Number(button.dataset.update)].path, 'update'));
     $$('[data-verify]').forEach(button => button.onclick = () => runBackup(locations[Number(button.dataset.verify)].path, 'verify'));
     $$('[data-restore]').forEach(button => button.onclick = () => openRestoreDialog(locations[Number(button.dataset.restore)].path));
+    $$('[data-configure]').forEach(button => {
+      button.onclick = () => {
+        const location = locations[Number(button.dataset.configure)];
+        openBackupDialog(location.path, location.meta);
+      };
+    });
     $$('[data-status]').forEach(button => button.onclick = async () => {
       try {
         const location = locations[Number(button.dataset.status)];
@@ -148,13 +159,17 @@ async function runBackup(path, action) {
   }
 }
 
-function openBackupDialog(path) {
+function openBackupDialog(path, meta = null) {
   backupPath = path;
+  backupEditing = Boolean(meta);
   $('#backupPathLabel').textContent = path;
-  $('#backupName').value = '';
-  $('#backupEverything').checked = true;
-  $('#backupTypes').classList.add('disabled');
-  $$('#backupTypes input').forEach(input => { input.checked = false; });
+  $('#backupName').value = meta?.name || '';
+  const everything = meta?.policy?.all !== false;
+  $('#backupEverything').checked = everything;
+  $('#backupTypes').classList.toggle('disabled', everything);
+  const selected = new Set(meta?.policy?.types || []);
+  $$('#backupTypes input').forEach(input => { input.checked = selected.has(input.value); });
+  $('#initializeBackup').textContent = meta ? 'Save' : 'Initialize';
   $('#backupDialog').showModal();
 }
 
@@ -194,11 +209,11 @@ $('#initializeBackup').onclick = async () => {
   try {
     const result = await req('/api/backup/init', {
       method: 'POST',
-      body: JSON.stringify({ path: backupPath, name: $('#backupName').value.trim(), types })
+      body: JSON.stringify({ path: backupPath, name: $('#backupName').value.trim(), types, configure: backupEditing })
     });
     $('#backupDialog').close();
     $('#backupLocation').value = '';
-    toast(result.existing ? 'Existing backup added' : 'Backup folder initialized');
+    toast(backupEditing ? 'Backup settings saved' : result.existing ? 'Existing backup added' : 'Backup folder initialized');
     backups();
   } catch (error) {
     toast(error.message);
