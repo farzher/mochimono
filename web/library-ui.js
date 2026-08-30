@@ -20,9 +20,14 @@ const selectionClear = document.querySelector('#selectionClear');
 let selectionMode = false;
 let anchorHash = '';
 let selected = new Set();
-let decorateFrame = 0;
 let cachePromise;
-const tinyUrls = new Map();
+
+const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff']);
+const VIDEO_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'mpg', 'mpeg', 'm2v', 'mts', 'm2ts', '3gp']);
+
+function extension(name) {
+  return String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
+}
 
 function cache() {
   if (!cachePromise) {
@@ -44,6 +49,12 @@ function cache() {
 const idb = request => new Promise((resolve, reject) => {
   request.onsuccess = () => resolve(request.result);
   request.onerror = () => reject(request.error);
+});
+
+const txDone = transaction => new Promise((resolve, reject) => {
+  transaction.oncomplete = resolve;
+  transaction.onerror = () => reject(transaction.error);
+  transaction.onabort = () => reject(transaction.error || new Error('IndexedDB transaction aborted'));
 });
 
 function currentView() {
@@ -125,8 +136,18 @@ function toggleHash(hash, extend) {
   anchorHash = hash;
 }
 
-function mediaTypeMatches(mime, filter) {
-  const base = String(mime || '').split('/')[0];
+function fileKind(file) {
+  const base = String(file.mime || '').split('/')[0];
+  if (base && base !== 'application') return base;
+  if (file.mime && file.mime !== 'application/octet-stream') return base;
+  const ext = extension(file.filename);
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video';
+  return base || 'other';
+}
+
+function mediaTypeMatches(file, filter) {
+  const base = fileKind(file);
   if (!filter) return true;
   if (filter === 'media') return base === 'image' || base === 'video';
   if (filter === 'application') return base === 'application' || base === 'text';
@@ -144,10 +165,10 @@ function breadcrumbPath() {
 async function cachedCatalog() {
   const db = await cache();
   const transaction = db.transaction(['files', 'meta']);
-  const [records, meta] = await Promise.all([
-    idb(transaction.objectStore('files').getAll()),
-    idb(transaction.objectStore('meta').get('catalog'))
-  ]);
+  const fileRequest = transaction.objectStore('files').getAll();
+  const metaRequest = transaction.objectStore('meta').get('catalog');
+  const [records, meta] = await Promise.all([idb(fileRequest), idb(metaRequest)]);
+  await txDone(transaction);
   return { records, meta };
 }
 
@@ -169,7 +190,7 @@ async function selectionUniverse() {
     const importIds = Array.isArray(file.importIds)
       ? file.importIds.map(Number)
       : String(file.importIds || '').split(',').map(Number).filter(Boolean);
-    if (!mediaTypeMatches(file.mime, fileType)) return false;
+    if (!mediaTypeMatches(file, fileType)) return false;
     if (filterInbox.checked && Boolean(file.reviewed)) return false;
     if (filterUnprotected.checked && Number(file.backupCount) > 0) return false;
     if (sourceId && !importIds.includes(sourceId)) return false;
@@ -190,9 +211,8 @@ async function removeCached(hashes) {
   for (const hash of hashes) {
     fileStore.delete(hash);
     thumbStore.delete(hash);
-    if (tinyUrls.has(hash)) URL.revokeObjectURL(tinyUrls.get(hash));
-    tinyUrls.delete(hash);
   }
+  await txDone(transaction);
 }
 
 async function deleteSelected(ignore) {
@@ -230,67 +250,6 @@ async function deleteSelected(ignore) {
   await removeCached(succeeded).catch(console.warn);
   if (failed.length) alert(`${failed.length.toLocaleString()} file${failed.length === 1 ? '' : 's'} could not be deleted.`);
   location.reload();
-}
-
-async function decorateTinyPreviews() {
-  decorateFrame = 0;
-  const rows = [...files.querySelectorAll('.file-row[data-hash], .folder-row.file-folder-row[data-hash]')]
-    .filter(row => !row.dataset.tinyChecked);
-  if (!rows.length) return;
-
-  const db = await cache();
-  const transaction = db.transaction(['files', 'thumbs']);
-  const fileStore = transaction.objectStore('files');
-  const thumbStore = transaction.objectStore('thumbs');
-  const results = await Promise.all(rows.map(async row => ({
-    row,
-    file: await idb(fileStore.get(row.dataset.hash)),
-    thumb: await idb(thumbStore.get(row.dataset.hash))
-  })));
-
-  let missing = false;
-  for (const { row, file, thumb } of results) {
-    if (!file) { missing = true; continue; }
-    row.dataset.tinyChecked = '1';
-    const base = String(file.mime || '').split('/')[0];
-    if (!['image', 'video'].includes(base)) continue;
-
-    const box = document.createElement('span');
-    box.className = `tiny-preview media-thumb ${base === 'video' ? 'video' : ''}`;
-    let media;
-    if (thumb?.blob) {
-      let url = tinyUrls.get(file.hash);
-      if (!url) {
-        url = URL.createObjectURL(thumb.blob);
-        tinyUrls.set(file.hash, url);
-      }
-      media = document.createElement('img');
-      media.className = 'cached-thumb';
-      media.src = url;
-    } else if (base === 'image') {
-      media = document.createElement('img');
-      media.loading = 'lazy';
-      media.src = `/api/objects/${file.hash}`;
-    } else {
-      media = document.createElement('video');
-      media.className = 'video-thumb';
-      media.muted = true;
-      media.playsInline = true;
-      media.preload = 'metadata';
-      media.src = `/api/objects/${file.hash}#t=0.1`;
-    }
-    box.append(media);
-
-    const old = row.classList.contains('file-row')
-      ? row.querySelector('.type')
-      : row.querySelector('.document-icon');
-    old?.replaceWith(box);
-  }
-  if (missing) setTimeout(scheduleDecorate, 500);
-}
-
-function scheduleDecorate() {
-  if (!decorateFrame) decorateFrame = requestAnimationFrame(() => decorateTinyPreviews().catch(console.warn));
 }
 
 selectToggle.addEventListener('click', () => {
@@ -338,20 +297,12 @@ for (const control of [sort, typeFilter, filterInbox, filterUnprotected]) contro
 document.querySelector('#views').addEventListener('click', event => {
   if (!event.target.closest('[data-view]')) return;
   clearSelection(true);
-  setTimeout(() => { saveUi(); scheduleDecorate(); });
+  setTimeout(saveUi);
 });
 source.addEventListener('change', () => clearSelection(true));
 search.addEventListener('input', () => { if (selected.size) clearSelection(true); });
 
-new MutationObserver(() => {
-  syncSelectedClasses();
-  scheduleDecorate();
-}).observe(files, { childList: true, subtree: true });
-
-window.addEventListener('beforeunload', () => {
-  for (const url of tinyUrls.values()) URL.revokeObjectURL(url);
-});
+new MutationObserver(syncSelectedClasses).observe(files, { childList: true, subtree: true });
 
 restoreUi();
 syncSelectionUi();
-scheduleDecorate();
