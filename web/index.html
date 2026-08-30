@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mochimono</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <h1>Mochimono</h1>
+        <p>Your stuff, without the sorting.</p>
+      </div>
+      <button id="logout" class="quiet" hidden>Log out</button>
+    </header>
+
+    <section id="login" class="card login" hidden>
+      <h2>Connect</h2>
+      <p>Enter the server token configured in <code>MOCHIMONO_TOKEN</code>.</p>
+      <form id="login-form">
+        <input id="token" type="password" autocomplete="current-password" placeholder="Server token" required>
+        <button>Open Mochimono</button>
+      </form>
+      <p id="login-error" class="error"></p>
+    </section>
+
+    <div id="app" hidden>
+      <section id="stats" class="stats"></section>
+
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h2>Files</h2>
+            <p>One row per unique object. Original locations are preserved separately.</p>
+          </div>
+          <input id="search" type="search" placeholder="Search names and paths">
+        </div>
+        <div id="files" class="files"></div>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h2>Backup drives</h2>
+            <p>What each managed drive is intended to protect, and what the server currently believes is there.</p>
+          </div>
+        </div>
+        <div id="drives" class="drives"></div>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
