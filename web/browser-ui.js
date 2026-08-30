@@ -2,7 +2,6 @@ const files = document.querySelector('#files');
 const views = document.querySelector('#views');
 const folderbar = document.querySelector('#folderbar');
 const viewer = document.querySelector('#viewer');
-const finePointer = matchMedia('(hover:hover) and (pointer:fine)');
 
 function currentView() {
   return views.querySelector('[data-view].active')?.dataset.view || 'grid';
@@ -29,27 +28,43 @@ folderbar.addEventListener('click', event => {
 });
 
 let viewerUiTimer = 0;
+let lastPointerType = 'mouse';
 
-function showViewerUi() {
-  if (viewer.hidden || !finePointer.matches) return;
-  viewer.classList.remove('viewer-ui-hidden');
+function hideViewerUiSoon() {
   clearTimeout(viewerUiTimer);
   viewerUiTimer = setTimeout(() => {
-    if (!viewer.hidden && finePointer.matches) viewer.classList.add('viewer-ui-hidden');
+    if (!viewer.hidden && lastPointerType === 'mouse') viewer.classList.add('viewer-ui-hidden');
   }, 500);
+}
+
+function showViewerUi() {
+  if (viewer.hidden) return;
+  viewer.classList.remove('viewer-ui-hidden');
+  if (lastPointerType === 'mouse') hideViewerUiSoon();
+  else clearTimeout(viewerUiTimer);
 }
 
 function syncViewerUi() {
   clearTimeout(viewerUiTimer);
   viewerUiTimer = 0;
   viewer.classList.remove('viewer-ui-hidden');
-  if (!viewer.hidden && finePointer.matches) showViewerUi();
+  if (!viewer.hidden && lastPointerType === 'mouse') hideViewerUiSoon();
 }
 
-viewer.addEventListener('mousemove', showViewerUi, { passive: true });
-viewer.addEventListener('mouseenter', showViewerUi, { passive: true });
+window.addEventListener('pointerdown', event => {
+  lastPointerType = event.pointerType || 'mouse';
+  if (!viewer.hidden && lastPointerType !== 'mouse') showViewerUi();
+}, { passive: true });
+
+viewer.addEventListener('mousemove', () => {
+  lastPointerType = 'mouse';
+  showViewerUi();
+}, { passive: true });
+viewer.addEventListener('mouseenter', () => {
+  lastPointerType = 'mouse';
+  showViewerUi();
+}, { passive: true });
 new MutationObserver(syncViewerUi).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
-finePointer.addEventListener?.('change', syncViewerUi);
 syncViewerUi();
 
 let press = null;
