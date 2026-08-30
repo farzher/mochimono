@@ -16,16 +16,13 @@ const HOST = process.env.HOST || '127.0.0.1';
 const TOKEN = process.env.MOCHIMONO_TOKEN || '';
 
 if (!TOKEN) {
-  console.error('MOCHIMONO_TOKEN is required. Example: MOCHIMONO_TOKEN="a-long-random-secret" npm start');
+  console.error('MOCHIMONO_TOKEN is required.');
   process.exit(1);
 }
 
 await mkdir(DATA_DIR, { recursive: true });
 const db = openCatalog(join(DATA_DIR, 'catalog.sqlite'));
-
-function now() {
-  return new Date().toISOString();
-}
+const now = () => new Date().toISOString();
 
 function json(res, status, data, headers = {}) {
   const body = JSON.stringify(data);
@@ -46,23 +43,19 @@ async function readJson(req, max = 5 * 1024 * 1024) {
     chunks.push(chunk);
   }
   if (!size) return {};
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-  } catch {
-    throw Object.assign(new Error('Invalid JSON'), { status: 400 });
-  }
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  catch { throw Object.assign(new Error('Invalid JSON'), { status: 400 }); }
 }
 
-function cookieValue(req, name) {
-  const cookies = req.headers.cookie || '';
-  for (const part of cookies.split(';')) {
-    const [key, ...rest] = part.trim().split('=');
-    if (key === name) return decodeURIComponent(rest.join('='));
+function cookie(req, name) {
+  for (const part of String(req.headers.cookie || '').split(';')) {
+    const [key, ...value] = part.trim().split('=');
+    if (key === name) return decodeURIComponent(value.join('='));
   }
   return null;
 }
 
-function tokenEqual(value) {
+function sameToken(value) {
   if (typeof value !== 'string') return false;
   const a = Buffer.from(value);
   const b = Buffer.from(TOKEN);
@@ -70,9 +63,8 @@ function tokenEqual(value) {
 }
 
 function authorized(req) {
-  const auth = req.headers.authorization || '';
-  if (auth.startsWith('Bearer ') && tokenEqual(auth.slice(7))) return true;
-  return tokenEqual(cookieValue(req, 'mochimono_session'));
+  const auth = String(req.headers.authorization || '');
+  return (auth.startsWith('Bearer ') && sameToken(auth.slice(7))) || sameToken(cookie(req, 'mochimono_session'));
 }
 
 function requireAuth(req, res) {
@@ -93,7 +85,10 @@ function getDrive(id) {
 function driveCoverage(row) {
   const policy = parsePolicy(row);
   const filter = policySql(policy, 'o');
-  const desired = db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes FROM objects o WHERE o.state = 'active' AND ${filter.sql}`).get(...filter.params);
+  const desired = db.prepare(`
+    SELECT COUNT(*) AS count, COALESCE(SUM(o.size), 0) AS bytes
+    FROM objects o WHERE o.state = 'active' AND ${filter.sql}
+  `).get(...filter.params);
   const protectedRow = db.prepare(`
     SELECT COUNT(*) AS count, COALESCE(SUM(o.size), 0) AS bytes
     FROM objects o
@@ -112,81 +107,88 @@ function driveCoverage(row) {
   };
 }
 
-function mimeForStatic(path) {
-  switch (extname(path).toLowerCase()) {
-    case '.html': return 'text/html; charset=utf-8';
-    case '.js': return 'text/javascript; charset=utf-8';
-    case '.css': return 'text/css; charset=utf-8';
-    case '.svg': return 'image/svg+xml';
-    default: return 'application/octet-stream';
+function fileTypeSql(type, alias = 'o') {
+  if (!type) return { sql: '1=1', params: [] };
+  if (type === 'application') return { sql: `(${alias}.mime LIKE 'application/%' OR ${alias}.mime LIKE 'text/%')`, params: [] };
+  if (type === 'other') {
+    return { sql: `(${alias}.mime NOT LIKE 'image/%' AND ${alias}.mime NOT LIKE 'video/%' AND ${alias}.mime NOT LIKE 'audio/%' AND ${alias}.mime NOT LIKE 'text/%' AND ${alias}.mime NOT LIKE 'application/%')`, params: [] };
   }
+  if (['image', 'video', 'audio', 'text'].includes(type)) return { sql: `${alias}.mime LIKE ?`, params: [`${type}/%`] };
+  return { sql: '1=0', params: [] };
 }
 
-async function serveStatic(req, res, pathname) {
+function staticType(path) {
+  if (path.endsWith('.html')) return 'text/html; charset=utf-8';
+  if (path.endsWith('.js')) return 'text/javascript; charset=utf-8';
+  if (path.endsWith('.css')) return 'text/css; charset=utf-8';
+  if (path.endsWith('.svg')) return 'image/svg+xml';
+  return 'application/octet-stream';
+}
+
+async function serveStatic(res, pathname) {
   const relative = pathname === '/' ? '/index.html' : pathname;
   const path = resolve(WEB_DIR, `.${relative}`);
   if (path !== WEB_DIR && !path.startsWith(`${WEB_DIR}${sep}`)) return false;
   try {
     const info = await stat(path);
     if (!info.isFile()) return false;
-    res.writeHead(200, { 'content-type': mimeForStatic(path), 'content-length': info.size, 'cache-control': 'no-cache' });
+    res.writeHead(200, { 'content-type': staticType(path), 'content-length': info.size, 'cache-control': 'no-cache' });
     createReadStream(path).pipe(res);
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 async function serveObject(req, res, hash) {
-  const row = db.prepare("SELECT hash, size, mime FROM objects WHERE hash = ? AND state = 'active'").get(hash);
+  const row = db.prepare("SELECT size, mime FROM objects WHERE hash = ? AND state = 'active'").get(hash);
   if (!row) return json(res, 404, { error: 'Object not found' });
 
-  const path = objectPath(DATA_DIR, hash);
   let info;
-  try { info = await stat(path); }
+  try { info = await stat(objectPath(DATA_DIR, hash)); }
   catch { return json(res, 503, { error: 'Object is cataloged but missing from primary storage' }); }
 
-  const range = req.headers.range;
   const headers = {
     'content-type': row.mime,
     'accept-ranges': 'bytes',
     'cache-control': 'private, max-age=3600'
   };
+  const range = req.headers.range;
 
-  if (range) {
-    const match = /^bytes=(\d*)-(\d*)$/.exec(range);
-    if (!match) {
-      res.writeHead(416, { 'content-range': `bytes */${info.size}` });
-      return res.end();
-    }
-    let start = match[1] ? Number(match[1]) : 0;
-    let end = match[2] ? Number(match[2]) : info.size - 1;
-    if (!match[1] && match[2]) {
-      const suffix = Number(match[2]);
-      start = Math.max(0, info.size - suffix);
-      end = info.size - 1;
-    }
-    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= info.size) {
-      res.writeHead(416, { 'content-range': `bytes */${info.size}` });
-      return res.end();
-    }
-    end = Math.min(end, info.size - 1);
-    res.writeHead(206, {
-      ...headers,
-      'content-range': `bytes ${start}-${end}/${info.size}`,
-      'content-length': end - start + 1
-    });
-    return readObject(DATA_DIR, hash, { start, end }).pipe(res);
+  if (!range) {
+    res.writeHead(200, { ...headers, 'content-length': info.size });
+    if (req.method === 'HEAD') return res.end();
+    return readObject(DATA_DIR, hash).pipe(res);
   }
 
-  res.writeHead(200, { ...headers, 'content-length': info.size });
-  readObject(DATA_DIR, hash).pipe(res);
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (!match) {
+    res.writeHead(416, { 'content-range': `bytes */${info.size}` });
+    return res.end();
+  }
+
+  let start = match[1] ? Number(match[1]) : 0;
+  let end = match[2] ? Number(match[2]) : info.size - 1;
+  if (!match[1] && match[2]) {
+    start = Math.max(0, info.size - Number(match[2]));
+    end = info.size - 1;
+  }
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= info.size) {
+    res.writeHead(416, { 'content-range': `bytes */${info.size}` });
+    return res.end();
+  }
+  end = Math.min(end, info.size - 1);
+  res.writeHead(206, {
+    ...headers,
+    'content-range': `bytes ${start}-${end}/${info.size}`,
+    'content-length': end - start + 1
+  });
+  if (req.method === 'HEAD') return res.end();
+  readObject(DATA_DIR, hash, { start, end }).pipe(res);
 }
 
 async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/login') {
     const body = await readJson(req);
-    if (!tokenEqual(body.token)) return json(res, 401, { error: 'Invalid token' });
+    if (!sameToken(body.token)) return json(res, 401, { error: 'Invalid token' });
     return json(res, 200, { ok: true }, {
       'set-cookie': `mochimono_session=${encodeURIComponent(TOKEN)}; HttpOnly; SameSite=Strict; Path=/`
     });
@@ -200,16 +202,26 @@ async function handleApi(req, res, url) {
 
   if (!requireAuth(req, res)) return;
 
-  if (req.method === 'GET' && url.pathname === '/api/health') {
-    return json(res, 200, { ok: true });
-  }
+  if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true });
 
   if (req.method === 'GET' && url.pathname === '/api/stats') {
     const objects = db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes FROM objects WHERE state = 'active'").get();
-    const sources = db.prepare('SELECT COUNT(*) AS count FROM sources').get();
+    const sources = db.prepare("SELECT COUNT(*) AS count FROM sources s JOIN objects o ON o.hash = s.object_hash WHERE o.state = 'active'").get();
     const ignored = db.prepare('SELECT COUNT(*) AS count FROM ignored_hashes').get();
     const drives = db.prepare('SELECT COUNT(*) AS count FROM drives').get();
     return json(res, 200, { objects: objects.count, bytes: objects.bytes, sources: sources.count, ignored: ignored.count, drives: drives.count });
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/imports') {
+    const rows = db.prepare(`
+      SELECT i.id, i.source_name AS sourceName, i.created_at AS createdAt,
+             COUNT(s.id) AS files, COALESCE(SUM(o.size), 0) AS referencedBytes
+      FROM imports i
+      LEFT JOIN sources s ON s.import_id = i.id
+      LEFT JOIN objects o ON o.hash = s.object_hash AND o.state = 'active'
+      GROUP BY i.id ORDER BY i.id DESC LIMIT 100
+    `).all();
+    return json(res, 200, { imports: rows });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/imports') {
@@ -251,16 +263,13 @@ async function handleApi(req, res, url) {
     }
   }
 
-  if (objectMatch && req.method === 'GET') {
-    return serveObject(req, res, objectMatch[1]);
-  }
+  if (objectMatch && (req.method === 'GET' || req.method === 'HEAD')) return serveObject(req, res, objectMatch[1]);
 
   const deleteMatch = /^\/api\/objects\/([a-f0-9]{64})\/delete$/.exec(url.pathname);
   if (deleteMatch && req.method === 'POST') {
     const hash = deleteMatch[1];
     const body = await readJson(req);
-    const row = db.prepare('SELECT hash FROM objects WHERE hash = ?').get(hash);
-    if (!row) return json(res, 404, { error: 'Object not found' });
+    if (!db.prepare('SELECT 1 FROM objects WHERE hash = ?').get(hash)) return json(res, 404, { error: 'Object not found' });
     db.prepare("UPDATE objects SET state = 'deleted' WHERE hash = ?").run(hash);
     if (body.ignore === true) db.prepare('INSERT OR IGNORE INTO ignored_hashes(hash, ignored_at) VALUES(?, ?)').run(hash, now());
     await removeObject(DATA_DIR, hash);
@@ -276,10 +285,7 @@ async function handleApi(req, res, url) {
     const insert = db.prepare(`
       INSERT INTO sources(object_hash, import_id, original_path, filename, mtime, created_at)
       VALUES(?, ?, ?, ?, ?, ?)
-      ON CONFLICT(import_id, original_path) DO UPDATE SET
-        object_hash = excluded.object_hash,
-        filename = excluded.filename,
-        mtime = excluded.mtime
+      ON CONFLICT(import_id, original_path) DO UPDATE SET object_hash = excluded.object_hash, filename = excluded.filename, mtime = excluded.mtime
     `);
     try {
       db.exec('BEGIN IMMEDIATE');
@@ -297,17 +303,20 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/api/files') {
     const q = String(url.searchParams.get('q') || '').slice(0, 200);
+    const type = String(url.searchParams.get('type') || '');
     const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') || 100)));
     const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
+    const filter = fileTypeSql(type, 'o');
     const like = `%${q}%`;
     const rows = db.prepare(`
       SELECT o.hash, o.size, o.mime, o.created_at AS createdAt,
              COALESCE(MIN(s.filename), o.hash) AS filename,
              COALESCE(MIN(s.original_path), '') AS originalPath,
-             COUNT(s.id) AS referencesCount
+             COUNT(s.id) AS referencesCount,
+             (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount
       FROM objects o
       LEFT JOIN sources s ON s.object_hash = o.hash
-      WHERE o.state = 'active'
+      WHERE o.state = 'active' AND ${filter.sql}
         AND (? = '' OR EXISTS (
           SELECT 1 FROM sources sx
           WHERE sx.object_hash = o.hash AND (sx.filename LIKE ? OR sx.original_path LIKE ?)
@@ -315,8 +324,26 @@ async function handleApi(req, res, url) {
       GROUP BY o.hash
       ORDER BY o.created_at DESC
       LIMIT ? OFFSET ?
-    `).all(q, like, like, limit, offset);
-    return json(res, 200, { files: rows, limit, offset });
+    `).all(...filter.params, q, like, like, limit, offset);
+    return json(res, 200, { files: rows, limit, offset, hasMore: rows.length === limit });
+  }
+
+  const detailsMatch = /^\/api\/files\/([a-f0-9]{64})\/details$/.exec(url.pathname);
+  if (detailsMatch && req.method === 'GET') {
+    const hash = detailsMatch[1];
+    const object = db.prepare("SELECT hash, size, mime, created_at AS createdAt FROM objects WHERE hash = ? AND state = 'active'").get(hash);
+    if (!object) return json(res, 404, { error: 'File not found' });
+    const sources = db.prepare(`
+      SELECT s.original_path AS path, s.filename, s.mtime, i.source_name AS sourceName, i.created_at AS importedAt
+      FROM sources s JOIN imports i ON i.id = s.import_id
+      WHERE s.object_hash = ? ORDER BY i.created_at DESC, s.original_path
+    `).all(hash);
+    const backups = db.prepare(`
+      SELECT d.id, d.name, d.last_seen AS lastSeen, r.verified_at AS verifiedAt
+      FROM replicas r JOIN drives d ON d.id = r.drive_id
+      WHERE r.object_hash = ? ORDER BY d.name
+    `).all(hash);
+    return json(res, 200, { object, sources, backups });
   }
 
   const sourcesMatch = /^\/api\/files\/([a-f0-9]{64})\/sources$/.exec(url.pathname);
@@ -351,14 +378,12 @@ async function handleApi(req, res, url) {
   if (desiredMatch && req.method === 'GET') {
     const id = decodeURIComponent(desiredMatch[1]);
     const drive = getDrive(id);
-    if (!drive) return json(res, 404, { error: 'Drive not registered' });
-    const policy = parsePolicy(drive);
-    const filter = policySql(policy, 'o');
+    if (!drive) return json(res, 404, { error: 'Backup not registered' });
+    const filter = policySql(parsePolicy(drive), 'o');
     const after = String(url.searchParams.get('after') || '');
     const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') || 1000)));
     const rows = db.prepare(`
-      SELECT o.hash, o.size, o.mime
-      FROM objects o
+      SELECT o.hash, o.size, o.mime FROM objects o
       WHERE o.state = 'active' AND o.hash > ? AND ${filter.sql}
       ORDER BY o.hash LIMIT ?
     `).all(after, ...filter.params, limit);
@@ -369,7 +394,7 @@ async function handleApi(req, res, url) {
   const replicasMatch = /^\/api\/drives\/([^/]+)\/replicas$/.exec(url.pathname);
   if (replicasMatch && req.method === 'POST') {
     const id = decodeURIComponent(replicasMatch[1]);
-    if (!getDrive(id)) return json(res, 404, { error: 'Drive not registered' });
+    if (!getDrive(id)) return json(res, 404, { error: 'Backup not registered' });
     const body = await readJson(req);
     if (!Array.isArray(body.replicas) || body.replicas.length > 5000) return json(res, 400, { error: 'replicas must be an array of at most 5000 records' });
     const insert = db.prepare(`
@@ -397,8 +422,8 @@ async function handleApi(req, res, url) {
     const body = await readJson(req);
     if (!Array.isArray(body.hashes) || body.hashes.length > 5000) return json(res, 400, { error: 'hashes must be an array of at most 5000 hashes' });
     const remove = db.prepare('DELETE FROM replicas WHERE drive_id = ? AND object_hash = ?');
-    db.exec('BEGIN IMMEDIATE');
     try {
+      db.exec('BEGIN IMMEDIATE');
       for (const hash of body.hashes) if (validHash(hash)) remove.run(id, hash);
       db.exec('COMMIT');
     } catch (error) {
@@ -426,7 +451,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
-    if (await serveStatic(req, res, decodeURIComponent(url.pathname))) return;
+    if (await serveStatic(res, decodeURIComponent(url.pathname))) return;
     json(res, 404, { error: 'Not found' });
   } catch (error) {
     console.error(error);
