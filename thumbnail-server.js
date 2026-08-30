@@ -12,7 +12,7 @@ import { validHash } from './lib/store.js';
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const DATA_DIR = resolve(process.env.MOCHIMONO_DATA || join(ROOT, 'data'));
 const TOKEN = process.env.MOCHIMONO_TOKEN || '';
-const THUMB_VERSION = 1;
+const THUMB_VERSION = 3;
 const MAX_THUMB_BYTES = 5 * 1024 * 1024;
 const PRIORITY_WINDOW_MS = 20_000;
 const db = openCatalog(join(DATA_DIR, 'catalog.sqlite'));
