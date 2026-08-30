@@ -129,7 +129,6 @@ async function cacheThumb(hash, blob, width, height, source = 'server') {
       }
     }
   }
-  applyDimensions(hash, width, height);
 }
 
 async function deleteCachedThumb(hash) {
@@ -254,7 +253,7 @@ async function flushRequests() {
 function queueCheck(file, card) {
   const hash = file.hash;
   const state = states.get(hash) || {};
-  if (state.ready || state.downloading || (state.next || 0) > performance.now()) return;
+  if (state.ready || state.downloading || state.downloadQueued || (state.next || 0) > performance.now()) return;
   const priority = visible(card);
   const queued = checkQueue.get(hash);
   if (!queued || priority) checkQueue.set(hash, { file, priority: priority || queued?.priority || false });
@@ -318,11 +317,13 @@ function handleMissing(file) {
 function queueDownload(file, priority, metadata) {
   const hash = file.hash;
   const state = states.get(hash) || {};
-  if (state.ready || state.downloading) return;
+  if (state.ready || state.downloading || state.downloadQueued) return;
+  state.downloadQueued = true;
+  states.set(hash, state);
   if (priority) {
     downloadBackground.delete(hash);
     downloadPriority.set(hash, { file, metadata });
-  } else if (!downloadPriority.has(hash) && !downloadBackground.has(hash)) {
+  } else {
     downloadBackground.set(hash, { file, metadata });
   }
   pumpDownloads();
@@ -340,6 +341,7 @@ async function downloadThumb(job) {
   const { file, metadata } = job;
   const hash = file.hash;
   const state = states.get(hash) || {};
+  state.downloadQueued = false;
   state.downloading = true;
   states.set(hash, state);
   try {
@@ -348,9 +350,10 @@ async function downloadThumb(job) {
       const blob = await response.blob();
       const width = Number(response.headers.get('x-mochimono-width')) || Number(metadata?.width) || 0;
       const height = Number(response.headers.get('x-mochimono-height')) || Number(metadata?.height) || 0;
-      await cacheThumb(hash, blob, width, height, 'server');
+      applyDimensions(hash, width, height);
       applyBlob(hash, blob);
       states.set(hash, { ready: true });
+      cacheThumb(hash, blob, width, height, 'server').catch(error => console.warn('Preview cache write failed', error));
       return;
     }
     if (response.status === 404) handleMissing(file);
@@ -359,7 +362,10 @@ async function downloadThumb(job) {
     scheduleRetry(hash, 2500);
   } finally {
     const latest = states.get(hash);
-    if (latest && !latest.ready) latest.downloading = false;
+    if (latest && !latest.ready) {
+      latest.downloading = false;
+      latest.downloadQueued = false;
+    }
   }
 }
 
@@ -385,7 +391,7 @@ async function scan() {
   for (const card of cards) {
     const hash = card.dataset.hash;
     const existing = urls.get(hash);
-    if (existing) {
+    if (existing && card.querySelector('.media-thumb')) {
       applyBlob(hash, existing.blob);
       continue;
     }
@@ -402,7 +408,14 @@ async function scan() {
     const box = mediaBox(card, kind);
     if (!box) continue;
 
+    const existing = urls.get(record.hash);
+    if (existing) {
+      applyBlob(record.hash, existing.blob);
+      states.set(record.hash, { ready: true });
+      continue;
+    }
     if (thumb?.blob && thumb.version === THUMB_VERSION) {
+      applyDimensions(record.hash, Number(file?.width) || 0, Number(file?.height) || 0);
       applyBlob(record.hash, thumb.blob);
       states.set(record.hash, { ready: true });
       continue;
@@ -570,9 +583,10 @@ async function runFallback(job) {
     const result = kind === 'image' ? await imageFallback(file) : await videoFallback(file);
     if (states.get(file.hash)?.ready) return;
     await uploadFallback(file, result);
-    await cacheThumb(file.hash, result.blob, result.width, result.height, 'browser');
+    applyDimensions(file.hash, result.width, result.height);
     applyBlob(file.hash, result.blob);
     states.set(file.hash, { ready: true, fallbackDone: true });
+    cacheThumb(file.hash, result.blob, result.width, result.height, 'browser').catch(error => console.warn('Preview cache write failed', error));
   } catch (error) {
     const state = states.get(file.hash) || {};
     state.fallbackDone = true;
