@@ -309,6 +309,10 @@ async function syncFiles(folder, device, update, importId = null) {
   const created = importId ? { id: importId } : await api('/api/imports', { method: 'POST', body: { sourceName: source } });
   const accepted = hashed.filter(record => !ignored.has(record.hash));
 
+  if (importId) {
+    await api(`/api/imports/${importId}`, { method: 'POST', body: { sourceName: source } });
+  }
+
   for (let index = 0; index < accepted.length; index += 1000) {
     await api('/api/sources', {
       method: 'POST',
@@ -787,7 +791,11 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/settings') {
     const body = await readJson(req);
     settings.server = String(body.server || settings.server).trim().replace(/\/$/, '');
-    if (body.token !== '') settings.token = String(body.token ?? settings.token);
+    if (body.token !== undefined && body.token !== '') settings.token = String(body.token);
+    if (body.device !== undefined) {
+      settings.device = String(body.device || DEVICE).trim() || DEVICE;
+      settings.folders.forEach(folder => { folder.device = settings.device; });
+    }
     await persistSettings();
     if (settings.token) settings.folders.forEach(folder => queueFolderSync(folder.path));
     return json(res, 200, { ok: true });
@@ -813,7 +821,6 @@ async function handleApi(req, res, url) {
     settings.device = device;
     let folder = folderFor(root);
     if (folder) {
-      if (folder.device !== device) folder.importId = null;
       folder.device = device;
     } else {
       folder = { path: root, device, importId: null, lastSynced: null };
