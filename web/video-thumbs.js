@@ -1,6 +1,7 @@
 const files = document.querySelector('#files');
 const CACHE_NAME = 'mochimono-catalog';
 const CACHE_VERSION = 2;
+const VIDEO_THUMB_VERSION = 2;
 const THUMB_EDGE = 768;
 const MAX_ATTEMPTS = 3;
 const queue = [];
@@ -94,8 +95,11 @@ function scheduleScan() {
 
 function scan() {
   scanFrame = 0;
-  files.querySelectorAll('.file-row[data-hash], .folder-row.file-folder-row[data-hash]').forEach(ensureTinyPlaceholder);
+  const rows = [...files.querySelectorAll('.file-row[data-hash], .folder-row.file-folder-row[data-hash]')];
+  rows.forEach(ensureTinyPlaceholder);
   files.querySelectorAll('video.video-thumb').forEach(replaceVideoElement);
+  files.querySelectorAll('.video-card[data-hash]').forEach(card => enqueue(card.dataset.hash));
+  rows.filter(card => isVideoName(cardName(card))).forEach(card => enqueue(card.dataset.hash));
   files.querySelectorAll('.video-thumb-pending').forEach(element => enqueue(placeholderHash(element)));
 }
 
@@ -117,7 +121,7 @@ function viewportScore(hash) {
   const rect = card.getBoundingClientRect();
   if (rect.bottom >= 0 && rect.top <= innerHeight) return Math.max(0, rect.top);
   if (rect.bottom < 0) return Math.abs(rect.bottom) + innerHeight;
-  return rect.top - innerHeight + innerHeight;
+  return rect.top;
 }
 
 function takeNext() {
@@ -236,7 +240,7 @@ async function saveResult(hash, blob, width, height) {
   if (!db) return;
   const file = await idb(db.transaction('files').objectStore('files').get(hash));
   const transaction = db.transaction(['thumbs', 'files'], 'readwrite');
-  transaction.objectStore('thumbs').put({ hash, blob });
+  transaction.objectStore('thumbs').put({ hash, blob, videoVersion: VIDEO_THUMB_VERSION });
   if (file) {
     file.width = width;
     file.height = height;
@@ -278,7 +282,7 @@ function markFailed(hash, message) {
 
 async function generate(hash) {
   const existing = await cachedThumb(hash);
-  if (existing?.blob) {
+  if (existing?.blob && existing.videoVersion === VIDEO_THUMB_VERSION) {
     applyBlob(hash, existing.blob);
     return true;
   }
