@@ -53,9 +53,12 @@
             </div>
           </details>
           <div id="activeFilters" class="active-filters"></div>
-          <label id="mediaSizeControl" class="media-size" title="Preview size">
-            <span>−</span><input id="mediaSize" type="range" min="96" max="260" step="2" value="158" aria-label="Preview size"><span>+</span>
-          </label>
+          <div id="mediaSizeControl" class="media-sizes" aria-label="Preview size">
+            <button data-media-size="112" title="Small">S</button>
+            <button data-media-size="158" title="Medium" class="active">M</button>
+            <button data-media-size="220" title="Large">L</button>
+            <button data-media-size="300" title="Extra large">XL</button>
+          </div>
           <div id="views" class="views" aria-label="View">
             <button data-view="grid" class="active" title="Grid" aria-label="Grid">▦</button>
             <button data-view="list" title="List" aria-label="List">☷</button>
@@ -89,9 +92,11 @@
         </details>
       </div>
     </div>
-    <button id="viewer-prev" class="viewer-nav viewer-prev" aria-label="Previous">‹</button>
-    <button id="viewer-next" class="viewer-nav viewer-next" aria-label="Next">›</button>
-    <div id="viewer-stage" class="viewer-stage"><div id="viewer-media" class="viewer-media"></div></div>
+    <div id="viewer-stage" class="viewer-stage">
+      <button id="viewer-prev" class="viewer-nav viewer-prev" aria-label="Previous">‹</button>
+      <div id="viewer-media" class="viewer-media"></div>
+      <button id="viewer-next" class="viewer-nav viewer-next" aria-label="Next">›</button>
+    </div>
   </div>
 
   <script type="module" src="/app.js"></script>
