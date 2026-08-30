@@ -10,6 +10,8 @@ let loaded = [];
 let imports = [];
 let offset = 0;
 let hasMore = false;
+let loadingMore = false;
+let fileLoadGeneration = 0;
 let type = '';
 let importId = '';
 let inboxOnly = false;
@@ -92,7 +94,7 @@ function renderFiles() {
   const element = $('#files');
   element.className = `files ${view}`;
   $('#folderbar').hidden = true;
-  $('#more').hidden = !hasMore;
+  $('#scroll-sentinel').hidden = !hasMore;
 
   if (!loaded.length) {
     const message = inboxOnly ? 'Inbox empty.' : noBackupOnly ? 'All backed up.' : 'No files.';
@@ -122,18 +124,29 @@ function renderFiles() {
 
 async function loadFiles(reset = true) {
   if (view === 'folders') return loadFolder();
+  if (!reset && (!hasMore || loadingMore)) return;
   if (reset) {
+    fileLoadGeneration++;
     loaded = [];
     offset = 0;
+    hasMore = false;
   }
-  const q = $('#search').value.trim();
-  const review = inboxOnly ? 'unreviewed' : '';
-  const backup = noBackupOnly ? 'missing' : '';
-  const data = await request(`/api/files?limit=${PAGE}&offset=${offset}&type=${encodeURIComponent(type)}&review=${review}&backup=${backup}&import=${encodeURIComponent(importId)}&q=${encodeURIComponent(q)}`);
-  loaded.push(...data.files);
-  offset += data.files.length;
-  hasMore = data.hasMore;
-  renderFiles();
+
+  const generation = fileLoadGeneration;
+  if (!reset) loadingMore = true;
+  try {
+    const q = $('#search').value.trim();
+    const review = inboxOnly ? 'unreviewed' : '';
+    const backup = noBackupOnly ? 'missing' : '';
+    const data = await request(`/api/files?limit=${PAGE}&offset=${offset}&type=${encodeURIComponent(type)}&review=${review}&backup=${backup}&import=${encodeURIComponent(importId)}&q=${encodeURIComponent(q)}`);
+    if (generation !== fileLoadGeneration || view === 'folders') return;
+    loaded.push(...data.files);
+    offset += data.files.length;
+    hasMore = data.hasMore;
+    renderFiles();
+  } finally {
+    if (!reset && generation === fileLoadGeneration) loadingMore = false;
+  }
 }
 
 function currentFolderSource() {
@@ -156,7 +169,7 @@ function folderBreadcrumb() {
 function renderFolder() {
   const element = $('#files');
   element.className = 'files folders';
-  $('#more').hidden = true;
+  $('#scroll-sentinel').hidden = true;
   folderBreadcrumb();
 
   if (!folderImportId) {
@@ -417,7 +430,10 @@ $('#files').addEventListener('click', event => {
   if (item) openDetails(item.dataset.hash).catch(console.error);
 });
 
-$('#more').onclick = () => loadFiles(false).catch(console.error);
+new IntersectionObserver(entries => {
+  if (entries.some(entry => entry.isIntersecting) && hasMore && view !== 'folders') loadFiles(false).catch(console.error);
+}, { rootMargin: '600px 0px' }).observe($('#scroll-sentinel'));
+
 $('#close-details').onclick = () => $('#details').close();
 $('#review-toggle').onclick = () => toggleReviewed().catch(console.error);
 $('#delete').onclick = () => removeSelected(false).catch(console.error);
