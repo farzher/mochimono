@@ -123,6 +123,12 @@ function reviewSql(review, alias = 'o') {
   return '1=1';
 }
 
+function cleanRelativePath(value) {
+  const parts = String(value || '').replaceAll('\\', '/').split('/').filter(Boolean);
+  if (parts.some(part => part === '.' || part === '..')) throw Object.assign(new Error('Invalid folder path'), { status: 400 });
+  return parts.join('/');
+}
+
 function staticType(path) {
   if (path.endsWith('.html')) return 'text/html; charset=utf-8';
   if (path.endsWith('.js')) return 'text/javascript; charset=utf-8';
@@ -238,6 +244,46 @@ async function handleApi(req, res, url) {
     if (!sourceName) return json(res, 400, { error: 'sourceName is required' });
     const result = db.prepare('INSERT INTO imports(source_name, created_at) VALUES(?, ?)').run(sourceName, now());
     return json(res, 201, { id: Number(result.lastInsertRowid), sourceName });
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/folders') {
+    const importId = Number(url.searchParams.get('import'));
+    if (!Number.isInteger(importId) || importId < 1) return json(res, 400, { error: 'Valid import is required' });
+    const source = db.prepare('SELECT id, source_name AS sourceName, created_at AS createdAt FROM imports WHERE id = ?').get(importId);
+    if (!source) return json(res, 404, { error: 'Source not found' });
+
+    const path = cleanRelativePath(url.searchParams.get('path'));
+    const prefix = path ? `${path}/` : '';
+    const prefixLength = prefix.length;
+    const folders = db.prepare(`
+      WITH scoped AS (
+        SELECT substr(s.original_path, ? + 1) AS rest
+        FROM sources s
+        JOIN objects o ON o.hash = s.object_hash
+        WHERE s.import_id = ? AND o.state = 'active'
+          AND substr(s.original_path, 1, ?) = ?
+      )
+      SELECT substr(rest, 1, instr(rest, '/') - 1) AS name, COUNT(*) AS files
+      FROM scoped
+      WHERE instr(rest, '/') > 0
+      GROUP BY name
+      ORDER BY lower(name), name
+    `).all(prefixLength, importId, prefixLength, prefix);
+
+    const files = db.prepare(`
+      SELECT o.hash, o.size, o.mime, o.created_at AS createdAt,
+             s.filename, s.original_path AS originalPath, s.mtime,
+             EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
+             (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount
+      FROM sources s
+      JOIN objects o ON o.hash = s.object_hash
+      WHERE s.import_id = ? AND o.state = 'active'
+        AND substr(s.original_path, 1, ?) = ?
+        AND instr(substr(s.original_path, ? + 1), '/') = 0
+      ORDER BY lower(s.filename), s.filename
+    `).all(importId, prefixLength, prefix, prefixLength);
+
+    return json(res, 200, { source, path, folders, files });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/objects/check') {
