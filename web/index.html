@@ -10,15 +10,15 @@
 </head>
 <body>
   <main class="shell">
-    <header>
-      <div class="app-brand">
-        <span class="mini" aria-hidden="true"></span>
-        <h1>Mochimono</h1>
+    <header class="topbar">
+      <div class="app-brand"><span class="mini" aria-hidden="true"></span><h1>Mochimono</h1></div>
+      <div class="top-actions">
+        <div id="stats" class="storage-head"></div>
+        <button id="logout" class="text-button" hidden>Log out</button>
       </div>
-      <button id="logout" class="quiet" hidden>Log out</button>
     </header>
 
-    <section id="login" class="card login" hidden>
+    <section id="login" class="login" hidden>
       <h2>Connect</h2>
       <form id="login-form">
         <input id="token" type="password" autocomplete="current-password" placeholder="Server token" required>
@@ -28,78 +28,64 @@
     </section>
 
     <div id="app" hidden>
-      <section id="stats" class="stats"></section>
-
-      <section id="library-card" class="card library-card">
-        <div class="toolbar">
-          <input id="search" type="search" placeholder="Search">
-          <div class="library-filters">
-            <select id="source" aria-label="Source"><option value="">All sources</option></select>
-            <button id="inbox" class="inbox-toggle">Inbox</button>
-            <button id="unbacked" class="backup-toggle">Unbacked</button>
-            <div id="filters" class="segmented">
-              <button data-type="" class="active">All</button>
-              <button data-type="image">Images</button>
-              <button data-type="video">Video</button>
-              <button data-type="audio">Audio</button>
-              <button data-type="application">Docs</button>
-              <button data-type="other">Other</button>
-            </div>
-          </div>
-          <div class="library-tools">
-            <select id="sort" aria-label="Sort">
-              <option value="date-desc">Newest</option>
-              <option value="date-asc">Oldest</option>
-              <option value="name">Name</option>
-              <option value="size-desc">Largest</option>
-            </select>
-            <div id="views" class="segmented compact">
-              <button data-view="grid" class="active">Grid</button>
-              <button data-view="list">List</button>
-              <button data-view="folders">Folders</button>
-            </div>
+      <section id="library-card" class="library">
+        <div class="commandbar">
+          <input id="search" class="search" type="search" placeholder="Search">
+          <select id="source" aria-label="Source"><option value="">All sources</option></select>
+          <select id="typeFilter" aria-label="File type">
+            <option value="">All files</option>
+            <option value="image">Images</option>
+            <option value="video">Video</option>
+            <option value="audio">Audio</option>
+            <option value="application">Docs</option>
+            <option value="other">Other</option>
+          </select>
+          <button id="inbox" class="chip">Inbox</button>
+          <button id="unbacked" class="chip">Unbacked</button>
+          <select id="sort" aria-label="Sort">
+            <option value="date-desc">Newest</option>
+            <option value="date-asc">Oldest</option>
+            <option value="name">Name</option>
+            <option value="size-desc">Largest</option>
+          </select>
+          <div id="views" class="views" aria-label="View">
+            <button data-view="grid" class="active" title="Grid" aria-label="Grid">▦</button>
+            <button data-view="list" title="List" aria-label="List">☷</button>
+            <button data-view="folders" title="Folders" aria-label="Folders">▤</button>
           </div>
         </div>
+
         <div id="folderbar" class="folderbar" hidden></div>
         <div id="files" class="files grid"></div>
         <div id="scroll-sentinel" style="height:1px" hidden></div>
         <nav id="dateRail" class="date-rail" aria-label="Dates" hidden></nav>
       </section>
 
-      <section class="card">
-        <div class="section-head"><h2>Backups</h2></div>
+      <details class="protection">
+        <summary>Protection</summary>
         <div id="drives" class="drives"></div>
-      </section>
+      </details>
     </div>
   </main>
 
   <dialog id="details">
-    <button id="close-details" class="dialog-close quiet" aria-label="Close">×</button>
+    <button id="close-details" class="dialog-close" aria-label="Close">×</button>
     <button id="detail-prev" class="detail-nav detail-prev" aria-label="Previous">‹</button>
     <button id="detail-next" class="detail-nav detail-next" aria-label="Next">›</button>
     <div id="detail-preview" class="detail-preview"></div>
     <div class="detail-body">
       <div class="detail-title-row">
-        <div>
-          <h2 id="detail-name"></h2>
-          <p id="detail-meta"></p>
-        </div>
+        <div><h2 id="detail-name"></h2><p id="detail-meta"></p></div>
         <a id="detail-open" class="button-link" target="_blank">Open</a>
       </div>
-      <div class="review-zone">
-        <strong id="review-status"></strong>
-        <button id="review-toggle"></button>
-      </div>
+      <div class="review-zone"><strong id="review-status"></strong><button id="review-toggle"></button></div>
       <h3>Locations</h3>
       <div id="detail-sources" class="sources"></div>
       <h3 class="detail-section">Backups</h3>
       <div id="detail-backups" class="sources"></div>
       <div class="danger-zone">
         <strong>Remove</strong>
-        <div class="danger-actions">
-          <button id="delete" class="quiet">Delete</button>
-          <button id="delete-ignore" class="danger">Delete + Ignore</button>
-        </div>
+        <div class="danger-actions"><button id="delete" class="text-button">Delete</button><button id="delete-ignore" class="danger">Delete + Ignore</button></div>
       </div>
     </div>
   </dialog>
