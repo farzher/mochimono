@@ -1,25 +1,249 @@
 const search = document.querySelector('#search');
-const value = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+const valueDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+const SEARCH_INDEX_VERSION = '3';
+const SEARCH_INDEX_KEY = 'mochimono-search-index-version';
+const nativeFetch = window.fetch.bind(window);
 
-function normalizeSearchQuery(text) {
-  const raw = String(text || '').normalize('NFKC').trim();
-  const pathParts = raw.split(/[\\/]+/).filter(Boolean);
-  const searchable = pathParts.length > 1 ? pathParts.at(-1) : raw;
-  return searchable
-    .replace(/[\\/_\-.–—:;,()[\]{}"'`~!@#$%^&*+=|<>?]+/g, ' ')
+function normalizeText(text) {
+  return String(text || '')
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-if (search && value?.get && value?.set) {
-  // Keep exactly what the user typed visible while app.js reads a forgiving query.
+function encoded(text) {
+  return normalizeText(text).replaceAll(' ', '_');
+}
+
+function extension(name) {
+  return String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
+}
+
+function fileKind(file) {
+  const mime = String(file.mime || '');
+  const base = mime.split('/')[0];
+  if (base && base !== 'application') return base;
+  const ext = extension(file.filename);
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff'].includes(ext)) return 'image';
+  if (['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'mpg', 'mpeg', 'm2v', 'mts', 'm2ts', '3gp'].includes(ext)) return 'video';
+  if (['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus'].includes(ext)) return 'audio';
+  if (base === 'text') return 'text';
+  return base || 'other';
+}
+
+function yearFor(file) {
+  const date = new Date(file.fileDate || file.createdAt || 0);
+  return Number.isNaN(date.getTime()) ? '' : String(date.getFullYear());
+}
+
+function augmentCatalogFile(file) {
+  const all = normalizeText(`${file.filename || ''} ${file.originalPath || ''} ${file.searchText || ''}`);
+  const fields = [
+    all,
+    `__name__${encoded(file.filename)}`,
+    `__path__${encoded(`${file.originalPath || ''} ${file.searchText || ''}`)}`,
+    `__type__${encoded(fileKind(file))}`,
+    `__ext__${encoded(extension(file.filename))}`,
+    `__year__${encoded(yearFor(file))}`
+  ];
+  const importIds = Array.isArray(file.importIds)
+    ? file.importIds
+    : String(file.importIds || '').split(',').filter(Boolean);
+  for (const id of importIds) fields.push(`__sourceid__${String(id).trim()}`);
+  file.searchText = `${file.searchText || ''} ${fields.filter(Boolean).join(' ')}`.trim();
+  return file;
+}
+
+window.fetch = async (...args) => {
+  const response = await nativeFetch(...args);
+  if (!response.ok) return response;
+  let pathname = '';
+  try {
+    const input = args[0] instanceof Request ? args[0].url : String(args[0]);
+    pathname = new URL(input, location.href).pathname;
+  } catch {}
+  if (pathname !== '/api/catalog') return response;
+
+  try {
+    const data = await response.clone().json();
+    if (!Array.isArray(data.files)) return response;
+    data.files = data.files.map(augmentCatalogFile);
+    const headers = new Headers(response.headers);
+    headers.delete('content-length');
+    return new Response(JSON.stringify(data), {
+      status: response.status,
+      statusText: response.statusText,
+      headers
+    });
+  } catch {
+    return response;
+  }
+};
+
+function pathTail(text, count = 2) {
+  const parts = String(text || '').split(/[\\/]+/).map(part => part.trim()).filter(Boolean);
+  return parts.length > 1 ? parts.slice(-count).join(' ') : String(text || '');
+}
+
+function tokenize(raw) {
+  const tokens = [];
+  const regex = /(?:^|\s)(?:(name|path|source|type|ext|year):(?:"([^"]*)"|'([^']*)'|([^\s]+))|"([^"]*)"|'([^']*)'|([^\s]+))/giu;
+  let match;
+  while ((match = regex.exec(String(raw || '')))) {
+    const field = match[1]?.toLowerCase() || '';
+    const text = match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[6] ?? match[7] ?? '';
+    if (text.trim()) tokens.push({ field, text: text.trim() });
+  }
+  return tokens;
+}
+
+function sourceToken(text) {
+  const wanted = normalizeText(text);
+  if (!wanted) return '';
+  const select = document.querySelector('#source');
+  const options = select ? [...select.options].filter(option => option.value) : [];
+  const exact = options.find(option => normalizeText(option.textContent) === wanted);
+  if (exact) return `__sourceid__${exact.value}`;
+  const matches = options.filter(option => normalizeText(option.textContent).includes(wanted));
+  return matches.length === 1 ? `__sourceid__${matches[0].value}` : wanted;
+}
+
+function typeToken(text) {
+  const aliases = new Map([
+    ['photo', 'image'], ['photos', 'image'], ['picture', 'image'], ['pictures', 'image'], ['images', 'image'],
+    ['videos', 'video'], ['movies', 'video'], ['music', 'audio'], ['documents', 'application'], ['document', 'application'], ['docs', 'application']
+  ]);
+  const normalized = normalizeText(text);
+  return aliases.get(normalized) || normalized;
+}
+
+function queryTerms(raw) {
+  const result = [];
+  for (const token of tokenize(raw)) {
+    if (token.field === 'name') {
+      result.push(`__name__${encoded(token.text)}`);
+      continue;
+    }
+    if (token.field === 'path') {
+      result.push(`__path__${encoded(pathTail(token.text, 3))}`);
+      continue;
+    }
+    if (token.field === 'source') {
+      result.push(sourceToken(token.text));
+      continue;
+    }
+    if (token.field === 'type') {
+      result.push(`__type__${encoded(typeToken(token.text))}`);
+      continue;
+    }
+    if (token.field === 'ext') {
+      result.push(`__ext__${encoded(String(token.text).replace(/^\./, ''))}`);
+      continue;
+    }
+    if (token.field === 'year') {
+      result.push(`__year__${encoded(token.text)}`);
+      continue;
+    }
+
+    const searchable = /[\\/]/.test(token.text) ? pathTail(token.text, 2) : token.text;
+    result.push(...normalizeText(searchable).split(' ').filter(Boolean));
+  }
+  return result.filter(Boolean);
+}
+
+function transformedQuery(raw) {
+  return queryTerms(raw).join(' ');
+}
+
+function rawSearch() {
+  return search && valueDescriptor?.get ? valueDescriptor.get.call(search) : '';
+}
+
+function setRawSearch(text, notify = true) {
+  if (!search || !valueDescriptor?.set) return;
+  valueDescriptor.set.call(search, String(text || ''));
+  if (notify) search.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function detailsHaystacks(details) {
+  const object = details?.object || {};
+  const sources = Array.isArray(details?.sources) ? details.sources : [];
+  const names = sources.map(item => item.filename || '');
+  const paths = sources.map(item => item.path || '');
+  const sourceNames = sources.map(item => item.sourceName || '');
+  const representative = names[0] || object.filename || '';
+  const kind = fileKind({ filename: representative, mime: object.mime });
+  const ext = extension(representative);
+  const date = sources.map(item => item.mtime).find(Boolean) || object.createdAt;
+  const year = date && !Number.isNaN(new Date(date).getTime()) ? String(new Date(date).getFullYear()) : '';
+  return {
+    all: normalizeText(`${names.join(' ')} ${paths.join(' ')} ${sourceNames.join(' ')}`),
+    name: normalizeText(names.join(' ')),
+    path: normalizeText(paths.join(' ')),
+    source: normalizeText(sourceNames.join(' ')),
+    type: normalizeText(kind),
+    ext: normalizeText(ext),
+    year
+  };
+}
+
+function queryMatchesDetails(raw, details) {
+  const hay = detailsHaystacks(details);
+  return tokenize(raw).every(token => {
+    let wanted = token.text;
+    if (token.field === 'type') wanted = typeToken(wanted);
+    if (token.field === 'path') wanted = pathTail(wanted, 3);
+    if (!token.field && /[\\/]/.test(wanted)) wanted = pathTail(wanted, 2);
+    const terms = normalizeText(wanted).split(' ').filter(Boolean);
+    const field = token.field && hay[token.field] !== undefined ? token.field : 'all';
+    return terms.every(term => String(hay[field] || '').includes(term));
+  });
+}
+
+function matchesSmart(details, spec = {}) {
+  const hay = detailsHaystacks(details);
+  if (spec.type) {
+    const wanted = typeToken(spec.type);
+    if (wanted === 'media') {
+      if (!['image', 'video'].includes(hay.type)) return false;
+    } else if (wanted === 'application') {
+      if (!['application', 'text'].includes(hay.type)) return false;
+    } else if (hay.type !== wanted) return false;
+  }
+  if (spec.sourceName && !hay.source.includes(normalizeText(spec.sourceName))) return false;
+  return queryMatchesDetails(spec.query || '', details);
+}
+
+async function refreshIndexOnce() {
+  if (!('indexedDB' in window) || localStorage.getItem(SEARCH_INDEX_KEY) === SEARCH_INDEX_VERSION) return;
+  await new Promise(resolve => {
+    const request = indexedDB.deleteDatabase('mochimono-catalog');
+    request.onsuccess = request.onerror = request.onblocked = () => resolve();
+  });
+  localStorage.setItem(SEARCH_INDEX_KEY, SEARCH_INDEX_VERSION);
+}
+
+await refreshIndexOnce();
+
+if (search && valueDescriptor?.get && valueDescriptor?.set) {
   Object.defineProperty(search, 'value', {
     configurable: true,
     get() {
-      return normalizeSearchQuery(value.get.call(this));
+      return transformedQuery(rawSearch());
     },
     set(next) {
-      value.set.call(this, next);
+      valueDescriptor.set.call(this, next);
     }
   });
 }
+
+window.mochimonoSearch = {
+  raw: rawSearch,
+  setRaw: setRawSearch,
+  normalize: normalizeText,
+  matchesDetails: queryMatchesDetails,
+  matchesSmart
+};
