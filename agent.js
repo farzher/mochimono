@@ -364,7 +364,7 @@ async function syncFiles(folder, update, importId = null) {
       };
       records.push(record);
       const previous = cached.get(cachePath);
-      if (!dirty.all && !dirty.paths.has(cachePath) && previous && Number(previous.size) === file.size && Number(previous.mtimeMs) === record.mtimeMs) {
+      if (!dirty.paths.has(cachePath) && previous && Number(previous.size) === file.size && Number(previous.mtimeMs) === record.mtimeMs) {
         record.hash = previous.hash;
         hashed.push(record);
         reusedHashes++;
@@ -377,6 +377,7 @@ async function syncFiles(folder, update, importId = null) {
       errors++;
     }
   }
+  syncIndex.prune(rootKey, new Set(records.map(record => record.cachePath)));
   scanReport({ scanned: records.length, current: '', reusedHashes }, true);
 
   const hashBytes = toHash.reduce((sum, record) => sum + record.size, 0);
@@ -457,6 +458,7 @@ async function syncChangedFiles(folder, update) {
         mime: mimeFor(path)
       });
     } catch {
+      syncIndex.forget(rootKey, relativePath);
       // Local deletion does not delete the cloud object or its provenance.
     }
   }
