@@ -6,6 +6,7 @@ const logout = $('#logout');
 const PAGE = 180;
 const CACHE_NAME = 'mochimono-catalog';
 const CACHE_VERSION = 2;
+const THUMB_VERSION = 3;
 
 let searchTimer;
 let catalog = [];
@@ -35,6 +36,7 @@ let cacheDbPromise;
 let viewerScrollY = 0;
 let viewerDirty = false;
 let viewerPreloads = [];
+let viewerImageLoad = null;
 let scrubbing = false;
 let lastScrubAt = 0;
 
@@ -185,6 +187,7 @@ function matchesType(file) {
 }
 
 const objectUrl = file => `/api/objects/${file.hash}`;
+const thumbUrl = file => `/api/thumbs/${file.hash}?v=${THUMB_VERSION}`;
 
 function preview(file) {
   const value = kind(file);
@@ -196,7 +199,7 @@ function preview(file) {
 
 function viewerMedia(file) {
   const url = objectUrl(file);
-  if (kind(file) === 'image') return `<img src="${url}" alt="${escapeHtml(file.filename)}">`;
+  if (kind(file) === 'image') return `<img src="${thumbUrl(file)}" data-full-src="${url}" alt="${escapeHtml(file.filename)}">`;
   if (kind(file) === 'video') return `<video src="${url}" controls autoplay playsinline></video>`;
   return `<div class="viewer-file-icon">${preview(file)}</div>`;
 }
@@ -420,6 +423,11 @@ function applyFilters(reset = true) {
   updateWindow();
   renderActiveFilters();
   renderFiles();
+  if (selected) {
+    const current = catalog.find(file => file.hash === selected.hash);
+    if (current) selected = normalizeFile(current);
+    updateViewerNav();
+  }
 }
 
 function cardsHtml(files) {
@@ -679,13 +687,38 @@ function updateViewerNav() {
   $('#viewer-next').disabled = index < 0 || index >= items.length - 1;
 }
 
+function loadFullViewerImage(file) {
+  const shown = $('#viewer-media img[data-full-src]');
+  if (!shown) return;
+  const hash = file.hash;
+  const fullUrl = shown.dataset.fullSrc;
+  const image = new Image();
+  viewerImageLoad = image;
+  const swap = () => {
+    if (selected?.hash !== hash || viewerImageLoad !== image || !shown.isConnected) return;
+    shown.src = fullUrl;
+    shown.removeAttribute('data-full-src');
+    viewerImageLoad = null;
+  };
+  image.onload = swap;
+  image.onerror = () => {
+    if (viewerImageLoad === image) viewerImageLoad = null;
+  };
+  shown.onerror = () => {
+    if (selected?.hash === hash && shown.dataset.fullSrc) shown.src = fullUrl;
+  };
+  image.src = fullUrl;
+}
+
 function renderViewerState() {
   if (!selected) return;
+  viewerImageLoad = null;
   $('#viewer-name').textContent = selected.filename;
   $('#viewer-meta').textContent = `${shortDate(normalizeFile(selected))} · ${formatBytes(selected.size)}`;
   $('#viewer-open').href = objectUrl(selected);
   $('#viewer-review').textContent = selected.reviewed ? 'Inbox' : 'Keep';
   $('#viewer-media').innerHTML = viewerMedia(selected);
+  if (kind(selected) === 'image') loadFullViewerImage(selected);
   updateViewerNav();
   preloadAround();
 }
@@ -702,13 +735,16 @@ function preloadAround() {
 
 function openViewer(hash, fallback = null) {
   selected = catalog.find(file => file.hash === hash) || folderData?.files?.find(file => file.hash === hash) || fallback;
-  if (!selected) return;
+  if (!selected) return false;
   selected = normalizeFile(selected);
   const viewer = $('#viewer');
   if (viewer.hidden) viewerScrollY = window.scrollY;
   viewer.hidden = false;
   renderViewerState();
+  return true;
 }
+
+window.mochimonoOpenViewer = openViewer;
 
 function closeViewer() {
   if ($('#viewer').hidden) return;
@@ -716,6 +752,7 @@ function closeViewer() {
   $('#viewer-menu').open = false;
   $('#viewer-media').innerHTML = '';
   viewerPreloads = [];
+  viewerImageLoad = null;
   selected = null;
   if (viewerDirty) {
     viewerDirty = false;
