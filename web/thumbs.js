@@ -15,6 +15,12 @@ let fallbackActive = false;
 
 const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff']);
 const VIDEO_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'mpg', 'mpeg', 'm2v', 'mts', 'm2ts', '3gp']);
+const MIME = new Map([
+  ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'], ['png', 'image/png'], ['gif', 'image/gif'], ['webp', 'image/webp'],
+  ['heic', 'image/heic'], ['heif', 'image/heif'], ['avif', 'image/avif'], ['bmp', 'image/bmp'], ['tif', 'image/tiff'], ['tiff', 'image/tiff'],
+  ['mp4', 'video/mp4'], ['m4v', 'video/mp4'], ['mov', 'video/quicktime'], ['mkv', 'video/x-matroska'], ['webm', 'video/webm'],
+  ['avi', 'video/x-msvideo'], ['mpg', 'video/mpeg'], ['mpeg', 'video/mpeg'], ['m2v', 'video/mpeg'], ['mts', 'video/mp2t'], ['m2ts', 'video/mp2t'], ['3gp', 'video/3gpp']
+]);
 
 function extension(name) {
   return String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
@@ -29,6 +35,11 @@ function kindFor(file, card) {
   if (IMAGE_EXTENSIONS.has(ext)) return 'image';
   if (VIDEO_EXTENSIONS.has(ext)) return 'video';
   return '';
+}
+
+function sourceMime(file) {
+  if (file?.mime && file.mime !== 'application/octet-stream') return file.mime;
+  return MIME.get(extension(file?.filename)) || file?.mime || 'application/octet-stream';
 }
 
 function cache() {
@@ -53,29 +64,45 @@ const idb = request => new Promise((resolve, reject) => {
   request.onerror = () => reject(request.error);
 });
 
+const txDone = transaction => new Promise((resolve, reject) => {
+  transaction.oncomplete = resolve;
+  transaction.onerror = () => reject(transaction.error);
+  transaction.onabort = () => reject(transaction.error || new Error('IndexedDB transaction aborted'));
+});
+
 async function cachedRows(cards) {
   const db = await cache();
   const transaction = db.transaction(['files', 'thumbs']);
   const fileStore = transaction.objectStore('files');
   const thumbStore = transaction.objectStore('thumbs');
-  return Promise.all(cards.map(async card => ({
+  const requests = cards.map(card => ({
     card,
-    file: await idb(fileStore.get(card.dataset.hash)),
-    thumb: await idb(thumbStore.get(card.dataset.hash))
+    file: fileStore.get(card.dataset.hash),
+    thumb: thumbStore.get(card.dataset.hash)
+  }));
+  const rows = await Promise.all(requests.map(async row => ({
+    card: row.card,
+    file: await idb(row.file),
+    thumb: await idb(row.thumb)
   })));
+  await txDone(transaction);
+  return rows;
 }
 
 async function cacheThumb(hash, blob, width, height, source = 'server') {
   const db = await cache();
   const thumbTx = db.transaction('thumbs', 'readwrite');
   thumbTx.objectStore('thumbs').put({ hash, blob, source, version: THUMB_VERSION });
+  await txDone(thumbTx);
 
   if (width && height) {
     const file = await idb(db.transaction('files').objectStore('files').get(hash));
     if (file && (!file.width || !file.height || file.width !== width || file.height !== height)) {
       file.width = width;
       file.height = height;
-      db.transaction('files', 'readwrite').objectStore('files').put(file);
+      const fileTx = db.transaction('files', 'readwrite');
+      fileTx.objectStore('files').put(file);
+      await txDone(fileTx);
     }
   }
 }
@@ -83,8 +110,8 @@ async function cacheThumb(hash, blob, width, height, source = 'server') {
 function mediaBox(card, kind) {
   let box = card.querySelector('.media-thumb');
   if (box) return box;
-
   if (!card.classList.contains('file-row') && !card.classList.contains('file-folder-row')) return null;
+
   box = document.createElement('span');
   box.className = `tiny-preview media-thumb ${kind === 'video' ? 'video' : ''}`;
   const old = card.classList.contains('file-row') ? card.querySelector('.type') : card.querySelector('.document-icon');
@@ -109,11 +136,11 @@ function pendingBox(box, hash) {
 }
 
 function objectUrl(hash, blob) {
-  let url = urls.get(hash);
-  if (!url) {
-    url = URL.createObjectURL(blob);
-    urls.set(hash, url);
-  }
+  const current = urls.get(hash);
+  if (current?.blob === blob) return current.url;
+  if (current) URL.revokeObjectURL(current.url);
+  const url = URL.createObjectURL(blob);
+  urls.set(hash, { blob, url });
   return url;
 }
 
@@ -179,12 +206,14 @@ function scheduleRetry(hash, delay) {
 
 function queueFallback(file, card) {
   if (!file || fallbackQueued.has(file.hash) || states.get(file.hash)?.fallbackDone) return;
+  const kind = kindFor(file, card);
+  if (!kind) return;
   fallbackQueued.add(file.hash);
-  fallbackQueue.push({ file, kind: kindFor(file, card) });
+  fallbackQueue.push({ file, kind });
   pumpFallback();
 }
 
-async function fetchServerThumb(file, card, box) {
+async function fetchServerThumb(file, card) {
   const hash = file.hash;
   const current = states.get(hash) || {};
   if (current.loading || (current.next || 0) > performance.now()) return;
@@ -242,7 +271,7 @@ async function scan() {
     if (thumb?.blob) applyBlob(record.hash, thumb.blob);
     else pendingBox(box, record.hash);
 
-    if (!states.get(record.hash)?.ready) fetchServerThumb(record, card, box).catch(console.warn);
+    if (!states.get(record.hash)?.ready) fetchServerThumb(record, card).catch(console.warn);
   }
 }
 
@@ -277,14 +306,27 @@ function makeCanvas(width, height) {
   return typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(width, height) : Object.assign(document.createElement('canvas'), { width, height });
 }
 
+async function imageBitmap(blob) {
+  if ('createImageBitmap' in window) return createImageBitmap(blob, { imageOrientation: 'from-image' });
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(blob);
+    image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+    image.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Image could not be decoded')); };
+    image.src = url;
+  });
+}
+
 async function imageFallback(file) {
   const response = await fetch(`/api/objects/${file.hash}`);
   if (!response.ok) throw new Error('Image unavailable');
   const blob = await response.blob();
-  const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
-  const scale = Math.min(1, THUMB_EDGE / Math.max(bitmap.width, bitmap.height));
-  const width = Math.max(1, Math.round(bitmap.width * scale));
-  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const bitmap = await imageBitmap(blob);
+  const sourceWidth = bitmap.width || bitmap.naturalWidth;
+  const sourceHeight = bitmap.height || bitmap.naturalHeight;
+  const scale = Math.min(1, THUMB_EDGE / Math.max(sourceWidth, sourceHeight));
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
   const canvas = makeCanvas(width, height);
   canvas.getContext('2d', { alpha: false }).drawImage(bitmap, 0, 0, width, height);
   bitmap.close?.();
@@ -294,8 +336,14 @@ async function imageFallback(file) {
 function decodedFrame(video) {
   if (!video.requestVideoFrameCallback) return new Promise(resolve => setTimeout(resolve, 50));
   return new Promise(resolve => {
-    const timer = setTimeout(resolve, 1200);
-    video.requestVideoFrameCallback(() => { clearTimeout(timer); resolve(); });
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    const timer = setTimeout(finish, 1200);
+    video.requestVideoFrameCallback(() => { clearTimeout(timer); finish(); });
   });
 }
 
@@ -361,7 +409,7 @@ async function uploadFallback(file, result) {
       'x-mochimono-width': String(result.width || 0),
       'x-mochimono-height': String(result.height || 0),
       ...(result.duration == null ? {} : { 'x-mochimono-duration': String(result.duration) }),
-      ...(file.mime ? { 'x-mochimono-source-mime': file.mime } : {})
+      'x-mochimono-source-mime': sourceMime(file)
     },
     body: result.blob
   });
@@ -413,5 +461,5 @@ scheduleScan();
 window.addEventListener('beforeunload', () => {
   clearInterval(rescan);
   clearTimeout(requestTimer);
-  for (const url of urls.values()) URL.revokeObjectURL(url);
+  for (const entry of urls.values()) URL.revokeObjectURL(entry.url);
 });
