@@ -20,6 +20,18 @@ const db = openCatalog(join(DATA_DIR, 'catalog.sqlite'));
 const thumbPath = hash => join(DATA_DIR, 'thumbs', hash.slice(0, 2), `${hash}.webp`);
 const now = () => new Date().toISOString();
 
+const staleRequestCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+db.prepare('DELETE FROM thumbnail_requests WHERE requested_at < ?').run(staleRequestCutoff);
+for (const row of db.prepare(`
+  SELECT t.object_hash AS hash
+  FROM thumbnails t
+  JOIN objects o ON o.hash = t.object_hash
+  WHERE o.state != 'active'
+`).all()) {
+  db.prepare('DELETE FROM thumbnails WHERE object_hash = ?').run(row.hash);
+  await rm(thumbPath(row.hash), { force: true }).catch(() => {});
+}
+
 function json(res, status, data, headers = {}) {
   const body = JSON.stringify(data);
   res.writeHead(status, {
@@ -351,8 +363,10 @@ async function handleThumbnailRequest(req, res, url) {
 
 const originalCreateServer = http.createServer;
 http.createServer = function (...args) {
+  const context = this;
+  http.createServer = originalCreateServer;
   const index = args.findIndex(value => typeof value === 'function');
-  if (index < 0) return originalCreateServer.apply(this, args);
+  if (index < 0) return originalCreateServer.apply(context, args);
   const listener = args[index];
   args[index] = async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -372,5 +386,5 @@ http.createServer = function (...args) {
     }
     return listener(req, res);
   };
-  return originalCreateServer.apply(this, args);
+  return originalCreateServer.apply(context, args);
 };
