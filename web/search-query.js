@@ -1,6 +1,6 @@
 const search = document.querySelector('#search');
 const valueDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-const SEARCH_INDEX_VERSION = '7';
+const SEARCH_INDEX_VERSION = '8';
 const SEARCH_INDEX_KEY = 'mochimono-search-index-version';
 const nativeFetch = window.fetch.bind(window);
 
@@ -73,6 +73,25 @@ function augmentCatalogFile(file) {
   return file;
 }
 
+async function correctedDates(files) {
+  if (!files.length) return files;
+  try {
+    const response = await nativeFetch('/api/file-dates', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hashes: files.map(file => file.hash) })
+    });
+    if (!response.ok) return files;
+    const dates = new Map((await response.json()).dates.map(item => [item.hash, item]));
+    return files.map(file => {
+      const date = dates.get(file.hash);
+      return date ? { ...file, fileDate: date.fileDate, dateSource: date.dateSource, capturedAt: date.capturedAt } : file;
+    });
+  } catch {
+    return files;
+  }
+}
+
 window.fetch = async (...args) => {
   const response = await nativeFetch(...args);
   if (!response.ok) return response;
@@ -86,7 +105,7 @@ window.fetch = async (...args) => {
   try {
     const data = await response.clone().json();
     if (!Array.isArray(data.files)) return response;
-    data.files = data.files.map(augmentCatalogFile);
+    data.files = (await correctedDates(data.files)).map(augmentCatalogFile);
     const headers = new Headers(response.headers);
     headers.delete('content-length');
     return new Response(JSON.stringify(data), {
@@ -197,12 +216,16 @@ function detailsHaystacks(details) {
   const sources = Array.isArray(details?.sources) ? details.sources : [];
   const names = sources.map(item => item.filename || '');
   const paths = sources.map(item => item.path || '');
-  const sourceNames = sources.map(item => normalizeText(item.sourceName || '')).filter(Boolean);
+  const sourceNames = sources.map(item => normalizeText(item.sourceName || item.deviceName || '')).filter(Boolean);
   const representative = names[0] || object.filename || '';
   const kind = fileKind({ filename: representative, mime: object.mime });
   const ext = extension(representative);
-  const dates = sources.map(item => new Date(item.mtime || 0).getTime()).filter(Number.isFinite);
-  const date = dates.length ? new Date(Math.max(...dates)) : new Date(object.createdAt || 0);
+  const embeddedDate = details?.date?.fileDate;
+  const mtimes = sources.map(item => new Date(item.mtime || 0)).filter(date => {
+    const year = date.getFullYear();
+    return !Number.isNaN(date.getTime()) && year >= 1980 && year <= new Date().getFullYear() + 1;
+  });
+  const date = embeddedDate ? new Date(embeddedDate) : mtimes.length ? new Date(Math.min(...mtimes.map(item => item.getTime()))) : new Date(object.createdAt || 0);
   const year = Number.isNaN(date.getTime()) ? '' : String(date.getFullYear());
   return {
     all: normalizeText(`${names.join(' ')} ${paths.join(' ')} ${sourceNames.join(' ')}`),
