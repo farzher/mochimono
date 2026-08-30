@@ -76,6 +76,48 @@ function listCollections() {
   `).all();
 }
 
+function parseSmart(row) {
+  if (!row) return null;
+  let spec = {};
+  try { spec = JSON.parse(row.queryJson || '{}'); } catch {}
+  return { id: row.id, name: row.name, createdAt: row.createdAt, spec };
+}
+
+function smartCollection(id) {
+  return parseSmart(db.prepare(`
+    SELECT id, name, query_json AS queryJson, created_at AS createdAt
+    FROM smart_collections WHERE id = ?
+  `).get(id));
+}
+
+function listSmartCollections() {
+  return db.prepare(`
+    SELECT id, name, query_json AS queryJson, created_at AS createdAt
+    FROM smart_collections ORDER BY lower(name), id
+  `).all().map(parseSmart);
+}
+
+function cleanSmartSpec(value) {
+  const spec = value && typeof value === 'object' ? value : {};
+  const query = String(spec.query || '').slice(0, 500);
+  const type = String(spec.type || '');
+  const sourceName = String(spec.sourceName || '').slice(0, 200);
+  const sort = String(spec.sort || 'date-desc');
+  const allowedTypes = new Set(['', 'media', 'image', 'video', 'audio', 'application', 'other']);
+  const allowedSorts = new Set(['date-desc', 'date-asc', 'size-desc']);
+  return {
+    query,
+    type: allowedTypes.has(type) ? type : '',
+    sourceName,
+    sort: allowedSorts.has(sort) ? sort : 'date-desc'
+  };
+}
+
+function nameTaken(name, exceptSmartId = 0) {
+  if (db.prepare('SELECT 1 FROM collections WHERE name = ? COLLATE NOCASE').get(name)) return true;
+  return Boolean(db.prepare('SELECT 1 FROM smart_collections WHERE name = ? COLLATE NOCASE AND id != ?').get(name, exceptSmartId));
+}
+
 function cleanHashes(body) {
   if (!Array.isArray(body.hashes) || body.hashes.length > 1000) {
     throw Object.assign(new Error('hashes must be an array of at most 1000 SHA-256 hashes'), { status: 400 });
@@ -92,9 +134,51 @@ function activeHashes(hashes) {
 }
 
 async function handleCollectionRequest(req, res, url) {
-  if (!url.pathname.startsWith('/api/collections')) return false;
+  if (!url.pathname.startsWith('/api/collections') && !url.pathname.startsWith('/api/smart-collections')) return false;
   if (!authorized(req)) {
     json(res, 401, { error: 'Unauthorized' });
+    return true;
+  }
+
+  if (url.pathname === '/api/smart-collections') {
+    if (req.method === 'GET') {
+      json(res, 200, { collections: listSmartCollections() });
+      return true;
+    }
+    if (req.method === 'POST') {
+      const body = await readJson(req);
+      const name = String(body.name || '').trim();
+      if (!name) throw Object.assign(new Error('Collection name is required'), { status: 400 });
+      if (name.length > 80) throw Object.assign(new Error('Collection name is too long'), { status: 400 });
+      if (nameTaken(name)) throw Object.assign(new Error('A collection with that name already exists'), { status: 409 });
+      const spec = cleanSmartSpec(body.spec);
+      if (!spec.query && !spec.type && !spec.sourceName) throw Object.assign(new Error('Nothing to save in this view'), { status: 400 });
+      const result = db.prepare('INSERT INTO smart_collections(name, query_json, created_at) VALUES(?, ?, ?)').run(name, JSON.stringify(spec), now());
+      json(res, 201, smartCollection(Number(result.lastInsertRowid)));
+      return true;
+    }
+    json(res, 405, { error: 'Method not allowed' });
+    return true;
+  }
+
+  const smartMatch = /^\/api\/smart-collections\/(\d+)$/.exec(url.pathname);
+  if (smartMatch) {
+    const id = Number(smartMatch[1]);
+    const item = smartCollection(id);
+    if (!item) {
+      json(res, 404, { error: 'Collection not found' });
+      return true;
+    }
+    if (req.method === 'GET') {
+      json(res, 200, item);
+      return true;
+    }
+    if (req.method === 'DELETE') {
+      db.prepare('DELETE FROM smart_collections WHERE id = ?').run(id);
+      json(res, 200, { ok: true });
+      return true;
+    }
+    json(res, 405, { error: 'Method not allowed' });
     return true;
   }
 
@@ -111,6 +195,9 @@ async function handleCollectionRequest(req, res, url) {
       if (existing) {
         json(res, 200, { ...collection(existing.id), existing: true });
         return true;
+      }
+      if (db.prepare('SELECT 1 FROM smart_collections WHERE name = ? COLLATE NOCASE').get(name)) {
+        throw Object.assign(new Error('A collection with that name already exists'), { status: 409 });
       }
       const result = db.prepare('INSERT INTO collections(name, created_at) VALUES(?, ?)').run(name, now());
       json(res, 201, { ...collection(Number(result.lastInsertRowid)), existing: false });
