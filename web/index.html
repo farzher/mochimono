@@ -35,16 +35,19 @@
             <h2>Library</h2>
             <p>Unique content is stored once. Every original location is remembered.</p>
           </div>
-          <input id="search" type="search" placeholder="Search names and paths">
+          <input id="search" type="search" placeholder="Search names, paths, and sources">
         </div>
         <div class="toolbar">
-          <div id="filters" class="segmented">
-            <button data-type="" class="active">All</button>
-            <button data-type="image">Images</button>
-            <button data-type="video">Video</button>
-            <button data-type="audio">Audio</button>
-            <button data-type="application">Documents</button>
-            <button data-type="other">Other</button>
+          <div class="library-filters">
+            <select id="source" aria-label="Filter by source"><option value="">All sources</option></select>
+            <div id="filters" class="segmented">
+              <button data-type="" class="active">All</button>
+              <button data-type="image">Images</button>
+              <button data-type="video">Video</button>
+              <button data-type="audio">Audio</button>
+              <button data-type="application">Documents</button>
+              <button data-type="other">Other</button>
+            </div>
           </div>
           <div id="views" class="segmented compact">
             <button data-view="grid" class="active">Grid</button>
