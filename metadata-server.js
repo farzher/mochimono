@@ -134,12 +134,39 @@ function missingMetadata(url) {
   return objects.map(item => ({ ...item, sources: byHash.get(item.hash) || [] }));
 }
 
+function details(hash) {
+  const object = db.prepare(`
+    SELECT o.hash, o.size, o.mime, o.created_at AS createdAt,
+           EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed
+    FROM objects o WHERE o.hash = ? AND o.state = 'active'
+  `).get(hash);
+  if (!object) return null;
+  const sources = db.prepare(`
+    SELECT s.import_id AS importId, s.original_path AS path, s.filename, s.mtime,
+           i.source_name AS sourceName, i.created_at AS importedAt,
+           COALESCE(ir.device_name, i.source_name) AS deviceName, COALESCE(ir.root_path, '') AS rootPath
+    FROM sources s
+    JOIN imports i ON i.id = s.import_id
+    LEFT JOIN import_roots ir ON ir.import_id = i.id
+    WHERE s.object_hash = ? ORDER BY i.created_at DESC, s.original_path
+  `).all(hash);
+  const backups = db.prepare(`
+    SELECT d.id, d.name, d.last_seen AS lastSeen, r.verified_at AS verifiedAt
+    FROM replicas r JOIN drives d ON d.id = r.drive_id
+    WHERE r.object_hash = ? ORDER BY d.name
+  `).all(hash);
+  const date = dateRows([hash])[0] || { hash, fileDate: object.createdAt, dateSource: 'imported', capturedAt: null };
+  return { object, sources, backups, date };
+}
+
 async function handleMetadataRequest(req, res, url) {
+  const detailsMatch = /^\/api\/files\/([a-f0-9]{64})\/details$/.exec(url.pathname);
   const isMetadataRoute = url.pathname === '/api/catalog/version' ||
     url.pathname === '/api/file-dates' ||
     url.pathname === '/api/import-roots' ||
     url.pathname.startsWith('/api/media-metadata') ||
-    url.pathname.startsWith('/api/provenance/');
+    url.pathname.startsWith('/api/provenance/') ||
+    Boolean(detailsMatch);
   if (!isMetadataRoute) return false;
   if (!authorized(req)) {
     json(res, 401, { error: 'Unauthorized' });
@@ -149,6 +176,13 @@ async function handleMetadataRequest(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/catalog/version') {
     const dataVersion = db.prepare('PRAGMA data_version').get().data_version;
     json(res, 200, { version: `metadata:${dataVersion}:${localRevision}` });
+    return true;
+  }
+
+  if (detailsMatch && req.method === 'GET') {
+    const data = details(detailsMatch[1]);
+    if (!data) return json(res, 404, { error: 'File not found' });
+    json(res, 200, data);
     return true;
   }
 
@@ -209,21 +243,9 @@ async function handleMetadataRequest(req, res, url) {
 
   const provenanceMatch = /^\/api\/provenance\/([a-f0-9]{64})$/.exec(url.pathname);
   if (provenanceMatch && req.method === 'GET') {
-    const hash = provenanceMatch[1];
-    const object = db.prepare("SELECT hash, size, mime, created_at AS createdAt FROM objects WHERE hash = ? AND state = 'active'").get(hash);
-    if (!object) return json(res, 404, { error: 'File not found' });
-    const sources = db.prepare(`
-      SELECT s.import_id AS importId, s.original_path AS path, s.filename, s.mtime,
-             i.source_name AS sourceName, i.created_at AS importedAt,
-             COALESCE(ir.device_name, i.source_name) AS deviceName, COALESCE(ir.root_path, '') AS rootPath
-      FROM sources s
-      JOIN imports i ON i.id = s.import_id
-      LEFT JOIN import_roots ir ON ir.import_id = i.id
-      WHERE s.object_hash = ?
-      ORDER BY i.created_at DESC, s.original_path
-    `).all(hash);
-    const date = dateRows([hash])[0] || { hash, fileDate: object.createdAt, dateSource: 'imported', capturedAt: null };
-    json(res, 200, { object, date, sources });
+    const data = details(provenanceMatch[1]);
+    if (!data) return json(res, 404, { error: 'File not found' });
+    json(res, 200, data);
     return true;
   }
 
