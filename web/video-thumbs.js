@@ -139,15 +139,14 @@ async function cachedThumb(hash) {
 async function saveResult(hash, blob, width, height) {
   const db = await cache();
   if (!db) return;
+  const file = await idb(db.transaction('files').objectStore('files').get(hash));
   const transaction = db.transaction(['thumbs', 'files'], 'readwrite');
   transaction.objectStore('thumbs').put({ hash, blob });
-  const fileStore = transaction.objectStore('files');
-  const file = await idb(fileStore.get(hash));
   if (file) {
     file.width = width;
     file.height = height;
     if (file.mime === 'application/octet-stream' && isVideoName(file.filename)) file.mime = 'video/mp4';
-    fileStore.put(file);
+    transaction.objectStore('files').put(file);
   }
 }
 
@@ -166,7 +165,9 @@ function applyBlob(hash, blob) {
       image.className = 'cached-thumb';
       image.loading = 'lazy';
       image.alt = box.closest('[data-hash]')?.getAttribute('title') || cardName(box.closest('[data-hash]'));
-      box.querySelector('img,video,.video-thumb-pending')?.replaceWith(image) || box.prepend(image);
+      const old = box.querySelector('img,video,.video-thumb-pending');
+      if (old) old.replaceWith(image);
+      else box.prepend(image);
     }
     image.src = url;
   });
