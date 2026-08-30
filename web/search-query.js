@@ -1,6 +1,6 @@
 const search = document.querySelector('#search');
 const valueDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-const SEARCH_INDEX_VERSION = '6';
+const SEARCH_INDEX_VERSION = '7';
 const SEARCH_INDEX_KEY = 'mochimono-search-index-version';
 const nativeFetch = window.fetch.bind(window);
 
@@ -99,9 +99,15 @@ window.fetch = async (...args) => {
   }
 };
 
-function pathTail(text, count = 2) {
+function pathTail(text, count = 1) {
   const parts = String(text || '').split(/[\\/]+/).map(part => part.trim()).filter(Boolean);
   return parts.length > 1 ? parts.slice(-count).join(' ') : String(text || '');
+}
+
+function pathQueryText(text) {
+  const raw = String(text || '').trim();
+  const absolute = /^[a-z]:[\\/]/i.test(raw) || /^[\\/]{1,2}/.test(raw);
+  return absolute ? pathTail(raw, 1) : raw;
 }
 
 function tokenize(raw) {
@@ -146,7 +152,7 @@ function queryTerms(raw) {
       continue;
     }
     if (token.field === 'path') {
-      result.push(...fieldWords('path', pathTail(token.text, 2)));
+      result.push(...fieldWords('path', pathQueryText(token.text)));
       continue;
     }
     if (token.field === 'source') {
@@ -166,7 +172,7 @@ function queryTerms(raw) {
       continue;
     }
 
-    const searchable = /[\\/]/.test(token.text) ? pathTail(token.text, 2) : token.text;
+    const searchable = /[\\/]/.test(token.text) ? pathQueryText(token.text) : token.text;
     result.push(...words(searchable));
   }
   return result.filter(Boolean);
@@ -220,8 +226,8 @@ function queryMatchesDetails(raw, details) {
       if (type === 'application') return ['application', 'text'].includes(hay.type);
       return hay.type === type;
     }
-    if (token.field === 'path') wanted = pathTail(wanted, 2);
-    if (!token.field && /[\\/]/.test(wanted)) wanted = pathTail(wanted, 2);
+    if (token.field === 'path') wanted = pathQueryText(wanted);
+    if (!token.field && /[\\/]/.test(wanted)) wanted = pathQueryText(wanted);
     const terms = words(wanted);
     const field = token.field && hay[token.field] !== undefined ? token.field : 'all';
     return terms.every(term => String(hay[field] || '').includes(term));
