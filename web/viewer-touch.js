@@ -13,6 +13,7 @@ if (touchViewer && touchStage && touchMedia) {
   const VIDEO_EDGE = .22;
 
   const pointers = new Map();
+  const videoPointerIds = new Set();
   let zoom = { scale: 1, x: 0, y: 0 };
   let pan = null;
   let pinch = null;
@@ -66,6 +67,7 @@ if (touchViewer && touchStage && touchMedia) {
     pan = null;
     pinch = null;
     pointers.clear();
+    videoPointerIds.clear();
     clearTap();
     applyZoom(animate);
   }
@@ -138,7 +140,7 @@ if (touchViewer && touchStage && touchMedia) {
 
   function scheduleChromeTap(clientX, clientY, canZoom) {
     const now = performance.now();
-    const isDouble = Boolean(canZoom && lastTap &&
+    const isDouble = Boolean(canZoom && lastTap?.canZoom &&
       now - lastTap.time <= DOUBLE_TAP_MS &&
       Math.hypot(clientX - lastTap.x, clientY - lastTap.y) <= DOUBLE_TAP_DISTANCE);
 
@@ -167,11 +169,10 @@ if (touchViewer && touchStage && touchMedia) {
     if (touchViewer.hidden || (event.pointerType !== 'touch' && event.pointerType !== 'pen')) return;
     if (ignoredTarget(event.target)) return;
 
-    // This controller owns touch gestures. Keep the legacy viewer gesture
-    // listeners from interpreting the same sequence a second time.
-    event.stopImmediatePropagation();
-
     const video = event.target.closest?.('#viewer-media video');
+    if (!video) event.stopImmediatePropagation();
+    else videoPointerIds.add(event.pointerId);
+
     const rect = video?.getBoundingClientRect();
     const controlBand = rect ? Math.min(64, rect.height * .22) : 0;
     const point = {
@@ -193,8 +194,6 @@ if (touchViewer && touchStage && touchMedia) {
     }
 
     if (zoomed()) {
-      // A zoomed-image touch begins as a tap candidate. It does not move the
-      // image at all until the finger crosses PAN_START.
       pan = {
         pointerId: event.pointerId,
         x: event.clientX,
@@ -209,7 +208,7 @@ if (touchViewer && touchStage && touchMedia) {
   touchStage.addEventListener('pointermove', event => {
     const point = pointers.get(event.pointerId);
     if (!point) return;
-    event.stopImmediatePropagation();
+    if (!point.video) event.stopImmediatePropagation();
     point.x = event.clientX;
     point.y = event.clientY;
 
@@ -238,7 +237,7 @@ if (touchViewer && touchStage && touchMedia) {
   touchStage.addEventListener('pointerup', event => {
     const point = pointers.get(event.pointerId);
     if (!point) return;
-    event.stopImmediatePropagation();
+    if (!point.video) event.stopImmediatePropagation();
 
     point.x = event.clientX;
     point.y = event.clientY;
@@ -270,7 +269,6 @@ if (touchViewer && touchStage && touchMedia) {
         clearTap();
         return;
       }
-      // Only an actual second tap changes zoom. The first tap cannot pan.
       scheduleChromeTap(event.clientX, event.clientY, Boolean(image()));
       event.preventDefault();
       return;
@@ -293,15 +291,12 @@ if (touchViewer && touchStage && touchMedia) {
       return;
     }
 
-    // Native video controls own ordinary taps. Only far-edge taps navigate.
     if (point.video) {
       clearTap();
       if (!point.videoControls && navigateAt(event.clientX, true)) event.preventDefault();
       return;
     }
 
-    // At fit size side taps are navigation, immediately and repeatedly. They
-    // never enter the double-tap state, so rapid Next/Previous taps stay fast.
     if (navigateAt(event.clientX, false)) {
       clearTap();
       event.preventDefault();
@@ -313,14 +308,26 @@ if (touchViewer && touchStage && touchMedia) {
   }, true);
 
   touchStage.addEventListener('pointercancel', event => {
-    if (!pointers.has(event.pointerId)) return;
-    event.stopImmediatePropagation();
+    const point = pointers.get(event.pointerId);
+    if (!point) return;
+    if (!point.video) event.stopImmediatePropagation();
     pointers.delete(event.pointerId);
     if (pan?.pointerId === event.pointerId) pan = null;
     if (pointers.size < 2) pinch = null;
     clearTap();
     if (!pointers.size && zoom.scale <= 1.03) resetZoom();
   }, true);
+
+  // Video pointer events must reach the native player, so they are not stopped
+  // during capture. Stop them here on the way back up, before the legacy
+  // viewer gesture handlers get a second chance to interpret the same touch.
+  for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) {
+    touchStage.addEventListener(type, event => {
+      if (!videoPointerIds.has(event.pointerId)) return;
+      event.stopImmediatePropagation();
+      if (type === 'pointerup' || type === 'pointercancel') videoPointerIds.delete(event.pointerId);
+    });
+  }
 
   new MutationObserver(() => resetZoom()).observe(touchMedia, { childList: true });
   new MutationObserver(() => {
