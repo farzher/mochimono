@@ -8,7 +8,10 @@
   },
   "scripts": {
     "dev": "git pull --ff-only && node dev.js",
-    "start": "node server.js",
-    "agent": "node agent.js"
+    "start": "node server-entry.js",
+    "agent": "node agent-entry.js"
+  },
+  "dependencies": {
+    "ffmpeg-static": "5.3.0"
   }
 }
