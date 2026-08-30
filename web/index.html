@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/folders.css">
   <link rel="stylesheet" href="/library-ui.css">
+  <link rel="stylesheet" href="/collections.css">
 </head>
 <body>
   <main class="shell">
@@ -35,6 +36,7 @@
         <div class="commandbar">
           <input id="search" class="search" type="search" placeholder="Search">
           <select id="source" aria-label="Source"><option value="">All sources</option></select>
+          <select id="collectionFilter" aria-label="Collection"><option value="">Collections</option></select>
           <select id="typeFilter" aria-label="File type">
             <option value="">All files</option>
             <option value="media">Media</option>
@@ -49,14 +51,6 @@
             <option value="date-asc">Oldest</option>
             <option value="size-desc">Largest</option>
           </select>
-          <details id="filterMenu" class="filter-menu">
-            <summary>Filter</summary>
-            <div class="filter-popover">
-              <label><input id="filterInbox" type="checkbox"><span id="filterInboxLabel">Inbox</span></label>
-              <label><input id="filterUnprotected" type="checkbox"><span id="filterUnprotectedLabel">Unprotected</span></label>
-            </div>
-          </details>
-          <div id="activeFilters" class="active-filters"></div>
           <button id="selectFiles" class="select-toggle" hidden aria-hidden="true" tabindex="-1">Select</button>
           <div id="mediaSizeControl" class="media-sizes" aria-label="Preview size">
             <input id="mediaSize" type="range" min="96" max="420" value="170" hidden>
@@ -74,6 +68,7 @@
         <div id="selectionBar" class="selection-bar" hidden>
           <strong id="selectionCount">0 selected</strong>
           <button id="selectAll">Select all</button>
+          <button id="selectionCollection">Add to collection</button>
           <span class="selection-spacer"></span>
           <button id="selectionDelete">Delete</button>
           <button id="selectionIgnore" class="selection-danger">Delete + Ignore</button>
@@ -98,7 +93,6 @@
       <button id="viewer-close" class="viewer-icon" aria-label="Close">×</button>
       <div class="viewer-title"><strong id="viewer-name"></strong><span id="viewer-meta"></span></div>
       <div class="viewer-actions">
-        <button id="viewer-review" class="viewer-action"></button>
         <a id="viewer-open" class="viewer-action" target="_blank">Open</a>
         <details id="viewer-menu" class="viewer-menu">
           <summary aria-label="More">•••</summary>
@@ -106,6 +100,7 @@
         </details>
       </div>
     </div>
+    <div id="viewerCollections" class="viewer-collections"></div>
     <div id="viewer-stage" class="viewer-stage">
       <button id="viewer-prev" class="viewer-nav viewer-prev" aria-label="Previous">‹</button>
       <div id="viewer-media" class="viewer-media"></div>
@@ -119,6 +114,7 @@
   <script type="module" src="/viewer-url.js"></script>
   <script type="module" src="/browser-ui.js"></script>
   <script type="module" src="/library-ui.js"></script>
+  <script type="module" src="/collections.js"></script>
   <script type="module" src="/folder-url.js"></script>
 </body>
 </html>
