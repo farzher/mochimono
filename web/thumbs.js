@@ -3,14 +3,25 @@ const CACHE_NAME = 'mochimono-catalog';
 const CACHE_VERSION = 2;
 const THUMB_VERSION = 1;
 const THUMB_EDGE = 768;
+const CHECK_BATCH = 500;
+const DOWNLOAD_WORKERS = 6;
+const IMAGE_FALLBACK_DELAY = 8_000;
+const VIDEO_FALLBACK_DELAY = 15_000;
+
 const states = new Map();
 const urls = new Map();
+const checkQueue = new Map();
+const downloadPriority = new Map();
+const downloadBackground = new Map();
 const requested = new Set();
 const fallbackQueue = [];
 const fallbackQueued = new Set();
 let cachePromise;
 let scanFrame = 0;
+let checkTimer = 0;
+let checking = false;
 let requestTimer = 0;
+let downloadActive = 0;
 let fallbackActive = false;
 
 const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff']);
@@ -30,10 +41,10 @@ function kindFor(file, card) {
   const base = String(file?.mime || '').split('/')[0];
   if (base === 'image' || base === 'video') return base;
   if (card?.classList.contains('video-card')) return 'video';
-  if (card?.classList.contains('media-card')) return 'image';
   const ext = extension(file?.filename || card?.title || card?.querySelector('strong')?.textContent);
   if (IMAGE_EXTENSIONS.has(ext)) return 'image';
   if (VIDEO_EXTENSIONS.has(ext)) return 'video';
+  if (card?.classList.contains('media-card')) return 'image';
   return '';
 }
 
@@ -43,6 +54,7 @@ function sourceMime(file) {
 }
 
 function cache() {
+  if (!('indexedDB' in window)) return Promise.resolve(null);
   if (!cachePromise) {
     cachePromise = new Promise((resolve, reject) => {
       const request = indexedDB.open(CACHE_NAME, CACHE_VERSION);
@@ -54,6 +66,9 @@ function cache() {
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
+    }).catch(error => {
+      console.warn('Preview cache unavailable', error);
+      return null;
     });
   }
   return cachePromise;
@@ -72,7 +87,9 @@ const txDone = transaction => new Promise((resolve, reject) => {
 
 async function cachedRows(cards) {
   const db = await cache();
+  if (!db) return cards.map(card => ({ card, file: null, thumb: null }));
   const transaction = db.transaction(['files', 'thumbs']);
+  const done = txDone(transaction);
   const fileStore = transaction.objectStore('files');
   const thumbStore = transaction.objectStore('thumbs');
   const requests = cards.map(card => ({
@@ -85,26 +102,43 @@ async function cachedRows(cards) {
     file: await idb(row.file),
     thumb: await idb(row.thumb)
   })));
-  await txDone(transaction);
+  await done;
   return rows;
 }
 
 async function cacheThumb(hash, blob, width, height, source = 'server') {
   const db = await cache();
-  const thumbTx = db.transaction('thumbs', 'readwrite');
-  thumbTx.objectStore('thumbs').put({ hash, blob, source, version: THUMB_VERSION });
-  await txDone(thumbTx);
+  if (db) {
+    const thumbTx = db.transaction('thumbs', 'readwrite');
+    const thumbDone = txDone(thumbTx);
+    thumbTx.objectStore('thumbs').put({ hash, blob, source, version: THUMB_VERSION });
+    await thumbDone;
 
-  if (width && height) {
-    const file = await idb(db.transaction('files').objectStore('files').get(hash));
-    if (file && (!file.width || !file.height || file.width !== width || file.height !== height)) {
-      file.width = width;
-      file.height = height;
-      const fileTx = db.transaction('files', 'readwrite');
-      fileTx.objectStore('files').put(file);
-      await txDone(fileTx);
+    if (width && height) {
+      const readTx = db.transaction('files');
+      const readDone = txDone(readTx);
+      const file = await idb(readTx.objectStore('files').get(hash));
+      await readDone;
+      if (file && (!file.width || !file.height || file.width !== width || file.height !== height)) {
+        file.width = width;
+        file.height = height;
+        const fileTx = db.transaction('files', 'readwrite');
+        const fileDone = txDone(fileTx);
+        fileTx.objectStore('files').put(file);
+        await fileDone;
+      }
     }
   }
+  applyDimensions(hash, width, height);
+}
+
+async function deleteCachedThumb(hash) {
+  const db = await cache();
+  if (!db) return;
+  const transaction = db.transaction('thumbs', 'readwrite');
+  const done = txDone(transaction);
+  transaction.objectStore('thumbs').delete(hash);
+  await done;
 }
 
 function mediaBox(card, kind) {
@@ -144,6 +178,12 @@ function objectUrl(hash, blob) {
   return url;
 }
 
+function applyDimensions(hash, width, height) {
+  if (!width || !height) return;
+  const ratio = Math.max(.65, Math.min(2.1, width / height));
+  for (const card of files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"].media-card`)) card.style.setProperty('--ratio', ratio);
+}
+
 function applyBlob(hash, blob) {
   const url = objectUrl(hash, blob);
   for (const card of files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"]`)) {
@@ -167,7 +207,7 @@ function applyBlob(hash, blob) {
 
 function nearViewport(card) {
   const rect = card.getBoundingClientRect();
-  return rect.bottom > -800 && rect.top < innerHeight + 1200;
+  return rect.bottom > -600 && rect.top < innerHeight + 900;
 }
 
 function visible(card) {
@@ -175,15 +215,30 @@ function visible(card) {
   return rect.bottom >= 0 && rect.top <= innerHeight;
 }
 
+function hashVisible(hash) {
+  return [...files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"]`)].some(visible);
+}
+
+function currentCard(hash) {
+  return files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
+}
+
+function scheduleRetry(hash, delay) {
+  const state = states.get(hash) || {};
+  state.next = performance.now() + delay;
+  states.set(hash, state);
+  setTimeout(scheduleScan, delay + 20);
+}
+
 function queueRequest(hash) {
   requested.add(hash);
   if (requestTimer) return;
-  requestTimer = setTimeout(flushRequests, 40);
+  requestTimer = setTimeout(flushRequests, 35);
 }
 
 async function flushRequests() {
   requestTimer = 0;
-  const hashes = [...requested].slice(0, 500);
+  const hashes = [...requested].slice(0, CHECK_BATCH);
   hashes.forEach(hash => requested.delete(hash));
   if (!hashes.length) return;
   try {
@@ -193,85 +248,168 @@ async function flushRequests() {
       body: JSON.stringify({ hashes })
     });
   } catch {}
-  if (requested.size) requestTimer = setTimeout(flushRequests, 50);
+  if (requested.size) requestTimer = setTimeout(flushRequests, 40);
 }
 
-function scheduleRetry(hash, delay) {
-  const state = states.get(hash) || {};
-  state.next = performance.now() + delay;
-  state.loading = false;
-  states.set(hash, state);
-  setTimeout(scheduleScan, delay + 20);
-}
-
-function queueFallback(file, card) {
-  if (!file || fallbackQueued.has(file.hash) || states.get(file.hash)?.fallbackDone) return;
-  const kind = kindFor(file, card);
-  if (!kind) return;
-  fallbackQueued.add(file.hash);
-  fallbackQueue.push({ file, kind });
-  pumpFallback();
-}
-
-async function fetchServerThumb(file, card) {
+function queueCheck(file, card) {
   const hash = file.hash;
-  const current = states.get(hash) || {};
-  if (current.loading || (current.next || 0) > performance.now()) return;
-  current.loading = true;
-  states.set(hash, current);
+  const state = states.get(hash) || {};
+  if (state.ready || state.downloading || (state.next || 0) > performance.now()) return;
+  const priority = visible(card);
+  const queued = checkQueue.get(hash);
+  if (!queued || priority) checkQueue.set(hash, { file, priority: priority || queued?.priority || false });
+  if (!checkTimer) checkTimer = setTimeout(flushChecks, 25);
+}
 
+function takeChecks() {
+  const entries = [...checkQueue.entries()]
+    .sort((a, b) => Number(b[1].priority) - Number(a[1].priority))
+    .slice(0, CHECK_BATCH);
+  for (const [hash] of entries) checkQueue.delete(hash);
+  return entries.map(([, job]) => job);
+}
+
+async function flushChecks() {
+  checkTimer = 0;
+  if (checking) return;
+  const jobs = takeChecks();
+  if (!jobs.length) return;
+  checking = true;
+  try {
+    const response = await fetch('/api/thumbs/check', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hashes: jobs.map(job => job.file.hash) })
+    });
+    if (!response.ok) throw new Error(`Preview check failed: ${response.status}`);
+    const data = await response.json();
+    const ready = new Map((data.thumbnails || []).map(row => [row.hash, row]));
+    for (const job of jobs) {
+      const row = ready.get(job.file.hash);
+      if (row) queueDownload(job.file, job.priority, row);
+      else handleMissing(job.file);
+    }
+  } catch {
+    for (const job of jobs) scheduleRetry(job.file.hash, 3000);
+  } finally {
+    checking = false;
+    if (checkQueue.size && !checkTimer) checkTimer = setTimeout(flushChecks, 30);
+  }
+}
+
+function handleMissing(file) {
+  const hash = file.hash;
+  const state = states.get(hash) || {};
+  const isVisible = hashVisible(hash);
+  const now = performance.now();
+  state.firstMissingAt ||= now;
+  state.misses = (state.misses || 0) + 1;
+  states.set(hash, state);
+
+  if (isVisible) {
+    queueRequest(hash);
+    const kind = kindFor(file, currentCard(hash));
+    const fallbackDelay = kind === 'video' ? VIDEO_FALLBACK_DELAY : IMAGE_FALLBACK_DELAY;
+    if (now - state.firstMissingAt >= fallbackDelay) queueFallback(file, currentCard(hash));
+  }
+  scheduleRetry(hash, isVisible ? 1000 : 4000);
+}
+
+function queueDownload(file, priority, metadata) {
+  const hash = file.hash;
+  const state = states.get(hash) || {};
+  if (state.ready || state.downloading) return;
+  if (priority) {
+    downloadBackground.delete(hash);
+    downloadPriority.set(hash, { file, metadata });
+  } else if (!downloadPriority.has(hash) && !downloadBackground.has(hash)) {
+    downloadBackground.set(hash, { file, metadata });
+  }
+  pumpDownloads();
+}
+
+function nextDownload() {
+  const queue = downloadPriority.size ? downloadPriority : downloadBackground;
+  const entry = queue.entries().next().value;
+  if (!entry) return null;
+  queue.delete(entry[0]);
+  return entry[1];
+}
+
+async function downloadThumb(job) {
+  const { file, metadata } = job;
+  const hash = file.hash;
+  const state = states.get(hash) || {};
+  state.downloading = true;
+  states.set(hash, state);
   try {
     const response = await fetch(`/api/thumbs/${hash}`);
     if (response.ok) {
       const blob = await response.blob();
-      const width = Number(response.headers.get('x-mochimono-width')) || 0;
-      const height = Number(response.headers.get('x-mochimono-height')) || 0;
+      const width = Number(response.headers.get('x-mochimono-width')) || Number(metadata?.width) || 0;
+      const height = Number(response.headers.get('x-mochimono-height')) || Number(metadata?.height) || 0;
       await cacheThumb(hash, blob, width, height, 'server');
       applyBlob(hash, blob);
       states.set(hash, { ready: true });
       return;
     }
-
-    if (response.status === 404) {
-      if (visible(card)) queueRequest(hash);
-      const misses = (current.misses || 0) + 1;
-      current.misses = misses;
-      if (misses >= 3 && visible(card)) {
-        current.loading = false;
-        states.set(hash, current);
-        queueFallback(file, card);
-      } else {
-        states.set(hash, current);
-        scheduleRetry(hash, misses === 1 ? 900 : 1800);
-      }
-      return;
-    }
-    scheduleRetry(hash, 3000);
+    if (response.status === 404) handleMissing(file);
+    else scheduleRetry(hash, 3000);
   } catch {
     scheduleRetry(hash, 2500);
   } finally {
-    const state = states.get(hash);
-    if (state && !state.ready) state.loading = false;
+    const latest = states.get(hash);
+    if (latest && !latest.ready) latest.downloading = false;
+  }
+}
+
+function pumpDownloads() {
+  while (downloadActive < DOWNLOAD_WORKERS && (downloadPriority.size || downloadBackground.size)) {
+    const job = nextDownload();
+    if (!job) break;
+    downloadActive++;
+    downloadThumb(job).finally(() => {
+      downloadActive--;
+      pumpDownloads();
+    });
   }
 }
 
 async function scan() {
   scanFrame = 0;
+  if (document.hidden) return;
   const cards = [...files.querySelectorAll('[data-hash]')].filter(card => nearViewport(card));
   if (!cards.length) return;
-  const rows = await cachedRows(cards).catch(() => []);
 
+  const unresolved = [];
+  for (const card of cards) {
+    const hash = card.dataset.hash;
+    const existing = urls.get(hash);
+    if (existing) {
+      applyBlob(hash, existing.blob);
+      continue;
+    }
+    unresolved.push(card);
+  }
+  if (!unresolved.length) return;
+
+  const rows = await cachedRows(unresolved).catch(() => unresolved.map(card => ({ card, file: null, thumb: null })));
   for (const { card, file, thumb } of rows) {
+    if (!card.isConnected) continue;
     const record = file || { hash: card.dataset.hash, filename: card.title || card.querySelector('strong')?.textContent || '', mime: '' };
     const kind = kindFor(record, card);
     if (!kind) continue;
     const box = mediaBox(card, kind);
     if (!box) continue;
 
-    if (thumb?.blob) applyBlob(record.hash, thumb.blob);
-    else pendingBox(box, record.hash);
-
-    if (!states.get(record.hash)?.ready) fetchServerThumb(record, card).catch(console.warn);
+    if (thumb?.blob && thumb.version === THUMB_VERSION) {
+      applyBlob(record.hash, thumb.blob);
+      states.set(record.hash, { ready: true });
+      continue;
+    }
+    if (thumb?.blob) deleteCachedThumb(record.hash).catch(() => {});
+    pendingBox(box, record.hash);
+    queueCheck(record, card);
   }
 }
 
@@ -416,10 +554,21 @@ async function uploadFallback(file, result) {
   if (!response.ok) throw new Error('Could not save preview');
 }
 
+function queueFallback(file, card) {
+  if (!file || fallbackQueued.has(file.hash) || states.get(file.hash)?.fallbackDone || states.get(file.hash)?.ready) return;
+  const kind = kindFor(file, card);
+  if (!kind) return;
+  fallbackQueued.add(file.hash);
+  fallbackQueue.push({ file, kind });
+  pumpFallback();
+}
+
 async function runFallback(job) {
   const { file, kind } = job;
+  if (states.get(file.hash)?.ready) return;
   try {
     const result = kind === 'image' ? await imageFallback(file) : await videoFallback(file);
+    if (states.get(file.hash)?.ready) return;
     await uploadFallback(file, result);
     await cacheThumb(file.hash, result.blob, result.width, result.height, 'browser');
     applyBlob(file.hash, result.blob);
@@ -455,11 +604,12 @@ window.addEventListener('resize', scheduleScan, { passive: true });
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) { scheduleScan(); pumpFallback(); }
 });
-const rescan = setInterval(scheduleScan, 2000);
+const rescan = setInterval(scheduleScan, 1500);
 scheduleScan();
 
 window.addEventListener('beforeunload', () => {
   clearInterval(rescan);
+  clearTimeout(checkTimer);
   clearTimeout(requestTimer);
   for (const entry of urls.values()) URL.revokeObjectURL(entry.url);
 });
