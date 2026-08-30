@@ -10,15 +10,19 @@ import { pipeline } from 'node:stream/promises';
 import { DatabaseSync } from 'node:sqlite';
 import http from 'node:http';
 import { restoreBackup } from './lib/restore.js';
+import { openSyncIndex } from './lib/sync-index.js';
 import { queueLocalThumbnail, thumbnailAgentStatus } from './lib/thumbnail-agent.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'agent-web');
 const CONFIG_DIR = join(homedir(), '.mochimono');
 const CONFIG_PATH = join(CONFIG_DIR, 'agent.json');
+const SYNC_INDEX_PATH = join(CONFIG_DIR, 'index.sqlite');
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.MOCHIMONO_AGENT_PORT || 8643);
 const DEVICE = hostname();
+const FULL_RECONCILE_MS = 60 * 60 * 1000;
+const syncIndex = openSyncIndex(SYNC_INDEX_PATH);
 
 let saved = {};
 try { saved = JSON.parse(await readFile(CONFIG_PATH, 'utf8')); } catch {}
@@ -38,7 +42,14 @@ const settings = {
 let job = null;
 const folderWatchers = new Map();
 const pendingSyncs = new Set();
+const syncTimers = new Map();
+const dirtyPaths = new Map();
+const dirtyAll = new Set();
 const pathKey = path => platform() === 'win32' ? resolve(path).toLowerCase() : resolve(path);
+const relativeKey = path => {
+  const clean = String(path || '').replaceAll('\\', '/').replace(/^\/+/, '');
+  return platform() === 'win32' ? clean.toLowerCase() : clean;
+};
 const folderFor = path => settings.folders.find(folder => pathKey(folder.path) === pathKey(path));
 const now = () => new Date().toISOString();
 
@@ -238,53 +249,80 @@ function queuePreview(record) {
   });
 }
 
+function consumeDirty(root) {
+  const key = pathKey(root);
+  const all = dirtyAll.delete(key);
+  const paths = dirtyPaths.get(key) || new Set();
+  dirtyPaths.delete(key);
+  return { all, paths };
+}
+
 async function syncFiles(folder, update, importId = null) {
   const root = resolve(folder);
+  const rootKey = pathKey(root);
   const info = await stat(root);
   if (!info.isDirectory()) throw new Error(`${root} is not a directory`);
 
+  const cached = syncIndex.load(rootKey);
+  const dirty = consumeDirty(root);
   const records = [];
+  const hashed = [];
+  const toHash = [];
   let errors = 0;
+  let reusedHashes = 0;
   const scanReport = progressReporter(update, { phase: 'Scanning', path: root, indeterminate: true });
   scanReport({ scanned: 0, current: '' }, true);
 
   for await (const path of filesUnder(root)) {
     try {
       const file = await stat(path);
-      records.push({
+      const relativePath = relative(root, path).replaceAll('\\', '/');
+      const cachePath = relativeKey(relativePath);
+      const record = {
         path,
-        relative: relative(root, path).replaceAll('\\', '/'),
+        relative: relativePath,
+        cachePath,
         size: file.size,
         mtime: file.mtime.toISOString(),
+        mtimeMs: Math.trunc(file.mtimeMs),
         mime: mimeFor(path)
-      });
-      scanReport({ scanned: records.length, current: relative(root, path) });
+      };
+      records.push(record);
+      const previous = cached.get(cachePath);
+      if (!dirty.all && !dirty.paths.has(cachePath) && previous && Number(previous.size) === file.size && Number(previous.mtimeMs) === record.mtimeMs) {
+        record.hash = previous.hash;
+        hashed.push(record);
+        reusedHashes++;
+      } else {
+        toHash.push(record);
+      }
+      scanReport({ scanned: records.length, current: relativePath, reusedHashes });
     } catch (error) {
       if (error.canceled) throw error;
       errors++;
     }
   }
-  scanReport({ scanned: records.length, current: '' }, true);
+  scanReport({ scanned: records.length, current: '', reusedHashes }, true);
 
-  const totalBytes = records.reduce((sum, record) => sum + record.size, 0);
-  const hashed = [];
+  const hashBytes = toHash.reduce((sum, record) => sum + record.size, 0);
   let hashedBytes = 0;
   const hashStarted = Date.now();
   const hashReport = progressReporter(update, { phase: 'Hashing', path: root });
 
-  for (const record of records) {
+  for (const record of toHash) {
     const base = hashedBytes;
     try {
       record.hash = await hashFile(record.path, read => {
-        hashReport({ current: record.relative, ...transferProgress(base + read, totalBytes, hashStarted) });
+        hashReport({ current: record.relative, reusedHashes, ...transferProgress(base + read, hashBytes, hashStarted) });
       });
       hashed.push(record);
+      syncIndex.save(rootKey, record.cachePath, record.size, record.mtimeMs, record.hash);
     } catch (error) {
       if (error.canceled) throw error;
       errors++;
     }
     hashedBytes += record.size;
-    hashReport({ current: record.relative, ...transferProgress(hashedBytes, totalBytes, hashStarted) }, true);
+    hashReport({ current: record.relative, reusedHashes, ...transferProgress(hashedBytes, hashBytes, hashStarted) }, true);
   }
 
   const unique = new Map();
@@ -294,7 +332,7 @@ async function syncFiles(folder, update, importId = null) {
   const ignored = new Set();
   const previewReady = new Set();
 
-  update({ phase: 'Checking', path: root, indeterminate: true, current: '' });
+  update({ phase: 'Checking', path: root, indeterminate: true, current: '', reusedHashes });
   for (let index = 0; index < hashes.length; index += 1000) {
     const result = await api('/api/objects/check', { method: 'POST', body: { hashes: hashes.slice(index, index + 1000) } });
     result.missing.forEach(hash => missing.add(hash));
@@ -355,6 +393,8 @@ async function syncFiles(folder, update, importId = null) {
     importId: created.id,
     source,
     scanned: records.length,
+    hashed: toHash.length,
+    reusedHashes,
     new: missingRecords.length,
     duplicates: Math.max(0, accepted.length - missingRecords.length),
     ignored: hashed.length - accepted.length,
@@ -371,22 +411,52 @@ async function syncFolder(folder, update) {
   return result;
 }
 
-function queueFolderSync(path) {
+function markDirty(path, filename) {
+  const key = pathKey(path);
+  if (filename == null) {
+    dirtyAll.add(key);
+    return;
+  }
+  const relative = relativeKey(filename);
+  if (!relative) {
+    dirtyAll.add(key);
+    return;
+  }
+  if (!dirtyPaths.has(key)) dirtyPaths.set(key, new Set());
+  dirtyPaths.get(key).add(relative);
+}
+
+function queueFolderSync(path, filename = undefined, delay = 500) {
   const folder = folderFor(path);
-  if (folder) pendingSyncs.add(pathKey(folder.path));
+  if (!folder) return;
+  const key = pathKey(folder.path);
+  if (filename !== undefined) markDirty(folder.path, filename);
+  clearTimeout(syncTimers.get(key));
+  const queue = () => {
+    syncTimers.delete(key);
+    pendingSyncs.add(key);
+    pumpSyncs();
+  };
+  if (delay > 0) syncTimers.set(key, setTimeout(queue, delay));
+  else queue();
 }
 
 function watchFolder(folder) {
   const key = pathKey(folder.path);
   if (folderWatchers.has(key) || !existsSync(folder.path)) return;
   try {
-    const watcher = watch(folder.path, { recursive: true }, () => queueFolderSync(folder.path));
+    const watcher = watch(folder.path, { recursive: true }, (_event, filename) => {
+      queueFolderSync(folder.path, filename == null ? null : String(filename), 700);
+    });
     watcher.on('error', () => {
       watcher.close();
       folderWatchers.delete(key);
+      queueFolderSync(folder.path, null, 0);
     });
     folderWatchers.set(key, watcher);
-  } catch {}
+  } catch {
+    queueFolderSync(folder.path, undefined, 0);
+  }
 }
 
 function unwatchFolder(path) {
@@ -394,6 +464,10 @@ function unwatchFolder(path) {
   folderWatchers.get(key)?.close();
   folderWatchers.delete(key);
   pendingSyncs.delete(key);
+  clearTimeout(syncTimers.get(key));
+  syncTimers.delete(key);
+  dirtyPaths.delete(key);
+  dirtyAll.delete(key);
 }
 
 function pumpSyncs() {
@@ -828,7 +902,7 @@ async function handleApi(req, res, url) {
     } else {
       await persistSettings();
     }
-    if (settings.token) settings.folders.forEach(folder => queueFolderSync(folder.path));
+    if (settings.token) settings.folders.forEach(folder => queueFolderSync(folder.path, undefined, 0));
     return json(res, 200, { ok: true });
   }
 
@@ -855,8 +929,7 @@ async function handleApi(req, res, url) {
     }
     await persistSettings();
     watchFolder(folder);
-    queueFolderSync(root);
-    pumpSyncs();
+    queueFolderSync(root, undefined, 0);
     return json(res, 200, { folder });
   }
 
@@ -865,8 +938,7 @@ async function handleApi(req, res, url) {
     if (!body.path) return json(res, 400, { error: 'Folder required' });
     const folder = folderFor(body.path);
     if (!folder) return json(res, 404, { error: 'Folder not found' });
-    queueFolderSync(folder.path);
-    pumpSyncs();
+    queueFolderSync(folder.path, undefined, 0);
     return json(res, 200, { ok: true });
   }
 
@@ -878,6 +950,7 @@ async function handleApi(req, res, url) {
     if (index < 0) return json(res, 404, { error: 'Folder not found' });
     const [folder] = settings.folders.splice(index, 1);
     unwatchFolder(folder.path);
+    syncIndex.forgetRoot(pathKey(folder.path));
     await persistSettings();
     return json(res, 200, { ok: true });
   }
@@ -939,10 +1012,10 @@ function openBrowser(url) {
 
 for (const folder of settings.folders) {
   watchFolder(folder);
-  queueFolderSync(folder.path);
+  queueFolderSync(folder.path, undefined, 0);
 }
 setInterval(pumpSyncs, 1000);
-setInterval(() => settings.folders.forEach(folder => queueFolderSync(folder.path)), 15 * 60 * 1000);
+setInterval(() => settings.folders.forEach(folder => queueFolderSync(folder.path, undefined, 0)), FULL_RECONCILE_MS);
 
 server.listen(PORT, HOST, () => {
   const url = `http://${HOST}:${PORT}`;
