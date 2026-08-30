@@ -10,6 +10,7 @@ const CACHE_VERSION = 1;
 let searchTimer;
 let catalog = [];
 let filtered = [];
+let filteredIndex = new Map();
 let loaded = [];
 let imports = [];
 let sourceNames = new Map();
@@ -30,6 +31,9 @@ let folderData = null;
 let dateScrollFrame = 0;
 let cacheMeta = null;
 let cacheDbPromise;
+let viewerScrollY = 0;
+let viewerDirty = false;
+let viewerPreloads = [];
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
@@ -103,7 +107,7 @@ async function writeCache(files, meta) {
 
 async function cachePut(file) {
   const db = await openCache();
-  if (!db) return;
+  if (!db || !file) return;
   const transaction = db.transaction('files', 'readwrite');
   const done = idbDone(transaction);
   transaction.objectStore('files').put(file);
@@ -160,11 +164,21 @@ function matchesType(file) {
   return value === type;
 }
 
-function preview(file, large = false) {
-  const url = `/api/objects/${file.hash}`;
-  if (kind(file) === 'image') return `<img ${large ? '' : 'loading="lazy"'} src="${url}" alt="${escapeHtml(file.filename)}">`;
-  const icon = kind(file) === 'video' ? '▶' : kind(file) === 'audio' ? '♪' : typeLabel(file) === 'document' ? '▤' : '·';
+const objectUrl = file => `/api/objects/${file.hash}`;
+
+function preview(file) {
+  const url = objectUrl(file);
+  if (kind(file) === 'image') return `<img loading="lazy" src="${url}" alt="${escapeHtml(file.filename)}">`;
+  if (kind(file) === 'video') return `<video class="video-thumb" muted playsinline preload="metadata" src="${url}#t=0.1"></video><span class="play-badge">▶</span>`;
+  const icon = kind(file) === 'audio' ? '♪' : typeLabel(file) === 'document' ? '▤' : '·';
   return `<div class="file-icon ${escapeHtml(kind(file))}">${icon}</div>`;
+}
+
+function viewerMedia(file) {
+  const url = objectUrl(file);
+  if (kind(file) === 'image') return `<img src="${url}" alt="${escapeHtml(file.filename)}">`;
+  if (kind(file) === 'video') return `<video src="${url}" controls autoplay playsinline></video>`;
+  return `<div class="viewer-file-icon">${preview(file)}</div>`;
 }
 
 function normalizeFile(file) {
@@ -224,18 +238,18 @@ function timelineGroups() {
   let previous;
   filtered.forEach((file, index) => {
     const key = monthKey(file);
-    if (key !== previous) result.push({ key, label: monthLabel(key), index });
+    if (key !== previous) result.push({ key, label: monthLabel(key), index, year: dateValue(file).getFullYear() });
     previous = key;
   });
   return result;
 }
 
 function gridCard(file) {
-  const image = kind(file) === 'image';
+  const media = ['image', 'video'].includes(kind(file));
   return `
-    <button class="file-card ${image ? 'photo-card' : ''}" data-hash="${file.hash}" title="${escapeHtml(file.filename)}">
-      <div class="thumb ${image ? 'photo-thumb' : ''}">${preview(file)}${file.reviewed ? '' : '<span class="inbox-badge">Inbox</span>'}</div>
-      ${image ? '' : `<div class="card-copy"><strong>${escapeHtml(file.filename)}</strong><span>${formatBytes(file.size)}</span></div>`}
+    <button class="file-card ${media ? 'media-card' : ''} ${kind(file) === 'video' ? 'video-card' : ''}" data-hash="${file.hash}" title="${escapeHtml(file.filename)}">
+      <div class="thumb ${media ? 'media-thumb' : ''}">${preview(file)}${file.reviewed ? '' : '<span class="inbox-badge">Inbox</span>'}</div>
+      ${media ? '' : `<div class="card-copy"><strong>${escapeHtml(file.filename)}</strong><span>${formatBytes(file.size)}</span></div>`}
     </button>`;
 }
 
@@ -249,27 +263,61 @@ function listRow(file) {
     </button>`;
 }
 
-function renderDateRail() {
-  const rail = $('#dateRail');
-  const groups = sort.startsWith('date-') && view !== 'folders' ? timelineGroups() : [];
-  rail.hidden = !groups.length;
-  if (rail.hidden) return;
-  rail.innerHTML = groups.map(group => `<button data-date-jump="${group.key}" data-index="${group.index}">${escapeHtml(group.label.replace(' ', ' '))}</button>`).join('');
-  updateDateRailActive();
+function railEntries() {
+  if (view === 'folders' || !filtered.length) return [];
+  if (sort === 'size-desc') {
+    const count = Math.min(18, filtered.length);
+    const indexes = [...new Set(Array.from({ length: count }, (_, i) => Math.round(i * (filtered.length - 1) / Math.max(1, count - 1))))];
+    return indexes.map((index, i) => ({
+      index,
+      label: formatBytes(filtered[index].size),
+      position: filtered.length === 1 ? 0 : index / (filtered.length - 1),
+      major: i % 3 === 0 || i === indexes.length - 1
+    }));
+  }
+
+  const groups = timelineGroups();
+  const compact = groups.length > 18;
+  let lastYear;
+  return groups.map(group => {
+    const major = !compact || group.year !== lastYear;
+    lastYear = group.year;
+    return {
+      index: group.index,
+      label: group.label,
+      short: compact && major ? String(group.year) : group.label,
+      position: filtered.length === 1 ? 0 : group.index / (filtered.length - 1),
+      major
+    };
+  });
 }
 
-function updateDateRailActive() {
+function renderRail() {
   const rail = $('#dateRail');
-  if (rail.hidden) return;
-  const groups = $$('.date-group');
-  if (!groups.length) return;
-  let active = groups[0];
-  const line = window.innerHeight * .28;
-  for (const group of groups) {
-    if (group.getBoundingClientRect().top <= line) active = group;
-    else break;
+  const entries = railEntries();
+  rail.hidden = !entries.length;
+  document.documentElement.classList.toggle('library-scroll', Boolean(entries.length));
+  if (!entries.length) return;
+  rail.innerHTML = entries.map(entry => `
+    <button data-index="${entry.index}" class="${entry.major ? 'major' : ''}" style="top:${(entry.position * 100).toFixed(3)}%" title="${escapeHtml(entry.label)}">
+      <span>${escapeHtml(entry.short || entry.label)}</span><i></i>
+    </button>`).join('');
+  updateRailActive();
+}
+
+function updateRailActive() {
+  const rail = $('#dateRail');
+  if (rail.hidden || !loaded.length) return;
+  const visible = [...$('#files').querySelectorAll('[data-hash]')].find(item => item.getBoundingClientRect().bottom > 90);
+  const index = visible ? filteredIndex.get(visible.dataset.hash) ?? renderOffset : renderOffset;
+  const buttons = [...rail.querySelectorAll('[data-index]')];
+  let active = buttons[0];
+  let distance = Infinity;
+  for (const button of buttons) {
+    const next = Math.abs(Number(button.dataset.index) - index);
+    if (next < distance) { distance = next; active = button; }
   }
-  $$('[data-date-jump]').forEach(button => button.classList.toggle('active', button.dataset.dateJump === active.dataset.dateGroup));
+  buttons.forEach(button => button.classList.toggle('active', button === active));
 }
 
 function renderImports() {
@@ -281,7 +329,6 @@ function renderImports() {
 
 function sortFiles(files) {
   if (sort === 'date-asc') return files.sort((a, b) => a.dateMs - b.dateMs || a.hash.localeCompare(b.hash));
-  if (sort === 'name') return files.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { sensitivity: 'base' }) || a.hash.localeCompare(b.hash));
   if (sort === 'size-desc') return files.sort((a, b) => b.size - a.size || a.filename.localeCompare(b.filename));
   return files.sort((a, b) => b.dateMs - a.dateMs || a.hash.localeCompare(b.hash));
 }
@@ -308,6 +355,7 @@ function applyFilters(reset = true) {
     }
     return true;
   }));
+  filteredIndex = new Map(filtered.map((file, index) => [file.hash, index]));
 
   if (reset) {
     renderOffset = 0;
@@ -334,7 +382,7 @@ function renderFiles() {
   if (!loaded.length) {
     const message = inboxOnly ? 'Inbox empty.' : noBackupOnly ? 'All backed up.' : 'No files.';
     element.innerHTML = `<div class="empty">${message}</div>`;
-    renderDateRail();
+    renderRail();
     return;
   }
 
@@ -349,17 +397,25 @@ function renderFiles() {
       ? `<div class="date-grid flat-grid">${loaded.map(gridCard).join('')}</div>`
       : loaded.map(listRow).join('');
   }
-  renderDateRail();
+  renderRail();
 }
 
-function jumpToMonth(key, index) {
+function jumpToIndex(index) {
+  if (!Number.isInteger(index) || !filtered[index]) return;
   if (index < renderOffset || index >= renderOffset + renderLimit) {
-    renderOffset = Math.max(0, index - 12);
-    renderLimit = PAGE;
+    renderOffset = Math.max(0, index - PAGE);
+    renderLimit = PAGE * 3;
     updateWindow();
     renderFiles();
   }
-  requestAnimationFrame(() => document.querySelector(`[data-date-group="${CSS.escape(key)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  const hash = filtered[index].hash;
+  requestAnimationFrame(() => document.querySelector(`[data-hash="${CSS.escape(hash)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+}
+
+function setMediaRatio(element, width, height) {
+  if (!width || !height) return;
+  const card = element.closest('.media-card');
+  if (card) card.style.setProperty('--ratio', Math.max(.65, Math.min(2.1, width / height)));
 }
 
 async function loadStats() {
@@ -425,6 +481,7 @@ function renderFolder() {
   element.className = 'files folders';
   $('#scroll-sentinel').hidden = true;
   $('#dateRail').hidden = true;
+  document.documentElement.classList.remove('library-scroll');
   folderBreadcrumb();
 
   if (!folderImportId) {
@@ -481,57 +538,80 @@ function setView(next) {
   }
 }
 
-function renderReviewState() {
-  const reviewed = Boolean(selected?.reviewed);
-  $('#review-status').textContent = reviewed ? 'Kept' : 'Inbox';
-  $('#review-toggle').textContent = reviewed ? 'Inbox' : 'Keep';
-  $('#review-toggle').className = reviewed ? 'text-button' : '';
+function viewerItems() {
+  return view === 'folders' ? (folderData?.files || []).map(normalizeFile) : filtered;
 }
 
-function detailItems() {
-  return view === 'folders' ? folderData?.files || [] : filtered;
-}
-
-function updateDetailNav() {
-  const items = detailItems();
+function updateViewerNav() {
+  const items = viewerItems();
   const index = items.findIndex(file => file.hash === selected?.hash);
-  $('#detail-prev').disabled = index <= 0;
-  $('#detail-next').disabled = index < 0 || index >= items.length - 1;
+  $('#viewer-prev').disabled = index <= 0;
+  $('#viewer-next').disabled = index < 0 || index >= items.length - 1;
 }
 
-async function navigateDetails(step) {
-  const items = detailItems();
+function renderViewerState() {
+  if (!selected) return;
+  $('#viewer-name').textContent = selected.filename;
+  $('#viewer-meta').textContent = `${shortDate(normalizeFile(selected))} · ${formatBytes(selected.size)}`;
+  $('#viewer-open').href = objectUrl(selected);
+  $('#viewer-review').textContent = selected.reviewed ? 'Inbox' : 'Keep';
+  $('#viewer-media').innerHTML = viewerMedia(selected);
+  updateViewerNav();
+  preloadAround();
+}
+
+function preloadAround() {
+  const items = viewerItems();
   const index = items.findIndex(file => file.hash === selected?.hash);
-  const next = items[index + step];
-  if (next) await openDetails(next.hash, next);
+  viewerPreloads = [-1, 1].map(step => items[index + step]).filter(Boolean).map(file => {
+    if (kind(file) === 'image') {
+      const image = new Image();
+      image.src = objectUrl(file);
+      return image;
+    }
+    if (kind(file) === 'video') {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.muted = true;
+      video.src = `${objectUrl(file)}#t=0.1`;
+      return video;
+    }
+    return null;
+  }).filter(Boolean);
 }
 
-async function openDetails(hash, fallback = null) {
+function openViewer(hash, fallback = null) {
   selected = catalog.find(file => file.hash === hash) || folderData?.files?.find(file => file.hash === hash) || fallback;
   if (!selected) return;
+  selected = normalizeFile(selected);
+  const viewer = $('#viewer');
+  if (viewer.hidden) viewerScrollY = window.scrollY;
+  viewer.hidden = false;
+  renderViewerState();
+}
 
-  $('#detail-name').textContent = selected.filename;
-  $('#detail-meta').textContent = `${shortDate(normalizeFile(selected))} · ${formatBytes(selected.size)}`;
-  $('#detail-open').href = `/api/objects/${selected.hash}`;
-  $('#detail-preview').innerHTML = preview(selected, true);
-  $('#detail-sources').innerHTML = '<div class="empty small-empty">Loading…</div>';
-  $('#detail-backups').innerHTML = '<div class="empty small-empty">Loading…</div>';
-  renderReviewState();
-  updateDetailNav();
-  if (!$('#details').open) $('#details').showModal();
+function closeViewer() {
+  if ($('#viewer').hidden) return;
+  $('#viewer').hidden = true;
+  $('#viewer-menu').open = false;
+  $('#viewer-media').innerHTML = '';
+  viewerPreloads = [];
+  selected = null;
+  if (viewerDirty) {
+    viewerDirty = false;
+    if (view === 'folders') loadFolder().catch(console.error);
+    else applyFilters(false);
+  }
+  requestAnimationFrame(() => window.scrollTo(0, viewerScrollY));
+}
 
-  try {
-    const data = await request(`/api/files/${selected.hash}/details`);
-    selected.reviewed = Boolean(data.object.reviewed);
-    renderReviewState();
-    $('#detail-sources').innerHTML = data.sources.length ? data.sources.map(source => `
-      <article><strong>${escapeHtml(source.sourceName)}</strong><span>${escapeHtml(source.path)}</span><small>${source.mtime ? new Date(source.mtime).toLocaleString() : ''}</small></article>`).join('') : '<div class="empty small-empty">None.</div>';
-    $('#detail-backups').innerHTML = data.backups.length ? data.backups.map(backup => `
-      <article><strong>${escapeHtml(backup.name)}</strong><small>${backup.verifiedAt ? new Date(backup.verifiedAt).toLocaleString() : new Date(backup.lastSeen).toLocaleString()}</small></article>`).join('') : '<div class="empty small-empty">None.</div>';
-  } catch (error) {
-    const html = `<div class="error">${escapeHtml(error.message)}</div>`;
-    $('#detail-sources').innerHTML = html;
-    $('#detail-backups').innerHTML = html;
+function navigateViewer(step) {
+  const items = viewerItems();
+  const index = items.findIndex(file => file.hash === selected?.hash);
+  const next = items[index + step];
+  if (next) {
+    selected = normalizeFile(next);
+    renderViewerState();
   }
 }
 
@@ -543,11 +623,9 @@ async function toggleReviewed() {
   const cached = catalog.find(file => file.hash === selected.hash);
   if (cached) cached.reviewed = reviewed;
   cachePut(cached || selected).catch(console.warn);
-  $('#details').close();
-  selected = null;
+  viewerDirty = true;
+  $('#viewer-review').textContent = reviewed ? 'Inbox' : 'Keep';
   await loadStats();
-  if (view === 'folders') await loadFolder();
-  else applyFilters(true);
 }
 
 async function refreshImports() {
@@ -566,8 +644,8 @@ async function removeSelected(ignore) {
   catalog = catalog.filter(file => file.hash !== hash);
   searchIndex.delete(hash);
   cacheDelete(hash).catch(console.warn);
-  $('#details').close();
-  selected = null;
+  viewerDirty = false;
+  closeViewer();
   await Promise.all([loadStats(), refreshImports()]);
   if (view === 'folders') await loadFolder();
   else applyFilters(true);
@@ -671,8 +749,8 @@ $('#views').addEventListener('click', event => {
 });
 
 $('#dateRail').addEventListener('click', event => {
-  const button = event.target.closest('[data-date-jump]');
-  if (button) jumpToMonth(button.dataset.dateJump, Number(button.dataset.index));
+  const button = event.target.closest('[data-index]');
+  if (button) jumpToIndex(Number(button.dataset.index));
 });
 
 $('#folderbar').addEventListener('click', event => {
@@ -708,8 +786,15 @@ $('#files').addEventListener('click', event => {
     return;
   }
   const item = event.target.closest('[data-hash]');
-  if (item) openDetails(item.dataset.hash).catch(console.error);
+  if (item) openViewer(item.dataset.hash);
 });
+
+$('#files').addEventListener('load', event => {
+  if (event.target instanceof HTMLImageElement) setMediaRatio(event.target, event.target.naturalWidth, event.target.naturalHeight);
+}, true);
+$('#files').addEventListener('loadedmetadata', event => {
+  if (event.target instanceof HTMLVideoElement) setMediaRatio(event.target, event.target.videoWidth, event.target.videoHeight);
+}, true);
 
 new IntersectionObserver(entries => {
   if (entries.some(entry => entry.isIntersecting)) showMore();
@@ -719,22 +804,27 @@ window.addEventListener('scroll', () => {
   if (dateScrollFrame) return;
   dateScrollFrame = requestAnimationFrame(() => {
     dateScrollFrame = 0;
-    updateDateRailActive();
+    updateRailActive();
   });
 }, { passive: true });
 
 document.addEventListener('keydown', event => {
-  if (!$('#details').open) return;
-  if (event.key === 'ArrowLeft') { event.preventDefault(); navigateDetails(-1).catch(console.error); }
-  if (event.key === 'ArrowRight') { event.preventDefault(); navigateDetails(1).catch(console.error); }
+  if ($('#viewer').hidden) return;
+  if (event.key === 'Escape') { event.preventDefault(); closeViewer(); }
+  if (event.key === 'ArrowLeft') { event.preventDefault(); navigateViewer(-1); }
+  if (event.key === 'ArrowRight') { event.preventDefault(); navigateViewer(1); }
 });
 
-$('#close-details').onclick = () => $('#details').close();
-$('#detail-prev').onclick = () => navigateDetails(-1).catch(console.error);
-$('#detail-next').onclick = () => navigateDetails(1).catch(console.error);
-$('#review-toggle').onclick = () => toggleReviewed().catch(console.error);
+$('#viewer-close').onclick = closeViewer;
+$('#viewer-prev').onclick = () => navigateViewer(-1);
+$('#viewer-next').onclick = () => navigateViewer(1);
+$('#viewer-review').onclick = () => toggleReviewed().catch(console.error);
 $('#delete').onclick = () => removeSelected(false).catch(console.error);
 $('#delete-ignore').onclick = () => removeSelected(true).catch(console.error);
+$('#viewer').addEventListener('click', event => {
+  if (event.target === $('#viewer') || event.target === $('#viewer-stage')) closeViewer();
+});
+$('#viewer').addEventListener('wheel', event => event.preventDefault(), { passive: false });
 
 boot().catch(error => {
   console.error(error);
