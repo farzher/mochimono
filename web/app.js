@@ -68,11 +68,17 @@ function preview(file, large = false) {
 
 async function loadStats() {
   const s = await request('/api/stats');
+  const percent = s.capacityBytes ? Math.min(100, (s.bytes / s.capacityBytes) * 100) : 0;
+  const percentText = s.bytes && percent < 0.1 ? '<0.1%' : `${percent.toFixed(percent < 10 ? 1 : 0)}%`;
+  const width = s.bytes ? `max(2px, ${percent}%)` : '0';
   $('#stats').innerHTML = `
-    <article><strong>${s.objects.toLocaleString()}</strong><span>files</span></article>
-    <article><strong>${formatBytes(s.bytes)}</strong><span>stored</span></article>
-    <article><strong>${s.sources.toLocaleString()}</strong><span>locations</span></article>
-    <article><strong>${s.unreviewed.toLocaleString()}</strong><span>inbox</span></article>`;
+    <article class="storage-usage">
+      <div class="storage-copy">
+        <strong>${formatBytes(s.bytes)} <span>of ${formatBytes(s.capacityBytes)}</span></strong>
+        <b>${percentText}</b>
+      </div>
+      <div class="storage-bar"><i style="width:${width}"></i></div>
+    </article>`;
   $('#inbox').textContent = s.unreviewed ? `Inbox · ${s.unreviewed.toLocaleString()}` : 'Inbox';
   $('#unbacked').textContent = s.unbacked ? `Unbacked · ${s.unbacked.toLocaleString()}` : 'Unbacked';
 }
