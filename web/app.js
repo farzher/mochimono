@@ -189,8 +189,14 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 }
 
+const VIDEO_EXTENSIONS = new Set(['m4v', 'mp4', 'mov', 'mkv', 'webm', 'avi']);
 function kind(file) {
-  return file.mime?.split('/')[0] || 'other';
+  const value = file.mime?.split('/')[0] || 'other';
+  if (value === 'application' && (!file.mime || file.mime === 'application/octet-stream')) {
+    const extension = String(file.filename || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
+    if (VIDEO_EXTENSIONS.has(extension)) return 'video';
+  }
+  return value;
 }
 
 function typeLabel(file) {
@@ -217,7 +223,7 @@ function preview(file) {
   }
   const url = objectUrl(file);
   if (kind(file) === 'image') return `<img loading="lazy" src="${url}" alt="${escapeHtml(file.filename)}">`;
-  if (kind(file) === 'video') return `<video class="video-thumb" muted playsinline preload="metadata" src="${url}#t=0.1"></video><span class="play-badge">▶</span>`;
+  if (kind(file) === 'video') return `<span class="video-thumb-pending" data-video-thumb="${file.hash}"></span><span class="play-badge">▶</span>`;
   const icon = kind(file) === 'audio' ? '♪' : typeLabel(file) === 'document' ? '▤' : '·';
   return `<div class="file-icon ${escapeHtml(kind(file))}">${icon}</div>`;
 }
@@ -587,7 +593,7 @@ function applyCachedThumb(hash) {
   for (const card of document.querySelectorAll(`#files [data-hash="${CSS.escape(hash)}"]`)) {
     const box = card.querySelector('.media-thumb');
     if (!box || box.querySelector('.cached-thumb')) continue;
-    const old = box.querySelector('img,video');
+    const old = box.querySelector('img,video,.video-thumb-pending');
     if (!old) continue;
     const image = document.createElement('img');
     image.className = 'cached-thumb';
