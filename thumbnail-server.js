@@ -202,30 +202,52 @@ function missingThumbnails(res, url) {
   return json(res, 200, { version: THUMB_VERSION, files });
 }
 
+function cleanHashes(body) {
+  if (!Array.isArray(body.hashes) || body.hashes.length > 500) throw Object.assign(new Error('hashes must be an array of at most 500 hashes'), { status: 400 });
+  return [...new Set(body.hashes.map(String).filter(validHash))];
+}
+
+function thumbnailStatuses(hashes) {
+  if (!hashes.length) return [];
+  const marks = hashes.map(() => '?').join(',');
+  return db.prepare(`
+    SELECT o.hash,
+           CASE WHEN t.object_hash IS NULL THEN 0 ELSE 1 END AS ready,
+           COALESCE(t.width, 0) AS width,
+           COALESCE(t.height, 0) AS height,
+           t.duration AS duration
+    FROM objects o
+    LEFT JOIN thumbnails t ON t.object_hash = o.hash AND t.version = ?
+    WHERE o.state = 'active' AND o.hash IN (${marks})
+  `).all(THUMB_VERSION, ...hashes);
+}
+
+async function checkThumbnails(req, res) {
+  const hashes = cleanHashes(await readJson(req));
+  const thumbnails = thumbnailStatuses(hashes).filter(row => row.ready).map(({ ready, ...row }) => row);
+  return json(res, 200, { version: THUMB_VERSION, thumbnails });
+}
+
 async function requestThumbnails(req, res) {
-  const body = await readJson(req);
-  if (!Array.isArray(body.hashes) || body.hashes.length > 500) return json(res, 400, { error: 'hashes must be an array of at most 500 hashes' });
+  const hashes = cleanHashes(await readJson(req));
+  const status = thumbnailStatuses(hashes);
+  const missing = status.filter(row => !row.ready).map(row => row.hash);
+  if (!missing.length) return json(res, 200, { ok: true, count: 0 });
+
   const insert = db.prepare(`
     INSERT INTO thumbnail_requests(object_hash, requested_at) VALUES(?, ?)
     ON CONFLICT(object_hash) DO UPDATE SET requested_at = excluded.requested_at
   `);
-  let count = 0;
   const timestamp = now();
   try {
     db.exec('BEGIN IMMEDIATE');
-    for (const hash of new Set(body.hashes.map(String))) {
-      if (!validHash(hash)) continue;
-      if (!db.prepare("SELECT 1 FROM objects WHERE hash = ? AND state = 'active'").get(hash)) continue;
-      if (db.prepare('SELECT 1 FROM thumbnails WHERE object_hash = ? AND version = ?').get(hash, THUMB_VERSION)) continue;
-      insert.run(hash, timestamp);
-      count++;
-    }
+    for (const hash of missing) insert.run(hash, timestamp);
     db.exec('COMMIT');
   } catch (error) {
     try { db.exec('ROLLBACK'); } catch {}
     throw error;
   }
-  return json(res, 200, { ok: true, count });
+  return json(res, 200, { ok: true, count: missing.length });
 }
 
 async function uploadThumbnail(req, res, hash) {
@@ -276,6 +298,10 @@ async function handleThumbnailRequest(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/api/thumbs/missing') {
     missingThumbnails(res, url);
+    return true;
+  }
+  if (req.method === 'POST' && url.pathname === '/api/thumbs/check') {
+    await checkThumbnails(req, res);
     return true;
   }
   if (req.method === 'POST' && url.pathname === '/api/thumbs/request') {
