@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0d0c0e">
   <title>Mochimono Agent</title>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -18,39 +19,39 @@
   <main>
     <section class="card import-card">
       <div class="section-title">
-        <div><h2>Import</h2><p>Add a folder or entire drive to your cloud library.</p></div>
+        <div><h2>Import</h2><p>Add a folder or drive.</p></div>
       </div>
       <label>Folder or drive</label>
       <div class="path-row">
-        <input id="importPath" placeholder="Paste a path, e.g. C:\Users\you\Pictures">
-        <button id="chooseImport" class="secondary">Choose…</button>
+        <input id="importPath" placeholder="C:\Users\you\Pictures">
+        <button id="chooseImport" class="secondary">Browse…</button>
       </div>
       <label>Source name <span>optional</span></label>
-      <input id="sourceName" placeholder="Old laptop, Phone backup, Photos…">
-      <button id="startImport" class="primary wide">Import into Mochimono</button>
+      <input id="sourceName" placeholder="Old laptop, Phone, Photos…">
+      <button id="startImport" class="primary wide">Import</button>
     </section>
 
     <section class="card backup-card">
       <div class="section-title">
-        <div><h2>Backup locations</h2><p>Use any writable folder — including a folder on C: for testing.</p></div>
+        <div><h2>Backups</h2><p>Add any writable folder.</p></div>
       </div>
-      <label>New backup folder</label>
+      <label>Backup folder</label>
       <div class="path-row">
-        <input id="backupLocation" placeholder="Paste a path, e.g. C:\MochimonoBackup">
-        <button id="chooseBackup" class="secondary">Choose…</button>
+        <input id="backupLocation" placeholder="C:\MochimonoBackup">
+        <button id="chooseBackup" class="secondary">Browse…</button>
       </div>
-      <button id="addBackup" class="primary wide">Use this folder as a backup</button>
-      <p class="safe-note"><b>Safe by design:</b> Mochimono never formats, partitions, or erases a drive. It only creates a <code>.mochimono</code> folder inside the location you choose.</p>
+      <button id="addBackup" class="primary wide">Add backup</button>
+      <p class="safe-note">Mochimono never formats or erases the drive. It only creates <code>.mochimono</code> inside the folder you choose.</p>
 
       <div class="section-title row backup-list-title">
-        <div><h3>Your backup locations</h3></div>
+        <div><h3>Backup locations</h3></div>
         <button id="refreshBackups" class="secondary small">Refresh</button>
       </div>
       <div id="backups" class="drives"><div class="muted">Looking for backups…</div></div>
     </section>
 
     <section class="card activity-card">
-      <div class="section-title"><div><h2>Activity</h2><p>Current local work.</p></div></div>
+      <div class="section-title"><div><h2>Activity</h2></div></div>
       <div id="activity" class="empty">Nothing running.</div>
     </section>
 
@@ -63,7 +64,7 @@
           <label>Server token</label>
           <input id="serverToken" type="password" placeholder="Leave blank to keep the saved token">
           <button id="saveSettings" class="secondary">Save settings</button>
-          <p class="hint">Saved locally in your user profile. The Agent itself only listens on 127.0.0.1.</p>
+          <p class="hint">Saved locally. The Agent only listens on 127.0.0.1.</p>
         </div>
       </details>
     </section>
@@ -75,7 +76,7 @@
       <button class="icon" data-close>×</button>
     </div>
     <label>Name</label>
-    <input id="backupName" placeholder="Test Backup">
+    <input id="backupName" placeholder="Backup">
     <label>What should this backup protect?</label>
     <label class="check"><input id="backupEverything" type="checkbox" checked> Everything</label>
     <div id="backupTypes" class="type-grid disabled">
@@ -86,7 +87,7 @@
       <label class="check"><input type="checkbox" value="application"> Documents / apps</label>
       <label class="check"><input type="checkbox" value="other"> Other</label>
     </div>
-    <p class="safe-note compact">This does not format or erase anything. Mochimono only writes inside <code>.mochimono</code> in this folder.</p>
+    <p class="safe-note compact">Only <code>.mochimono</code> is written here.</p>
     <div class="dialog-actions">
       <div class="spacer"></div>
       <button data-close class="secondary">Cancel</button>
@@ -99,17 +100,17 @@
       <div><h3>Restore backup</h3><div id="restoreBackupLabel" class="picker-path"></div></div>
       <button class="icon" data-close>×</button>
     </div>
-    <p class="restore-copy">Rebuild the original source folder trees as ordinary files. This works from the backup itself and does not require the Mochimono server to be online.</p>
+    <p class="restore-copy">Rebuild the original source folders as ordinary files, without needing the server.</p>
     <label>Restore into</label>
     <div class="path-row">
-      <input id="restoreDestination" placeholder="Paste a path, e.g. C:\MochimonoRecovered">
-      <button id="chooseRestore" class="secondary">Choose…</button>
+      <input id="restoreDestination" placeholder="C:\MochimonoRecovered">
+      <button id="chooseRestore" class="secondary">Browse…</button>
     </div>
-    <p class="safe-note compact"><b>Non-destructive:</b> existing matching files are skipped. Conflicting files are kept and the restored copy gets a short hash suffix. The backup is never modified.</p>
+    <p class="safe-note compact">Matching files are skipped. Conflicts are preserved. The backup is never modified.</p>
     <div class="dialog-actions">
       <div class="spacer"></div>
       <button data-close class="secondary">Cancel</button>
-      <button id="startRestore" class="primary">Restore files</button>
+      <button id="startRestore" class="primary">Restore</button>
     </div>
   </dialog>
 
