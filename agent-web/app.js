@@ -92,7 +92,7 @@ async function state() {
     status.title = current.server.online ? `${current.server.stats.objects.toLocaleString()} files` : current.server.error || 'Connect';
 
     renderFolders(current.settings.folders || [], current.job);
-    activity(current.job);
+    activity(current.job, current.previews);
     if (current.job && current.job.status !== 'running' && lastFinished !== current.job.id) {
       lastFinished = current.job.id;
       const done = current.job.type === 'sync' ? 'Synced' : 'Done';
@@ -104,13 +104,27 @@ async function state() {
   }
 }
 
-function activity(job) {
-  if (!job || job.status !== 'running') {
+function activity(job, previews = {}) {
+  const previewActive = Number(previews.active) || 0;
+  const previewQueued = (Number(previews.urgent) || 0) + (Number(previews.priority) || 0) + (Number(previews.queued) || 0);
+  const working = job?.status === 'running';
+  if (!working && !previewActive && !previewQueued) {
     activityCard.hidden = true;
     return;
   }
 
   activityCard.hidden = false;
+  if (!working) {
+    const meta = [];
+    if (previewActive) meta.push(`${previewActive} working`);
+    if (previewQueued) meta.push(`${previewQueued.toLocaleString()} queued`);
+    $('#activity').innerHTML = `
+      <div class="progress-head"><strong>Previews</strong></div>
+      <div class="progress-bar indeterminate"><i style="width:32%"></i></div>
+      <div class="progress-foot"><span>${esc(meta.join(' · '))}</span><span></span></div>`;
+    return;
+  }
+
   const p = job.progress || {};
   const total = Number(p.totalBytes) || 0;
   const done = Math.min(total, Number(p.doneBytes) || 0);
@@ -119,8 +133,10 @@ function activity(job) {
 
   if (total) meta.push(`${bytes(done)} / ${bytes(total)}`);
   else if (p.scanned != null) meta.push(`${Number(p.scanned).toLocaleString()} files`);
+  if (p.reusedHashes) meta.push(`${Number(p.reusedHashes).toLocaleString()} hashes reused`);
   if (p.speedBps > 0) meta.push(`${bytes(p.speedBps)}/s`);
   if (p.etaSeconds != null && p.etaSeconds > 0) meta.push(`${duration(p.etaSeconds)} left`);
+  if (previewActive || previewQueued) meta.push(`${previewActive} preview${previewActive === 1 ? '' : 's'} working · ${previewQueued.toLocaleString()} queued`);
 
   $('#activity').innerHTML = `
     <div class="progress-head">
