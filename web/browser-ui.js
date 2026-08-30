@@ -3,6 +3,7 @@ const views = document.querySelector('#views');
 const folderbar = document.querySelector('#folderbar');
 const viewer = document.querySelector('#viewer');
 const viewerStage = document.querySelector('#viewer-stage');
+const viewerMedia = document.querySelector('#viewer-media');
 const viewerPrev = document.querySelector('#viewer-prev');
 const viewerNext = document.querySelector('#viewer-next');
 const dateRail = document.querySelector('#dateRail');
@@ -166,51 +167,225 @@ viewer.addEventListener('mouseenter', () => {
 new MutationObserver(syncViewerUi).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 syncViewerUi();
 
+const viewerPointers = new Map();
 let viewerSwipe = null;
+let viewerPan = null;
+let viewerPinch = null;
+let lastViewerTap = null;
+let viewerZoom = { scale: 1, x: 0, y: 0 };
 
-function clearViewerSwipe(event) {
-  if (event && viewerSwipe?.pointerId !== event.pointerId) return;
+function viewerImage() {
+  return viewerMedia.querySelector('img');
+}
+
+function clampViewerPan(scale = viewerZoom.scale, x = viewerZoom.x, y = viewerZoom.y) {
+  const image = viewerImage();
+  if (!image || scale <= 1) return { x: 0, y: 0 };
+  const width = image.clientWidth * scale;
+  const height = image.clientHeight * scale;
+  const maxX = Math.max(0, (width - innerWidth) / 2);
+  const maxY = Math.max(0, (height - innerHeight) / 2);
+  return {
+    x: Math.max(-maxX, Math.min(maxX, x)),
+    y: Math.max(-maxY, Math.min(maxY, y))
+  };
+}
+
+function applyViewerZoom(animate = false) {
+  const image = viewerImage();
+  const zoomed = viewerZoom.scale > 1.01;
+  viewerStage.classList.toggle('viewer-zoomed', zoomed);
+  if (!image) return;
+  const clamped = clampViewerPan();
+  viewerZoom.x = clamped.x;
+  viewerZoom.y = clamped.y;
+  image.style.transition = animate ? 'transform 160ms ease-out' : 'none';
+  image.style.transform = zoomed
+    ? `translate3d(${viewerZoom.x}px,${viewerZoom.y}px,0) scale(${viewerZoom.scale})`
+    : '';
+  if (animate) setTimeout(() => {
+    if (image.isConnected) image.style.transition = '';
+  }, 180);
+}
+
+function resetViewerZoom(animate = false) {
+  viewerZoom = { scale: 1, x: 0, y: 0 };
   viewerSwipe = null;
+  viewerPan = null;
+  viewerPinch = null;
+  viewerPointers.clear();
+  applyViewerZoom(animate);
+}
+
+function zoomScaleForImage(image) {
+  const renderedWidth = Math.max(1, image.clientWidth);
+  const renderedHeight = Math.max(1, image.clientHeight);
+  const naturalScale = Math.max(
+    Number(image.naturalWidth || 0) / renderedWidth,
+    Number(image.naturalHeight || 0) / renderedHeight
+  );
+  return Math.max(2.25, Math.min(4, naturalScale || 2.25));
+}
+
+function toggleViewerZoom(clientX, clientY) {
+  const image = viewerImage();
+  if (!image) return;
+  if (viewerZoom.scale > 1.01) {
+    resetViewerZoom(true);
+    return;
+  }
+  const scale = zoomScaleForImage(image);
+  viewerZoom.scale = scale;
+  viewerZoom.x = (1 - scale) * (clientX - innerWidth / 2);
+  viewerZoom.y = (1 - scale) * (clientY - innerHeight / 2);
+  applyViewerZoom(true);
+}
+
+function pointerDistance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function beginPinch() {
+  const points = [...viewerPointers.values()];
+  if (points.length < 2 || !viewerImage()) return;
+  const [a, b] = points;
+  const centerX = (a.x + b.x) / 2;
+  const centerY = (a.y + b.y) / 2;
+  const scale = viewerZoom.scale;
+  viewerPinch = {
+    distance: Math.max(1, pointerDistance(a, b)),
+    scale,
+    anchorX: (centerX - innerWidth / 2 - viewerZoom.x) / scale,
+    anchorY: (centerY - innerHeight / 2 - viewerZoom.y) / scale
+  };
+  viewerSwipe = null;
+  viewerPan = null;
+}
+
+function updatePinch() {
+  const points = [...viewerPointers.values()];
+  if (!viewerPinch || points.length < 2) return;
+  const [a, b] = points;
+  const centerX = (a.x + b.x) / 2;
+  const centerY = (a.y + b.y) / 2;
+  const scale = Math.max(1, Math.min(4, viewerPinch.scale * pointerDistance(a, b) / viewerPinch.distance));
+  viewerZoom.scale = scale;
+  viewerZoom.x = centerX - innerWidth / 2 - viewerPinch.anchorX * scale;
+  viewerZoom.y = centerY - innerHeight / 2 - viewerPinch.anchorY * scale;
+  applyViewerZoom(false);
+}
+
+function clearViewerPointer(event) {
+  viewerPointers.delete(event.pointerId);
+  if (viewerSwipe?.pointerId === event.pointerId) viewerSwipe = null;
+  if (viewerPan?.pointerId === event.pointerId) viewerPan = null;
+  if (viewerPointers.size < 2) viewerPinch = null;
 }
 
 viewerStage.addEventListener('pointerdown', event => {
   if (viewer.hidden || (event.pointerType !== 'touch' && event.pointerType !== 'pen')) return;
   if (event.target.closest('.viewer-nav')) return;
-  viewerSwipe = {
-    pointerId: event.pointerId,
-    x: event.clientX,
-    y: event.clientY,
-    lastX: event.clientX,
-    lastY: event.clientY
-  };
+  const point = { x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, startedAt: performance.now() };
+  viewerPointers.set(event.pointerId, point);
   try { viewerStage.setPointerCapture(event.pointerId); } catch {}
-});
 
-viewerStage.addEventListener('pointermove', event => {
-  if (!viewerSwipe || viewerSwipe.pointerId !== event.pointerId) return;
-  viewerSwipe.lastX = event.clientX;
-  viewerSwipe.lastY = event.clientY;
-});
+  if (viewerPointers.size >= 2) {
+    beginPinch();
+    event.preventDefault();
+    return;
+  }
 
-viewerStage.addEventListener('pointerup', event => {
-  if (!viewerSwipe || viewerSwipe.pointerId !== event.pointerId) return;
-  const swipe = viewerSwipe;
-  clearViewerSwipe(event);
-  try { viewerStage.releasePointerCapture(event.pointerId); } catch {}
-
-  const dx = event.clientX - swipe.x;
-  const dy = event.clientY - swipe.y;
-  const threshold = Math.max(52, Math.min(88, innerWidth * .12));
-  if (Math.abs(dx) < threshold || Math.abs(dx) < Math.abs(dy) * 1.35) return;
-
-  if (dx < 0) {
-    if (!viewerNext.disabled) viewerNext.click();
-  } else if (!viewerPrev.disabled) {
-    viewerPrev.click();
+  if (viewerZoom.scale > 1.01) {
+    viewerPan = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, startX: viewerZoom.x, startY: viewerZoom.y };
+    event.preventDefault();
+  } else {
+    viewerSwipe = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, startedAt: performance.now(), image: Boolean(event.target.closest('#viewer-media img')) };
   }
 });
 
-viewerStage.addEventListener('pointercancel', clearViewerSwipe);
+viewerStage.addEventListener('pointermove', event => {
+  const point = viewerPointers.get(event.pointerId);
+  if (!point) return;
+  point.x = event.clientX;
+  point.y = event.clientY;
+
+  if (viewerPointers.size >= 2) {
+    if (!viewerPinch) beginPinch();
+    updatePinch();
+    event.preventDefault();
+    return;
+  }
+
+  if (viewerPan?.pointerId === event.pointerId && viewerZoom.scale > 1.01) {
+    viewerZoom.x = viewerPan.startX + event.clientX - viewerPan.x;
+    viewerZoom.y = viewerPan.startY + event.clientY - viewerPan.y;
+    applyViewerZoom(false);
+    event.preventDefault();
+  }
+});
+
+viewerStage.addEventListener('pointerup', event => {
+  const point = viewerPointers.get(event.pointerId);
+  if (!point) return;
+  const swipe = viewerSwipe?.pointerId === event.pointerId ? viewerSwipe : null;
+  const wasPinching = Boolean(viewerPinch) || viewerPointers.size > 1;
+  const wasPanning = viewerPan?.pointerId === event.pointerId;
+  const dx = event.clientX - point.startX;
+  const dy = event.clientY - point.startY;
+  const travel = Math.hypot(dx, dy);
+  const duration = Math.max(1, performance.now() - point.startedAt);
+  clearViewerPointer(event);
+  try { viewerStage.releasePointerCapture(event.pointerId); } catch {}
+
+  if (wasPinching) {
+    if (viewerZoom.scale <= 1.03) resetViewerZoom(true);
+    return;
+  }
+  if (wasPanning || viewerZoom.scale > 1.01) return;
+
+  if (swipe) {
+    const horizontal = Math.abs(dx) > Math.abs(dy) * 1.08;
+    const velocity = Math.abs(dx) / duration;
+    const deliberate = Math.abs(dx) >= 26;
+    const quickFlick = Math.abs(dx) >= 16 && velocity >= .18;
+    if (horizontal && (deliberate || quickFlick)) {
+      lastViewerTap = null;
+      if (dx < 0) {
+        if (!viewerNext.disabled) viewerNext.click();
+      } else if (!viewerPrev.disabled) {
+        viewerPrev.click();
+      }
+      return;
+    }
+  }
+
+  if (travel > 12 || !swipe?.image) {
+    lastViewerTap = null;
+    return;
+  }
+
+  const now = performance.now();
+  if (lastViewerTap && now - lastViewerTap.time <= 320 && Math.hypot(event.clientX - lastViewerTap.x, event.clientY - lastViewerTap.y) <= 44) {
+    toggleViewerZoom(event.clientX, event.clientY);
+    lastViewerTap = null;
+    event.preventDefault();
+  } else {
+    lastViewerTap = { time: now, x: event.clientX, y: event.clientY };
+  }
+});
+
+viewerStage.addEventListener('pointercancel', event => {
+  clearViewerPointer(event);
+  if (!viewerPointers.size && viewerZoom.scale <= 1.03) resetViewerZoom(false);
+});
+
+new MutationObserver(() => resetViewerZoom(false)).observe(viewerMedia, { childList: true });
+new MutationObserver(() => {
+  if (viewer.hidden) resetViewerZoom(false);
+}).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
+window.addEventListener('resize', () => {
+  if (viewerZoom.scale > 1.01) applyViewerZoom(false);
+}, { passive: true });
 
 let press = null;
 let dispatchingLongPress = false;
