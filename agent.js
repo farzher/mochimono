@@ -9,6 +9,7 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { DatabaseSync } from 'node:sqlite';
 import http from 'node:http';
+import { restoreBackup } from './lib/restore.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'agent-web');
@@ -20,7 +21,7 @@ const BATCH = 250;
 
 let saved = {};
 try { saved = JSON.parse(await readFile(CONFIG_PATH, 'utf8')); } catch {}
-let settings = {
+const settings = {
   server: String(process.env.MOCHIMONO_URL || saved.server || 'http://127.0.0.1:8642').replace(/\/$/, ''),
   token: String(process.env.MOCHIMONO_TOKEN || saved.token || ''),
   backups: Array.isArray(saved.backups) ? saved.backups.map(String) : []
@@ -30,12 +31,6 @@ let job = null;
 async function persistSettings() {
   await mkdir(CONFIG_DIR, { recursive: true });
   await writeFile(CONFIG_PATH, `${JSON.stringify(settings, null, 2)}\n`);
-}
-
-async function saveSettings(next) {
-  settings.server = String(next.server || settings.server || 'http://127.0.0.1:8642').trim().replace(/\/$/, '');
-  if (next.token !== undefined) settings.token = String(next.token);
-  await persistSettings();
 }
 
 async function rememberBackup(path) {
@@ -70,7 +65,7 @@ async function readJson(req, max = 1024 * 1024) {
 }
 
 async function api(path, options = {}) {
-  if (!settings.token) throw new Error('Set the Mochimono server token in Agent Settings first');
+  if (!settings.token) throw new Error('Set the Mochimono server token in Agent settings first');
   const headers = { authorization: `Bearer ${settings.token}`, ...(options.headers || {}) };
   let body = options.body;
   if (body && typeof body !== 'string' && !body.pipe && !body[Symbol.asyncIterator]) {
@@ -84,15 +79,39 @@ async function api(path, options = {}) {
     try { message = (await response.json()).error || message; } catch {}
     throw new Error(message);
   }
-  const type = response.headers.get('content-type') || '';
-  return type.includes('application/json') ? response.json() : response;
+  return (response.headers.get('content-type') || '').includes('application/json') ? response.json() : response;
 }
 
-async function* filesUnder(root, directory = root) {
-  const dir = await opendir(directory);
+async function serverState() {
+  if (!settings.token) return { online: false, error: 'Token not configured' };
+  try { return { online: true, stats: await api('/api/stats') }; }
+  catch (error) { return { online: false, error: error.message }; }
+}
+
+function startJob(res, type, label, work) {
+  if (job?.status === 'running') return json(res, 409, { error: 'Another Agent operation is already running' });
+  job = { id: randomUUID(), type, label, status: 'running', startedAt: new Date().toISOString(), progress: {} };
+  json(res, 202, { job });
+  setImmediate(async () => {
+    try {
+      const update = patch => { if (job?.status === 'running') job.progress = { ...job.progress, ...patch }; };
+      const result = await work(update);
+      job = { ...job, status: 'done', finishedAt: new Date().toISOString(), result };
+    } catch (error) {
+      console.error(error);
+      job = { ...job, status: 'error', finishedAt: new Date().toISOString(), error: error.message };
+    }
+  });
+}
+
+async function* filesUnder(directory) {
+  let dir;
+  try { dir = await opendir(directory); }
+  catch { return; }
   for await (const entry of dir) {
+    if (entry.name === '.mochimono') continue;
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) yield* filesUnder(root, path);
+    if (entry.isDirectory()) yield* filesUnder(path);
     else if (entry.isFile()) yield path;
   }
 }
@@ -107,10 +126,10 @@ const MIME = new Map([
   ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.png', 'image/png'], ['.gif', 'image/gif'], ['.webp', 'image/webp'], ['.heic', 'image/heic'], ['.avif', 'image/avif'],
   ['.mp4', 'video/mp4'], ['.mov', 'video/quicktime'], ['.mkv', 'video/x-matroska'], ['.webm', 'video/webm'], ['.avi', 'video/x-msvideo'],
   ['.mp3', 'audio/mpeg'], ['.m4a', 'audio/mp4'], ['.flac', 'audio/flac'], ['.wav', 'audio/wav'], ['.ogg', 'audio/ogg'],
-  ['.txt', 'text/plain'], ['.md', 'text/markdown'], ['.json', 'application/json'], ['.csv', 'text/csv'], ['.html', 'text/html'], ['.css', 'text/css'], ['.js', 'text/javascript'],
-  ['.pdf', 'application/pdf'], ['.zip', 'application/zip'], ['.7z', 'application/x-7z-compressed'], ['.rar', 'application/vnd.rar']
+  ['.txt', 'text/plain'], ['.md', 'text/markdown'], ['.csv', 'text/csv'], ['.html', 'text/html'], ['.css', 'text/css'], ['.js', 'text/javascript'],
+  ['.json', 'application/json'], ['.pdf', 'application/pdf'], ['.zip', 'application/zip'], ['.7z', 'application/x-7z-compressed'], ['.rar', 'application/vnd.rar']
 ]);
-function mimeFor(path) { return MIME.get(extname(path).toLowerCase()) || 'application/octet-stream'; }
+const mimeFor = path => MIME.get(extname(path).toLowerCase()) || 'application/octet-stream';
 
 function formatBytes(bytes) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
@@ -118,25 +137,6 @@ function formatBytes(bytes) {
   let unit = 0;
   while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
   return `${value < 10 && unit ? value.toFixed(2) : value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
-}
-
-function progress(patch) {
-  if (job?.status === 'running') job.progress = { ...job.progress, ...patch };
-}
-
-function startJob(res, type, label, work) {
-  if (job?.status === 'running') return json(res, 409, { error: 'Another agent operation is already running' });
-  job = { id: randomUUID(), type, label, status: 'running', startedAt: new Date().toISOString(), progress: {} };
-  json(res, 202, { job });
-  setImmediate(async () => {
-    try {
-      const result = await work(progress);
-      job = { ...job, status: 'done', finishedAt: new Date().toISOString(), result };
-    } catch (error) {
-      console.error(error);
-      job = { ...job, status: 'error', finishedAt: new Date().toISOString(), error: error.message };
-    }
-  });
 }
 
 async function uploadFile(record) {
@@ -153,7 +153,6 @@ async function importBatch(importId, records, totals, update) {
   const check = await api('/api/objects/check', { method: 'POST', body: { hashes: [...firstByHash.keys()] } });
   const missing = new Set(check.missing);
   const ignored = new Set(check.ignored);
-  let uploadedObjects = 0;
 
   for (const hash of missing) {
     const record = firstByHash.get(hash);
@@ -161,37 +160,46 @@ async function importBatch(importId, records, totals, update) {
     await uploadFile(record);
     totals.new++;
     totals.uploadedBytes += record.size;
-    uploadedObjects++;
   }
 
   const accepted = records.filter(record => !ignored.has(record.hash));
   totals.ignored += records.length - accepted.length;
-  totals.duplicates += accepted.length - uploadedObjects;
-  const sources = accepted.map(record => ({ hash: record.hash, path: record.relative, filename: basename(record.path), mtime: record.mtime }));
-  if (sources.length) await api('/api/sources', { method: 'POST', body: { importId, sources } });
+  totals.duplicates += accepted.length - missing.size;
+  if (accepted.length) {
+    await api('/api/sources', {
+      method: 'POST',
+      body: {
+        importId,
+        sources: accepted.map(record => ({ hash: record.hash, path: record.relative, filename: basename(record.path), mtime: record.mtime }))
+      }
+    });
+  }
   update({ ...totals, uploaded: formatBytes(totals.uploadedBytes) });
 }
 
 async function importFolder(folder, sourceName, update) {
   const root = resolve(folder);
-  const rootStat = await stat(root);
-  if (!rootStat.isDirectory()) throw new Error(`${root} is not a directory`);
+  if (!(await stat(root)).isDirectory()) throw new Error(`${root} is not a directory`);
   const source = String(sourceName || basename(root) || root);
   const created = await api('/api/imports', { method: 'POST', body: { sourceName: source } });
-  const totals = { scanned: 0, new: 0, duplicates: 0, ignored: 0, uploadedBytes: 0 };
+  const totals = { scanned: 0, new: 0, duplicates: 0, ignored: 0, errors: 0, uploadedBytes: 0 };
   let batch = [];
   update({ phase: 'Scanning', source, path: root, ...totals });
 
   for await (const path of filesUnder(root)) {
-    const info = await stat(path);
-    const rel = relative(root, path).replaceAll('\\', '/');
-    update({ phase: 'Hashing', current: rel, scanned: totals.scanned });
-    const hash = await hashFile(path);
-    totals.scanned++;
-    batch.push({ path, relative: rel, hash, size: info.size, mtime: info.mtime.toISOString(), mime: mimeFor(path) });
-    if (batch.length >= BATCH) {
-      await importBatch(created.id, batch, totals, update);
-      batch = [];
+    try {
+      const info = await stat(path);
+      const rel = relative(root, path).replaceAll('\\', '/');
+      update({ phase: 'Hashing', current: rel, ...totals });
+      const hash = await hashFile(path);
+      totals.scanned++;
+      batch.push({ path, relative: rel, hash, size: info.size, mtime: info.mtime.toISOString(), mime: mimeFor(path) });
+      if (batch.length >= BATCH) {
+        await importBatch(created.id, batch, totals, update);
+        batch = [];
+      }
+    } catch {
+      totals.errors++;
     }
   }
   if (batch.length) await importBatch(created.id, batch, totals, update);
@@ -199,9 +207,10 @@ async function importFolder(folder, sourceName, update) {
   return { importId: created.id, source, ...totals };
 }
 
-function driveMetaPath(root) { return join(root, '.mochimono', 'drive.json'); }
-function driveDbPath(root) { return join(root, '.mochimono', 'inventory.sqlite'); }
-function backupObjectPath(root, hash) { return join(root, '.mochimono', 'objects', hash.slice(0, 2), hash); }
+const controlPath = root => join(root, '.mochimono');
+const driveMetaPath = root => join(controlPath(root), 'drive.json');
+const driveDbPath = root => join(controlPath(root), 'inventory.sqlite');
+const backupObjectPath = (root, hash) => join(controlPath(root), 'objects', hash.slice(0, 2), hash);
 
 function openInventory(root) {
   const db = new DatabaseSync(driveDbPath(root), { timeout: 5000 });
@@ -217,38 +226,39 @@ function openInventory(root) {
   return db;
 }
 
-async function readDrive(root) { return JSON.parse(await readFile(driveMetaPath(root), 'utf8')); }
-async function registerDrive(meta) { return api('/api/drives/register', { method: 'POST', body: meta }); }
-function parseTypes(types) {
-  if (!Array.isArray(types) || !types.length) return { all: true, types: [] };
-  const clean = types.map(String).map(value => value.trim()).filter(Boolean);
+async function readBackup(root) {
+  return JSON.parse(await readFile(driveMetaPath(root), 'utf8'));
+}
+
+function policy(types) {
+  const clean = Array.isArray(types) ? types.map(String).map(value => value.trim()).filter(Boolean) : [];
   return clean.length ? { all: false, types: clean } : { all: true, types: [] };
+}
+
+async function registerBackup(meta) {
+  return api('/api/drives/register', { method: 'POST', body: meta });
 }
 
 async function backupInit(path, name, types) {
   const root = resolve(path);
-  const info = await stat(root);
-  if (!info.isDirectory()) throw new Error(`${root} is not a directory`);
+  if (!(await stat(root)).isDirectory()) throw new Error(`${root} is not a directory`);
 
-  // A Mochimono backup is only a folder. Never format, partition, erase, or otherwise modify the filesystem/drive itself.
+  // Backups are folders. Mochimono never formats, partitions, or erases the underlying drive.
   if (existsSync(driveMetaPath(root))) {
-    const meta = await readDrive(root);
+    const meta = await readBackup(root);
     await rememberBackup(root);
-    return { path: root, meta, remote: await registerDrive(meta), existing: true };
+    let remote = null;
+    try { remote = await registerBackup(meta); } catch {}
+    return { path: root, meta, remote, existing: true };
   }
 
-  await mkdir(join(root, '.mochimono'), { recursive: true });
-  const meta = {
-    format: 1,
-    id: randomUUID(),
-    name: String(name || basename(root) || root),
-    policy: parseTypes(types),
-    createdAt: new Date().toISOString()
-  };
+  await mkdir(controlPath(root), { recursive: true });
+  const meta = { format: 1, id: randomUUID(), name: String(name || basename(root) || root), policy: policy(types), createdAt: new Date().toISOString() };
   await writeFile(driveMetaPath(root), `${JSON.stringify(meta, null, 2)}\n`);
   openInventory(root).close();
   await rememberBackup(root);
-  const remote = await registerDrive(meta);
+  let remote = null;
+  try { remote = await registerBackup(meta); } catch {}
   return { path: root, meta, remote, existing: false };
 }
 
@@ -270,24 +280,24 @@ async function downloadVerified(hash, expectedSize, destination) {
   }
 }
 
+async function reportReplicas(id, replicas) {
+  if (replicas.length) await api(`/api/drives/${encodeURIComponent(id)}/replicas`, { method: 'POST', body: { replicas } });
+}
+
 async function saveCatalogSnapshot(root) {
   const response = await api('/api/catalog/export');
-  const target = join(root, '.mochimono', 'catalog.sqlite');
+  const target = join(controlPath(root), 'catalog.sqlite');
   const temp = `${target}.tmp`;
   await pipeline(Readable.fromWeb(response.body), createWriteStream(temp));
   await rm(target, { force: true });
   await rename(temp, target);
 }
 
-async function reportReplicas(driveId, replicas) {
-  if (replicas.length) await api(`/api/drives/${encodeURIComponent(driveId)}/replicas`, { method: 'POST', body: { replicas } });
-}
-
 async function backupUpdate(path, update) {
   const root = resolve(path);
-  const meta = await readDrive(root);
+  const meta = await readBackup(root);
   await rememberBackup(root);
-  await registerDrive(meta);
+  await registerBackup(meta);
   const db = openInventory(root);
   const find = db.prepare('SELECT hash, size, verified_at FROM objects WHERE hash = ?');
   const save = db.prepare(`INSERT INTO objects(hash, size, stored_at, verified_at) VALUES(?, ?, ?, ?) ON CONFLICT(hash) DO UPDATE SET size=excluded.size, stored_at=excluded.stored_at, verified_at=excluded.verified_at`);
@@ -296,7 +306,6 @@ async function backupUpdate(path, update) {
   let copiedBytes = 0;
   let already = 0;
   let reports = [];
-  update({ phase: 'Checking backup', drive: meta.name, copied, already, copiedBytes });
 
   try {
     do {
@@ -304,11 +313,15 @@ async function backupUpdate(path, update) {
       for (const object of page.objects) {
         const destination = backupObjectPath(root, object.hash);
         const local = find.get(object.hash);
+        let present = false;
         if (local && existsSync(destination)) {
+          try { present = (await stat(destination)).size === object.size; } catch {}
+        }
+        if (present) {
           already++;
           reports.push({ hash: object.hash, verifiedAt: local.verified_at });
         } else {
-          update({ phase: 'Backing up', current: object.hash.slice(0, 12), copied, already, copiedBytes, copiedSize: formatBytes(copiedBytes) });
+          update({ phase: 'Backing up', current: object.hash.slice(0, 12), copied, already, copiedSize: formatBytes(copiedBytes) });
           await downloadVerified(object.hash, object.size, destination);
           const timestamp = new Date().toISOString();
           save.run(object.hash, object.size, timestamp, timestamp);
@@ -320,8 +333,9 @@ async function backupUpdate(path, update) {
       }
       after = page.nextAfter || '';
     } while (after);
+
     await reportReplicas(meta.id, reports);
-    update({ phase: 'Saving catalog snapshot', copied, already, copiedBytes, copiedSize: formatBytes(copiedBytes) });
+    update({ phase: 'Saving catalog snapshot', copied, already, copiedSize: formatBytes(copiedBytes) });
     await saveCatalogSnapshot(root);
     return { drive: meta.name, copied, already, copiedBytes };
   } finally { db.close(); }
@@ -329,9 +343,8 @@ async function backupUpdate(path, update) {
 
 async function backupVerify(path, update) {
   const root = resolve(path);
-  const meta = await readDrive(root);
+  const meta = await readBackup(root);
   await rememberBackup(root);
-  await registerDrive(meta);
   const db = openInventory(root);
   const rows = db.prepare('SELECT hash, size FROM objects ORDER BY hash').all();
   const mark = db.prepare('UPDATE objects SET verified_at = ? WHERE hash = ?');
@@ -339,14 +352,16 @@ async function backupVerify(path, update) {
   const good = [];
   const bad = [];
   let badCount = 0;
-  let checked = 0;
+
   try {
-    for (const row of rows) {
-      update({ phase: 'Verifying', drive: meta.name, checked, total: rows.length, bad: badCount, current: row.hash.slice(0, 12) });
-      const file = backupObjectPath(root, row.hash);
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      update({ phase: 'Verifying', current: row.hash.slice(0, 12), checked: index, total: rows.length, bad: badCount });
       let ok = false;
-      try { const info = await stat(file); ok = info.size === row.size && await hashFile(file) === row.hash; } catch {}
-      checked++;
+      try {
+        const path = backupObjectPath(root, row.hash);
+        ok = (await stat(path)).size === row.size && await hashFile(path) === row.hash;
+      } catch {}
       if (ok) {
         const timestamp = new Date().toISOString();
         mark.run(timestamp, row.hash);
@@ -356,43 +371,42 @@ async function backupVerify(path, update) {
         bad.push(row.hash);
         badCount++;
       }
-      if (good.length >= 1000) await reportReplicas(meta.id, good.splice(0));
-      if (bad.length >= 1000) await api(`/api/drives/${encodeURIComponent(meta.id)}/replicas/remove`, { method: 'POST', body: { hashes: bad.splice(0) } });
     }
-    await reportReplicas(meta.id, good);
-    if (bad.length) await api(`/api/drives/${encodeURIComponent(meta.id)}/replicas/remove`, { method: 'POST', body: { hashes: bad } });
-    return { drive: meta.name, checked, healthy: checked - badCount, bad: badCount };
   } finally { db.close(); }
+
+  try {
+    await registerBackup(meta);
+    for (let i = 0; i < good.length; i += 1000) await reportReplicas(meta.id, good.slice(i, i + 1000));
+    for (let i = 0; i < bad.length; i += 1000) await api(`/api/drives/${encodeURIComponent(meta.id)}/replicas/remove`, { method: 'POST', body: { hashes: bad.slice(i, i + 1000) } });
+  } catch {}
+
+  update({ phase: 'Done', checked: rows.length, total: rows.length, bad: badCount });
+  return { drive: meta.name, checked: rows.length, healthy: rows.length - badCount, bad: badCount };
 }
 
 async function backupStatus(path) {
   const root = resolve(path);
-  const meta = await readDrive(root);
+  const meta = await readBackup(root);
   await rememberBackup(root);
   const db = openInventory(root);
   const local = db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes, MIN(verified_at) AS oldestVerification FROM objects').get();
   db.close();
-  const remote = await registerDrive(meta);
+  let remote = null;
+  try { remote = await registerBackup(meta); } catch {}
   return { path: root, meta, local, remote };
-}
-
-async function managedInfo(path) {
-  try {
-    const meta = await readDrive(path);
-    return { managed: true, meta };
-  } catch { return { managed: false }; }
 }
 
 async function pathInfo(path) {
   const root = resolve(path);
-  const info = await statfs(root);
-  const managed = await managedInfo(root);
+  const fs = await statfs(root);
+  let meta = null;
+  try { meta = await readBackup(root); } catch {}
   return {
     path: root,
-    name: root,
-    totalBytes: Number(info.blocks) * Number(info.bsize),
-    freeBytes: Number(info.bavail) * Number(info.bsize),
-    ...managed
+    totalBytes: Number(fs.blocks) * Number(fs.bsize),
+    freeBytes: Number(fs.bavail) * Number(fs.bsize),
+    managed: Boolean(meta),
+    meta
   };
 }
 
@@ -409,24 +423,23 @@ async function roots() {
       try { for (const entry of await readdir(base, { withFileTypes: true })) if (entry.isDirectory()) candidates.push(join(base, entry.name)); } catch {}
     }
   }
-  const results = [];
-  for (const candidate of [...new Set(candidates)]) {
-    try { results.push(await pathInfo(candidate)); } catch {}
+  const result = [];
+  for (const path of [...new Set(candidates)]) {
+    try { result.push(await pathInfo(path)); } catch {}
   }
-  return results;
+  return result;
 }
 
 async function backupLocations() {
-  const discovered = (await roots()).filter(root => root.managed).map(root => root.path);
-  const paths = [...new Set([...settings.backups, ...discovered])];
-  const results = [];
-  for (const path of paths) {
+  const discovered = (await roots()).filter(item => item.managed).map(item => item.path);
+  const result = [];
+  for (const path of [...new Set([...settings.backups, ...discovered])]) {
     try {
       const info = await pathInfo(path);
-      if (info.managed) results.push(info);
+      if (info.managed) result.push(info);
     } catch {}
   }
-  return results;
+  return result;
 }
 
 function commandOutput(command, args) {
@@ -482,17 +495,14 @@ async function serveStatic(res, pathname) {
 
 async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/state') {
-    let server = { online: false, error: settings.token ? null : 'Token not configured' };
-    if (settings.token) {
-      try { server = { online: true, stats: await api('/api/stats') }; }
-      catch (error) { server = { online: false, error: error.message }; }
-    }
-    return json(res, 200, { settings: { server: settings.server, hasToken: Boolean(settings.token) }, server, job });
+    return json(res, 200, { settings: { server: settings.server, hasToken: Boolean(settings.token) }, server: await serverState(), job });
   }
   if (req.method === 'POST' && url.pathname === '/api/settings') {
     const body = await readJson(req);
-    await saveSettings({ server: body.server, token: body.token === '' ? undefined : body.token });
-    return json(res, 200, { ok: true, server: settings.server, hasToken: Boolean(settings.token) });
+    settings.server = String(body.server || settings.server).trim().replace(/\/$/, '');
+    if (body.token !== '') settings.token = String(body.token ?? settings.token);
+    await persistSettings();
+    return json(res, 200, { ok: true });
   }
   if (req.method === 'GET' && url.pathname === '/api/pick-folder') return json(res, 200, { path: await pickFolder() });
   if (req.method === 'GET' && url.pathname === '/api/backups') return json(res, 200, { backups: await backupLocations() });
@@ -506,8 +516,7 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/backup/init') {
     const body = await readJson(req);
     if (!body.path) return json(res, 400, { error: 'Choose or paste a backup folder' });
-    const result = await backupInit(body.path, body.name, body.types);
-    return json(res, 200, result);
+    return json(res, 200, await backupInit(body.path, body.name, body.types));
   }
   if (req.method === 'POST' && url.pathname === '/api/backup/update') {
     const body = await readJson(req);
@@ -518,6 +527,11 @@ async function handleApi(req, res, url) {
     const body = await readJson(req);
     if (!body.path) return json(res, 400, { error: 'Choose a backup location' });
     return startJob(res, 'verify', `Verify ${body.path}`, update => backupVerify(body.path, update));
+  }
+  if (req.method === 'POST' && url.pathname === '/api/backup/restore') {
+    const body = await readJson(req);
+    if (!body.path || !body.destination) return json(res, 400, { error: 'Backup and restore destination are required' });
+    return startJob(res, 'restore', `Restore ${body.path}`, update => restoreBackup(body.path, body.destination, update));
   }
   return json(res, 404, { error: 'Not found' });
 }
