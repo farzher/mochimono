@@ -32,7 +32,7 @@ style.textContent = `
 document.head.append(style);
 
 function clearAutoFade() {
-  if (viewer?.classList.contains('viewer-ui-hidden')) viewer.classList.remove('viewer-ui-hidden');
+  viewer?.classList.remove('viewer-ui-hidden');
 }
 
 function showControls() {
@@ -59,7 +59,8 @@ if (viewer) {
 const desktopZoom = { scale: 1, x: 0, y: 0 };
 let desktopNavState = null;
 let desktopPan = null;
-const finePointer = matchMedia('(hover:hover) and (pointer:fine)');
+let suppressDesktopClick = false;
+let desktopClickTimer = 0;
 
 function desktopImage() {
   return viewerMedia?.querySelector('img') || null;
@@ -69,16 +70,18 @@ function desktopZoomed() {
   return desktopZoom.scale > 1.01;
 }
 
+function touchZoomed() {
+  return stage?.classList.contains('viewer-zoomed') && !desktopZoomed();
+}
+
 function clampDesktopPan(scale = desktopZoom.scale, x = desktopZoom.x, y = desktopZoom.y) {
   const image = desktopImage();
   if (!image || scale <= 1) return { x: 0, y: 0 };
   const width = image.clientWidth * scale;
   const height = image.clientHeight * scale;
-  const maxX = Math.max(0, (width - innerWidth) / 2);
-  const maxY = Math.max(0, (height - innerHeight) / 2);
   return {
-    x: Math.max(-maxX, Math.min(maxX, x)),
-    y: Math.max(-maxY, Math.min(maxY, y))
+    x: Math.max(-(Math.max(0, width - innerWidth) / 2), Math.min(Math.max(0, width - innerWidth) / 2, x)),
+    y: Math.max(-(Math.max(0, height - innerHeight) / 2), Math.min(Math.max(0, height - innerHeight) / 2, y))
   };
 }
 
@@ -123,12 +126,10 @@ function resetDesktopZoom(animate = false) {
   applyDesktopZoom(animate);
 }
 
-function desktopNaturalScale(image) {
-  const renderedWidth = Math.max(1, image.clientWidth);
-  const renderedHeight = Math.max(1, image.clientHeight);
+function naturalZoom(image) {
   const naturalScale = Math.max(
-    Number(image.naturalWidth || 0) / renderedWidth,
-    Number(image.naturalHeight || 0) / renderedHeight
+    Number(image.naturalWidth || 0) / Math.max(1, image.clientWidth),
+    Number(image.naturalHeight || 0) / Math.max(1, image.clientHeight)
   );
   return Math.max(2.25, Math.min(4, naturalScale || 2.25));
 }
@@ -138,10 +139,8 @@ function setDesktopScaleAt(nextScale, clientX, clientY, animate = false) {
   if (!image) return;
   const oldScale = desktopZoom.scale;
   const scale = Math.max(1, Math.min(4, nextScale));
-  if (scale <= 1.01) {
-    resetDesktopZoom(animate);
-    return;
-  }
+  if (scale <= 1.01) return resetDesktopZoom(animate);
+
   const offsetX = clientX - innerWidth / 2;
   const offsetY = clientY - innerHeight / 2;
   const anchorX = (offsetX - desktopZoom.x) / oldScale;
@@ -156,12 +155,15 @@ function toggleDesktopZoom(clientX, clientY) {
   const image = desktopImage();
   if (!image) return;
   if (desktopZoomed()) resetDesktopZoom(true);
-  else setDesktopScaleAt(desktopNaturalScale(image), clientX, clientY, true);
+  else setDesktopScaleAt(naturalZoom(image), clientX, clientY, true);
+}
+
+function activeUi(target) {
+  return target?.closest?.('.viewer-nav,.viewer-bar,.viewer-collections,.viewer-info,dialog,video');
 }
 
 document.addEventListener('keydown', event => {
   if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
-    // Browser Back/Forward must win over viewer navigation.
     event.stopImmediatePropagation();
     return;
   }
@@ -172,36 +174,56 @@ document.addEventListener('keydown', event => {
 }, true);
 
 if (stage && viewer) {
-  // A tap directly on the video belongs to the native player. These handlers
-  // run before browser-ui.js and stop its side-tap/swipe recognizer from
-  // turning a play/pause tap into previous/next navigation.
+  // Direct interaction with a video always belongs to the native player.
   for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) {
     stage.addEventListener(type, event => {
       if (event.target.closest('#viewer-media video')) event.stopImmediatePropagation();
     });
   }
 
+  // Desktop double-click uses the actual mouse gesture, not a media query about
+  // the device's primary pointer. This matters on touch-capable Windows PCs.
   stage.addEventListener('dblclick', event => {
-    if (viewer.hidden || !finePointer.matches || event.button > 0) return;
-    if (stage.classList.contains('viewer-zoomed') && !stage.classList.contains('viewer-desktop-zoomed')) return;
+    if (viewer.hidden || event.button > 0 || touchZoomed()) return;
     if (!event.target.closest('#viewer-media img')) return;
+    clearTimeout(desktopClickTimer);
+    desktopClickTimer = 0;
     event.preventDefault();
     event.stopImmediatePropagation();
     toggleDesktopZoom(event.clientX, event.clientY);
-  });
+  }, true);
+
+  // Delay a single mouse click on the image just enough to distinguish it from
+  // a double-click. Blank viewer areas still toggle controls immediately.
+  stage.addEventListener('click', event => {
+    if (viewer.hidden || event.button > 0 || activeUi(event.target)) return;
+    if (suppressDesktopClick) {
+      suppressDesktopClick = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (!event.target.closest('#viewer-media img')) return;
+    clearTimeout(desktopClickTimer);
+    if (event.detail >= 2) return;
+    desktopClickTimer = setTimeout(() => {
+      desktopClickTimer = 0;
+      if (!viewer.hidden) toggleControls();
+    }, 300);
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
 
   stage.addEventListener('wheel', event => {
-    if (viewer.hidden || !finePointer.matches || !desktopImage()) return;
-    if (event.target.closest('.viewer-bar,.viewer-collections,.viewer-info,dialog,video')) return;
-    if (stage.classList.contains('viewer-zoomed') && !stage.classList.contains('viewer-desktop-zoomed')) return;
+    if (viewer.hidden || !desktopImage() || touchZoomed()) return;
+    if (activeUi(event.target)) return;
     const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1;
     const delta = event.deltaY * multiplier;
     const sensitivity = event.ctrlKey ? .006 : .0015;
-    const scale = desktopZoom.scale * Math.exp(-delta * sensitivity);
-    setDesktopScaleAt(scale, event.clientX, event.clientY, false);
+    setDesktopScaleAt(desktopZoom.scale * Math.exp(-delta * sensitivity), event.clientX, event.clientY);
     event.preventDefault();
     event.stopImmediatePropagation();
-  }, { passive: false });
+  }, { passive: false, capture: true });
 
   stage.addEventListener('pointerdown', event => {
     if (event.pointerType !== 'mouse' || event.button !== 0 || !desktopZoomed()) return;
@@ -227,18 +249,17 @@ if (stage && viewer) {
     if (Math.hypot(dx, dy) > 4) desktopPan.moved = true;
     desktopZoom.x = desktopPan.startX + dx;
     desktopZoom.y = desktopPan.startY + dy;
-    applyDesktopZoom(false);
+    applyDesktopZoom();
     event.preventDefault();
     event.stopImmediatePropagation();
   });
 
   stage.addEventListener('pointerup', event => {
     if (!desktopPan || event.pointerId !== desktopPan.pointerId) return;
-    const moved = desktopPan.moved;
+    suppressDesktopClick = desktopPan.moved;
     desktopPan = null;
     stage.classList.remove('viewer-desktop-panning');
     try { stage.releasePointerCapture(event.pointerId); } catch {}
-    if (!moved) toggleControls();
     event.preventDefault();
     event.stopImmediatePropagation();
   });
@@ -250,29 +271,16 @@ if (stage && viewer) {
     event.stopImmediatePropagation();
   });
 
+  // Touch controls toggle. browser-ui.js owns swipe navigation and touch zoom;
+  // this only handles the conventional single-tap show/hide chrome behavior.
   const pointers = new Map();
   let pendingTap = 0;
   let lastTap = null;
   const DOUBLE_TAP_MS = 300;
 
-  const activeUiAt = (x, y) => document.elementFromPoint(x, y)?.closest(
-    '.viewer-nav,.viewer-bar,.viewer-collections,.viewer-info,dialog,video'
-  );
-
-  const zoomed = () => stage.classList.contains('viewer-zoomed') || desktopZoomed();
-
-  function clearPendingTap() {
-    clearTimeout(pendingTap);
-    pendingTap = 0;
-  }
-
   stage.addEventListener('pointerdown', event => {
-    if (viewer.hidden || event.button > 0 || activeUiAt(event.clientX, event.clientY)) return;
-    pointers.set(event.pointerId, {
-      x: event.clientX,
-      y: event.clientY,
-      pointerType: event.pointerType || 'mouse'
-    });
+    if (viewer.hidden || (event.pointerType !== 'touch' && event.pointerType !== 'pen') || activeUi(event.target)) return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   });
 
   stage.addEventListener('pointermove', event => {
@@ -284,32 +292,25 @@ if (stage && viewer) {
   stage.addEventListener('pointerup', event => {
     const point = pointers.get(event.pointerId);
     pointers.delete(event.pointerId);
-    if (!point || point.moved || viewer.hidden) return;
-    if (activeUiAt(event.clientX, event.clientY)) return;
+    if (!point || point.moved || viewer.hidden || activeUi(event.target)) return;
 
-    const touch = point.pointerType === 'touch' || point.pointerType === 'pen';
-    const isZoomed = zoomed();
+    const isZoomed = stage.classList.contains('viewer-zoomed') || desktopZoomed();
+    if (!isZoomed && (event.clientX < innerWidth * .36 || event.clientX > innerWidth * .64)) return;
 
-    // At fit size, the left/right thirds are active mobile navigation zones.
-    // The center remains the conventional single-tap controls toggle.
-    if (touch && !isZoomed && (event.clientX < innerWidth * .36 || event.clientX > innerWidth * .64)) return;
-
-    const hit = document.elementFromPoint(event.clientX, event.clientY);
-    const imageHit = Boolean(hit?.closest('#viewer-media img'));
+    const imageHit = Boolean(event.target.closest('#viewer-media img'));
     const now = performance.now();
-    const isDoubleTap = touch && lastTap &&
-      now - lastTap.time <= DOUBLE_TAP_MS &&
+    const doubleTap = lastTap && now - lastTap.time <= DOUBLE_TAP_MS &&
       Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) <= 44;
 
-    if (isDoubleTap && (imageHit || isZoomed)) {
-      clearPendingTap();
+    if (doubleTap && (imageHit || isZoomed)) {
+      clearTimeout(pendingTap);
+      pendingTap = 0;
       lastTap = null;
-      // browser-ui.js owns the actual touch double-tap zoom transition.
       return;
     }
 
-    clearPendingTap();
-    if (touch && (imageHit || isZoomed)) {
+    clearTimeout(pendingTap);
+    if (imageHit || isZoomed) {
       lastTap = { time: now, x: event.clientX, y: event.clientY };
       pendingTap = setTimeout(() => {
         pendingTap = 0;
@@ -323,15 +324,13 @@ if (stage && viewer) {
     toggleControls();
   });
 
-  stage.addEventListener('pointercancel', event => {
-    pointers.delete(event.pointerId);
-  });
+  stage.addEventListener('pointercancel', event => pointers.delete(event.pointerId));
 
-  new MutationObserver(() => resetDesktopZoom(false)).observe(viewerMedia, { childList: true });
+  new MutationObserver(() => resetDesktopZoom()).observe(viewerMedia, { childList: true });
   new MutationObserver(() => {
-    if (viewer.hidden) resetDesktopZoom(false);
+    if (viewer.hidden) resetDesktopZoom();
   }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
   window.addEventListener('resize', () => {
-    if (desktopZoomed()) applyDesktopZoom(false);
+    if (desktopZoomed()) applyDesktopZoom();
   }, { passive: true });
 }
