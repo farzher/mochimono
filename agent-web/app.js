@@ -29,6 +29,15 @@ function bytes(number) {
   return `${value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
 }
 
+function duration(seconds) {
+  seconds = Math.max(0, Math.round(Number(seconds) || 0));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
 function toast(text) {
   const element = $('#toast');
   element.textContent = text;
@@ -79,9 +88,7 @@ async function state() {
     const status = $('#serverStatus');
     status.className = `status ${current.server.online ? 'online' : 'offline'}`;
     status.textContent = current.server.online ? 'Online' : 'Connect';
-    status.title = current.server.online
-      ? `${current.server.stats.objects.toLocaleString()} files`
-      : current.server.error || 'Connect';
+    status.title = current.server.online ? `${current.server.stats.objects.toLocaleString()} files` : current.server.error || 'Connect';
 
     renderFolders(current.settings.folders || [], current.job);
     activity(current.job);
@@ -102,31 +109,27 @@ function activity(job) {
   }
 
   activityCard.hidden = false;
-  const element = $('#activity');
-  const progress = job.progress || {};
-  const metrics = [];
-  for (const [key, label] of [
-    ['scanned', 'scanned'], ['new', 'new'], ['duplicates', 'duplicates'], ['ignored', 'ignored'], ['errors', 'errors'],
-    ['copied', 'copied'], ['already', 'existing'], ['checked', 'checked'], ['total', 'total'], ['bad', 'bad'],
-    ['restored', 'restored'], ['skipped', 'skipped'], ['missing', 'missing'], ['conflicts', 'conflicts']
-  ]) {
-    if (progress[key] != null) metrics.push(`<span class="metric"><b>${esc(progress[key])}</b> ${label}</span>`);
-  }
-  if (progress.uploaded) metrics.push(`<span class="metric"><b>${esc(progress.uploaded)}</b> uploaded</span>`);
-  if (progress.copiedSize) metrics.push(`<span class="metric"><b>${esc(progress.copiedSize)}</b> copied</span>`);
+  const p = job.progress || {};
+  const total = Number(p.totalBytes) || 0;
+  const done = Math.min(total, Number(p.doneBytes) || 0);
+  const percent = total ? Math.max(0, Math.min(100, done / total * 100)) : 0;
+  const meta = [];
 
-  const phase = job.cancelRequested ? 'Canceling…' : progress.phase || 'Working…';
-  element.className = 'activity';
-  element.innerHTML = `
-    <div class="activity-top">
-      <div>
-        <div class="activity-title">${esc(job.label)}</div>
-        <div class="activity-phase">${esc(phase)}</div>
-      </div>
-      <button class="secondary small" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>${job.cancelRequested ? 'Canceling…' : 'Cancel'}</button>
+  if (total) meta.push(`${bytes(done)} / ${bytes(total)}`);
+  else if (p.scanned != null) meta.push(`${Number(p.scanned).toLocaleString()} files`);
+  if (p.speedBps > 0) meta.push(`${bytes(p.speedBps)}/s`);
+  if (p.etaSeconds != null && p.etaSeconds > 0) meta.push(`${duration(p.etaSeconds)} left`);
+
+  $('#activity').innerHTML = `
+    <div class="progress-head">
+      <strong>${esc(job.cancelRequested ? 'Canceling…' : p.phase || 'Working…')}</strong>
+      <button class="secondary small" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>Cancel</button>
     </div>
-    ${progress.current ? `<div class="drive-path">${esc(progress.current)}</div>` : ''}
-    ${metrics.length ? `<div class="metrics">${metrics.join('')}</div>` : ''}`;
+    <div class="progress-bar ${p.indeterminate ? 'indeterminate' : ''}"><i style="width:${p.indeterminate ? '32%' : `${percent}%`}"></i></div>
+    <div class="progress-foot">
+      <span>${esc(meta.join(' · '))}</span>
+      <span title="${esc(p.current || '')}">${esc(p.current || '')}</span>
+    </div>`;
 }
 
 async function backups() {
@@ -137,7 +140,7 @@ async function backups() {
     element.innerHTML = locations.map((location, index) => {
       const policy = location.meta.policy?.all ? 'Everything' : (location.meta.policy?.types || []).join(', ');
       const remote = location.remote;
-      const ratio = remote?.desiredBytes ? Math.min(100, (remote.protectedBytes / remote.desiredBytes) * 100) : remote ? 100 : null;
+      const ratio = remote?.desiredBytes ? Math.min(100, remote.protectedBytes / remote.desiredBytes * 100) : remote ? 100 : 0;
       const missing = remote ? Math.max(0, remote.desiredBytes - remote.protectedBytes) : null;
       const coverage = remote ? `
         <div class="coverage"><div class="coverage-bar"><i style="width:${ratio}%"></i></div>
@@ -145,12 +148,8 @@ async function backups() {
         '<div class="coverage-copy offline-copy"><span>Offline</span><b>Local only</b></div>';
       return `
         <div class="drive">
-          <div class="drive-head">
-            <div>
-              <div class="drive-name">${esc(location.meta.name)}</div>
-              <div class="drive-path">${esc(location.path)}</div>
-            </div>
-          </div>
+          <div class="drive-name">${esc(location.meta.name)}</div>
+          <div class="drive-path">${esc(location.path)}</div>
           ${coverage}
           <div class="drive-meta">${location.local.count.toLocaleString()} files · ${bytes(location.local.bytes)} · ${bytes(location.freeBytes)} free · ${esc(policy)}</div>
           <div class="drive-actions">
@@ -165,11 +164,9 @@ async function backups() {
     $$('[data-update]').forEach(button => button.onclick = () => runBackup(locations[Number(button.dataset.update)].path, 'update'));
     $$('[data-verify]').forEach(button => button.onclick = () => runBackup(locations[Number(button.dataset.verify)].path, 'verify'));
     $$('[data-restore]').forEach(button => button.onclick = () => openRestoreDialog(locations[Number(button.dataset.restore)].path));
-    $$('[data-configure]').forEach(button => {
-      button.onclick = () => {
-        const location = locations[Number(button.dataset.configure)];
-        openBackupDialog(location.path, location.meta);
-      };
+    $$('[data-configure]').forEach(button => button.onclick = () => {
+      const location = locations[Number(button.dataset.configure)];
+      openBackupDialog(location.path, location.meta);
     });
   } catch (error) {
     element.innerHTML = `<div class="error">${esc(error.message)}</div>`;
@@ -275,10 +272,7 @@ $('#startRestore').onclick = async () => {
   const destination = $('#restoreDestination').value.trim();
   if (!destination) return toast('Choose a destination.');
   try {
-    await req('/api/backup/restore', {
-      method: 'POST',
-      body: JSON.stringify({ path: restorePath, destination })
-    });
+    await req('/api/backup/restore', { method: 'POST', body: JSON.stringify({ path: restorePath, destination }) });
     $('#restoreDialog').close();
     state();
   } catch (error) {
