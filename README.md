@@ -2,7 +2,7 @@
 
 Mochimono is a cloud-first personal archive: dump in files, store identical content once, remember where it came from, and know which offline drives protect it.
 
-V1 is deliberately small: plain JavaScript, one Node server, one SQLite catalog, one filesystem object store, one browser UI, and one local agent. There are currently no npm runtime dependencies.
+V1 is deliberately small: plain JavaScript, one Node server, one SQLite catalog, one filesystem object store, one browser library UI, and one local Agent web UI. There are currently no npm runtime dependencies.
 
 ## Development philosophy
 
@@ -23,12 +23,14 @@ Runtime integrity checks that are part of Mochimono itself, such as verifying st
 - import provenance: import/source, original path, filename, and mtime
 - browser search, open/download, and HTTP byte-range streaming
 - Delete & Ignore so intentionally rejected exact content stays rejected on later imports
+- local Agent web UI for importing folders and managing backup drives
+- built-in local folder/drive browser; no CLI workflow required
 - managed offline backup drives with independent SQLite inventories
 - drive policies for everything or broad MIME classes (`image`, `video`, `audio`, `text`, `application`, `other`)
 - server-side backup coverage by drive
 - reconnect/resume: only missing objects are copied
 - SHA-256 verification while writing primary and backup copies
-- full backup-drive verification
+- optional full backup-drive verification
 - a fresh server catalog snapshot copied to each backup drive after update
 
 Not implemented yet: thumbnails, AI, encryption/private vaults, chunking, packfiles, compression, native apps, virtual filesystems, automatic garbage collection, or multi-user sharing.
@@ -47,7 +49,9 @@ export PORT=8642
 npm start
 ```
 
-Open `http://127.0.0.1:8642` and enter the same token. Put an internet-facing installation behind HTTPS.
+On Windows PowerShell, the same settings can be set with `$env:NAME="value"`.
+
+Open `http://127.0.0.1:8642` and enter the token to browse the library. Put an internet-facing installation behind HTTPS.
 
 Primary storage is intentionally boring:
 
@@ -59,31 +63,31 @@ $MOCHIMONO_DATA/
       ab...full-sha256...
 ```
 
-## Import files
+## Run the local Agent
+
+On the computer that has the folders and backup drives you want Mochimono to use:
 
 ```bash
-export MOCHIMONO_URL='https://your-server.example'
-export MOCHIMONO_TOKEN='same-secret'
-node agent.js import /path/to/folder --source='Old WD drive'
+npm run agent
 ```
 
-Hashing happens on the local device. Only object bytes the server does not already know are uploaded; every accepted original path is recorded.
+The Agent opens `http://127.0.0.1:8643` in your browser. The first time, open **Agent settings** and enter the Mochimono server URL and token. Those settings are saved locally in `~/.mochimono/agent.json` (the corresponding user-profile directory on Windows).
 
-## Create and update a backup drive
+Use the Agent UI to:
 
-Everything:
+- browse local drives and folders
+- choose a folder or whole drive to import
+- name the import source
+- watch hashing/upload progress
+- initialize a drive as a Mochimono backup
+- choose whether a backup drive protects everything or selected broad file classes
+- update a backup with only missing objects
+- see backup coverage
+- optionally verify a backup drive
 
-```bash
-node agent.js backup-init /mnt/backup --name='Red 8TB'
-node agent.js backup-update /mnt/backup
-```
+There is intentionally no separate operational CLI to maintain. Filesystem operations live in the local Agent and the browser UI is the normal interface.
 
-Selected broad classes:
-
-```bash
-node agent.js backup-init /mnt/offsite --name='Offsite 4TB' --types=image,application,text
-node agent.js backup-update /mnt/offsite
-```
+## Backup drive format
 
 A managed drive contains:
 
@@ -96,15 +100,6 @@ A managed drive contains:
 ```
 
 The drive inventory and server replica catalog are separate on purpose: a drive can say what it believes it contains, while the server separately remembers what it believes is backed up there.
-
-## Check a backup
-
-```bash
-node agent.js backup-status /mnt/backup
-node agent.js backup-verify /mnt/backup
-```
-
-Verification re-hashes stored objects. Missing/corrupt objects are removed from the drive inventory and server replica record so the next `backup-update` repairs them from the primary copy.
 
 ## Design rules for V1
 

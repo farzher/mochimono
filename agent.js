@@ -1,57 +1,73 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync } from 'node:fs';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, extname, join, relative, resolve } from 'node:path';
+import { mkdir, opendir, readFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises';
+import { homedir, platform, userInfo } from 'node:os';
+import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { DatabaseSync } from 'node:sqlite';
+import http from 'node:http';
 
-const SERVER = (process.env.MOCHIMONO_URL || 'http://127.0.0.1:8642').replace(/\/$/, '');
-const TOKEN = process.env.MOCHIMONO_TOKEN || '';
+const ROOT = fileURLToPath(new URL('.', import.meta.url));
+const WEB_DIR = join(ROOT, 'agent-web');
+const CONFIG_DIR = join(homedir(), '.mochimono');
+const CONFIG_PATH = join(CONFIG_DIR, 'agent.json');
+const HOST = '127.0.0.1';
+const PORT = Number(process.env.MOCHIMONO_AGENT_PORT || 8643);
 const BATCH = 250;
 
-function usage() {
-  console.log(`Mochimono agent
+let saved = {};
+try { saved = JSON.parse(await readFile(CONFIG_PATH, 'utf8')); } catch {}
+let settings = {
+  server: String(process.env.MOCHIMONO_URL || saved.server || 'http://127.0.0.1:8642').replace(/\/$/, ''),
+  token: String(process.env.MOCHIMONO_TOKEN || saved.token || '')
+};
+let job = null;
 
-Environment:
-  MOCHIMONO_URL    Server URL (default http://127.0.0.1:8642)
-  MOCHIMONO_TOKEN  Required server token
-
-Commands:
-  import <folder> [--source=name]
-  backup-init <drive-path> [--name=name] [--types=image,video,...]
-  backup-update <drive-path>
-  backup-verify <drive-path>
-  backup-status <drive-path>
-`);
+async function saveSettings(next) {
+  settings = {
+    server: String(next.server || settings.server || 'http://127.0.0.1:8642').trim().replace(/\/$/, ''),
+    token: next.token === undefined ? settings.token : String(next.token)
+  };
+  await mkdir(CONFIG_DIR, { recursive: true });
+  await writeFile(CONFIG_PATH, `${JSON.stringify(settings, null, 2)}\n`);
 }
 
-function requireToken() {
-  if (!TOKEN) throw new Error('MOCHIMONO_TOKEN is required');
+function json(res, status, data) {
+  const body = JSON.stringify(data);
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+    'cache-control': 'no-store'
+  });
+  res.end(body);
 }
 
-function parseArgs(args) {
-  const positional = [];
-  const flags = {};
-  for (const arg of args) {
-    if (arg.startsWith('--')) {
-      const [key, ...rest] = arg.slice(2).split('=');
-      flags[key] = rest.length ? rest.join('=') : true;
-    } else positional.push(arg);
+async function readJson(req, max = 1024 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > max) throw Object.assign(new Error('Request too large'), { status: 413 });
+    chunks.push(chunk);
   }
-  return { positional, flags };
+  if (!size) return {};
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  catch { throw Object.assign(new Error('Invalid JSON'), { status: 400 }); }
 }
 
 async function api(path, options = {}) {
-  requireToken();
-  const headers = { authorization: `Bearer ${TOKEN}`, ...(options.headers || {}) };
+  if (!settings.token) throw new Error('Set the Mochimono server token in Agent Settings first');
+  const headers = { authorization: `Bearer ${settings.token}`, ...(options.headers || {}) };
   let body = options.body;
   if (body && typeof body !== 'string' && !body.pipe && !body[Symbol.asyncIterator]) {
     headers['content-type'] = 'application/json';
     body = JSON.stringify(body);
   }
   const streaming = body?.pipe || body?.[Symbol.asyncIterator];
-  const response = await fetch(`${SERVER}${path}`, { ...options, headers, body, duplex: streaming ? 'half' : undefined });
+  const response = await fetch(`${settings.server}${path}`, { ...options, headers, body, duplex: streaming ? 'half' : undefined });
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
     try { message = (await response.json()).error || message; } catch {}
@@ -62,7 +78,6 @@ async function api(path, options = {}) {
 }
 
 async function* filesUnder(root, directory = root) {
-  const { opendir } = await import('node:fs/promises');
   const dir = await opendir(directory);
   for await (const entry of dir) {
     const path = join(directory, entry.name);
@@ -84,26 +99,46 @@ const MIME = new Map([
   ['.txt', 'text/plain'], ['.md', 'text/markdown'], ['.json', 'application/json'], ['.csv', 'text/csv'], ['.html', 'text/html'], ['.css', 'text/css'], ['.js', 'text/javascript'],
   ['.pdf', 'application/pdf'], ['.zip', 'application/zip'], ['.7z', 'application/x-7z-compressed'], ['.rar', 'application/vnd.rar']
 ]);
+function mimeFor(path) { return MIME.get(extname(path).toLowerCase()) || 'application/octet-stream'; }
 
-function mimeFor(path) {
-  return MIME.get(extname(path).toLowerCase()) || 'application/octet-stream';
+function formatBytes(bytes) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  let value = Number(bytes || 0);
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
+  return `${value < 10 && unit ? value.toFixed(2) : value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
+}
+
+function progress(patch) {
+  if (job?.status === 'running') job.progress = { ...job.progress, ...patch };
+}
+
+function startJob(res, type, label, work) {
+  if (job?.status === 'running') return json(res, 409, { error: 'Another agent operation is already running' });
+  job = { id: randomUUID(), type, label, status: 'running', startedAt: new Date().toISOString(), progress: {} };
+  json(res, 202, { job });
+  setImmediate(async () => {
+    try {
+      const result = await work(progress);
+      job = { ...job, status: 'done', finishedAt: new Date().toISOString(), result };
+    } catch (error) {
+      console.error(error);
+      job = { ...job, status: 'error', finishedAt: new Date().toISOString(), error: error.message };
+    }
+  });
 }
 
 async function uploadFile(record) {
   await api(`/api/objects/${record.hash}`, {
     method: 'PUT',
-    headers: {
-      'content-length': String(record.size),
-      'x-mochimono-mime': record.mime
-    },
+    headers: { 'content-length': String(record.size), 'x-mochimono-mime': record.mime },
     body: createReadStream(record.path)
   });
 }
 
-async function importBatch(importId, records, totals) {
+async function importBatch(importId, records, totals, update) {
   const firstByHash = new Map();
   for (const record of records) if (!firstByHash.has(record.hash)) firstByHash.set(record.hash, record);
-
   const check = await api('/api/objects/check', { method: 'POST', body: { hashes: [...firstByHash.keys()] } });
   const missing = new Set(check.missing);
   const ignored = new Set(check.ignored);
@@ -111,7 +146,7 @@ async function importBatch(importId, records, totals) {
 
   for (const hash of missing) {
     const record = firstByHash.get(hash);
-    process.stdout.write(`upload  ${record.relative}\n`);
+    update({ phase: 'Uploading', current: record.relative });
     await uploadFile(record);
     totals.new++;
     totals.uploadedBytes += record.size;
@@ -121,46 +156,41 @@ async function importBatch(importId, records, totals) {
   const accepted = records.filter(record => !ignored.has(record.hash));
   totals.ignored += records.length - accepted.length;
   totals.duplicates += accepted.length - uploadedObjects;
-
   const sources = accepted.map(record => ({ hash: record.hash, path: record.relative, filename: basename(record.path), mtime: record.mtime }));
   if (sources.length) await api('/api/sources', { method: 'POST', body: { importId, sources } });
+  update({ ...totals, uploaded: formatBytes(totals.uploadedBytes) });
 }
 
-async function importFolder(folder, flags) {
+async function importFolder(folder, sourceName, update) {
   const root = resolve(folder);
   const rootStat = await stat(root);
   if (!rootStat.isDirectory()) throw new Error(`${root} is not a directory`);
-  const sourceName = String(flags.source || basename(root));
-  const created = await api('/api/imports', { method: 'POST', body: { sourceName } });
+  const source = String(sourceName || basename(root) || root);
+  const created = await api('/api/imports', { method: 'POST', body: { sourceName: source } });
   const totals = { scanned: 0, new: 0, duplicates: 0, ignored: 0, uploadedBytes: 0 };
   let batch = [];
+  update({ phase: 'Scanning', source, path: root, ...totals });
 
-  console.log(`Import #${created.id}: ${sourceName}`);
   for await (const path of filesUnder(root)) {
     const info = await stat(path);
+    const rel = relative(root, path).replaceAll('\\', '/');
+    update({ phase: 'Hashing', current: rel, scanned: totals.scanned });
     const hash = await hashFile(path);
     totals.scanned++;
-    batch.push({
-      path,
-      relative: relative(root, path).replaceAll('\\', '/'),
-      hash,
-      size: info.size,
-      mtime: info.mtime.toISOString(),
-      mime: mimeFor(path)
-    });
+    batch.push({ path, relative: rel, hash, size: info.size, mtime: info.mtime.toISOString(), mime: mimeFor(path) });
     if (batch.length >= BATCH) {
-      await importBatch(created.id, batch, totals);
+      await importBatch(created.id, batch, totals, update);
       batch = [];
-      console.log(`scanned ${totals.scanned} | new ${totals.new} | duplicate ${totals.duplicates} | ignored ${totals.ignored}`);
     }
   }
-  if (batch.length) await importBatch(created.id, batch, totals);
-  console.log(`Done. ${totals.scanned} files scanned; ${totals.new} uploaded; ${totals.duplicates} already stored; ${totals.ignored} ignored; ${formatBytes(totals.uploadedBytes)} uploaded.`);
+  if (batch.length) await importBatch(created.id, batch, totals, update);
+  update({ phase: 'Done', current: '', ...totals, uploaded: formatBytes(totals.uploadedBytes) });
+  return { importId: created.id, source, ...totals };
 }
 
 function driveMetaPath(root) { return join(root, '.mochimono', 'drive.json'); }
 function driveDbPath(root) { return join(root, '.mochimono', 'inventory.sqlite'); }
-function driveObjectsRoot(root) { return join(root, '.mochimono'); }
+function backupObjectPath(root, hash) { return join(root, '.mochimono', 'objects', hash.slice(0, 2), hash); }
 
 function openInventory(root) {
   const db = new DatabaseSync(driveDbPath(root), { timeout: 5000 });
@@ -176,45 +206,31 @@ function openInventory(root) {
   return db;
 }
 
-async function readDrive(root) {
-  return JSON.parse(await readFile(driveMetaPath(root), 'utf8'));
+async function readDrive(root) { return JSON.parse(await readFile(driveMetaPath(root), 'utf8')); }
+async function registerDrive(meta) { return api('/api/drives/register', { method: 'POST', body: meta }); }
+function parseTypes(types) {
+  if (!Array.isArray(types) || !types.length) return { all: true, types: [] };
+  const clean = types.map(String).map(value => value.trim()).filter(Boolean);
+  return clean.length ? { all: false, types: clean } : { all: true, types: [] };
 }
 
-async function registerDrive(meta) {
-  return api('/api/drives/register', { method: 'POST', body: meta });
-}
-
-function parseTypes(value) {
-  if (!value) return { all: true, types: [] };
-  const types = String(value).split(',').map(value => value.trim()).filter(Boolean);
-  return types.length ? { all: false, types } : { all: true, types: [] };
-}
-
-async function backupInit(path, flags) {
+async function backupInit(path, name, types) {
   const root = resolve(path);
   const info = await stat(root);
   if (!info.isDirectory()) throw new Error(`${root} is not a directory`);
-  const control = join(root, '.mochimono');
-  if (existsSync(driveMetaPath(root))) throw new Error('This path is already a Mochimono backup drive');
-  await mkdir(control, { recursive: true });
+  if (existsSync(driveMetaPath(root))) throw new Error('This location is already a Mochimono backup');
+  await mkdir(join(root, '.mochimono'), { recursive: true });
   const meta = {
     format: 1,
     id: randomUUID(),
-    name: String(flags.name || basename(root) || 'Mochimono Backup'),
-    policy: parseTypes(flags.types),
+    name: String(name || basename(root) || root),
+    policy: parseTypes(types),
     createdAt: new Date().toISOString()
   };
   await writeFile(driveMetaPath(root), `${JSON.stringify(meta, null, 2)}\n`);
-  const db = openInventory(root);
-  db.close();
-  await registerDrive(meta);
-  console.log(`Initialized ${meta.name}`);
-  console.log(`Drive ID: ${meta.id}`);
-  console.log(`Policy: ${meta.policy.all ? 'everything' : meta.policy.types.join(', ')}`);
-}
-
-function backupObjectPath(root, hash) {
-  return join(driveObjectsRoot(root), 'objects', hash.slice(0, 2), hash);
+  openInventory(root).close();
+  const remote = await registerDrive(meta);
+  return { path: root, meta, remote };
 }
 
 async function downloadVerified(hash, expectedSize, destination) {
@@ -223,17 +239,10 @@ async function downloadVerified(hash, expectedSize, destination) {
   await mkdir(dirname(destination), { recursive: true });
   const digest = createHash('sha256');
   let size = 0;
-  const verifier = new Transform({
-    transform(chunk, encoding, callback) {
-      digest.update(chunk);
-      size += chunk.length;
-      callback(null, chunk);
-    }
-  });
+  const verifier = new Transform({ transform(chunk, encoding, callback) { digest.update(chunk); size += chunk.length; callback(null, chunk); } });
   try {
     await pipeline(Readable.fromWeb(response.body), verifier, createWriteStream(temp, { flags: 'wx' }));
-    const actual = digest.digest('hex');
-    if (actual !== hash || size !== expectedSize) throw new Error(`Verification failed for ${hash}`);
+    if (digest.digest('hex') !== hash || size !== expectedSize) throw new Error(`Verification failed for ${hash}`);
     await rm(destination, { force: true });
     await rename(temp, destination);
   } catch (error) {
@@ -252,11 +261,10 @@ async function saveCatalogSnapshot(root) {
 }
 
 async function reportReplicas(driveId, replicas) {
-  if (!replicas.length) return;
-  await api(`/api/drives/${encodeURIComponent(driveId)}/replicas`, { method: 'POST', body: { replicas } });
+  if (replicas.length) await api(`/api/drives/${encodeURIComponent(driveId)}/replicas`, { method: 'POST', body: { replicas } });
 }
 
-async function backupUpdate(path) {
+async function backupUpdate(path, update) {
   const root = resolve(path);
   const meta = await readDrive(root);
   await registerDrive(meta);
@@ -268,39 +276,38 @@ async function backupUpdate(path) {
   let copiedBytes = 0;
   let already = 0;
   let reports = [];
+  update({ phase: 'Checking backup', drive: meta.name, copied, already, copiedBytes });
 
-  do {
-    const page = await api(`/api/drives/${encodeURIComponent(meta.id)}/desired?after=${encodeURIComponent(after)}&limit=1000`);
-    for (const object of page.objects) {
-      const destination = backupObjectPath(root, object.hash);
-      const local = find.get(object.hash);
-      if (local && existsSync(destination)) {
-        already++;
-        reports.push({ hash: object.hash, verifiedAt: local.verified_at });
-      } else {
-        process.stdout.write(`backup  ${object.hash.slice(0, 12)}  ${formatBytes(object.size)}\n`);
-        await downloadVerified(object.hash, object.size, destination);
-        const timestamp = new Date().toISOString();
-        save.run(object.hash, object.size, timestamp, timestamp);
-        reports.push({ hash: object.hash, verifiedAt: timestamp });
-        copied++;
-        copiedBytes += object.size;
+  try {
+    do {
+      const page = await api(`/api/drives/${encodeURIComponent(meta.id)}/desired?after=${encodeURIComponent(after)}&limit=1000`);
+      for (const object of page.objects) {
+        const destination = backupObjectPath(root, object.hash);
+        const local = find.get(object.hash);
+        if (local && existsSync(destination)) {
+          already++;
+          reports.push({ hash: object.hash, verifiedAt: local.verified_at });
+        } else {
+          update({ phase: 'Backing up', current: object.hash.slice(0, 12), copied, already, copiedBytes, copiedSize: formatBytes(copiedBytes) });
+          await downloadVerified(object.hash, object.size, destination);
+          const timestamp = new Date().toISOString();
+          save.run(object.hash, object.size, timestamp, timestamp);
+          reports.push({ hash: object.hash, verifiedAt: timestamp });
+          copied++;
+          copiedBytes += object.size;
+        }
+        if (reports.length >= 1000) { await reportReplicas(meta.id, reports); reports = []; }
       }
-      if (reports.length >= 1000) {
-        await reportReplicas(meta.id, reports);
-        reports = [];
-      }
-    }
-    after = page.nextAfter || '';
-  } while (after);
-
-  await reportReplicas(meta.id, reports);
-  await saveCatalogSnapshot(root);
-  db.close();
-  console.log(`Done. ${copied} objects copied (${formatBytes(copiedBytes)}); ${already} already present. Catalog snapshot updated.`);
+      after = page.nextAfter || '';
+    } while (after);
+    await reportReplicas(meta.id, reports);
+    update({ phase: 'Saving catalog snapshot', copied, already, copiedBytes, copiedSize: formatBytes(copiedBytes) });
+    await saveCatalogSnapshot(root);
+    return { drive: meta.name, copied, already, copiedBytes };
+  } finally { db.close(); }
 }
 
-async function backupVerify(path) {
+async function backupVerify(path, update) {
   const root = resolve(path);
   const meta = await readDrive(root);
   await registerDrive(meta);
@@ -312,33 +319,29 @@ async function backupVerify(path) {
   const bad = [];
   let badCount = 0;
   let checked = 0;
-
-  for (const row of rows) {
-    const path = backupObjectPath(root, row.hash);
-    let ok = false;
-    try {
-      const info = await stat(path);
-      ok = info.size === row.size && await hashFile(path) === row.hash;
-    } catch {}
-    checked++;
-    if (ok) {
-      const timestamp = new Date().toISOString();
-      mark.run(timestamp, row.hash);
-      good.push({ hash: row.hash, verifiedAt: timestamp });
-    } else {
-      forget.run(row.hash);
-      bad.push(row.hash);
-      badCount++;
-      console.log(`BAD     ${row.hash}`);
+  try {
+    for (const row of rows) {
+      update({ phase: 'Verifying', drive: meta.name, checked, total: rows.length, bad: badCount, current: row.hash.slice(0, 12) });
+      const file = backupObjectPath(root, row.hash);
+      let ok = false;
+      try { const info = await stat(file); ok = info.size === row.size && await hashFile(file) === row.hash; } catch {}
+      checked++;
+      if (ok) {
+        const timestamp = new Date().toISOString();
+        mark.run(timestamp, row.hash);
+        good.push({ hash: row.hash, verifiedAt: timestamp });
+      } else {
+        forget.run(row.hash);
+        bad.push(row.hash);
+        badCount++;
+      }
+      if (good.length >= 1000) await reportReplicas(meta.id, good.splice(0));
+      if (bad.length >= 1000) await api(`/api/drives/${encodeURIComponent(meta.id)}/replicas/remove`, { method: 'POST', body: { hashes: bad.splice(0) } });
     }
-    if (good.length >= 1000) await reportReplicas(meta.id, good.splice(0));
-    if (bad.length >= 1000) await api(`/api/drives/${encodeURIComponent(meta.id)}/replicas/remove`, { method: 'POST', body: { hashes: bad.splice(0) } });
-    if (checked % 100 === 0) process.stdout.write(`verified ${checked}/${rows.length}\r`);
-  }
-  await reportReplicas(meta.id, good);
-  if (bad.length) await api(`/api/drives/${encodeURIComponent(meta.id)}/replicas/remove`, { method: 'POST', body: { hashes: bad } });
-  db.close();
-  console.log(`\nVerification complete: ${rows.length - badCount} healthy; ${badCount} missing/corrupt.`);
+    await reportReplicas(meta.id, good);
+    if (bad.length) await api(`/api/drives/${encodeURIComponent(meta.id)}/replicas/remove`, { method: 'POST', body: { hashes: bad } });
+    return { drive: meta.name, checked, healthy: checked - badCount, bad: badCount };
+  } finally { db.close(); }
 }
 
 async function backupStatus(path) {
@@ -348,51 +351,150 @@ async function backupStatus(path) {
   const local = db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes, MIN(verified_at) AS oldestVerification FROM objects').get();
   db.close();
   const remote = await registerDrive(meta);
-  console.log(`${meta.name} (${meta.id})`);
-  console.log(`Local inventory: ${local.count} objects, ${formatBytes(local.bytes)}`);
-  console.log(`Server policy: ${remote.policy.all ? 'everything' : remote.policy.types.join(', ')}`);
-  console.log(`Coverage known by server: ${remote.protectedCount}/${remote.desiredCount} objects (${formatBytes(remote.protectedBytes)} / ${formatBytes(remote.desiredBytes)})`);
-  if (local.oldestVerification) console.log(`Oldest verification: ${local.oldestVerification}`);
+  return { path: root, meta, local, remote };
 }
 
-function formatBytes(bytes) {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  let value = Number(bytes || 0);
-  let unit = 0;
-  while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
-  return `${value < 10 && unit ? value.toFixed(2) : value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
+async function managedInfo(path) {
+  try {
+    const meta = await readDrive(path);
+    return { managed: true, meta };
+  } catch { return { managed: false }; }
 }
 
-const [command, ...rawArgs] = process.argv.slice(2);
-const { positional, flags } = parseArgs(rawArgs);
+async function pathInfo(path) {
+  const root = resolve(path);
+  const info = await statfs(root);
+  const managed = await managedInfo(root);
+  return {
+    path: root,
+    name: root,
+    totalBytes: Number(info.blocks) * Number(info.bsize),
+    freeBytes: Number(info.bavail) * Number(info.bsize),
+    ...managed
+  };
+}
 
-try {
-  switch (command) {
-    case 'import':
-      if (!positional[0]) throw new Error('import requires a folder');
-      await importFolder(positional[0], flags);
-      break;
-    case 'backup-init':
-      if (!positional[0]) throw new Error('backup-init requires a drive path');
-      await backupInit(positional[0], flags);
-      break;
-    case 'backup-update':
-      if (!positional[0]) throw new Error('backup-update requires a drive path');
-      await backupUpdate(positional[0]);
-      break;
-    case 'backup-verify':
-      if (!positional[0]) throw new Error('backup-verify requires a drive path');
-      await backupVerify(positional[0]);
-      break;
-    case 'backup-status':
-      if (!positional[0]) throw new Error('backup-status requires a drive path');
-      await backupStatus(positional[0]);
-      break;
-    default:
-      usage();
-      if (command) process.exitCode = 1;
+async function roots() {
+  const candidates = [];
+  if (platform() === 'win32') {
+    for (let code = 67; code <= 90; code++) candidates.push(`${String.fromCharCode(code)}:\\`);
+  } else if (platform() === 'darwin') {
+    candidates.push('/');
+    try { for (const entry of await readdir('/Volumes', { withFileTypes: true })) if (entry.isDirectory()) candidates.push(join('/Volumes', entry.name)); } catch {}
+  } else {
+    candidates.push('/');
+    for (const base of ['/mnt', join('/media', userInfo().username), join('/run/media', userInfo().username)]) {
+      try { for (const entry of await readdir(base, { withFileTypes: true })) if (entry.isDirectory()) candidates.push(join(base, entry.name)); } catch {}
+    }
   }
-} catch (error) {
-  console.error(`Error: ${error.message}`);
-  process.exitCode = 1;
+  const results = [];
+  for (const candidate of [...new Set(candidates)]) {
+    try { results.push(await pathInfo(candidate)); } catch {}
+  }
+  return results;
 }
+
+async function browse(path) {
+  const current = resolve(path || homedir());
+  const entries = [];
+  for (const entry of await readdir(current, { withFileTypes: true })) {
+    if (entry.isDirectory()) entries.push({ name: entry.name, path: join(current, entry.name) });
+  }
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  const parent = dirname(current) === current ? null : dirname(current);
+  return { path: current, parent, directories: entries };
+}
+
+function staticType(path) {
+  if (path.endsWith('.html')) return 'text/html; charset=utf-8';
+  if (path.endsWith('.js')) return 'text/javascript; charset=utf-8';
+  if (path.endsWith('.css')) return 'text/css; charset=utf-8';
+  return 'application/octet-stream';
+}
+
+async function serveStatic(res, pathname) {
+  const relativePath = pathname === '/' ? '/index.html' : pathname;
+  const file = resolve(WEB_DIR, `.${relativePath}`);
+  if (file !== WEB_DIR && !file.startsWith(`${WEB_DIR}${sep}`)) return false;
+  try {
+    const info = await stat(file);
+    if (!info.isFile()) return false;
+    res.writeHead(200, { 'content-type': staticType(file), 'content-length': info.size, 'cache-control': 'no-cache' });
+    createReadStream(file).pipe(res);
+    return true;
+  } catch { return false; }
+}
+
+async function handleApi(req, res, url) {
+  if (req.method === 'GET' && url.pathname === '/api/state') {
+    let server = { online: false, error: settings.token ? null : 'Token not configured' };
+    if (settings.token) {
+      try { server = { online: true, stats: await api('/api/stats') }; }
+      catch (error) { server = { online: false, error: error.message }; }
+    }
+    return json(res, 200, { settings: { server: settings.server, hasToken: Boolean(settings.token) }, server, job });
+  }
+  if (req.method === 'POST' && url.pathname === '/api/settings') {
+    const body = await readJson(req);
+    await saveSettings({ server: body.server, token: body.token === '' ? undefined : body.token });
+    return json(res, 200, { ok: true, server: settings.server, hasToken: Boolean(settings.token) });
+  }
+  if (req.method === 'GET' && url.pathname === '/api/roots') return json(res, 200, { roots: await roots(), home: homedir() });
+  if (req.method === 'GET' && url.pathname === '/api/browse') return json(res, 200, await browse(url.searchParams.get('path') || homedir()));
+  if (req.method === 'GET' && url.pathname === '/api/backup/status') return json(res, 200, await backupStatus(url.searchParams.get('path')));
+
+  if (req.method === 'POST' && url.pathname === '/api/import') {
+    const body = await readJson(req);
+    if (!body.path) return json(res, 400, { error: 'Choose a folder to import' });
+    return startJob(res, 'import', `Import ${body.source || basename(body.path)}`, update => importFolder(body.path, body.source, update));
+  }
+  if (req.method === 'POST' && url.pathname === '/api/backup/init') {
+    const body = await readJson(req);
+    if (!body.path) return json(res, 400, { error: 'Choose a backup location' });
+    const result = await backupInit(body.path, body.name, body.types);
+    return json(res, 200, result);
+  }
+  if (req.method === 'POST' && url.pathname === '/api/backup/update') {
+    const body = await readJson(req);
+    if (!body.path) return json(res, 400, { error: 'Choose a backup location' });
+    return startJob(res, 'backup', `Update ${body.path}`, update => backupUpdate(body.path, update));
+  }
+  if (req.method === 'POST' && url.pathname === '/api/backup/verify') {
+    const body = await readJson(req);
+    if (!body.path) return json(res, 400, { error: 'Choose a backup location' });
+    return startJob(res, 'verify', `Verify ${body.path}`, update => backupVerify(body.path, update));
+  }
+  return json(res, 404, { error: 'Not found' });
+}
+
+const server = http.createServer(async (req, res) => {
+  try {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
+    if (await serveStatic(res, decodeURIComponent(url.pathname))) return;
+    json(res, 404, { error: 'Not found' });
+  } catch (error) {
+    console.error(error);
+    if (!res.headersSent) json(res, error.status || 500, { error: error.message || 'Internal error' });
+    else res.destroy();
+  }
+});
+
+function openBrowser(url) {
+  if (process.env.MOCHIMONO_NO_OPEN === '1') return;
+  try {
+    const child = platform() === 'win32'
+      ? spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' })
+      : platform() === 'darwin'
+        ? spawn('open', [url], { detached: true, stdio: 'ignore' })
+        : spawn('xdg-open', [url], { detached: true, stdio: 'ignore' });
+    child.unref();
+  } catch {}
+}
+
+server.listen(PORT, HOST, () => {
+  const url = `http://${HOST}:${PORT}`;
+  console.log(`Mochimono Agent: ${url}`);
+  console.log(`Server: ${settings.server}`);
+  openBrowser(url);
+});
