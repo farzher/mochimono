@@ -24,6 +24,7 @@ Runtime integrity checks that are part of Mochimono itself, such as verifying st
 - **Inbox** for new exact content with **Keep**, **Delete**, and **Delete & Ignore** review actions
 - browser library with search, source filtering, type filtering, grid/list views, image previews, paging, and file details
 - per-file visibility into every known source path and every backup location that reports a copy
+- **No backup copy** filter for finding live files with no known offline replica
 - open/download and HTTP byte-range streaming
 - local Agent web UI for importing folders and managing backup locations
 - paste a filesystem path or use the operating system's native folder picker
