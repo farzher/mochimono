@@ -32,7 +32,7 @@ style.textContent = `
 document.head.append(style);
 
 function clearAutoFade() {
-  viewer?.classList.remove('viewer-ui-hidden');
+  if (viewer?.classList.contains('viewer-ui-hidden')) viewer.classList.remove('viewer-ui-hidden');
 }
 
 function showControls() {
@@ -51,7 +51,7 @@ if (viewer) {
     clearAutoFade();
     if (!viewer.hidden && viewer.dataset.viewerWasHidden === '1') showControls();
     viewer.dataset.viewerWasHidden = viewer.hidden ? '1' : '0';
-  }).observe(viewer, { attributes: true, attributeFilter: ['class', 'hidden'] });
+  }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
   viewer.dataset.viewerWasHidden = viewer.hidden ? '1' : '0';
   clearAutoFade();
 }
