@@ -1,14 +1,16 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, rename, rm, stat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import http from 'node:http';
 import { openCatalog } from './lib/db.js';
 import { validHash } from './lib/store.js';
 
-const DATA_DIR = resolve(process.env.MOCHIMONO_DATA || new URL('./data', import.meta.url).pathname);
+const ROOT = fileURLToPath(new URL('.', import.meta.url));
+const DATA_DIR = resolve(process.env.MOCHIMONO_DATA || join(ROOT, 'data'));
 const TOKEN = process.env.MOCHIMONO_TOKEN || '';
 const THUMB_VERSION = 1;
 const MAX_THUMB_BYTES = 5 * 1024 * 1024;
@@ -26,6 +28,19 @@ function json(res, status, data, headers = {}) {
     ...headers
   });
   res.end(body);
+}
+
+async function readJson(req, max = 128 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > max) throw Object.assign(new Error('Request too large'), { status: 413 });
+    chunks.push(chunk);
+  }
+  if (!size) return {};
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  catch { throw Object.assign(new Error('Invalid JSON'), { status: 400 }); }
 }
 
 function cookie(req, name) {
@@ -62,7 +77,7 @@ async function writeThumbnail(req, destination) {
   const declared = Number(req.headers['content-length'] || 0);
   if (declared > MAX_THUMB_BYTES) throw Object.assign(new Error('Thumbnail too large'), { status: 413 });
 
-  await mkdir(join(DATA_DIR, 'thumbs', destination.split(/[/\\]/).at(-2)), { recursive: true });
+  await mkdir(dirname(destination), { recursive: true });
   const temp = `${destination}.tmp-${process.pid}-${Date.now()}`;
   let size = 0;
   const limiter = new Transform({
@@ -132,24 +147,51 @@ function missingThumbnails(res, url) {
   const rows = db.prepare(`
     WITH candidates AS (
       SELECT o.hash, o.size, o.mime, s.import_id AS importId, s.original_path AS originalPath,
-             s.filename, s.mtime,
+             s.filename, s.mtime, r.requested_at AS requestedAt,
              ROW_NUMBER() OVER (PARTITION BY o.hash ORDER BY s.import_id, s.id) AS choice
       FROM sources s
       JOIN objects o ON o.hash = s.object_hash
       LEFT JOIN thumbnails t ON t.object_hash = o.hash AND t.version = ?
+      LEFT JOIN thumbnail_requests r ON r.object_hash = o.hash
       WHERE s.import_id IN (${placeholders})
         AND o.state = 'active'
         AND t.object_hash IS NULL
         AND (o.mime LIKE 'image/%' OR o.mime LIKE 'video/%' OR ${extensionSql})
     )
-    SELECT hash, size, mime, importId, originalPath, filename, mtime
+    SELECT hash, size, mime, importId, originalPath, filename, mtime, requestedAt
     FROM candidates
     WHERE choice = 1
-    ORDER BY size DESC, hash
+    ORDER BY (requestedAt IS NOT NULL) DESC, requestedAt DESC, size ASC, hash
     LIMIT ?
   `).all(THUMB_VERSION, ...imports, limit);
 
   return json(res, 200, { version: THUMB_VERSION, files: rows });
+}
+
+async function requestThumbnails(req, res) {
+  const body = await readJson(req);
+  if (!Array.isArray(body.hashes) || body.hashes.length > 500) return json(res, 400, { error: 'hashes must be an array of at most 500 hashes' });
+  const insert = db.prepare(`
+    INSERT INTO thumbnail_requests(object_hash, requested_at) VALUES(?, ?)
+    ON CONFLICT(object_hash) DO UPDATE SET requested_at = excluded.requested_at
+  `);
+  let count = 0;
+  const timestamp = now();
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    for (const hash of new Set(body.hashes.map(String))) {
+      if (!validHash(hash)) continue;
+      if (!db.prepare("SELECT 1 FROM objects WHERE hash = ? AND state = 'active'").get(hash)) continue;
+      if (db.prepare('SELECT 1 FROM thumbnails WHERE object_hash = ? AND version = ?').get(hash, THUMB_VERSION)) continue;
+      insert.run(hash, timestamp);
+      count++;
+    }
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch {}
+    throw error;
+  }
+  return json(res, 200, { ok: true, count });
 }
 
 async function uploadThumbnail(req, res, hash) {
@@ -176,6 +218,7 @@ async function uploadThumbnail(req, res, hash) {
       duration = excluded.duration,
       created_at = excluded.created_at
   `).run(hash, THUMB_VERSION, mime, size, width, height, duration, now());
+  db.prepare('DELETE FROM thumbnail_requests WHERE object_hash = ?').run(hash);
 
   const sourceMime = String(req.headers['x-mochimono-source-mime'] || '').slice(0, 200);
   if (sourceMime && sourceMime !== 'application/octet-stream') {
@@ -186,6 +229,7 @@ async function uploadThumbnail(req, res, hash) {
 
 async function cleanupThumbnail(hash) {
   db.prepare('DELETE FROM thumbnails WHERE object_hash = ?').run(hash);
+  db.prepare('DELETE FROM thumbnail_requests WHERE object_hash = ?').run(hash);
   await rm(thumbPath(hash), { force: true }).catch(() => {});
 }
 
@@ -198,6 +242,10 @@ async function handleThumbnailRequest(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/api/thumbs/missing') {
     missingThumbnails(res, url);
+    return true;
+  }
+  if (req.method === 'POST' && url.pathname === '/api/thumbs/request') {
+    await requestThumbnails(req, res);
     return true;
   }
 
