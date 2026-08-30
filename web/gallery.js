@@ -1,7 +1,7 @@
 const files = document.querySelector('#files');
 const sizeInput = document.querySelector('#mediaSize');
 const sizeButtons = [...document.querySelectorAll('[data-media-size]')];
-const sizes = sizeButtons.map(button => Number(button.datasetMediaSize || button.dataset.mediaSize));
+const sizes = sizeButtons.map(button => Number(button.dataset.mediaSize));
 let frame = 0;
 
 function mediaSize() {
@@ -97,7 +97,14 @@ function schedule() {
 
 sizeButtons.forEach(button => button.addEventListener('click', () => setMediaSize(Number(button.dataset.mediaSize))));
 sizeInput.addEventListener('input', schedule);
-files.addEventListener('media-dimensions', schedule);
+files.addEventListener('load', event => {
+  const image = event.target;
+  if (!(image instanceof HTMLImageElement) || !image.classList.contains('cached-thumb')) return;
+  const card = image.closest('.media-card');
+  if (!card || !image.naturalWidth || !image.naturalHeight) return;
+  card.style.setProperty('--ratio', Math.max(.65, Math.min(2.1, image.naturalWidth / image.naturalHeight)));
+  schedule();
+}, true);
 new MutationObserver(schedule).observe(files, { childList: true, subtree: true });
 new ResizeObserver(schedule).observe(files);
 
