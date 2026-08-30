@@ -20,19 +20,20 @@ Runtime integrity checks that are part of Mochimono itself, such as verifying st
 ## Current V1 features
 
 - SHA-256 whole-file identity and exact deduplication
-- import provenance: import/source, original path, filename, and mtime
-- browser library with search, server-side type filtering, grid/list views, image previews, paging, and file details
+- import provenance: source/import, original path, filename, and mtime
+- **Inbox** for new exact content with **Keep**, **Delete**, and **Delete & Ignore** review actions
+- browser library with search, source filtering, type filtering, grid/list views, image previews, paging, and file details
 - per-file visibility into every known source path and every backup location that reports a copy
 - open/download and HTTP byte-range streaming
-- separate **Delete** and **Delete & Ignore** behavior
 - local Agent web UI for importing folders and managing backup locations
 - paste a filesystem path or use the operating system's native folder picker
+- cancel long-running Agent operations while iterating on large imports and backups
 - whole-drive imports skip Mochimono's own `.mochimono` backup internals
 - unreadable folders/files do not abort an entire large import
 - any writable folder can be a backup location, including a folder on the local C: drive for testing
 - managed backups with independent SQLite inventories
 - editable backup policies for everything or broad MIME classes (`image`, `video`, `audio`, `text`, `application`, `other`)
-- server-side backup coverage by location
+- backup cards show local inventory plus server-known protected/missing coverage
 - reconnect/resume: only missing objects are copied
 - SHA-256 verification while writing primary and backup copies
 - optional full backup verification
@@ -40,6 +41,16 @@ Runtime integrity checks that are part of Mochimono itself, such as verifying st
 - offline **Restore to folder** that reconstructs ordinary source folder trees from a backup even if the server is unavailable
 
 Not implemented yet: generated thumbnails, AI, encryption/private vaults, chunking, packfiles, compression, native apps, virtual filesystems, automatic garbage collection, or multi-user sharing.
+
+## Review workflow
+
+New exact content starts in **Inbox**. Reviewing an item gives three useful choices:
+
+- **Keep** — mark this exact content reviewed and remove it from Inbox.
+- **Delete** — remove the live copy; it can return if encountered in a future import.
+- **Delete & Ignore** — remove the live copy and remember its SHA-256 so the same exact junk stays rejected on future imports.
+
+If the same exact content appears in several imported folders, it is still one object. Once you keep that object, later duplicate references do not make it unreviewed again.
 
 ## Requirements
 
@@ -102,11 +113,11 @@ Use the Agent UI to:
 - paste a local path or click **Choose…** to open the native OS folder picker
 - choose a folder or whole drive to import
 - name the import source
-- watch hashing/upload progress
+- watch hashing/upload progress and cancel an operation if needed
 - choose any writable folder as a Mochimono backup location
 - configure what each backup protects and change that policy later
 - update a backup with only missing objects
-- see local backup contents and server-known coverage
+- see local backup contents and server-known coverage directly on the backup card
 - optionally verify a backup
 - restore a backup into ordinary folders without needing the server online
 
