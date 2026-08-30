@@ -206,6 +206,12 @@ async function serveObject(req, res, hash) {
   readObject(DATA_DIR, hash, { start, end }).pipe(res);
 }
 
+function hashSet(sql, hashes) {
+  if (!hashes.length) return new Set();
+  const marks = hashes.map(() => '?').join(',');
+  return new Set(db.prepare(`${sql} (${marks})`).all(...hashes).map(row => row.hash));
+}
+
 async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/login') {
     const body = await readJson(req);
@@ -345,13 +351,15 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/objects/check') {
     const body = await readJson(req);
     if (!Array.isArray(body.hashes) || body.hashes.length > 1000) return json(res, 400, { error: 'hashes must be an array of at most 1000 SHA-256 hashes' });
-    const active = db.prepare("SELECT 1 FROM objects WHERE hash = ? AND state = 'active'");
-    const ignored = db.prepare('SELECT 1 FROM ignored_hashes WHERE hash = ?');
+    const hashes = body.hashes.map(String);
+    for (const hash of hashes) if (!validHash(hash)) return json(res, 400, { error: `Invalid hash: ${hash}` });
+    const unique = [...new Set(hashes)];
+    const ignored = hashSet('SELECT hash FROM ignored_hashes WHERE hash IN', unique);
+    const active = hashSet("SELECT hash FROM objects WHERE state = 'active' AND hash IN", unique);
     const result = { known: [], missing: [], ignored: [] };
-    for (const hash of body.hashes) {
-      if (!validHash(hash)) return json(res, 400, { error: `Invalid hash: ${hash}` });
-      if (ignored.get(hash)) result.ignored.push(hash);
-      else if (active.get(hash)) result.known.push(hash);
+    for (const hash of hashes) {
+      if (ignored.has(hash)) result.ignored.push(hash);
+      else if (active.has(hash)) result.known.push(hash);
       else result.missing.push(hash);
     }
     return json(res, 200, result);
@@ -403,6 +411,11 @@ async function handleApi(req, res, url) {
     if (!Number.isInteger(importId) || !db.prepare('SELECT 1 FROM imports WHERE id = ?').get(importId)) return json(res, 400, { error: 'Valid importId is required' });
     if (!Array.isArray(body.sources) || body.sources.length > 1000) return json(res, 400, { error: 'sources must be an array of at most 1000 records' });
 
+    const hashes = body.sources.map(source => String(source.hash));
+    for (const hash of hashes) if (!validHash(hash)) return json(res, 400, { error: `Invalid hash: ${hash}` });
+    const active = hashSet("SELECT hash FROM objects WHERE state = 'active' AND hash IN", [...new Set(hashes)]);
+    for (const hash of hashes) if (!active.has(hash)) return json(res, 400, { error: `Unknown active object: ${hash}` });
+
     const insert = db.prepare(`
       INSERT INTO sources(object_hash, import_id, original_path, filename, mtime, created_at)
       VALUES(?, ?, ?, ?, ?, ?)
@@ -410,10 +423,8 @@ async function handleApi(req, res, url) {
     `);
     try {
       db.exec('BEGIN IMMEDIATE');
-      for (const source of body.sources) {
-        if (!validHash(source.hash) || !db.prepare("SELECT 1 FROM objects WHERE hash = ? AND state = 'active'").get(source.hash)) throw new Error(`Unknown active object: ${source.hash}`);
-        insert.run(source.hash, importId, String(source.path), String(source.filename), source.mtime ? String(source.mtime) : null, now());
-      }
+      const timestamp = now();
+      for (const source of body.sources) insert.run(String(source.hash), importId, String(source.path), String(source.filename), source.mtime ? String(source.mtime) : null, timestamp);
       db.exec('COMMIT');
       return json(res, 200, { ok: true, count: body.sources.length });
     } catch (error) {
@@ -535,6 +546,8 @@ async function handleApi(req, res, url) {
     if (!getDrive(id)) return json(res, 404, { error: 'Backup not registered' });
     const body = await readJson(req);
     if (!Array.isArray(body.replicas) || body.replicas.length > 5000) return json(res, 400, { error: 'replicas must be an array of at most 5000 records' });
+    const hashes = [...new Set(body.replicas.map(replica => String(replica.hash)).filter(validHash))];
+    const known = hashSet('SELECT hash FROM objects WHERE hash IN', hashes);
     const insert = db.prepare(`
       INSERT INTO replicas(object_hash, drive_id, verified_at) VALUES(?, ?, ?)
       ON CONFLICT(object_hash, drive_id) DO UPDATE SET verified_at = excluded.verified_at
@@ -542,8 +555,8 @@ async function handleApi(req, res, url) {
     try {
       db.exec('BEGIN IMMEDIATE');
       for (const replica of body.replicas) {
-        if (!validHash(replica.hash) || !db.prepare('SELECT 1 FROM objects WHERE hash = ?').get(replica.hash)) continue;
-        insert.run(replica.hash, id, replica.verifiedAt || null);
+        const hash = String(replica.hash);
+        if (known.has(hash)) insert.run(hash, id, replica.verifiedAt || null);
       }
       db.prepare('UPDATE drives SET last_seen = ? WHERE id = ?').run(now(), id);
       db.exec('COMMIT');
