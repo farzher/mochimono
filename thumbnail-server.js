@@ -138,34 +138,56 @@ function missingThumbnails(res, url) {
   if (!imports.length) return json(res, 400, { error: 'imports is required' });
   if (imports.length > 100) return json(res, 400, { error: 'Too many imports' });
   const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') || 100)));
-  const placeholders = imports.map(() => '?').join(',');
-  const extensionSql = [
+  const importMarks = imports.map(() => '?').join(',');
+  const mediaExtensions = [
     '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.avif', '.bmp', '.tif', '.tiff',
     '.mp4', '.m4v', '.mov', '.mkv', '.webm', '.avi', '.mpg', '.mpeg', '.m2v', '.mts', '.m2ts', '.3gp'
-  ].map(extension => `lower(s.filename) LIKE '%${extension}'`).join(' OR ');
+  ];
+  const extensionSql = mediaExtensions.map(extension => `lower(s.filename) LIKE '%${extension}'`).join(' OR ');
 
-  const rows = db.prepare(`
-    WITH candidates AS (
-      SELECT o.hash, o.size, o.mime, s.import_id AS importId, s.original_path AS originalPath,
-             s.filename, s.mtime, r.requested_at AS requestedAt,
-             ROW_NUMBER() OVER (PARTITION BY o.hash ORDER BY s.import_id, s.id) AS choice
-      FROM sources s
-      JOIN objects o ON o.hash = s.object_hash
-      LEFT JOIN thumbnails t ON t.object_hash = o.hash AND t.version = ?
-      LEFT JOIN thumbnail_requests r ON r.object_hash = o.hash
-      WHERE s.import_id IN (${placeholders})
-        AND o.state = 'active'
-        AND t.object_hash IS NULL
-        AND (o.mime LIKE 'image/%' OR o.mime LIKE 'video/%' OR ${extensionSql})
-    )
-    SELECT hash, size, mime, importId, originalPath, filename, mtime, requestedAt
-    FROM candidates
-    WHERE choice = 1
-    ORDER BY (requestedAt IS NOT NULL) DESC, requestedAt DESC, size ASC, hash
+  const objects = db.prepare(`
+    SELECT o.hash, o.size, o.mime, r.requested_at AS requestedAt
+    FROM objects o
+    LEFT JOIN thumbnails t ON t.object_hash = o.hash AND t.version = ?
+    LEFT JOIN thumbnail_requests r ON r.object_hash = o.hash
+    WHERE o.state = 'active'
+      AND t.object_hash IS NULL
+      AND EXISTS (
+        SELECT 1 FROM sources s
+        WHERE s.object_hash = o.hash
+          AND s.import_id IN (${importMarks})
+          AND (o.mime LIKE 'image/%' OR o.mime LIKE 'video/%' OR ${extensionSql})
+      )
+    ORDER BY (requestedAt IS NOT NULL) DESC, requestedAt DESC, o.size ASC, o.hash
     LIMIT ?
   `).all(THUMB_VERSION, ...imports, limit);
 
-  return json(res, 200, { version: THUMB_VERSION, files: rows });
+  if (!objects.length) return json(res, 200, { version: THUMB_VERSION, files: [] });
+  const hashes = objects.map(object => object.hash);
+  const hashMarks = hashes.map(() => '?').join(',');
+  const sourceRows = db.prepare(`
+    SELECT s.object_hash AS hash, s.import_id AS importId, s.original_path AS originalPath, s.filename, s.mtime
+    FROM sources s
+    WHERE s.object_hash IN (${hashMarks}) AND s.import_id IN (${importMarks})
+    ORDER BY s.object_hash, s.import_id, s.id
+  `).all(...hashes, ...imports);
+  const sources = new Map();
+  for (const row of sourceRows) {
+    if (!sources.has(row.hash)) sources.set(row.hash, []);
+    sources.get(row.hash).push({
+      importId: row.importId,
+      originalPath: row.originalPath,
+      filename: row.filename,
+      mtime: row.mtime
+    });
+  }
+
+  const files = objects.map(object => {
+    const candidates = sources.get(object.hash) || [];
+    const first = candidates[0] || {};
+    return { ...object, ...first, filename: first.filename || object.hash, sources: candidates };
+  });
+  return json(res, 200, { version: THUMB_VERSION, files });
 }
 
 async function requestThumbnails(req, res) {
