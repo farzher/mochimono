@@ -67,7 +67,7 @@ function restoreUi() {
     sort.value = saved.sort;
     sort.dispatchEvent(new Event('change', { bubbles: true }));
   }
-  if (['', 'image', 'video', 'audio', 'application', 'other'].includes(saved.type)) {
+  if (['', 'media', 'image', 'video', 'audio', 'application', 'other'].includes(saved.type)) {
     typeFilter.value = saved.type;
     typeFilter.dispatchEvent(new Event('change', { bubbles: true }));
   }
@@ -128,6 +128,7 @@ function toggleHash(hash, extend) {
 function mediaTypeMatches(mime, filter) {
   const base = String(mime || '').split('/')[0];
   if (!filter) return true;
+  if (filter === 'media') return base === 'image' || base === 'video';
   if (filter === 'application') return base === 'application' || base === 'text';
   if (filter === 'other') return !['image', 'video', 'audio', 'application', 'text'].includes(base);
   return base === filter;
