@@ -3,7 +3,7 @@ const $$ = selector => [...document.querySelectorAll(selector)];
 const login = $('#login');
 const app = $('#app');
 const logout = $('#logout');
-const PAGE = 200;
+const PAGE = 120;
 
 let searchTimer;
 let loaded = [];
@@ -47,22 +47,12 @@ function kind(file) {
 function typeLabel(file) {
   const value = kind(file);
   if (value === 'application' || value === 'text') return 'document';
-  return value === 'other' || value === 'application/octet-stream' ? 'file' : value;
-}
-
-function matchesType(file) {
-  if (!type) return true;
-  const value = kind(file);
-  if (type === 'application') return value === 'application' || value === 'text';
-  if (type === 'other') return !['image', 'video', 'audio', 'application', 'text'].includes(value);
-  return value === type;
+  return value === 'other' ? 'file' : value;
 }
 
 function preview(file, large = false) {
   const url = `/api/objects/${file.hash}`;
-  if (kind(file) === 'image') {
-    return `<img ${large ? '' : 'loading="lazy"'} src="${url}" alt="${escapeHtml(file.filename)}">`;
-  }
+  if (kind(file) === 'image') return `<img ${large ? '' : 'loading="lazy"'} src="${url}" alt="${escapeHtml(file.filename)}">`;
   const icon = kind(file) === 'video' ? '▶' : kind(file) === 'audio' ? '♪' : typeLabel(file) === 'document' ? '▤' : '·';
   return `<div class="file-icon ${escapeHtml(kind(file))}">${icon}</div>`;
 }
@@ -77,30 +67,29 @@ async function loadStats() {
 }
 
 function renderFiles() {
-  const files = loaded.filter(matchesType);
   const element = $('#files');
   element.className = `files ${view}`;
 
-  if (!files.length) {
-    element.innerHTML = `<div class="empty">${loaded.length && type ? 'No loaded files match this filter. Load more to search farther back.' : 'No files found.'}</div>`;
+  if (!loaded.length) {
+    element.innerHTML = '<div class="empty">No files found.</div>';
   } else if (view === 'grid') {
-    element.innerHTML = files.map(file => `
+    element.innerHTML = loaded.map(file => `
       <button class="file-card" data-hash="${file.hash}">
         <div class="thumb">${preview(file)}</div>
         <div class="card-copy">
           <strong title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</strong>
-          <span>${formatBytes(file.size)}${file.referencesCount > 1 ? ` · ${file.referencesCount} locations` : ''}</span>
+          <span>${formatBytes(file.size)}${file.backupCount ? ` · ${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : ' · not offline-backed-up'}</span>
         </div>
       </button>`).join('');
   } else {
-    element.innerHTML = files.map(file => `
+    element.innerHTML = loaded.map(file => `
       <button class="file-row" data-hash="${file.hash}">
         <span class="type">${escapeHtml(typeLabel(file))}</span>
         <div class="file-main">
           <strong>${escapeHtml(file.filename)}</strong>
           <span>${escapeHtml(file.originalPath || '')}</span>
         </div>
-        <span class="refs">${file.referencesCount > 1 ? `${file.referencesCount} locations` : ''}</span>
+        <span class="refs">${file.backupCount ? `${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : 'no backup'}</span>
         <span class="size">${formatBytes(file.size)}</span>
       </button>`).join('');
   }
@@ -114,10 +103,10 @@ async function loadFiles(reset = true) {
     offset = 0;
   }
   const q = $('#search').value.trim();
-  const data = await request(`/api/files?limit=${PAGE}&offset=${offset}&q=${encodeURIComponent(q)}`);
+  const data = await request(`/api/files?limit=${PAGE}&offset=${offset}&type=${encodeURIComponent(type)}&q=${encodeURIComponent(q)}`);
   loaded.push(...data.files);
   offset += data.files.length;
-  hasMore = data.files.length === PAGE;
+  hasMore = data.hasMore;
   renderFiles();
 }
 
@@ -130,18 +119,28 @@ async function openDetails(hash) {
   $('#detail-open').href = `/api/objects/${selected.hash}`;
   $('#detail-preview').innerHTML = preview(selected, true);
   $('#detail-sources').innerHTML = '<div class="empty small-empty">Loading locations…</div>';
+  $('#detail-backups').innerHTML = '<div class="empty small-empty">Loading backups…</div>';
   $('#details').showModal();
 
   try {
-    const data = await request(`/api/files/${selected.hash}/sources`);
+    const data = await request(`/api/files/${selected.hash}/details`);
     $('#detail-sources').innerHTML = data.sources.length ? data.sources.map(source => `
       <article>
         <strong>${escapeHtml(source.sourceName)}</strong>
         <span>${escapeHtml(source.path)}</span>
         <small>${source.mtime ? `Modified ${new Date(source.mtime).toLocaleString()}` : ''}</small>
       </article>`).join('') : '<div class="empty small-empty">No source locations recorded.</div>';
+
+    $('#detail-backups').innerHTML = data.backups.length ? data.backups.map(backup => `
+      <article>
+        <strong>${escapeHtml(backup.name)}</strong>
+        <span>Known replica</span>
+        <small>${backup.verifiedAt ? `Verified ${new Date(backup.verifiedAt).toLocaleString()}` : `Last seen ${new Date(backup.lastSeen).toLocaleString()}`}</small>
+      </article>`).join('') : '<div class="empty small-empty warning">No offline backup location currently reports this file.</div>';
   } catch (error) {
-    $('#detail-sources').innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+    const html = `<div class="error">${escapeHtml(error.message)}</div>`;
+    $('#detail-sources').innerHTML = html;
+    $('#detail-backups').innerHTML = html;
   }
 }
 
@@ -219,7 +218,7 @@ $('#filters').addEventListener('click', event => {
   if (!button) return;
   type = button.dataset.type;
   $$('#filters button').forEach(item => item.classList.toggle('active', item === button));
-  renderFiles();
+  loadFiles(true).catch(console.error);
 });
 
 $('#views').addEventListener('click', event => {
