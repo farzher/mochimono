@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, createWriteStream, existsSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, watch } from 'node:fs';
 import { mkdir, opendir, readFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises';
-import { homedir, platform, userInfo } from 'node:os';
+import { homedir, hostname, platform, userInfo } from 'node:os';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -18,15 +18,28 @@ const CONFIG_PATH = join(CONFIG_DIR, 'agent.json');
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.MOCHIMONO_AGENT_PORT || 8643);
 const BATCH = 250;
+const DEVICE = hostname();
 
 let saved = {};
 try { saved = JSON.parse(await readFile(CONFIG_PATH, 'utf8')); } catch {}
 const settings = {
   server: String(process.env.MOCHIMONO_URL || saved.server || 'http://127.0.0.1:8642').replace(/\/$/, ''),
   token: String(process.env.MOCHIMONO_TOKEN || saved.token || ''),
+  device: String(saved.device || DEVICE),
+  folders: Array.isArray(saved.folders) ? saved.folders.map(item => ({
+    path: resolve(String(item.path || item)),
+    device: String(item.device || saved.device || DEVICE),
+    importId: Number(item.importId) || null,
+    lastSynced: item.lastSynced ? String(item.lastSynced) : null
+  })) : [],
   backups: Array.isArray(saved.backups) ? saved.backups.map(String) : []
 };
 let job = null;
+const folderWatchers = new Map();
+const pendingSyncs = new Set();
+
+const pathKey = path => platform() === 'win32' ? resolve(path).toLowerCase() : resolve(path);
+const folderFor = path => settings.folders.find(folder => pathKey(folder.path) === pathKey(path));
 
 async function persistSettings() {
   await mkdir(CONFIG_DIR, { recursive: true });
@@ -65,7 +78,7 @@ async function readJson(req, max = 1024 * 1024) {
 }
 
 async function api(path, options = {}) {
-  if (!settings.token) throw new Error('Set the Mochimono server token in Agent settings first');
+  if (!settings.token) throw new Error('Connect to the Mochimono server first');
   const headers = { authorization: `Bearer ${settings.token}`, ...(options.headers || {}) };
   let body = options.body;
   if (body && typeof body !== 'string' && !body.pipe && !body[Symbol.asyncIterator]) {
@@ -83,7 +96,7 @@ async function api(path, options = {}) {
 }
 
 async function serverState() {
-  if (!settings.token) return { online: false, error: 'Token not configured' };
+  if (!settings.token) return { online: false, error: 'Not connected' };
   try { return { online: true, stats: await api('/api/stats') }; }
   catch (error) { return { online: false, error: error.message }; }
 }
@@ -92,10 +105,9 @@ function canceled() {
   if (job?.cancelRequested) throw Object.assign(new Error('Canceled'), { canceled: true });
 }
 
-function startJob(res, type, label, work) {
-  if (job?.status === 'running') return json(res, 409, { error: 'Another Agent operation is already running' });
+function beginJob(type, label, work) {
+  if (job?.status === 'running') return null;
   job = { id: randomUUID(), type, label, status: 'running', cancelRequested: false, startedAt: new Date().toISOString(), progress: {} };
-  json(res, 202, { job });
   setImmediate(async () => {
     try {
       const update = patch => {
@@ -116,6 +128,13 @@ function startJob(res, type, label, work) {
       };
     }
   });
+  return job;
+}
+
+function startJob(res, type, label, work) {
+  const started = beginJob(type, label, work);
+  if (!started) return json(res, 409, { error: 'Another Agent operation is already running' });
+  return json(res, 202, { job: started });
 }
 
 async function* filesUnder(directory) {
@@ -199,11 +218,11 @@ async function importBatch(importId, records, totals, update) {
   update({ ...totals, uploaded: formatBytes(totals.uploadedBytes) });
 }
 
-async function importFolder(folder, sourceName, update) {
+async function importFolder(folder, device, update, importId = null) {
   const root = resolve(folder);
   if (!(await stat(root)).isDirectory()) throw new Error(`${root} is not a directory`);
-  const source = String(sourceName || basename(root) || root);
-  const created = await api('/api/imports', { method: 'POST', body: { sourceName: source } });
+  const source = String(device || settings.device || DEVICE);
+  const created = importId ? { id: importId } : await api('/api/imports', { method: 'POST', body: { sourceName: source } });
   const totals = { scanned: 0, new: 0, duplicates: 0, ignored: 0, errors: 0, uploadedBytes: 0 };
   let batch = [];
   update({ phase: 'Scanning', source, path: root, ...totals });
@@ -229,6 +248,48 @@ async function importFolder(folder, sourceName, update) {
   if (batch.length) await importBatch(created.id, batch, totals, update);
   update({ phase: 'Done', current: '', ...totals, uploaded: formatBytes(totals.uploadedBytes) });
   return { importId: created.id, source, ...totals };
+}
+
+async function syncFolder(folder, update) {
+  const result = await importFolder(folder.path, folder.device, update, folder.importId);
+  folder.importId = result.importId;
+  folder.lastSynced = new Date().toISOString();
+  await persistSettings();
+  return result;
+}
+
+function queueFolderSync(path) {
+  const folder = folderFor(path);
+  if (folder) pendingSyncs.add(pathKey(folder.path));
+}
+
+function watchFolder(folder) {
+  const key = pathKey(folder.path);
+  if (folderWatchers.has(key) || !existsSync(folder.path)) return;
+  try {
+    const watcher = watch(folder.path, { recursive: true }, () => queueFolderSync(folder.path));
+    watcher.on('error', () => {
+      watcher.close();
+      folderWatchers.delete(key);
+    });
+    folderWatchers.set(key, watcher);
+  } catch {}
+}
+
+function unwatchFolder(path) {
+  const key = pathKey(path);
+  folderWatchers.get(key)?.close();
+  folderWatchers.delete(key);
+  pendingSyncs.delete(key);
+}
+
+function pumpSyncs() {
+  if (!settings.token || job?.status === 'running' || !pendingSyncs.size) return;
+  const key = pendingSyncs.values().next().value;
+  const folder = settings.folders.find(item => pathKey(item.path) === key);
+  pendingSyncs.delete(key);
+  if (!folder || !existsSync(folder.path)) return;
+  beginJob('sync', `Sync ${basename(folder.path) || folder.path}`, update => syncFolder(folder, update));
 }
 
 const controlPath = root => join(root, '.mochimono');
@@ -267,7 +328,6 @@ async function backupInit(path, name, types, configure = false) {
   const root = resolve(path);
   if (!(await stat(root)).isDirectory()) throw new Error(`${root} is not a directory`);
 
-  // Backups are folders. Mochimono never formats, partitions, or erases the underlying drive.
   if (existsSync(driveMetaPath(root))) {
     const meta = await readBackup(root);
     if (configure) {
@@ -613,13 +673,23 @@ async function serveStatic(res, pathname) {
 
 async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/state') {
-    return json(res, 200, { settings: { server: settings.server, hasToken: Boolean(settings.token) }, server: await serverState(), job });
+    return json(res, 200, {
+      settings: {
+        server: settings.server,
+        hasToken: Boolean(settings.token),
+        device: settings.device,
+        folders: settings.folders
+      },
+      server: await serverState(),
+      job
+    });
   }
   if (req.method === 'POST' && url.pathname === '/api/settings') {
     const body = await readJson(req);
     settings.server = String(body.server || settings.server).trim().replace(/\/$/, '');
     if (body.token !== '') settings.token = String(body.token ?? settings.token);
     await persistSettings();
+    if (settings.token) settings.folders.forEach(folder => queueFolderSync(folder.path));
     return json(res, 200, { ok: true });
   }
   if (req.method === 'POST' && url.pathname === '/api/job/cancel') {
@@ -628,17 +698,57 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true });
   }
   if (req.method === 'GET' && url.pathname === '/api/pick-folder') return json(res, 200, { path: await pickFolder() });
+
+  if (req.method === 'POST' && url.pathname === '/api/folders') {
+    const body = await readJson(req);
+    const root = resolve(String(body.path || ''));
+    if (!body.path || !(await stat(root)).isDirectory()) return json(res, 400, { error: 'Choose a folder' });
+    const device = String(body.device || settings.device || DEVICE).trim() || DEVICE;
+    settings.device = device;
+    let folder = folderFor(root);
+    if (folder) folder.device = device;
+    else {
+      folder = { path: root, device, importId: null, lastSynced: null };
+      settings.folders.push(folder);
+    }
+    await persistSettings();
+    watchFolder(folder);
+    queueFolderSync(root);
+    pumpSyncs();
+    return json(res, 200, { folder });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/folders/sync') {
+    const body = await readJson(req);
+    const folder = folderFor(body.path || '');
+    if (!folder) return json(res, 404, { error: 'Folder not found' });
+    queueFolderSync(folder.path);
+    pumpSyncs();
+    return json(res, 200, { ok: true });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/folders/remove') {
+    const body = await readJson(req);
+    const key = pathKey(body.path || '');
+    const index = settings.folders.findIndex(folder => pathKey(folder.path) === key);
+    if (index < 0) return json(res, 404, { error: 'Folder not found' });
+    const [folder] = settings.folders.splice(index, 1);
+    unwatchFolder(folder.path);
+    await persistSettings();
+    return json(res, 200, { ok: true });
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/backups') return json(res, 200, { backups: await backupLocations() });
   if (req.method === 'GET' && url.pathname === '/api/backup/status') return json(res, 200, await backupStatus(url.searchParams.get('path')));
 
   if (req.method === 'POST' && url.pathname === '/api/import') {
     const body = await readJson(req);
-    if (!body.path) return json(res, 400, { error: 'Choose or paste a folder to import' });
-    return startJob(res, 'import', `Import ${body.source || basename(body.path)}`, update => importFolder(body.path, body.source, update));
+    if (!body.path) return json(res, 400, { error: 'Choose a folder' });
+    return startJob(res, 'import', `Import ${basename(body.path)}`, update => importFolder(body.path, body.source || settings.device, update));
   }
   if (req.method === 'POST' && url.pathname === '/api/backup/init') {
     const body = await readJson(req);
-    if (!body.path) return json(res, 400, { error: 'Choose or paste a backup folder' });
+    if (!body.path) return json(res, 400, { error: 'Choose a backup folder' });
     return json(res, 200, await backupInit(body.path, body.name, body.types, body.configure === true));
   }
   if (req.method === 'POST' && url.pathname === '/api/backup/update') {
@@ -683,6 +793,13 @@ function openBrowser(url) {
     child.unref();
   } catch {}
 }
+
+for (const folder of settings.folders) {
+  watchFolder(folder);
+  queueFolderSync(folder.path);
+}
+setInterval(pumpSyncs, 1000);
+setInterval(() => settings.folders.forEach(folder => queueFolderSync(folder.path)), 15 * 60 * 1000);
 
 server.listen(PORT, HOST, () => {
   const url = `http://${HOST}:${PORT}`;
