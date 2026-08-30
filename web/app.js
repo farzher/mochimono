@@ -17,10 +17,12 @@ let importId = '';
 let inboxOnly = false;
 let noBackupOnly = false;
 let view = 'grid';
+let sort = 'date-desc';
 let selected = null;
 let folderImportId = '';
 let folderPath = '';
 let folderData = null;
+let dateScrollFrame = 0;
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
@@ -66,15 +68,88 @@ function preview(file, large = false) {
   return `<div class="file-icon ${escapeHtml(kind(file))}">${icon}</div>`;
 }
 
+function dateValue(file) {
+  const value = new Date(file.fileDate || file.createdAt || 0);
+  return Number.isNaN(value.getTime()) ? new Date(0) : value;
+}
+
+function shortDate(file) {
+  return dateValue(file).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function monthKey(file) {
+  const date = dateValue(file);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthLabel(key) {
+  const [year, month] = key.split('-').map(Number);
+  return new Date(year, month - 1, 1).toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
+}
+
+function dateGroups() {
+  const groups = [];
+  for (const file of loaded) {
+    const key = monthKey(file);
+    const last = groups.at(-1);
+    if (last?.key === key) last.files.push(file);
+    else groups.push({ key, label: monthLabel(key), files: [file] });
+  }
+  return groups;
+}
+
+function gridCard(file) {
+  const image = kind(file) === 'image';
+  return `
+    <button class="file-card ${image ? 'photo-card' : ''}" data-hash="${file.hash}" title="${escapeHtml(file.filename)}">
+      <div class="thumb ${image ? 'photo-thumb' : ''}">${preview(file)}${file.reviewed ? '' : '<span class="inbox-badge">Inbox</span>'}</div>
+      ${image ? '' : `<div class="card-copy"><strong>${escapeHtml(file.filename)}</strong><span>${formatBytes(file.size)}</span></div>`}
+    </button>`;
+}
+
+function listRow(file) {
+  return `
+    <button class="file-row" data-hash="${file.hash}">
+      <span class="type ${file.reviewed ? '' : 'inbox-type'}">${file.reviewed ? escapeHtml(typeLabel(file)) : 'inbox'}</span>
+      <div class="file-main">
+        <strong>${escapeHtml(file.filename)}</strong>
+        <span>${escapeHtml(file.originalPath || '')}</span>
+      </div>
+      <span class="refs">${escapeHtml(shortDate(file))}</span>
+      <span class="size">${formatBytes(file.size)}</span>
+    </button>`;
+}
+
+function renderDateRail(groups) {
+  const rail = $('#dateRail');
+  const dateSorted = sort.startsWith('date-') && view !== 'folders';
+  rail.hidden = !dateSorted || !groups.length;
+  if (rail.hidden) return;
+  rail.innerHTML = groups.map(group => `<button data-date-jump="${group.key}">${escapeHtml(group.label.replace(' ', ' '))}</button>`).join('');
+  updateDateRailActive();
+}
+
+function updateDateRailActive() {
+  const rail = $('#dateRail');
+  if (rail.hidden) return;
+  const groups = $$('.date-group');
+  if (!groups.length) return;
+  let active = groups[0];
+  const line = window.innerHeight * .28;
+  for (const group of groups) {
+    if (group.getBoundingClientRect().top <= line) active = group;
+    else break;
+  }
+  $$('[data-date-jump]').forEach(button => button.classList.toggle('active', button.dataset.dateJump === active.dataset.dateGroup));
+}
+
 async function loadStats() {
   const s = await request('/api/stats');
   const percent = s.capacityBytes ? Math.min(100, (s.bytes / s.capacityBytes) * 100) : 0;
   const width = s.bytes ? `max(2px, ${percent}%)` : '0';
   $('#stats').innerHTML = `
     <article class="storage-usage">
-      <div class="storage-copy">
-        <strong>${formatBytes(s.bytes)} <span>of ${formatBytes(s.capacityBytes)}</span></strong>
-      </div>
+      <div class="storage-copy"><strong>${formatBytes(s.bytes)} <span>of ${formatBytes(s.capacityBytes)}</span></strong></div>
       <div class="storage-bar"><i style="width:${width}"></i></div>
     </article>`;
   $('#inbox').textContent = s.unreviewed ? `Inbox · ${s.unreviewed.toLocaleString()}` : 'Inbox';
@@ -103,26 +178,25 @@ function renderFiles() {
   if (!loaded.length) {
     const message = inboxOnly ? 'Inbox empty.' : noBackupOnly ? 'All backed up.' : 'No files.';
     element.innerHTML = `<div class="empty">${message}</div>`;
-  } else if (view === 'grid') {
-    element.innerHTML = loaded.map(file => `
-      <button class="file-card" data-hash="${file.hash}">
-        <div class="thumb">${preview(file)}${file.reviewed ? '' : '<span class="inbox-badge">Inbox</span>'}</div>
-        <div class="card-copy">
-          <strong title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</strong>
-          <span>${formatBytes(file.size)}${file.backupCount ? ` · ${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : ' · unbacked'}</span>
+    renderDateRail([]);
+    return;
+  }
+
+  if (sort.startsWith('date-')) {
+    const groups = dateGroups();
+    element.innerHTML = groups.map(group => `
+      <section class="date-group" data-date-group="${group.key}">
+        <h3 class="date-heading">${escapeHtml(group.label)}</h3>
+        <div class="${view === 'grid' ? 'date-grid' : 'date-list'}">
+          ${group.files.map(file => view === 'grid' ? gridCard(file) : listRow(file)).join('')}
         </div>
-      </button>`).join('');
+      </section>`).join('');
+    renderDateRail(groups);
   } else {
-    element.innerHTML = loaded.map(file => `
-      <button class="file-row" data-hash="${file.hash}">
-        <span class="type ${file.reviewed ? '' : 'inbox-type'}">${file.reviewed ? escapeHtml(typeLabel(file)) : 'inbox'}</span>
-        <div class="file-main">
-          <strong>${escapeHtml(file.filename)}</strong>
-          <span>${escapeHtml(file.originalPath || '')}</span>
-        </div>
-        <span class="refs">${file.backupCount ? `${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : 'unbacked'}</span>
-        <span class="size">${formatBytes(file.size)}</span>
-      </button>`).join('');
+    element.innerHTML = view === 'grid'
+      ? `<div class="date-grid flat-grid">${loaded.map(gridCard).join('')}</div>`
+      : loaded.map(listRow).join('');
+    renderDateRail([]);
   }
 }
 
@@ -142,7 +216,7 @@ async function loadFiles(reset = true) {
     const q = $('#search').value.trim();
     const review = inboxOnly ? 'unreviewed' : '';
     const backup = noBackupOnly ? 'missing' : '';
-    const data = await request(`/api/files?limit=${PAGE}&offset=${offset}&type=${encodeURIComponent(type)}&review=${review}&backup=${backup}&import=${encodeURIComponent(importId)}&q=${encodeURIComponent(q)}`);
+    const data = await request(`/api/files?limit=${PAGE}&offset=${offset}&type=${encodeURIComponent(type)}&review=${review}&backup=${backup}&import=${encodeURIComponent(importId)}&q=${encodeURIComponent(q)}&sort=${encodeURIComponent(sort)}`);
     if (generation !== fileLoadGeneration || view === 'folders') return;
     loaded.push(...data.files);
     offset += data.files.length;
@@ -174,6 +248,7 @@ function renderFolder() {
   const element = $('#files');
   element.className = 'files folders';
   $('#scroll-sentinel').hidden = true;
+  $('#dateRail').hidden = true;
   folderBreadcrumb();
 
   if (!folderImportId) {
@@ -226,12 +301,15 @@ async function loadFolder() {
 function setView(next) {
   view = next;
   $('#library-card').classList.toggle('folder-mode', view === 'folders');
+  $('#sort').hidden = view === 'folders';
   $$('#views button').forEach(item => item.classList.toggle('active', item.dataset.view === view));
   if (view === 'folders') {
     folderImportId = importId;
     folderPath = '';
     loadFolder().catch(console.error);
   } else {
+    folderImportId = '';
+    folderPath = '';
     $('#folderbar').hidden = true;
     loadFiles(true).catch(console.error);
   }
@@ -249,7 +327,7 @@ async function openDetails(hash, fallback = null) {
   if (!selected) return;
 
   $('#detail-name').textContent = selected.filename;
-  $('#detail-meta').textContent = `${typeLabel(selected)} · ${formatBytes(selected.size)} · ${selected.hash.slice(0, 12)}…`;
+  $('#detail-meta').textContent = `${shortDate(selected)} · ${formatBytes(selected.size)}`;
   $('#detail-open').href = `/api/objects/${selected.hash}`;
   $('#detail-preview').innerHTML = preview(selected, true);
   $('#detail-sources').innerHTML = '<div class="empty small-empty">Loading…</div>';
@@ -366,11 +444,21 @@ $('#search').addEventListener('input', () => {
 
 $('#source').addEventListener('change', event => {
   importId = event.target.value;
+  view = $('#views button.active')?.dataset.view || view;
   if (view === 'folders') {
     folderImportId = importId;
     folderPath = '';
     loadFolder().catch(console.error);
-  } else loadFiles(true).catch(console.error);
+  } else {
+    folderImportId = '';
+    folderPath = '';
+    loadFiles(true).catch(console.error);
+  }
+});
+
+$('#sort').addEventListener('change', event => {
+  sort = event.target.value;
+  loadFiles(true).catch(console.error);
 });
 
 $('#inbox').addEventListener('click', () => {
@@ -396,6 +484,12 @@ $('#filters').addEventListener('click', event => {
 $('#views').addEventListener('click', event => {
   const button = event.target.closest('[data-view]');
   if (button) setView(button.dataset.view);
+});
+
+$('#dateRail').addEventListener('click', event => {
+  const button = event.target.closest('[data-date-jump]');
+  if (!button) return;
+  document.querySelector(`[data-date-group="${CSS.escape(button.dataset.dateJump)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
 $('#folderbar').addEventListener('click', event => {
@@ -437,6 +531,14 @@ $('#files').addEventListener('click', event => {
 new IntersectionObserver(entries => {
   if (entries.some(entry => entry.isIntersecting) && hasMore && view !== 'folders') loadFiles(false).catch(console.error);
 }, { rootMargin: '600px 0px' }).observe($('#scroll-sentinel'));
+
+window.addEventListener('scroll', () => {
+  if (dateScrollFrame) return;
+  dateScrollFrame = requestAnimationFrame(() => {
+    dateScrollFrame = 0;
+    updateDateRailActive();
+  });
+}, { passive: true });
 
 $('#close-details').onclick = () => $('#details').close();
 $('#review-toggle').onclick = () => toggleReviewed().catch(console.error);
