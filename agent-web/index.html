@@ -18,15 +18,15 @@
 
   <main>
     <section class="card folders-card">
-      <h2>Folders</h2>
+      <div class="folders-head">
+        <h2>Folders</h2>
+        <button id="deviceButton" class="device-button" title="Rename device">This device: <span id="deviceLabel"></span></button>
+      </div>
       <div id="folders" class="sync-folders"><div class="muted">Loading…</div></div>
       <div class="add-folder">
         <div class="path-row">
           <input id="importPath" placeholder="Folder or drive">
           <button id="chooseImport" class="secondary">Browse…</button>
-        </div>
-        <div class="add-row">
-          <input id="deviceName" placeholder="Device">
           <button id="startImport" class="primary">Add</button>
         </div>
       </div>
@@ -67,6 +67,18 @@
     <div class="dialog-actions">
       <div class="spacer"></div>
       <button id="saveSettings" class="primary">Connect</button>
+    </div>
+  </dialog>
+
+  <dialog id="deviceDialog" class="small-dialog">
+    <div class="dialog-head">
+      <h3>Device</h3>
+      <button class="icon" data-close>×</button>
+    </div>
+    <input id="deviceName" placeholder="Device">
+    <div class="dialog-actions">
+      <div class="spacer"></div>
+      <button id="saveDevice" class="primary">Save</button>
     </div>
   </dialog>
 
