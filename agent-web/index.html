@@ -9,62 +9,54 @@
 </head>
 <body>
   <header>
-    <div>
-      <div class="eyebrow">LOCAL AGENT</div>
-      <h1>Mochimono</h1>
+    <div class="app-brand">
+      <span class="mini" aria-hidden="true"></span>
+      <div><h1>Mochimono</h1><span class="agent-label">Agent</span></div>
     </div>
     <div id="serverStatus" class="status">Connecting…</div>
   </header>
 
   <main>
     <section class="card import-card">
-      <div class="section-title">
-        <div><h2>Import</h2><p>Add a folder or drive.</p></div>
-      </div>
+      <div class="section-title"><h2>Import</h2></div>
       <label>Folder or drive</label>
       <div class="path-row">
         <input id="importPath" placeholder="C:\Users\you\Pictures">
         <button id="chooseImport" class="secondary">Browse…</button>
       </div>
-      <label>Source name <span>optional</span></label>
+      <label>Source <span>optional</span></label>
       <input id="sourceName" placeholder="Old laptop, Phone, Photos…">
       <button id="startImport" class="primary wide">Import</button>
     </section>
 
     <section class="card backup-card">
-      <div class="section-title">
-        <div><h2>Backups</h2><p>Add any writable folder.</p></div>
+      <div class="section-title row">
+        <h2>Backups</h2>
+        <button id="refreshBackups" class="secondary small">Refresh</button>
       </div>
-      <label>Backup folder</label>
+      <label>Folder</label>
       <div class="path-row">
         <input id="backupLocation" placeholder="C:\MochimonoBackup">
         <button id="chooseBackup" class="secondary">Browse…</button>
       </div>
-      <button id="addBackup" class="primary wide">Add backup</button>
-      <p class="safe-note">Mochimono never formats or erases the drive. It only creates <code>.mochimono</code> inside the folder you choose.</p>
-
-      <div class="section-title row backup-list-title">
-        <div><h3>Backup locations</h3></div>
-        <button id="refreshBackups" class="secondary small">Refresh</button>
-      </div>
-      <div id="backups" class="drives"><div class="muted">Looking for backups…</div></div>
+      <button id="addBackup" class="primary wide">Add</button>
+      <div id="backups" class="drives backup-list"><div class="muted">Loading…</div></div>
     </section>
 
     <section class="card activity-card">
-      <div class="section-title"><div><h2>Activity</h2></div></div>
-      <div id="activity" class="empty">Nothing running.</div>
+      <div class="section-title"><h2>Activity</h2></div>
+      <div id="activity" class="empty">Idle</div>
     </section>
 
     <section class="card settings-card">
       <details>
-        <summary>Agent settings</summary>
+        <summary>Settings</summary>
         <div class="settings-body">
-          <label>Server URL</label>
+          <label>Server</label>
           <input id="serverUrl" placeholder="http://127.0.0.1:8642">
-          <label>Server token</label>
-          <input id="serverToken" type="password" placeholder="Leave blank to keep the saved token">
-          <button id="saveSettings" class="secondary">Save settings</button>
-          <p class="hint">Saved locally. The Agent only listens on 127.0.0.1.</p>
+          <label>Token</label>
+          <input id="serverToken" type="password" placeholder="Unchanged if blank">
+          <button id="saveSettings" class="secondary">Save</button>
         </div>
       </details>
     </section>
@@ -72,41 +64,38 @@
 
   <dialog id="backupDialog">
     <div class="dialog-head">
-      <div><h3>Initialize backup</h3><div id="backupPathLabel" class="picker-path"></div></div>
+      <div><h3>Backup</h3><div id="backupPathLabel" class="picker-path"></div></div>
       <button class="icon" data-close>×</button>
     </div>
     <label>Name</label>
     <input id="backupName" placeholder="Backup">
-    <label>What should this backup protect?</label>
+    <label>Protect</label>
     <label class="check"><input id="backupEverything" type="checkbox" checked> Everything</label>
     <div id="backupTypes" class="type-grid disabled">
-      <label class="check"><input type="checkbox" value="image"> Photos / images</label>
-      <label class="check"><input type="checkbox" value="video"> Videos</label>
+      <label class="check"><input type="checkbox" value="image"> Images</label>
+      <label class="check"><input type="checkbox" value="video"> Video</label>
       <label class="check"><input type="checkbox" value="audio"> Audio</label>
       <label class="check"><input type="checkbox" value="text"> Text</label>
-      <label class="check"><input type="checkbox" value="application"> Documents / apps</label>
+      <label class="check"><input type="checkbox" value="application"> Documents</label>
       <label class="check"><input type="checkbox" value="other"> Other</label>
     </div>
-    <p class="safe-note compact">Only <code>.mochimono</code> is written here.</p>
     <div class="dialog-actions">
       <div class="spacer"></div>
       <button data-close class="secondary">Cancel</button>
-      <button id="initializeBackup" class="primary">Initialize</button>
+      <button id="initializeBackup" class="primary">Save</button>
     </div>
   </dialog>
 
   <dialog id="restoreDialog">
     <div class="dialog-head">
-      <div><h3>Restore backup</h3><div id="restoreBackupLabel" class="picker-path"></div></div>
+      <div><h3>Restore</h3><div id="restoreBackupLabel" class="picker-path"></div></div>
       <button class="icon" data-close>×</button>
     </div>
-    <p class="restore-copy">Rebuild the original source folders as ordinary files, without needing the server.</p>
-    <label>Restore into</label>
+    <label>Destination</label>
     <div class="path-row">
       <input id="restoreDestination" placeholder="C:\MochimonoRecovered">
       <button id="chooseRestore" class="secondary">Browse…</button>
     </div>
-    <p class="safe-note compact">Matching files are skipped. Conflicts are preserved. The backup is never modified.</p>
     <div class="dialog-actions">
       <div class="spacer"></div>
       <button data-close class="secondary">Cancel</button>
