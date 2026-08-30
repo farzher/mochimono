@@ -131,41 +131,18 @@ async function serveThumbnail(req, res, hash) {
   createReadStream(path).pipe(res);
 }
 
-function missingThumbnails(res, url) {
-  const imports = [...new Set(String(url.searchParams.get('imports') || '')
-    .split(',')
-    .map(Number)
-    .filter(value => Number.isInteger(value) && value > 0))];
-  if (!imports.length) return json(res, 400, { error: 'imports is required' });
-  if (imports.length > 100) return json(res, 400, { error: 'Too many imports' });
-  const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') || 100)));
-  const importMarks = imports.map(() => '?').join(',');
-  const priorityCutoff = new Date(Date.now() - PRIORITY_WINDOW_MS).toISOString();
-  const mediaExtensions = [
+function mediaExtensions() {
+  return [
     '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.avif', '.bmp', '.tif', '.tiff',
     '.mp4', '.m4v', '.mov', '.mkv', '.webm', '.avi', '.mpg', '.mpeg', '.m2v', '.mts', '.m2ts', '.3gp'
   ];
-  const extensionSql = mediaExtensions.map(extension => `lower(s.filename) LIKE '%${extension}'`).join(' OR ');
+}
 
-  const objects = db.prepare(`
-    SELECT o.hash, o.size, o.mime,
-           MAX(CASE WHEN r.requested_at >= ? THEN r.requested_at END) AS requestedAt
-    FROM sources s
-    JOIN objects o ON o.hash = s.object_hash
-    LEFT JOIN thumbnails t ON t.object_hash = o.hash AND t.version = ?
-    LEFT JOIN thumbnail_requests r ON r.object_hash = o.hash
-    WHERE s.import_id IN (${importMarks})
-      AND o.state = 'active'
-      AND t.object_hash IS NULL
-      AND (o.mime LIKE 'image/%' OR o.mime LIKE 'video/%' OR ${extensionSql})
-    GROUP BY o.hash, o.size, o.mime
-    ORDER BY (requestedAt IS NOT NULL) DESC, requestedAt DESC, o.size ASC, o.hash
-    LIMIT ?
-  `).all(priorityCutoff, THUMB_VERSION, ...imports, limit);
-
-  if (!objects.length) return json(res, 200, { version: THUMB_VERSION, files: [] });
+function hydrateMissing(objects, imports, extensions) {
+  if (!objects.length) return [];
   const hashes = objects.map(object => object.hash);
   const hashMarks = hashes.map(() => '?').join(',');
+  const importMarks = imports.map(() => '?').join(',');
   const sourceRows = db.prepare(`
     SELECT s.object_hash AS hash, s.import_id AS importId, s.original_path AS originalPath, s.filename, s.mtime
     FROM sources s
@@ -185,9 +162,9 @@ function missingThumbnails(res, url) {
 
   const isMediaName = name => {
     const lower = String(name || '').toLowerCase();
-    return mediaExtensions.some(extension => lower.endsWith(extension));
+    return extensions.some(extension => lower.endsWith(extension));
   };
-  const files = objects.map(object => {
+  return objects.map(object => {
     const candidates = sources.get(object.hash) || [];
     const first = object.mime.startsWith('image/') || object.mime.startsWith('video/')
       ? candidates[0]
@@ -199,7 +176,58 @@ function missingThumbnails(res, url) {
       sources: candidates
     };
   });
-  return json(res, 200, { version: THUMB_VERSION, files });
+}
+
+function missingThumbnails(res, url) {
+  const imports = [...new Set(String(url.searchParams.get('imports') || '')
+    .split(',')
+    .map(Number)
+    .filter(value => Number.isInteger(value) && value > 0))];
+  if (!imports.length) return json(res, 400, { error: 'imports is required' });
+  if (imports.length > 100) return json(res, 400, { error: 'Too many imports' });
+  const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') || 100)));
+  const priorityOnly = url.searchParams.get('priority') === '1';
+  const importMarks = imports.map(() => '?').join(',');
+  const extensions = mediaExtensions();
+  let objects;
+
+  if (priorityOnly) {
+    const priorityCutoff = new Date(Date.now() - PRIORITY_WINDOW_MS).toISOString();
+    objects = db.prepare(`
+      SELECT o.hash, o.size, o.mime, MAX(r.requested_at) AS requestedAt
+      FROM thumbnail_requests r
+      JOIN objects o ON o.hash = r.object_hash
+      JOIN sources s ON s.object_hash = o.hash
+      LEFT JOIN thumbnails t ON t.object_hash = o.hash AND t.version = ?
+      WHERE s.import_id IN (${importMarks})
+        AND r.requested_at >= ?
+        AND o.state = 'active'
+        AND t.object_hash IS NULL
+      GROUP BY o.hash, o.size, o.mime
+      ORDER BY requestedAt DESC, o.size ASC, o.hash
+      LIMIT ?
+    `).all(THUMB_VERSION, ...imports, priorityCutoff, limit);
+  } else {
+    const extensionSql = extensions.map(extension => `lower(s.filename) LIKE '%${extension}'`).join(' OR ');
+    objects = db.prepare(`
+      SELECT o.hash, o.size, o.mime, NULL AS requestedAt
+      FROM sources s
+      JOIN objects o ON o.hash = s.object_hash
+      LEFT JOIN thumbnails t ON t.object_hash = o.hash AND t.version = ?
+      WHERE s.import_id IN (${importMarks})
+        AND o.state = 'active'
+        AND t.object_hash IS NULL
+        AND (o.mime LIKE 'image/%' OR o.mime LIKE 'video/%' OR ${extensionSql})
+      GROUP BY o.hash, o.size, o.mime
+      ORDER BY o.size ASC, o.hash
+      LIMIT ?
+    `).all(THUMB_VERSION, ...imports, limit);
+  }
+
+  return json(res, 200, {
+    version: THUMB_VERSION,
+    files: hydrateMissing(objects, imports, extensions)
+  });
 }
 
 function cleanHashes(body) {
