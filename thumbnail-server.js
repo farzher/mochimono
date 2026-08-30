@@ -14,6 +14,7 @@ const DATA_DIR = resolve(process.env.MOCHIMONO_DATA || join(ROOT, 'data'));
 const TOKEN = process.env.MOCHIMONO_TOKEN || '';
 const THUMB_VERSION = 1;
 const MAX_THUMB_BYTES = 5 * 1024 * 1024;
+const PRIORITY_WINDOW_MS = 20_000;
 const db = openCatalog(join(DATA_DIR, 'catalog.sqlite'));
 
 const thumbPath = hash => join(DATA_DIR, 'thumbs', hash.slice(0, 2), `${hash}.webp`);
@@ -139,6 +140,7 @@ function missingThumbnails(res, url) {
   if (imports.length > 100) return json(res, 400, { error: 'Too many imports' });
   const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') || 100)));
   const importMarks = imports.map(() => '?').join(',');
+  const priorityCutoff = new Date(Date.now() - PRIORITY_WINDOW_MS).toISOString();
   const mediaExtensions = [
     '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.avif', '.bmp', '.tif', '.tiff',
     '.mp4', '.m4v', '.mov', '.mkv', '.webm', '.avi', '.mpg', '.mpeg', '.m2v', '.mts', '.m2ts', '.3gp'
@@ -146,7 +148,8 @@ function missingThumbnails(res, url) {
   const extensionSql = mediaExtensions.map(extension => `lower(s.filename) LIKE '%${extension}'`).join(' OR ');
 
   const objects = db.prepare(`
-    SELECT o.hash, o.size, o.mime, MAX(r.requested_at) AS requestedAt
+    SELECT o.hash, o.size, o.mime,
+           MAX(CASE WHEN r.requested_at >= ? THEN r.requested_at END) AS requestedAt
     FROM sources s
     JOIN objects o ON o.hash = s.object_hash
     LEFT JOIN thumbnails t ON t.object_hash = o.hash AND t.version = ?
@@ -158,7 +161,7 @@ function missingThumbnails(res, url) {
     GROUP BY o.hash, o.size, o.mime
     ORDER BY (requestedAt IS NOT NULL) DESC, requestedAt DESC, o.size ASC, o.hash
     LIMIT ?
-  `).all(THUMB_VERSION, ...imports, limit);
+  `).all(priorityCutoff, THUMB_VERSION, ...imports, limit);
 
   if (!objects.length) return json(res, 200, { version: THUMB_VERSION, files: [] });
   const hashes = objects.map(object => object.hash);
