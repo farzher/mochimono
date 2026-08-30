@@ -27,8 +27,8 @@ for (const row of db.prepare(`
   SELECT t.object_hash AS hash
   FROM thumbnails t
   JOIN objects o ON o.hash = t.object_hash
-  WHERE o.state != 'active'
-`).all()) {
+  WHERE o.state != 'active' OR t.version != ?
+`).all(THUMB_VERSION)) {
   db.prepare('DELETE FROM thumbnails WHERE object_hash = ?').run(row.hash);
   await rm(thumbPath(row.hash), { force: true }).catch(() => {});
 }
