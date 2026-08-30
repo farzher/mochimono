@@ -54,8 +54,13 @@ async function refreshCollections() {
 
 function updateCollectionUrl(id) {
   const url = new URL(location.href);
-  if (id) url.searchParams.set('collection', id);
-  else url.searchParams.delete('collection');
+  if (id) {
+    url.searchParams.set('collection', id);
+    url.searchParams.delete('source');
+    url.searchParams.delete('path');
+  } else {
+    url.searchParams.delete('collection');
+  }
   history.replaceState(history.state, '', url);
 }
 
@@ -75,6 +80,18 @@ async function setActiveCollection(id, updateUrl = true) {
   activeHashes = new Set(data.hashes || []);
   window.mochimonoSetCollectionHashes?.(activeHashes);
   if (updateUrl) updateCollectionUrl(next);
+}
+
+async function switchFromViewer(id) {
+  const next = String(id);
+  if (!viewer.hidden && history.state?.mochimonoViewer) {
+    const apply = () => setActiveCollection(next).catch(console.error);
+    window.addEventListener('popstate', apply, { once: true });
+    viewerClose.click();
+    return;
+  }
+  if (!viewer.hidden) viewerClose.click();
+  await setActiveCollection(next);
 }
 
 filter.addEventListener('change', () => setActiveCollection(filter.value).catch(console.error));
@@ -130,8 +147,7 @@ new MutationObserver(() => {
 viewerCollections.addEventListener('click', async event => {
   const open = event.target.closest('[data-open-collection]');
   if (open) {
-    await setActiveCollection(open.dataset.openCollection);
-    viewerClose.click();
+    await switchFromViewer(open.dataset.openCollection);
     return;
   }
   const remove = event.target.closest('[data-remove-collection]');
@@ -185,7 +201,7 @@ function openPicker(hashes) {
   if (!pickerHashes.length) return;
   pickerInput.value = '';
   renderPickerOptions();
-  picker.showModal();
+  if (!picker.open) picker.showModal();
   requestAnimationFrame(() => pickerInput.focus());
 }
 
