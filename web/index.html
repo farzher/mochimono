@@ -11,19 +11,18 @@
 <body>
   <main class="shell">
     <header>
-      <div>
+      <div class="app-brand">
+        <span class="mini" aria-hidden="true"></span>
         <h1>Mochimono</h1>
-        <p>A cozy home for all your stuff.</p>
       </div>
       <button id="logout" class="quiet" hidden>Log out</button>
     </header>
 
     <section id="login" class="card login" hidden>
       <h2>Connect</h2>
-      <p>Enter the server token configured in <code>MOCHIMONO_TOKEN</code>.</p>
       <form id="login-form">
         <input id="token" type="password" autocomplete="current-password" placeholder="Server token" required>
-        <button>Open Mochimono</button>
+        <button>Open</button>
       </form>
       <p id="login-error" class="error"></p>
     </section>
@@ -33,23 +32,20 @@
 
       <section id="library-card" class="card library-card">
         <div class="section-head library-head">
-          <div>
-            <h2>Library</h2>
-            <p>Everything together. Original locations remembered.</p>
-          </div>
-          <input id="search" type="search" placeholder="Search names, paths, and sources">
+          <h2>Library</h2>
+          <input id="search" type="search" placeholder="Search">
         </div>
         <div class="toolbar">
           <div class="library-filters">
-            <select id="source" aria-label="Filter by source"><option value="">All sources</option></select>
+            <select id="source" aria-label="Source"><option value="">All sources</option></select>
             <button id="inbox" class="inbox-toggle">Inbox</button>
-            <button id="unbacked" class="backup-toggle">No backup copy</button>
+            <button id="unbacked" class="backup-toggle">Unbacked</button>
             <div id="filters" class="segmented">
               <button data-type="" class="active">All</button>
               <button data-type="image">Images</button>
               <button data-type="video">Video</button>
               <button data-type="audio">Audio</button>
-              <button data-type="application">Documents</button>
+              <button data-type="application">Docs</button>
               <button data-type="other">Other</button>
             </div>
           </div>
@@ -61,16 +57,11 @@
         </div>
         <div id="folderbar" class="folderbar" hidden></div>
         <div id="files" class="files grid"></div>
-        <button id="more" class="more quiet" hidden>Load more</button>
+        <button id="more" class="more quiet" hidden>More</button>
       </section>
 
       <section class="card">
-        <div class="section-head">
-          <div>
-            <h2>Backups</h2>
-            <p>Coverage reported by each offline backup location.</p>
-          </div>
-        </div>
+        <div class="section-head"><h2>Backups</h2></div>
         <div id="drives" class="drives"></div>
       </section>
     </div>
@@ -85,24 +76,21 @@
           <h2 id="detail-name"></h2>
           <p id="detail-meta"></p>
         </div>
-        <a id="detail-open" class="button-link" target="_blank">Open original</a>
+        <a id="detail-open" class="button-link" target="_blank">Open</a>
       </div>
       <div class="review-zone">
-        <div><strong id="review-status"></strong><p id="review-copy"></p></div>
+        <strong id="review-status"></strong>
         <button id="review-toggle"></button>
       </div>
-      <h3>Known locations</h3>
+      <h3>Locations</h3>
       <div id="detail-sources" class="sources"></div>
-      <h3 class="detail-section">Backup copies</h3>
+      <h3 class="detail-section">Backups</h3>
       <div id="detail-backups" class="sources"></div>
       <div class="danger-zone">
-        <div>
-          <strong>Remove from live library</strong>
-          <p>Offline backup copies are left alone.</p>
-        </div>
+        <strong>Remove</strong>
         <div class="danger-actions">
           <button id="delete" class="quiet">Delete</button>
-          <button id="delete-ignore" class="danger">Delete & Ignore</button>
+          <button id="delete-ignore" class="danger">Delete + Ignore</button>
         </div>
       </div>
     </div>
