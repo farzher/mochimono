@@ -33,8 +33,11 @@ header p { margin: 4px 0 0; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 0 15px; border-bottom: 1px solid #efede7; }
 .library-filters { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-width: 0; }
 .library-filters select { min-width: 180px; max-width: 320px; padding: 7px 30px 7px 10px; font-size: 12px; background: #f8f7f3; }
-.inbox-toggle { background: #fff4e7; color: #8a5d28; border: 1px solid #ecd6b7; padding: 7px 10px; font-size: 12px; }
+.inbox-toggle,.backup-toggle { padding: 7px 10px; font-size: 12px; }
+.inbox-toggle { background: #fff4e7; color: #8a5d28; border: 1px solid #ecd6b7; }
 .inbox-toggle.active { background: #a66a2a; color: white; border-color: #a66a2a; }
+.backup-toggle { background: #f5f1ee; color: #715e55; border: 1px solid #ded3cd; }
+.backup-toggle.active { background: #6e554a; color: white; border-color: #6e554a; }
 .segmented { display: flex; flex-wrap: wrap; gap: 5px; }
 .segmented button { background: #f1efe9; color: #605d56; padding: 7px 10px; font-size: 12px; }
 .segmented button.active { background: #222; color: #fff; }
@@ -101,7 +104,7 @@ dialog::backdrop { background: rgba(28,26,23,.44); }
   .section-head { align-items: stretch; flex-direction: column; }
   .section-head input, .library-head input, .library-filters select { width: 100%; max-width: none; min-width: 0; }
   .library-filters { align-items: stretch; flex-direction: column; }
-  .inbox-toggle { width: 100%; }
+  .inbox-toggle,.backup-toggle { width: 100%; }
   .files.grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .thumb { height: 130px; }
   .file-row { grid-template-columns: 62px minmax(0, 1fr) 70px; }
