@@ -29,7 +29,7 @@
     <div id="app" hidden>
       <section id="stats" class="stats"></section>
 
-      <section class="card library-card">
+      <section id="library-card" class="card library-card">
         <div class="section-head library-head">
           <div>
             <h2>Library</h2>
@@ -54,8 +54,10 @@
           <div id="views" class="segmented compact">
             <button data-view="grid" class="active">Grid</button>
             <button data-view="list">List</button>
+            <button data-view="folders">Folders</button>
           </div>
         </div>
+        <div id="folderbar" class="folderbar" hidden></div>
         <div id="files" class="files grid"></div>
         <button id="more" class="more quiet" hidden>Load more</button>
       </section>
