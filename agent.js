@@ -22,17 +22,28 @@ let saved = {};
 try { saved = JSON.parse(await readFile(CONFIG_PATH, 'utf8')); } catch {}
 let settings = {
   server: String(process.env.MOCHIMONO_URL || saved.server || 'http://127.0.0.1:8642').replace(/\/$/, ''),
-  token: String(process.env.MOCHIMONO_TOKEN || saved.token || '')
+  token: String(process.env.MOCHIMONO_TOKEN || saved.token || ''),
+  backups: Array.isArray(saved.backups) ? saved.backups.map(String) : []
 };
 let job = null;
 
-async function saveSettings(next) {
-  settings = {
-    server: String(next.server || settings.server || 'http://127.0.0.1:8642').trim().replace(/\/$/, ''),
-    token: next.token === undefined ? settings.token : String(next.token)
-  };
+async function persistSettings() {
   await mkdir(CONFIG_DIR, { recursive: true });
   await writeFile(CONFIG_PATH, `${JSON.stringify(settings, null, 2)}\n`);
+}
+
+async function saveSettings(next) {
+  settings.server = String(next.server || settings.server || 'http://127.0.0.1:8642').trim().replace(/\/$/, '');
+  if (next.token !== undefined) settings.token = String(next.token);
+  await persistSettings();
+}
+
+async function rememberBackup(path) {
+  const root = resolve(path);
+  if (!settings.backups.includes(root)) {
+    settings.backups.push(root);
+    await persistSettings();
+  }
 }
 
 function json(res, status, data) {
@@ -218,7 +229,14 @@ async function backupInit(path, name, types) {
   const root = resolve(path);
   const info = await stat(root);
   if (!info.isDirectory()) throw new Error(`${root} is not a directory`);
-  if (existsSync(driveMetaPath(root))) throw new Error('This location is already a Mochimono backup');
+
+  // A Mochimono backup is only a folder. Never format, partition, erase, or otherwise modify the filesystem/drive itself.
+  if (existsSync(driveMetaPath(root))) {
+    const meta = await readDrive(root);
+    await rememberBackup(root);
+    return { path: root, meta, remote: await registerDrive(meta), existing: true };
+  }
+
   await mkdir(join(root, '.mochimono'), { recursive: true });
   const meta = {
     format: 1,
@@ -229,8 +247,9 @@ async function backupInit(path, name, types) {
   };
   await writeFile(driveMetaPath(root), `${JSON.stringify(meta, null, 2)}\n`);
   openInventory(root).close();
+  await rememberBackup(root);
   const remote = await registerDrive(meta);
-  return { path: root, meta, remote };
+  return { path: root, meta, remote, existing: false };
 }
 
 async function downloadVerified(hash, expectedSize, destination) {
@@ -267,6 +286,7 @@ async function reportReplicas(driveId, replicas) {
 async function backupUpdate(path, update) {
   const root = resolve(path);
   const meta = await readDrive(root);
+  await rememberBackup(root);
   await registerDrive(meta);
   const db = openInventory(root);
   const find = db.prepare('SELECT hash, size, verified_at FROM objects WHERE hash = ?');
@@ -310,6 +330,7 @@ async function backupUpdate(path, update) {
 async function backupVerify(path, update) {
   const root = resolve(path);
   const meta = await readDrive(root);
+  await rememberBackup(root);
   await registerDrive(meta);
   const db = openInventory(root);
   const rows = db.prepare('SELECT hash, size FROM objects ORDER BY hash').all();
@@ -347,6 +368,7 @@ async function backupVerify(path, update) {
 async function backupStatus(path) {
   const root = resolve(path);
   const meta = await readDrive(root);
+  await rememberBackup(root);
   const db = openInventory(root);
   const local = db.prepare('SELECT COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes, MIN(verified_at) AS oldestVerification FROM objects').get();
   db.close();
@@ -394,15 +416,48 @@ async function roots() {
   return results;
 }
 
-async function browse(path) {
-  const current = resolve(path || homedir());
-  const entries = [];
-  for (const entry of await readdir(current, { withFileTypes: true })) {
-    if (entry.isDirectory()) entries.push({ name: entry.name, path: join(current, entry.name) });
+async function backupLocations() {
+  const discovered = (await roots()).filter(root => root.managed).map(root => root.path);
+  const paths = [...new Set([...settings.backups, ...discovered])];
+  const results = [];
+  for (const path of paths) {
+    try {
+      const info = await pathInfo(path);
+      if (info.managed) results.push(info);
+    } catch {}
   }
-  entries.sort((a, b) => a.name.localeCompare(b.name));
-  const parent = dirname(current) === current ? null : dirname(current);
-  return { path: current, parent, directories: entries };
+  return results;
+}
+
+function commandOutput(command, args) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, { windowsHide: false });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', code => code === 0 ? resolvePromise(stdout.trim()) : reject(new Error(stderr.trim() || `Folder picker exited with code ${code}`)));
+  });
+}
+
+async function pickFolder() {
+  if (platform() === 'win32') {
+    const script = [
+      'Add-Type -AssemblyName System.Windows.Forms',
+      '$d = New-Object System.Windows.Forms.FolderBrowserDialog',
+      '$d.Description = "Choose a folder for Mochimono"',
+      '$d.ShowNewFolderButton = $true',
+      'if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }'
+    ].join('; ');
+    return await commandOutput('powershell.exe', ['-NoProfile', '-STA', '-Command', script]) || null;
+  }
+  if (platform() === 'darwin') {
+    try { return await commandOutput('osascript', ['-e', 'POSIX path of (choose folder with prompt "Choose a folder for Mochimono")']) || null; }
+    catch { return null; }
+  }
+  try { return await commandOutput('zenity', ['--file-selection', '--directory', '--title=Choose a folder for Mochimono']) || null; }
+  catch { throw new Error('Native folder picker is unavailable. Paste the folder path instead.'); }
 }
 
 function staticType(path) {
@@ -439,18 +494,18 @@ async function handleApi(req, res, url) {
     await saveSettings({ server: body.server, token: body.token === '' ? undefined : body.token });
     return json(res, 200, { ok: true, server: settings.server, hasToken: Boolean(settings.token) });
   }
-  if (req.method === 'GET' && url.pathname === '/api/roots') return json(res, 200, { roots: await roots(), home: homedir() });
-  if (req.method === 'GET' && url.pathname === '/api/browse') return json(res, 200, await browse(url.searchParams.get('path') || homedir()));
+  if (req.method === 'GET' && url.pathname === '/api/pick-folder') return json(res, 200, { path: await pickFolder() });
+  if (req.method === 'GET' && url.pathname === '/api/backups') return json(res, 200, { backups: await backupLocations() });
   if (req.method === 'GET' && url.pathname === '/api/backup/status') return json(res, 200, await backupStatus(url.searchParams.get('path')));
 
   if (req.method === 'POST' && url.pathname === '/api/import') {
     const body = await readJson(req);
-    if (!body.path) return json(res, 400, { error: 'Choose a folder to import' });
+    if (!body.path) return json(res, 400, { error: 'Choose or paste a folder to import' });
     return startJob(res, 'import', `Import ${body.source || basename(body.path)}`, update => importFolder(body.path, body.source, update));
   }
   if (req.method === 'POST' && url.pathname === '/api/backup/init') {
     const body = await readJson(req);
-    if (!body.path) return json(res, 400, { error: 'Choose a backup location' });
+    if (!body.path) return json(res, 400, { error: 'Choose or paste a backup folder' });
     const result = await backupInit(body.path, body.name, body.types);
     return json(res, 200, result);
   }
