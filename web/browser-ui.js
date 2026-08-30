@@ -2,6 +2,9 @@ const files = document.querySelector('#files');
 const views = document.querySelector('#views');
 const folderbar = document.querySelector('#folderbar');
 const viewer = document.querySelector('#viewer');
+const viewerStage = document.querySelector('#viewer-stage');
+const viewerPrev = document.querySelector('#viewer-prev');
+const viewerNext = document.querySelector('#viewer-next');
 const dateRail = document.querySelector('#dateRail');
 
 function currentView() {
@@ -162,6 +165,52 @@ viewer.addEventListener('mouseenter', () => {
 }, { passive: true });
 new MutationObserver(syncViewerUi).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 syncViewerUi();
+
+let viewerSwipe = null;
+
+function clearViewerSwipe(event) {
+  if (event && viewerSwipe?.pointerId !== event.pointerId) return;
+  viewerSwipe = null;
+}
+
+viewerStage.addEventListener('pointerdown', event => {
+  if (viewer.hidden || (event.pointerType !== 'touch' && event.pointerType !== 'pen')) return;
+  if (event.target.closest('.viewer-nav')) return;
+  viewerSwipe = {
+    pointerId: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+    lastX: event.clientX,
+    lastY: event.clientY
+  };
+  try { viewerStage.setPointerCapture(event.pointerId); } catch {}
+});
+
+viewerStage.addEventListener('pointermove', event => {
+  if (!viewerSwipe || viewerSwipe.pointerId !== event.pointerId) return;
+  viewerSwipe.lastX = event.clientX;
+  viewerSwipe.lastY = event.clientY;
+});
+
+viewerStage.addEventListener('pointerup', event => {
+  if (!viewerSwipe || viewerSwipe.pointerId !== event.pointerId) return;
+  const swipe = viewerSwipe;
+  clearViewerSwipe(event);
+  try { viewerStage.releasePointerCapture(event.pointerId); } catch {}
+
+  const dx = event.clientX - swipe.x;
+  const dy = event.clientY - swipe.y;
+  const threshold = Math.max(52, Math.min(88, innerWidth * .12));
+  if (Math.abs(dx) < threshold || Math.abs(dx) < Math.abs(dy) * 1.35) return;
+
+  if (dx < 0) {
+    if (!viewerNext.disabled) viewerNext.click();
+  } else if (!viewerPrev.disabled) {
+    viewerPrev.click();
+  }
+});
+
+viewerStage.addEventListener('pointercancel', clearViewerSwipe);
 
 let press = null;
 let dispatchingLongPress = false;
