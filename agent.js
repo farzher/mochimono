@@ -249,12 +249,87 @@ function queuePreview(record) {
   });
 }
 
+function peekDirty(root) {
+  const key = pathKey(root);
+  return { all: dirtyAll.has(key), paths: dirtyPaths.get(key) || new Set() };
+}
+
 function consumeDirty(root) {
   const key = pathKey(root);
   const all = dirtyAll.delete(key);
   const paths = dirtyPaths.get(key) || new Set();
   dirtyPaths.delete(key);
   return { all, paths };
+}
+
+function localChangedPath(root, relativePath) {
+  const base = resolve(root);
+  const target = resolve(base, ...String(relativePath || '').replaceAll('\\', '/').split('/').filter(Boolean));
+  const normalize = value => platform() === 'win32' ? value.toLowerCase() : value;
+  const baseKey = normalize(base);
+  const targetKey = normalize(target);
+  if (targetKey !== baseKey && !targetKey.startsWith(`${baseKey}${sep}`)) return null;
+  return target;
+}
+
+async function checkObjectsAndPreviews(records) {
+  const hashes = [...new Set(records.map(record => record.hash))];
+  const missing = new Set();
+  const ignored = new Set();
+  const previewReady = new Set();
+  for (let index = 0; index < hashes.length; index += 1000) {
+    const result = await api('/api/objects/check', { method: 'POST', body: { hashes: hashes.slice(index, index + 1000) } });
+    result.missing.forEach(hash => missing.add(hash));
+    result.ignored.forEach(hash => ignored.add(hash));
+  }
+  for (let index = 0; index < hashes.length; index += 500) {
+    const result = await api('/api/thumbs/check', { method: 'POST', body: { hashes: hashes.slice(index, index + 500) } });
+    for (const preview of result.thumbnails || []) previewReady.add(preview.hash);
+  }
+  return { missing, ignored, previewReady };
+}
+
+async function uploadMissing(records, missing, previewReady, update, root) {
+  const unique = new Map();
+  for (const record of records) if (!unique.has(record.hash)) unique.set(record.hash, record);
+  for (const [hash, record] of unique) if (!missing.has(hash) && !previewReady.has(hash)) queuePreview(record);
+
+  const missingRecords = [...missing].map(hash => unique.get(hash)).filter(Boolean);
+  const uploadBytes = missingRecords.reduce((sum, record) => sum + record.size, 0);
+  let uploadedBytes = 0;
+  if (uploadBytes) {
+    const uploadStarted = Date.now();
+    const uploadReport = progressReporter(update, { phase: 'Uploading', path: root });
+    for (const record of missingRecords) {
+      const base = uploadedBytes;
+      await uploadFile(record, sent => {
+        uploadReport({ current: record.relative, ...transferProgress(base + sent, uploadBytes, uploadStarted) });
+      });
+      if (!previewReady.has(record.hash)) queuePreview(record);
+      uploadedBytes += record.size;
+      uploadReport({ current: record.relative, ...transferProgress(uploadedBytes, uploadBytes, uploadStarted) }, true);
+    }
+  }
+  return { unique, missingRecords, uploadedBytes };
+}
+
+async function saveSources(importId, records, ignored) {
+  const accepted = records.filter(record => !ignored.has(record.hash));
+  for (let index = 0; index < accepted.length; index += 1000) {
+    await api('/api/sources', {
+      method: 'POST',
+      body: {
+        importId,
+        sources: accepted.slice(index, index + 1000).map(record => ({
+          hash: record.hash,
+          path: record.relative,
+          filename: basename(record.path),
+          mtime: record.mtime
+        }))
+      }
+    });
+  }
+  return accepted;
 }
 
 async function syncFiles(folder, update, importId = null) {
@@ -315,6 +390,11 @@ async function syncFiles(folder, update, importId = null) {
       record.hash = await hashFile(record.path, read => {
         hashReport({ current: record.relative, reusedHashes, ...transferProgress(base + read, hashBytes, hashStarted) });
       });
+      const latest = await stat(record.path);
+      if (latest.size !== record.size || Math.trunc(latest.mtimeMs) !== record.mtimeMs) {
+        queueFolderSync(root, record.relative, 500);
+        continue;
+      }
       hashed.push(record);
       syncIndex.save(rootKey, record.cachePath, record.size, record.mtimeMs, record.hash);
     } catch (error) {
@@ -325,69 +405,15 @@ async function syncFiles(folder, update, importId = null) {
     hashReport({ current: record.relative, reusedHashes, ...transferProgress(hashedBytes, hashBytes, hashStarted) }, true);
   }
 
-  const unique = new Map();
-  for (const record of hashed) if (!unique.has(record.hash)) unique.set(record.hash, record);
-  const hashes = [...unique.keys()];
-  const missing = new Set();
-  const ignored = new Set();
-  const previewReady = new Set();
-
   update({ phase: 'Checking', path: root, indeterminate: true, current: '', reusedHashes });
-  for (let index = 0; index < hashes.length; index += 1000) {
-    const result = await api('/api/objects/check', { method: 'POST', body: { hashes: hashes.slice(index, index + 1000) } });
-    result.missing.forEach(hash => missing.add(hash));
-    result.ignored.forEach(hash => ignored.add(hash));
-  }
-  for (let index = 0; index < hashes.length; index += 500) {
-    const result = await api('/api/thumbs/check', { method: 'POST', body: { hashes: hashes.slice(index, index + 500) } });
-    for (const preview of result.thumbnails || []) previewReady.add(preview.hash);
-  }
-
-  for (const [hash, record] of unique) {
-    if (!missing.has(hash) && !ignored.has(hash) && !previewReady.has(hash)) queuePreview(record);
-  }
-
-  const missingRecords = [...missing].map(hash => unique.get(hash));
-  const uploadBytes = missingRecords.reduce((sum, record) => sum + record.size, 0);
-  let uploadedBytes = 0;
-
-  if (uploadBytes) {
-    const uploadStarted = Date.now();
-    const uploadReport = progressReporter(update, { phase: 'Uploading', path: root });
-    for (const record of missingRecords) {
-      const base = uploadedBytes;
-      await uploadFile(record, sent => {
-        uploadReport({ current: record.relative, ...transferProgress(base + sent, uploadBytes, uploadStarted) });
-      });
-      if (!previewReady.has(record.hash)) queuePreview(record);
-      uploadedBytes += record.size;
-      uploadReport({ current: record.relative, ...transferProgress(uploadedBytes, uploadBytes, uploadStarted) }, true);
-    }
-  }
+  const { missing, ignored, previewReady } = await checkObjectsAndPreviews(hashed);
+  const { missingRecords, uploadedBytes } = await uploadMissing(hashed, missing, previewReady, update, root);
 
   update({ phase: 'Saving', path: root, indeterminate: true, current: '' });
   const source = settings.device;
   const created = importId ? { id: importId } : await api('/api/imports', { method: 'POST', body: { sourceName: source } });
-  const accepted = hashed.filter(record => !ignored.has(record.hash));
-
-  if (importId) {
-    await api(`/api/imports/${importId}`, { method: 'POST', body: { sourceName: source } });
-  }
-
-  for (let index = 0; index < accepted.length; index += 1000) {
-    await api('/api/sources', {
-      method: 'POST',
-      body: {
-        importId: created.id,
-        sources: accepted.slice(index, index + 1000).map(record => ({
-          hash: record.hash,
-          path: record.relative,
-          filename: basename(record.path),
-          mtime: record.mtime
-        }))
-      }
-    });
-  }
+  if (importId) await api(`/api/imports/${importId}`, { method: 'POST', body: { sourceName: source } });
+  const accepted = await saveSources(created.id, hashed, ignored);
 
   return {
     importId: created.id,
@@ -403,8 +429,91 @@ async function syncFiles(folder, update, importId = null) {
   };
 }
 
+async function syncChangedFiles(folder, update) {
+  const root = resolve(folder.path);
+  const rootKey = pathKey(root);
+  const dirty = consumeDirty(root);
+  if (dirty.all || !folder.importId) return syncFiles(root, update, folder.importId);
+
+  const records = [];
+  let needsFullScan = false;
+  for (const relativePath of dirty.paths) {
+    const path = localChangedPath(root, relativePath);
+    if (!path) continue;
+    try {
+      const file = await stat(path);
+      if (file.isDirectory()) {
+        needsFullScan = true;
+        break;
+      }
+      if (!file.isFile()) continue;
+      records.push({
+        path,
+        relative: relative(root, path).replaceAll('\\', '/'),
+        cachePath: relativeKey(relative(root, path)),
+        size: file.size,
+        mtime: file.mtime.toISOString(),
+        mtimeMs: Math.trunc(file.mtimeMs),
+        mime: mimeFor(path)
+      });
+    } catch {
+      // Local deletion does not delete the cloud object or its provenance.
+    }
+  }
+  if (needsFullScan) return syncFiles(root, update, folder.importId);
+  if (!records.length) return { importId: folder.importId, source: settings.device, changed: 0, new: 0, uploadedBytes: 0 };
+
+  const totalBytes = records.reduce((sum, record) => sum + record.size, 0);
+  let doneBytes = 0;
+  let errors = 0;
+  const started = Date.now();
+  const report = progressReporter(update, { phase: 'Hashing', path: root });
+  const hashed = [];
+  for (const record of records) {
+    const base = doneBytes;
+    try {
+      record.hash = await hashFile(record.path, read => {
+        report({ current: record.relative, ...transferProgress(base + read, totalBytes, started) });
+      });
+      const latest = await stat(record.path);
+      if (latest.size !== record.size || Math.trunc(latest.mtimeMs) !== record.mtimeMs) {
+        queueFolderSync(root, record.relative, 500);
+      } else {
+        hashed.push(record);
+        syncIndex.save(rootKey, record.cachePath, record.size, record.mtimeMs, record.hash);
+      }
+    } catch (error) {
+      if (error.canceled) throw error;
+      errors++;
+      queueFolderSync(root, record.relative, 1000);
+    }
+    doneBytes += record.size;
+    report({ current: record.relative, ...transferProgress(doneBytes, totalBytes, started) }, true);
+  }
+  if (!hashed.length) return { importId: folder.importId, source: settings.device, changed: records.length, new: 0, errors, uploadedBytes: 0 };
+
+  update({ phase: 'Checking', path: root, indeterminate: true, current: '' });
+  const { missing, ignored, previewReady } = await checkObjectsAndPreviews(hashed);
+  const { missingRecords, uploadedBytes } = await uploadMissing(hashed, missing, previewReady, update, root);
+  update({ phase: 'Saving', path: root, indeterminate: true, current: '' });
+  await saveSources(folder.importId, hashed, ignored);
+
+  return {
+    importId: folder.importId,
+    source: settings.device,
+    changed: records.length,
+    new: missingRecords.length,
+    errors,
+    uploadedBytes
+  };
+}
+
 async function syncFolder(folder, update) {
-  const result = await syncFiles(folder.path, update, folder.importId);
+  const dirty = peekDirty(folder.path);
+  const incremental = Boolean(folder.importId && !dirty.all && dirty.paths.size);
+  const result = incremental
+    ? await syncChangedFiles(folder, update)
+    : await syncFiles(folder.path, update, folder.importId);
   folder.importId = result.importId;
   folder.lastSynced = now();
   await persistSettings();
