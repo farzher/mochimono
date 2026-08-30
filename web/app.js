@@ -7,6 +7,7 @@ const PAGE = 120;
 
 let searchTimer;
 let loaded = [];
+let imports = [];
 let offset = 0;
 let hasMore = false;
 let type = '';
@@ -15,6 +16,9 @@ let inboxOnly = false;
 let noBackupOnly = false;
 let view = 'grid';
 let selected = null;
+let folderImportId = '';
+let folderPath = '';
+let folderData = null;
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
@@ -73,17 +77,22 @@ async function loadStats() {
 
 async function loadImports() {
   const data = await request('/api/imports');
+  imports = data.imports;
   const source = $('#source');
-  source.innerHTML = '<option value="">All sources</option>' + data.imports.map(item => {
+  source.innerHTML = '<option value="">All sources</option>' + imports.map(item => {
     const date = new Date(item.createdAt).toLocaleDateString();
     return `<option value="${item.id}">${escapeHtml(item.sourceName)} · ${item.files.toLocaleString()} files · ${escapeHtml(date)}</option>`;
   }).join('');
   source.value = importId;
+  if (view === 'folders' && !folderImportId) renderFolder();
 }
 
 function renderFiles() {
+  if (view === 'folders') return renderFolder();
   const element = $('#files');
   element.className = `files ${view}`;
+  $('#folderbar').hidden = true;
+  $('#more').hidden = !hasMore;
 
   if (!loaded.length) {
     const message = inboxOnly ? 'Inbox is empty.' : noBackupOnly ? 'Every matching file has an offline backup copy.' : 'No files found.';
@@ -109,11 +118,10 @@ function renderFiles() {
         <span class="size">${formatBytes(file.size)}</span>
       </button>`).join('');
   }
-
-  $('#more').hidden = !hasMore;
 }
 
 async function loadFiles(reset = true) {
+  if (view === 'folders') return loadFolder();
   if (reset) {
     loaded = [];
     offset = 0;
@@ -128,6 +136,90 @@ async function loadFiles(reset = true) {
   renderFiles();
 }
 
+function currentFolderSource() {
+  return imports.find(item => String(item.id) === String(folderImportId));
+}
+
+function folderBreadcrumb() {
+  const bar = $('#folderbar');
+  bar.hidden = false;
+  const source = currentFolderSource();
+  const parts = folderPath ? folderPath.split('/') : [];
+  const crumbs = [`<button data-folder-home>Sources</button>`];
+  if (source) {
+    crumbs.push(`<span>›</span><button data-folder-depth="0">${escapeHtml(source.sourceName)}</button>`);
+    parts.forEach((part, index) => crumbs.push(`<span>›</span><button data-folder-depth="${index + 1}">${escapeHtml(part)}</button>`));
+  }
+  bar.innerHTML = `<div class="breadcrumbs">${crumbs.join('')}</div><span class="folder-note">Original imported structure</span>`;
+}
+
+function renderFolder() {
+  const element = $('#files');
+  element.className = 'files folders';
+  $('#more').hidden = true;
+  folderBreadcrumb();
+
+  if (!folderImportId) {
+    element.innerHTML = imports.length ? `
+      <div class="folder-list-head"><span>Name</span><span>Contents</span><span>Imported</span></div>
+      ${imports.map(item => `
+        <button class="folder-row source-row" data-folder-source="${item.id}">
+          <span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(item.sourceName)}</strong></span>
+          <span>${item.files.toLocaleString()} files · ${formatBytes(item.referencedBytes)}</span>
+          <span>${escapeHtml(new Date(item.createdAt).toLocaleDateString())}</span>
+        </button>`).join('')}` : '<div class="empty">No imported sources yet.</div>';
+    return;
+  }
+
+  if (!folderData) {
+    element.innerHTML = '<div class="empty">Loading folder…</div>';
+    return;
+  }
+
+  const rows = [];
+  for (const folder of folderData.folders) {
+    rows.push(`
+      <button class="folder-row" data-folder-name="${escapeHtml(folder.name)}">
+        <span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(folder.name)}</strong></span>
+        <span>${folder.files.toLocaleString()} file${folder.files === 1 ? '' : 's'}</span>
+        <span>Folder</span>
+      </button>`);
+  }
+  for (const file of folderData.files) {
+    rows.push(`
+      <button class="folder-row file-folder-row" data-hash="${file.hash}">
+        <span class="folder-name"><i class="document-icon"></i><strong>${escapeHtml(file.filename)}</strong>${file.reviewed ? '' : '<em>Inbox</em>'}</span>
+        <span>${formatBytes(file.size)} · ${file.backupCount ? `${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : 'no backup'}</span>
+        <span>${escapeHtml(typeLabel(file))}</span>
+      </button>`);
+  }
+  element.innerHTML = rows.length
+    ? `<div class="folder-list-head"><span>Name</span><span>Details</span><span>Type</span></div>${rows.join('')}`
+    : '<div class="empty">This folder is empty.</div>';
+}
+
+async function loadFolder() {
+  folderData = null;
+  renderFolder();
+  if (!folderImportId) return;
+  folderData = await request(`/api/folders?import=${encodeURIComponent(folderImportId)}&path=${encodeURIComponent(folderPath)}`);
+  renderFolder();
+}
+
+function setView(next) {
+  view = next;
+  $('#library-card').classList.toggle('folder-mode', view === 'folders');
+  $$('#views button').forEach(item => item.classList.toggle('active', item.dataset.view === view));
+  if (view === 'folders') {
+    folderImportId = importId;
+    folderPath = '';
+    loadFolder().catch(console.error);
+  } else {
+    $('#folderbar').hidden = true;
+    loadFiles(true).catch(console.error);
+  }
+}
+
 function renderReviewState() {
   const reviewed = Boolean(selected?.reviewed);
   $('#review-status').textContent = reviewed ? 'Reviewed' : 'Inbox';
@@ -136,8 +228,8 @@ function renderReviewState() {
   $('#review-toggle').className = reviewed ? 'quiet' : '';
 }
 
-async function openDetails(hash) {
-  selected = loaded.find(file => file.hash === hash);
+async function openDetails(hash, fallback = null) {
+  selected = loaded.find(file => file.hash === hash) || folderData?.files?.find(file => file.hash === hash) || fallback;
   if (!selected) return;
 
   $('#detail-name').textContent = selected.filename;
@@ -173,13 +265,19 @@ async function openDetails(hash) {
   }
 }
 
+async function refreshLibrary() {
+  await loadStats();
+  if (view === 'folders') await loadFolder();
+  else await loadFiles(true);
+}
+
 async function toggleReviewed() {
   if (!selected) return;
   const reviewed = !Boolean(selected.reviewed);
   await request(`/api/objects/${selected.hash}/review`, { method: 'POST', body: { reviewed } });
   $('#details').close();
   selected = null;
-  await Promise.all([loadStats(), loadFiles(true)]);
+  await refreshLibrary();
 }
 
 async function removeSelected(ignore) {
@@ -191,7 +289,9 @@ async function removeSelected(ignore) {
   await request(`/api/objects/${selected.hash}/delete`, { method: 'POST', body: { ignore } });
   $('#details').close();
   selected = null;
-  await Promise.all([loadStats(), loadFiles(true), loadImports(), loadDrives()]);
+  await Promise.all([loadStats(), loadImports(), loadDrives()]);
+  if (view === 'folders') await loadFolder();
+  else await loadFiles(true);
 }
 
 async function loadDrives() {
@@ -253,7 +353,11 @@ $('#search').addEventListener('input', () => {
 
 $('#source').addEventListener('change', event => {
   importId = event.target.value;
-  loadFiles(true).catch(console.error);
+  if (view === 'folders') {
+    folderImportId = importId;
+    folderPath = '';
+    loadFolder().catch(console.error);
+  } else loadFiles(true).catch(console.error);
 });
 
 $('#inbox').addEventListener('click', () => {
@@ -278,13 +382,41 @@ $('#filters').addEventListener('click', event => {
 
 $('#views').addEventListener('click', event => {
   const button = event.target.closest('[data-view]');
-  if (!button) return;
-  view = button.dataset.view;
-  $$('#views button').forEach(item => item.classList.toggle('active', item === button));
-  renderFiles();
+  if (button) setView(button.dataset.view);
+});
+
+$('#folderbar').addEventListener('click', event => {
+  if (event.target.closest('[data-folder-home]')) {
+    folderImportId = '';
+    folderPath = '';
+    importId = '';
+    $('#source').value = '';
+    loadFolder().catch(console.error);
+    return;
+  }
+  const crumb = event.target.closest('[data-folder-depth]');
+  if (!crumb) return;
+  const depth = Number(crumb.dataset.folderDepth);
+  folderPath = depth ? folderPath.split('/').slice(0, depth).join('/') : '';
+  loadFolder().catch(console.error);
 });
 
 $('#files').addEventListener('click', event => {
+  const sourceRow = event.target.closest('[data-folder-source]');
+  if (sourceRow) {
+    folderImportId = sourceRow.dataset.folderSource;
+    importId = folderImportId;
+    $('#source').value = importId;
+    folderPath = '';
+    loadFolder().catch(console.error);
+    return;
+  }
+  const folderRow = event.target.closest('[data-folder-name]');
+  if (folderRow) {
+    folderPath = folderPath ? `${folderPath}/${folderRow.dataset.folderName}` : folderRow.dataset.folderName;
+    loadFolder().catch(console.error);
+    return;
+  }
   const item = event.target.closest('[data-hash]');
   if (item) openDetails(item.dataset.hash).catch(console.error);
 });
