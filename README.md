@@ -2,7 +2,7 @@
 
 Mochimono is a cloud-first personal archive: dump in files, store identical content once, remember where it came from, and know which offline backups protect it.
 
-V1 is deliberately small: plain JavaScript, one Node server, one SQLite catalog, one filesystem object store, one browser library UI, and one local Agent web UI. There are currently no npm runtime dependencies.
+V1 is deliberately small: plain JavaScript, one Node server, one SQLite catalog, one filesystem object store, one browser library UI, and one local Agent web UI.
 
 ## Development philosophy
 
@@ -21,10 +21,13 @@ Runtime integrity checks that are part of Mochimono itself, such as verifying st
 
 - SHA-256 whole-file identity and exact deduplication
 - import provenance: import/source, original path, filename, and mtime
-- browser search, open/download, and HTTP byte-range streaming
-- Delete & Ignore so intentionally rejected exact content stays rejected on later imports
+- browser library with search, grid/list views, image previews, paging, file details, and every known source location
+- open/download and HTTP byte-range streaming
+- separate **Delete** and **Delete & Ignore** behavior
 - local Agent web UI for importing folders and managing backup locations
 - paste a filesystem path or use the operating system's native folder picker
+- whole-drive imports skip Mochimono's own `.mochimono` backup internals
+- unreadable folders/files do not abort an entire large import
 - any writable folder can be a backup location, including a folder on the local C: drive for testing
 - managed backups with independent SQLite inventories
 - backup policies for everything or broad MIME classes (`image`, `video`, `audio`, `text`, `application`, `other`)
@@ -33,8 +36,9 @@ Runtime integrity checks that are part of Mochimono itself, such as verifying st
 - SHA-256 verification while writing primary and backup copies
 - optional full backup verification
 - a fresh server catalog snapshot copied to each backup location after update
+- offline **Restore to folder** that reconstructs ordinary source folder trees from a backup even if the server is unavailable
 
-Not implemented yet: thumbnails, AI, encryption/private vaults, chunking, packfiles, compression, native apps, virtual filesystems, automatic garbage collection, or multi-user sharing.
+Not implemented yet: generated thumbnails, AI, encryption/private vaults, chunking, packfiles, compression, native apps, virtual filesystems, automatic garbage collection, or multi-user sharing.
 
 ## Requirements
 
@@ -83,8 +87,9 @@ Use the Agent UI to:
 - choose any writable folder as a Mochimono backup location
 - choose whether a backup protects everything or selected broad file classes
 - update a backup with only missing objects
-- see backup coverage
+- see local backup contents and server-known coverage
 - optionally verify a backup
+- restore a backup into ordinary folders without needing the server online
 
 There is intentionally no separate operational CLI to maintain. Filesystem operations live in the local Agent and the browser UI is the normal interface.
 
@@ -104,6 +109,17 @@ Mochimono **never formats, partitions, or erases a drive**. Initializing a backu
 ```
 
 The backup inventory and server replica catalog are separate on purpose: a backup location can say what it believes it contains, while the server separately remembers what it believes is backed up there.
+
+## Offline restore
+
+Each updated backup includes enough information to restore ordinary files without the server:
+
+1. Open the local Agent.
+2. Find the backup location and choose **Restore**.
+3. Pick any destination folder.
+4. Mochimono reconstructs folders under the original import/source names and verifies each object while copying it.
+
+Existing matching files are skipped. Conflicting files are preserved and the restored copy gets a short content-hash suffix. The backup itself is never modified.
 
 ## Design rules for V1
 
