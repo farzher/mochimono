@@ -53,6 +53,7 @@
             </div>
           </details>
           <div id="activeFilters" class="active-filters"></div>
+          <button id="selectFiles" class="select-toggle" title="Select files">Select</button>
           <div id="mediaSizeControl" class="media-sizes" aria-label="Preview size">
             <input id="mediaSize" type="range" min="96" max="420" value="170" hidden>
             <button data-media-size="112" title="Small" aria-label="Small previews"><span class="size-glyph size-1"></span></button>
@@ -63,8 +64,16 @@
           <div id="views" class="views" aria-label="View">
             <button data-view="grid" class="active" title="Grid" aria-label="Grid">▦</button>
             <button data-view="list" title="List" aria-label="List">☷</button>
-            <button data-view="folders" title="Folders" aria-label="Folders">▤</button>
+            <button data-view="folders" title="Folders" aria-label="Folders"><span class="view-folder-icon" aria-hidden="true"></span></button>
           </div>
+        </div>
+        <div id="selectionBar" class="selection-bar" hidden>
+          <strong id="selectionCount">0 selected</strong>
+          <button id="selectAll">Select all</button>
+          <span class="selection-spacer"></span>
+          <button id="selectionDelete">Delete</button>
+          <button id="selectionIgnore" class="selection-danger">Delete + Ignore</button>
+          <button id="selectionClear" aria-label="Clear selection" title="Clear selection">×</button>
         </div>
 
         <div id="folderbar" class="folderbar" hidden></div>
@@ -103,5 +112,6 @@
   <script type="module" src="/app.js"></script>
   <script type="module" src="/gallery.js"></script>
   <script type="module" src="/viewer-url.js"></script>
+  <script type="module" src="/library-ui.js"></script>
 </body>
 </html>
