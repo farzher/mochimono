@@ -1,5 +1,7 @@
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
+const activityCard = $('#activityCard');
+const protection = $('#protection');
 
 let backupPath;
 let backupEditing = false;
@@ -48,14 +50,16 @@ async function state() {
     $('#serverUrl').value = current.settings.server;
     const status = $('#serverStatus');
     status.className = `status ${current.server.online ? 'online' : 'offline'}`;
-    status.textContent = current.server.online ? `Online · ${current.server.stats.objects} files` : 'Offline';
-    status.title = current.server.online ? '' : current.server.error || 'Not configured';
+    status.textContent = current.server.online ? 'Online' : 'Offline';
+    status.title = current.server.online
+      ? `${current.server.stats.objects.toLocaleString()} files`
+      : current.server.error || 'Not configured';
 
     activity(current.job);
     if (current.job && current.job.status !== 'running' && lastFinished !== current.job.id) {
       lastFinished = current.job.id;
       toast(current.job.status === 'done' ? 'Done' : current.job.status === 'canceled' ? 'Canceled' : current.job.error);
-      backups();
+      if (protection.open) backups();
     }
   } catch (error) {
     toast(error.message);
@@ -63,13 +67,13 @@ async function state() {
 }
 
 function activity(job) {
-  const element = $('#activity');
-  if (!job) {
-    element.className = 'empty';
-    element.textContent = 'Idle';
+  if (!job || job.status !== 'running') {
+    activityCard.hidden = true;
     return;
   }
 
+  activityCard.hidden = false;
+  const element = $('#activity');
   const progress = job.progress || {};
   const metrics = [];
   for (const [key, label] of [
@@ -82,26 +86,20 @@ function activity(job) {
   if (progress.uploaded) metrics.push(`<span class="metric"><b>${esc(progress.uploaded)}</b> uploaded</span>`);
   if (progress.copiedSize) metrics.push(`<span class="metric"><b>${esc(progress.copiedSize)}</b> copied</span>`);
 
-  const phase = job.status === 'running'
-    ? (job.cancelRequested ? 'Canceling…' : progress.phase || 'Working…')
-    : job.status === 'done' ? 'Done'
-      : job.status === 'canceled' ? 'Canceled'
-        : job.error;
-
+  const phase = job.cancelRequested ? 'Canceling…' : progress.phase || 'Working…';
   element.className = 'activity';
   element.innerHTML = `
     <div class="activity-top">
       <div>
         <div class="activity-title">${esc(job.label)}</div>
-        <div class="activity-phase ${job.status}">${esc(phase)}</div>
+        <div class="activity-phase">${esc(phase)}</div>
       </div>
       <div class="activity-actions">
-        ${job.status === 'running' ? `<button class="secondary small" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>${job.cancelRequested ? 'Canceling…' : 'Cancel'}</button>` : ''}
-        <span class="badge">${esc(job.status)}</span>
+        <button class="secondary small" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>${job.cancelRequested ? 'Canceling…' : 'Cancel'}</button>
       </div>
     </div>
     ${progress.current ? `<div class="drive-path">${esc(progress.current)}</div>` : ''}
-    <div class="metrics">${metrics.join('')}</div>`;
+    ${metrics.length ? `<div class="metrics">${metrics.join('')}</div>` : ''}`;
 }
 
 async function backups() {
@@ -125,18 +123,17 @@ async function backups() {
               <div class="drive-name">${esc(location.meta.name)}</div>
               <div class="drive-path">${esc(location.path)}</div>
             </div>
-            <span class="badge managed">Backup</span>
           </div>
           ${coverage}
           <div class="drive-meta">${location.local.count.toLocaleString()} files · ${bytes(location.local.bytes)} · ${bytes(location.freeBytes)} free · ${esc(policy)}</div>
           <div class="drive-actions">
             <button class="primary small" data-update="${index}">Update</button>
-            <button class="secondary small" data-configure="${index}">Configure</button>
+            <button class="secondary small" data-configure="${index}">Edit</button>
             <button class="secondary small" data-restore="${index}">Restore</button>
             <button class="secondary small" data-verify="${index}">Verify</button>
           </div>
         </div>`;
-    }).join('') || '<div class="muted">No backups.</div>';
+    }).join('') || '<div class="muted">None.</div>';
 
     $$('[data-update]').forEach(button => button.onclick = () => runBackup(locations[Number(button.dataset.update)].path, 'update'));
     $$('[data-verify]').forEach(button => button.onclick = () => runBackup(locations[Number(button.dataset.verify)].path, 'verify'));
@@ -171,7 +168,6 @@ function openBackupDialog(path, meta = null) {
   $('#backupTypes').classList.toggle('disabled', everything);
   const selected = new Set(meta?.policy?.types || []);
   $$('#backupTypes input').forEach(input => { input.checked = selected.has(input.value); });
-  $('#initializeBackup').textContent = 'Save';
   $('#backupDialog').showModal();
 }
 
@@ -186,6 +182,7 @@ $('#chooseImport').onclick = () => chooseFolder($('#importPath'));
 $('#chooseBackup').onclick = () => chooseFolder($('#backupLocation'));
 $('#chooseRestore').onclick = () => chooseFolder($('#restoreDestination'));
 $('#refreshBackups').onclick = backups;
+protection.addEventListener('toggle', () => { if (protection.open) backups(); });
 $$('[data-close]').forEach(button => button.onclick = () => button.closest('dialog').close());
 $('#backupEverything').onchange = event => $('#backupTypes').classList.toggle('disabled', event.target.checked);
 
@@ -226,7 +223,7 @@ $('#initializeBackup').onclick = async () => {
     $('#backupDialog').close();
     $('#backupLocation').value = '';
     toast(backupEditing ? 'Saved' : result.existing ? 'Added' : 'Created');
-    backups();
+    if (protection.open) backups();
   } catch (error) {
     toast(error.message);
   }
@@ -262,5 +259,4 @@ $('#saveSettings').onclick = async () => {
 };
 
 state();
-backups();
 setInterval(state, 900);
