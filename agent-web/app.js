@@ -2,11 +2,13 @@ const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const activityCard = $('#activityCard');
 const protection = $('#protection');
+const connectionDialog = $('#connectionDialog');
 
 let backupPath;
 let backupEditing = false;
 let restorePath;
 let lastFinished;
+let defaultDevice = '';
 
 async function req(path, options = {}) {
   const response = await fetch(path, { headers: { 'content-type': 'application/json' }, ...options });
@@ -44,21 +46,48 @@ async function chooseFolder(target) {
   }
 }
 
+function renderFolders(folders, job) {
+  const element = $('#folders');
+  if (!folders.length) {
+    element.innerHTML = '<div class="muted">No folders.</div>';
+    return;
+  }
+  element.innerHTML = folders.map(folder => {
+    const syncing = job?.status === 'running' && job.type === 'sync' && job.progress?.path === folder.path;
+    const status = syncing ? 'Syncing…' : folder.lastSynced ? 'Synced' : 'Pending';
+    return `
+      <div class="sync-folder">
+        <div class="sync-folder-copy">
+          <strong>${esc(folder.path)}</strong>
+          <span>${esc(folder.device)} · ${status}</span>
+        </div>
+        <div class="sync-folder-actions">
+          <button class="secondary small" data-sync-folder="${esc(folder.path)}">Sync</button>
+          <button class="icon tiny" data-remove-folder="${esc(folder.path)}" aria-label="Remove" title="Stop syncing">×</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
 async function state() {
   try {
     const current = await req('/api/state');
     $('#serverUrl').value = current.settings.server;
+    defaultDevice = current.settings.device || defaultDevice;
+    if (!$('#deviceName').value) $('#deviceName').value = defaultDevice;
+
     const status = $('#serverStatus');
     status.className = `status ${current.server.online ? 'online' : 'offline'}`;
-    status.textContent = current.server.online ? 'Online' : 'Offline';
+    status.textContent = current.server.online ? 'Online' : 'Connect';
     status.title = current.server.online
       ? `${current.server.stats.objects.toLocaleString()} files`
-      : current.server.error || 'Not configured';
+      : current.server.error || 'Connect';
 
+    renderFolders(current.settings.folders || [], current.job);
     activity(current.job);
     if (current.job && current.job.status !== 'running' && lastFinished !== current.job.id) {
       lastFinished = current.job.id;
-      toast(current.job.status === 'done' ? 'Done' : current.job.status === 'canceled' ? 'Canceled' : current.job.error);
+      toast(current.job.status === 'done' ? 'Synced' : current.job.status === 'canceled' ? 'Canceled' : current.job.error);
       if (protection.open) backups();
     }
   } catch (error) {
@@ -94,9 +123,7 @@ function activity(job) {
         <div class="activity-title">${esc(job.label)}</div>
         <div class="activity-phase">${esc(phase)}</div>
       </div>
-      <div class="activity-actions">
-        <button class="secondary small" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>${job.cancelRequested ? 'Canceling…' : 'Cancel'}</button>
-      </div>
+      <button class="secondary small" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>${job.cancelRequested ? 'Canceling…' : 'Cancel'}</button>
     </div>
     ${progress.current ? `<div class="drive-path">${esc(progress.current)}</div>` : ''}
     ${metrics.length ? `<div class="metrics">${metrics.join('')}</div>` : ''}`;
@@ -178,6 +205,7 @@ function openRestoreDialog(path) {
   $('#restoreDialog').showModal();
 }
 
+$('#serverStatus').onclick = () => connectionDialog.showModal();
 $('#chooseImport').onclick = () => chooseFolder($('#importPath'));
 $('#chooseBackup').onclick = () => chooseFolder($('#backupLocation'));
 $('#chooseRestore').onclick = () => chooseFolder($('#restoreDestination'));
@@ -196,11 +224,25 @@ $('#activity').addEventListener('click', async event => {
   }
 });
 
+$('#folders').addEventListener('click', async event => {
+  const sync = event.target.closest('[data-sync-folder]');
+  const remove = event.target.closest('[data-remove-folder]');
+  try {
+    if (sync) await req('/api/folders/sync', { method: 'POST', body: JSON.stringify({ path: sync.dataset.syncFolder }) });
+    if (remove) await req('/api/folders/remove', { method: 'POST', body: JSON.stringify({ path: remove.dataset.removeFolder }) });
+    state();
+  } catch (error) {
+    toast(error.message);
+  }
+});
+
 $('#startImport').onclick = async () => {
   const path = $('#importPath').value.trim();
+  const device = $('#deviceName').value.trim() || defaultDevice;
   if (!path) return toast('Choose a folder.');
   try {
-    await req('/api/import', { method: 'POST', body: JSON.stringify({ path, source: $('#sourceName').value.trim() }) });
+    await req('/api/folders', { method: 'POST', body: JSON.stringify({ path, device }) });
+    $('#importPath').value = '';
     state();
   } catch (error) {
     toast(error.message);
@@ -251,7 +293,7 @@ $('#saveSettings').onclick = async () => {
       body: JSON.stringify({ server: $('#serverUrl').value.trim(), token: $('#serverToken').value })
     });
     $('#serverToken').value = '';
-    toast('Saved');
+    connectionDialog.close();
     state();
   } catch (error) {
     toast(error.message);
