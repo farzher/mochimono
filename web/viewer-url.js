@@ -1,18 +1,20 @@
 const viewer = document.querySelector('#viewer');
 const openLink = document.querySelector('#viewer-open');
+const closeButton = document.querySelector('#viewer-close');
 const files = document.querySelector('#files');
 const rail = document.querySelector('#dateRail');
 const CACHE_NAME = 'mochimono-catalog';
+const VIEWER_STATE = 'mochimonoViewer';
 
 function fileParam() {
   return new URL(location.href).searchParams.get('file');
 }
 
-function replaceFileParam(hash) {
+function fileUrl(hash) {
   const url = new URL(location.href);
   if (hash) url.searchParams.set('file', hash);
   else url.searchParams.delete('file');
-  history.replaceState(history.state, '', url);
+  return url;
 }
 
 function viewerHash() {
@@ -20,15 +22,46 @@ function viewerHash() {
   return match ? decodeURIComponent(match[1]) : '';
 }
 
+function viewerState(value) {
+  return { ...(history.state || {}), [VIEWER_STATE]: value };
+}
+
+const initialHash = fileParam();
+if (initialHash) {
+  const viewerUrl = new URL(location.href);
+  const baseUrl = new URL(viewerUrl);
+  baseUrl.searchParams.delete('file');
+  history.replaceState(viewerState(false), '', baseUrl);
+  history.pushState(viewerState(true), '', viewerUrl);
+} else if (history.state?.[VIEWER_STATE] == null) {
+  history.replaceState(viewerState(false), '', location.href);
+}
+
 let wasOpen = false;
+let closingFromHistory = false;
+
 function syncUrl() {
   const open = !viewer.hidden;
-  if (open) {
-    const hash = viewerHash();
-    if (hash) replaceFileParam(hash);
-  } else if (wasOpen) {
-    replaceFileParam('');
+  const hash = open ? viewerHash() : '';
+
+  if (open && hash) {
+    const url = fileUrl(hash);
+    if (!wasOpen) {
+      if (history.state?.[VIEWER_STATE] && fileParam() === hash) history.replaceState(viewerState(true), '', url);
+      else history.pushState(viewerState(true), '', url);
+    } else if (fileParam() !== hash || !history.state?.[VIEWER_STATE]) {
+      history.replaceState(viewerState(true), '', url);
+    }
+  } else if (!open && wasOpen) {
+    if (closingFromHistory) {
+      closingFromHistory = false;
+    } else if (history.state?.[VIEWER_STATE]) {
+      history.back();
+    } else if (fileParam()) {
+      history.replaceState(viewerState(false), '', fileUrl(''));
+    }
   }
+
   wasOpen = open;
 }
 
@@ -99,6 +132,7 @@ async function restoreViewer() {
   if (!hash) return;
 
   for (let attempt = 0; attempt < 40; attempt++) {
+    if (!fileParam()) return;
     const card = files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
     if (card) {
       card.click();
@@ -112,5 +146,18 @@ async function restoreViewer() {
     await wait(100);
   }
 }
+
+window.addEventListener('popstate', () => {
+  const hash = fileParam();
+  if (!hash) {
+    if (!viewer.hidden) {
+      closingFromHistory = true;
+      closeButton.click();
+    }
+    return;
+  }
+
+  if (viewer.hidden || viewerHash() !== hash) restoreViewer().catch(console.warn);
+});
 
 restoreViewer().catch(console.warn);
