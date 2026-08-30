@@ -22,14 +22,14 @@ let hasMore = false;
 let hasPrevious = false;
 let type = '';
 let importId = '';
-let inboxOnly = false;
-let unprotectedOnly = false;
+let collectionHashes = null;
 let view = 'grid';
 let sort = 'date-desc';
 let selected = null;
 let folderImportId = '';
 let folderPath = '';
 let folderData = null;
+let folderLoadGeneration = 0;
 let scrollFrame = 0;
 let cacheMeta = null;
 let cacheDbPromise;
@@ -114,15 +114,6 @@ async function writeCache(files, meta) {
   store.clear();
   for (const file of files) store.put(file);
   transaction.objectStore('meta').put({ key: 'catalog', ...meta });
-  await done;
-}
-
-async function cachePut(file) {
-  const db = await openCache();
-  if (!db || !file) return;
-  const transaction = db.transaction('files', 'readwrite');
-  const done = idbDone(transaction);
-  transaction.objectStore('files').put(file);
   await done;
 }
 
@@ -279,7 +270,7 @@ function gridCard(file) {
   const ratio = mediaRatio(file);
   return `
     <button class="file-card ${media ? 'media-card' : ''} ${kind(file) === 'video' ? 'video-card' : ''}" data-hash="${file.hash}" style="${media ? `--ratio:${ratio}` : ''}" title="${escapeHtml(file.filename)}">
-      <div class="thumb ${media ? 'media-thumb' : ''}">${preview(file)}${file.reviewed ? '' : '<span class="inbox-badge">Inbox</span>'}</div>
+      <div class="thumb ${media ? 'media-thumb' : ''}">${preview(file)}</div>
       ${media ? '' : `<div class="card-copy"><strong>${escapeHtml(file.filename)}</strong><span>${formatBytes(file.size)}</span></div>`}
     </button>`;
 }
@@ -287,7 +278,7 @@ function gridCard(file) {
 function listRow(file) {
   return `
     <button class="file-row" data-hash="${file.hash}">
-      <span class="type ${file.reviewed ? '' : 'inbox-type'}">${file.reviewed ? escapeHtml(typeLabel(file)) : 'inbox'}</span>
+      <span class="type">${escapeHtml(typeLabel(file))}</span>
       <div class="file-main"><strong>${escapeHtml(file.filename)}</strong><span>${escapeHtml(file.originalPath || '')}</span></div>
       <span class="refs">${escapeHtml(shortDate(file))}</span>
       <span class="size">${formatBytes(file.size)}</span>
@@ -394,15 +385,6 @@ function syncSentinels() {
   $('#scroll-sentinel').hidden = !hasMore || view === 'folders';
 }
 
-function renderActiveFilters() {
-  $('#filterInbox').checked = inboxOnly;
-  $('#filterUnprotected').checked = unprotectedOnly;
-  const active = [];
-  if (inboxOnly) active.push('<button data-clear-filter="inbox">Inbox ×</button>');
-  if (unprotectedOnly) active.push('<button data-clear-filter="unprotected">Unprotected ×</button>');
-  $('#activeFilters').innerHTML = active.join('');
-}
-
 function applyFilters(reset = true) {
   if (view === 'folders') return loadFolder();
   const query = $('#search').value.trim().toLowerCase();
@@ -411,8 +393,7 @@ function applyFilters(reset = true) {
   const folderHashes = folderImportId && folderData ? new Set(folderData.files.map(file => file.hash)) : null;
   filtered = sortFiles(catalog.filter(file => {
     if (!matchesType(file)) return false;
-    if (inboxOnly && file.reviewed) return false;
-    if (unprotectedOnly && file.backupCount > 0) return false;
+    if (collectionHashes && !collectionHashes.has(file.hash)) return false;
     if (sourceId && !file.importIds.includes(sourceId)) return false;
     if (folderHashes && !folderHashes.has(file.hash)) return false;
     if (terms.length && !terms.every(term => (searchIndex.get(file.hash) || '').includes(term))) return false;
@@ -421,7 +402,6 @@ function applyFilters(reset = true) {
   filteredIndex = new Map(filtered.map((file, index) => [file.hash, index]));
   if (reset) { renderOffset = 0; renderLimit = PAGE; }
   updateWindow();
-  renderActiveFilters();
   renderFiles();
   if (selected) {
     const current = catalog.find(file => file.hash === selected.hash);
@@ -443,11 +423,13 @@ function renderFiles() {
   const element = $('#files');
   element.className = `files ${view}`;
   if (folderImportId) folderBreadcrumb();
-  else $('#folderbar').hidden = true;
+  else {
+    $('#folderbar').hidden = true;
+    $('#folderbar').replaceChildren();
+  }
   syncSentinels();
   if (!loaded.length) {
-    const message = inboxOnly ? 'Inbox empty.' : unprotectedOnly ? 'All protected.' : 'No files.';
-    element.innerHTML = `<div class="empty">${message}</div>`;
+    element.innerHTML = '<div class="empty">No files.</div>';
     renderRail();
     return;
   }
@@ -563,8 +545,6 @@ async function loadStats() {
   const percent = s.capacityBytes ? Math.min(100, s.bytes / s.capacityBytes * 100) : 0;
   const width = s.bytes ? `max(2px, ${percent}%)` : '0';
   $('#stats').innerHTML = `<span>${formatBytes(s.bytes)} <small>of ${formatBytes(s.capacityBytes)}</small></span><i><b style="width:${width}"></b></i>`;
-  $('#filterInboxLabel').textContent = s.unreviewed ? `Inbox · ${s.unreviewed.toLocaleString()}` : 'Inbox';
-  $('#filterUnprotectedLabel').textContent = s.unbacked ? `Unprotected · ${s.unbacked.toLocaleString()}` : 'Unprotected';
 }
 
 async function fetchCatalog() {
@@ -637,21 +617,27 @@ function renderFolder() {
   if (!folderData) { element.innerHTML = '<div class="empty">Loading…</div>'; return; }
   const rows = [];
   for (const folder of folderData.folders) rows.push(`<button class="folder-row" data-folder-name="${escapeHtml(folder.name)}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(folder.name)}</strong></span><span>${folder.files.toLocaleString()}</span><span>Folder</span></button>`);
-  for (const file of folderData.files) rows.push(`<button class="folder-row file-folder-row" data-hash="${file.hash}"><span class="folder-name"><i class="document-icon"></i><strong>${escapeHtml(file.filename)}</strong>${file.reviewed ? '' : '<em>Inbox</em>'}</span><span>${formatBytes(file.size)}</span><span>${escapeHtml(typeLabel(file))}</span></button>`);
+  for (const file of folderData.files) rows.push(`<button class="folder-row file-folder-row" data-hash="${file.hash}"><span class="folder-name"><i class="document-icon"></i><strong>${escapeHtml(file.filename)}</strong></span><span>${formatBytes(file.size)}</span><span>${escapeHtml(typeLabel(file))}</span></button>`);
   element.innerHTML = rows.length ? `<div class="folder-list-head"><span>Name</span><span>Size</span><span>Type</span></div>${rows.join('')}` : '<div class="empty">Empty.</div>';
 }
 
 async function loadFolder() {
+  const generation = ++folderLoadGeneration;
   folderData = null;
   if (view === 'folders') renderFolder();
   if (!folderImportId) {
     if (view !== 'folders') {
       $('#folderbar').hidden = true;
+      $('#folderbar').replaceChildren();
       applyFilters(true);
     }
     return;
   }
-  folderData = await request(`/api/folders?import=${encodeURIComponent(folderImportId)}&path=${encodeURIComponent(folderPath)}`);
+  const wantedImport = String(folderImportId);
+  const wantedPath = folderPath;
+  const data = await request(`/api/folders?import=${encodeURIComponent(wantedImport)}&path=${encodeURIComponent(wantedPath)}`);
+  if (generation !== folderLoadGeneration || String(folderImportId) !== wantedImport || folderPath !== wantedPath) return;
+  folderData = data;
   if (view === 'folders') renderFolder();
   else applyFilters(true);
 }
@@ -661,8 +647,7 @@ function setView(next) {
   const folderMode = view === 'folders';
   $('#sort').hidden = folderMode;
   $('#typeFilter').hidden = folderMode;
-  $('#filterMenu').hidden = folderMode;
-  $('#activeFilters').hidden = folderMode;
+  $('#collectionFilter').hidden = folderMode;
   $('#mediaSizeControl').hidden = view !== 'grid';
   $$('#views button').forEach(item => item.classList.toggle('active', item.dataset.view === view));
   if (folderMode) {
@@ -675,6 +660,27 @@ function setView(next) {
     applyFilters(true);
   }
 }
+
+function setCollectionHashes(hashes) {
+  collectionHashes = hashes instanceof Set ? hashes : null;
+  if (collectionHashes) {
+    folderLoadGeneration++;
+    folderImportId = '';
+    folderPath = '';
+    folderData = null;
+    importId = '';
+    $('#source').value = '';
+    $('#folderbar').hidden = true;
+    $('#folderbar').replaceChildren();
+    if (view === 'folders') {
+      $('#views [data-view="grid"]')?.click();
+      return;
+    }
+  }
+  applyFilters(true);
+}
+
+window.mochimonoSetCollectionHashes = setCollectionHashes;
 
 function viewerItems() {
   return view === 'folders' ? (folderData?.files || []).map(normalizeFile) : filtered;
@@ -698,6 +704,7 @@ function loadFullViewerImage(file) {
     if (selected?.hash !== hash || viewerImageLoad !== image || !shown.isConnected) return;
     shown.src = fullUrl;
     shown.removeAttribute('data-full-src');
+    shown.onerror = null;
     viewerImageLoad = null;
   };
   image.onload = swap;
@@ -705,7 +712,10 @@ function loadFullViewerImage(file) {
     if (viewerImageLoad === image) viewerImageLoad = null;
   };
   shown.onerror = () => {
-    if (selected?.hash === hash && shown.dataset.fullSrc) shown.src = fullUrl;
+    if (selected?.hash !== hash || !shown.dataset.fullSrc) return;
+    shown.removeAttribute('data-full-src');
+    shown.onerror = null;
+    shown.src = fullUrl;
   };
   image.src = fullUrl;
 }
@@ -716,7 +726,6 @@ function renderViewerState() {
   $('#viewer-name').textContent = selected.filename;
   $('#viewer-meta').textContent = `${shortDate(normalizeFile(selected))} · ${formatBytes(selected.size)}`;
   $('#viewer-open').href = objectUrl(selected);
-  $('#viewer-review').textContent = selected.reviewed ? 'Inbox' : 'Keep';
   $('#viewer-media').innerHTML = viewerMedia(selected);
   if (kind(selected) === 'image') loadFullViewerImage(selected);
   updateViewerNav();
@@ -767,19 +776,6 @@ function navigateViewer(step) {
   const index = items.findIndex(file => file.hash === selected?.hash);
   const next = items[index + step];
   if (next) { selected = normalizeFile(next); renderViewerState(); }
-}
-
-async function toggleReviewed() {
-  if (!selected) return;
-  const reviewed = !Boolean(selected.reviewed);
-  await request(`/api/objects/${selected.hash}/review`, { method: 'POST', body: { reviewed } });
-  selected.reviewed = reviewed;
-  const cached = catalog.find(file => file.hash === selected.hash);
-  if (cached) cached.reviewed = reviewed;
-  cachePut(cached || selected).catch(console.warn);
-  viewerDirty = true;
-  $('#viewer-review').textContent = reviewed ? 'Inbox' : 'Keep';
-  await loadStats();
 }
 
 async function refreshImports() {
@@ -868,6 +864,7 @@ $('#search').addEventListener('input', () => {
 
 $('#source').addEventListener('change', event => {
   importId = event.target.value;
+  folderLoadGeneration++;
   folderImportId = '';
   folderPath = '';
   folderData = null;
@@ -876,21 +873,13 @@ $('#source').addEventListener('change', event => {
     loadFolder().catch(console.error);
   } else {
     $('#folderbar').hidden = true;
+    $('#folderbar').replaceChildren();
     applyFilters(true);
   }
 });
 
 $('#typeFilter').addEventListener('change', event => { type = event.target.value; applyFilters(true); });
 $('#sort').addEventListener('change', event => { sort = event.target.value; applyFilters(true); });
-$('#filterInbox').addEventListener('change', event => { inboxOnly = event.target.checked; applyFilters(true); });
-$('#filterUnprotected').addEventListener('change', event => { unprotectedOnly = event.target.checked; applyFilters(true); });
-$('#activeFilters').addEventListener('click', event => {
-  const button = event.target.closest('[data-clear-filter]');
-  if (!button) return;
-  if (button.dataset.clearFilter === 'inbox') inboxOnly = false;
-  if (button.dataset.clearFilter === 'unprotected') unprotectedOnly = false;
-  applyFilters(true);
-});
 $('#mediaSize').addEventListener('input', event => {
   const size = Number(event.target.value);
   document.documentElement.style.setProperty('--media-size', `${size}px`);
@@ -900,10 +889,6 @@ $('#mediaSize').addEventListener('input', event => {
 $('#views').addEventListener('click', event => {
   const button = event.target.closest('[data-view]');
   if (button) setView(button.dataset.view);
-});
-
-document.addEventListener('click', event => {
-  if ($('#filterMenu').open && !event.target.closest('#filterMenu')) $('#filterMenu').open = false;
 });
 
 const rail = $('#dateRail');
@@ -931,6 +916,7 @@ rail.addEventListener('pointercancel', () => { scrubbing = false; rail.classList
 
 $('#folderbar').addEventListener('click', event => {
   if (event.target.closest('[data-folder-home]')) {
+    folderLoadGeneration++;
     folderImportId = '';
     folderPath = '';
     folderData = null;
@@ -990,7 +976,6 @@ document.addEventListener('keydown', event => {
 $('#viewer-close').onclick = closeViewer;
 $('#viewer-prev').onclick = () => navigateViewer(-1);
 $('#viewer-next').onclick = () => navigateViewer(1);
-$('#viewer-review').onclick = () => toggleReviewed().catch(console.error);
 $('#delete').onclick = () => removeSelected(false).catch(console.error);
 $('#delete-ignore').onclick = () => removeSelected(true).catch(console.error);
 $('#viewer').addEventListener('wheel', event => event.preventDefault(), { passive: false });
