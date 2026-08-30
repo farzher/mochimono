@@ -165,10 +165,11 @@ function breadcrumbPath() {
 async function cachedCatalog() {
   const db = await cache();
   const transaction = db.transaction(['files', 'meta']);
+  const done = txDone(transaction);
   const fileRequest = transaction.objectStore('files').getAll();
   const metaRequest = transaction.objectStore('meta').get('catalog');
   const [records, meta] = await Promise.all([idb(fileRequest), idb(metaRequest)]);
-  await txDone(transaction);
+  await done;
   return { records, meta };
 }
 
@@ -206,13 +207,14 @@ async function selectionUniverse() {
 async function removeCached(hashes) {
   const db = await cache();
   const transaction = db.transaction(['files', 'thumbs'], 'readwrite');
+  const done = txDone(transaction);
   const fileStore = transaction.objectStore('files');
   const thumbStore = transaction.objectStore('thumbs');
   for (const hash of hashes) {
     fileStore.delete(hash);
     thumbStore.delete(hash);
   }
-  await txDone(transaction);
+  await done;
 }
 
 async function deleteSelected(ignore) {
