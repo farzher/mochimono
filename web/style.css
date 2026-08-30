@@ -47,10 +47,14 @@ p { color: var(--muted); }
 .login form { display: flex; gap: 8px; margin-top: 14px; }
 .login input { flex: 1; }
 .error { color: #f08d86; }
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-.stats article { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 18px; }
-.stats strong { display: block; font-size: 24px; letter-spacing: -0.03em; }
-.stats span { color: var(--muted); font-size: 13px; }
+.stats { margin-bottom: 18px; }
+.stats article { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 15px 17px; }
+.storage-copy { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.storage-copy strong { font-size: 18px; letter-spacing: -.025em; }
+.storage-copy strong span { color: var(--muted); font-size: 13px; font-weight: 500; letter-spacing: 0; }
+.storage-copy b { color: var(--muted); font-size: 12px; font-weight: 650; }
+.storage-bar { height: 6px; margin-top: 11px; background: #292529; border-radius: 999px; overflow: hidden; }
+.storage-bar i { display: block; height: 100%; background: var(--pink); border-radius: inherit; }
 .section-head { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 12px; }
 .library-head input { width: min(380px, 45vw); }
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 0 15px; border-bottom: 1px solid var(--line); }
@@ -124,7 +128,7 @@ dialog::backdrop { background: rgba(0,0,0,.68); }
 .danger-zone { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 25px; border-top: 1px solid #493033; padding-top: 18px; }
 .danger-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: end; }
 @media (max-width: 780px) {
-  .stats { grid-template-columns: repeat(2, 1fr); }
+  .storage-copy { align-items: flex-start; }
   .section-head { align-items: stretch; flex-direction: column; }
   .section-head input, .library-head input, .library-filters select { width: 100%; max-width: none; min-width: 0; }
   .library-filters { align-items: stretch; flex-direction: column; }
