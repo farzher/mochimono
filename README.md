@@ -1,6 +1,6 @@
 # Mochimono
 
-Mochimono is a cloud-first personal archive: dump in files, store identical content once, remember where it came from, and know which offline drives protect it.
+Mochimono is a cloud-first personal archive: dump in files, store identical content once, remember where it came from, and know which offline backups protect it.
 
 V1 is deliberately small: plain JavaScript, one Node server, one SQLite catalog, one filesystem object store, one browser library UI, and one local Agent web UI. There are currently no npm runtime dependencies.
 
@@ -23,15 +23,16 @@ Runtime integrity checks that are part of Mochimono itself, such as verifying st
 - import provenance: import/source, original path, filename, and mtime
 - browser search, open/download, and HTTP byte-range streaming
 - Delete & Ignore so intentionally rejected exact content stays rejected on later imports
-- local Agent web UI for importing folders and managing backup drives
-- built-in local folder/drive browser; no CLI workflow required
-- managed offline backup drives with independent SQLite inventories
-- drive policies for everything or broad MIME classes (`image`, `video`, `audio`, `text`, `application`, `other`)
-- server-side backup coverage by drive
+- local Agent web UI for importing folders and managing backup locations
+- paste a filesystem path or use the operating system's native folder picker
+- any writable folder can be a backup location, including a folder on the local C: drive for testing
+- managed backups with independent SQLite inventories
+- backup policies for everything or broad MIME classes (`image`, `video`, `audio`, `text`, `application`, `other`)
+- server-side backup coverage by location
 - reconnect/resume: only missing objects are copied
 - SHA-256 verification while writing primary and backup copies
-- optional full backup-drive verification
-- a fresh server catalog snapshot copied to each backup drive after update
+- optional full backup verification
+- a fresh server catalog snapshot copied to each backup location after update
 
 Not implemented yet: thumbnails, AI, encryption/private vaults, chunking, packfiles, compression, native apps, virtual filesystems, automatic garbage collection, or multi-user sharing.
 
@@ -65,7 +66,7 @@ $MOCHIMONO_DATA/
 
 ## Run the local Agent
 
-On the computer that has the folders and backup drives you want Mochimono to use:
+On the computer that has the folders and backup locations you want Mochimono to use:
 
 ```bash
 npm run agent
@@ -75,34 +76,37 @@ The Agent opens `http://127.0.0.1:8643` in your browser. The first time, open **
 
 Use the Agent UI to:
 
-- browse local drives and folders
+- paste a local path or click **Choose…** to open the native OS folder picker
 - choose a folder or whole drive to import
 - name the import source
 - watch hashing/upload progress
-- initialize a drive as a Mochimono backup
-- choose whether a backup drive protects everything or selected broad file classes
+- choose any writable folder as a Mochimono backup location
+- choose whether a backup protects everything or selected broad file classes
 - update a backup with only missing objects
 - see backup coverage
-- optionally verify a backup drive
+- optionally verify a backup
 
 There is intentionally no separate operational CLI to maintain. Filesystem operations live in the local Agent and the browser UI is the normal interface.
 
-## Backup drive format
+## Backup location format
 
-A managed drive contains:
+A backup can be the root of a dedicated HDD, a folder on that HDD, or simply a local folder such as `C:\MochimonoBackup` while testing.
+
+Mochimono **never formats, partitions, or erases a drive**. Initializing a backup only creates a `.mochimono` directory inside the folder you selected:
 
 ```text
-.mochimono/
-  drive.json
-  inventory.sqlite
-  catalog.sqlite
-  objects/
+<chosen backup folder>/
+  .mochimono/
+    drive.json
+    inventory.sqlite
+    catalog.sqlite
+    objects/
 ```
 
-The drive inventory and server replica catalog are separate on purpose: a drive can say what it believes it contains, while the server separately remembers what it believes is backed up there.
+The backup inventory and server replica catalog are separate on purpose: a backup location can say what it believes it contains, while the server separately remembers what it believes is backed up there.
 
 ## Design rules for V1
 
-One original file equals one immutable object. No chunking, compression, or second backup repository format yet. Backup disks are disaster-recovery repositories, not mirrors; live deletions are not automatically propagated to offline disks.
+One original file equals one immutable object. No chunking, compression, or second backup repository format yet. Offline backups are disaster-recovery repositories, not mirrors; live deletions are not automatically propagated to them.
 
 Add complexity only after real usage demonstrates a need for it.
