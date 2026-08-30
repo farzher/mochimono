@@ -12,6 +12,7 @@ let hasMore = false;
 let type = '';
 let importId = '';
 let inboxOnly = false;
+let noBackupOnly = false;
 let view = 'grid';
 let selected = null;
 
@@ -67,14 +68,16 @@ async function loadStats() {
     <article><strong>${s.sources.toLocaleString()}</strong><span>known locations</span></article>
     <article><strong>${s.unreviewed.toLocaleString()}</strong><span>in Inbox</span></article>`;
   $('#inbox').textContent = s.unreviewed ? `Inbox · ${s.unreviewed.toLocaleString()}` : 'Inbox';
+  $('#unbacked').textContent = s.unbacked ? `No backup copy · ${s.unbacked.toLocaleString()}` : 'No backup copy';
 }
 
 async function loadImports() {
   const data = await request('/api/imports');
   const source = $('#source');
-  source.innerHTML = '<option value="">All sources</option>' + data.imports.map(item =>
-    `<option value="${item.id}">${escapeHtml(item.sourceName)} · ${item.files.toLocaleString()} files</option>`
-  ).join('');
+  source.innerHTML = '<option value="">All sources</option>' + data.imports.map(item => {
+    const date = new Date(item.createdAt).toLocaleDateString();
+    return `<option value="${item.id}">${escapeHtml(item.sourceName)} · ${item.files.toLocaleString()} files · ${escapeHtml(date)}</option>`;
+  }).join('');
   source.value = importId;
 }
 
@@ -83,14 +86,15 @@ function renderFiles() {
   element.className = `files ${view}`;
 
   if (!loaded.length) {
-    element.innerHTML = `<div class="empty">${inboxOnly ? 'Inbox is empty.' : 'No files found.'}</div>`;
+    const message = inboxOnly ? 'Inbox is empty.' : noBackupOnly ? 'Every matching file has an offline backup copy.' : 'No files found.';
+    element.innerHTML = `<div class="empty">${message}</div>`;
   } else if (view === 'grid') {
     element.innerHTML = loaded.map(file => `
       <button class="file-card" data-hash="${file.hash}">
         <div class="thumb">${preview(file)}${file.reviewed ? '' : '<span class="inbox-badge">Inbox</span>'}</div>
         <div class="card-copy">
           <strong title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</strong>
-          <span>${formatBytes(file.size)}${file.backupCount ? ` · ${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : ' · not offline-backed-up'}</span>
+          <span>${formatBytes(file.size)}${file.backupCount ? ` · ${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : ' · no offline backup'}</span>
         </div>
       </button>`).join('');
   } else {
@@ -116,7 +120,8 @@ async function loadFiles(reset = true) {
   }
   const q = $('#search').value.trim();
   const review = inboxOnly ? 'unreviewed' : '';
-  const data = await request(`/api/files?limit=${PAGE}&offset=${offset}&type=${encodeURIComponent(type)}&review=${review}&import=${encodeURIComponent(importId)}&q=${encodeURIComponent(q)}`);
+  const backup = noBackupOnly ? 'missing' : '';
+  const data = await request(`/api/files?limit=${PAGE}&offset=${offset}&type=${encodeURIComponent(type)}&review=${review}&backup=${backup}&import=${encodeURIComponent(importId)}&q=${encodeURIComponent(q)}`);
   loaded.push(...data.files);
   offset += data.files.length;
   hasMore = data.hasMore;
@@ -254,6 +259,12 @@ $('#source').addEventListener('change', event => {
 $('#inbox').addEventListener('click', () => {
   inboxOnly = !inboxOnly;
   $('#inbox').classList.toggle('active', inboxOnly);
+  loadFiles(true).catch(console.error);
+});
+
+$('#unbacked').addEventListener('click', () => {
+  noBackupOnly = !noBackupOnly;
+  $('#unbacked').classList.toggle('active', noBackupOnly);
   loadFiles(true).catch(console.error);
 });
 
