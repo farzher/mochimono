@@ -2,14 +2,17 @@ const files = document.querySelector('#files');
 const CACHE_NAME = 'mochimono-catalog';
 const CACHE_VERSION = 2;
 const THUMB_EDGE = 768;
+const MAX_ATTEMPTS = 3;
 const queue = [];
 const queued = new Set();
 const urls = new Map();
+const attempts = new Map();
+const retryTimers = new Map();
 let cachePromise;
 let busy = false;
 let scanFrame = 0;
 
-const VIDEO_EXTENSIONS = new Set(['m4v', 'mp4', 'mov', 'mkv', 'webm', 'avi']);
+const VIDEO_EXTENSIONS = new Set(['m4v', 'mp4', 'mov', 'mkv', 'webm', 'avi', 'mpg', 'mpeg', 'm2v', 'mts', 'm2ts', '3gp']);
 
 function extension(name) {
   const match = String(name || '').toLowerCase().match(/\.([^.]+)$/);
@@ -96,19 +99,49 @@ function scan() {
   files.querySelectorAll('.video-thumb-pending').forEach(element => enqueue(placeholderHash(element)));
 }
 
-function enqueue(hash) {
-  if (!hash || queued.has(hash) || urls.has(hash)) return;
+function enqueue(hash, front = false) {
+  if (!hash || queued.has(hash) || urls.has(hash) || retryTimers.has(hash)) return;
   queued.add(hash);
-  queue.push(hash);
+  if (front) queue.unshift(hash);
+  else queue.push(hash);
   pump();
 }
 
-function idle(callback) {
-  if ('requestIdleCallback' in window) requestIdleCallback(callback, { timeout: 1500 });
-  else setTimeout(callback, 60);
+function cardFor(hash) {
+  return files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
 }
 
-function waitFor(target, event, timeout = 12000) {
+function viewportScore(hash) {
+  const card = cardFor(hash);
+  if (!card) return Number.POSITIVE_INFINITY;
+  const rect = card.getBoundingClientRect();
+  if (rect.bottom >= 0 && rect.top <= innerHeight) return Math.max(0, rect.top);
+  if (rect.bottom < 0) return Math.abs(rect.bottom) + innerHeight;
+  return rect.top - innerHeight + innerHeight;
+}
+
+function takeNext() {
+  if (!queue.length) return '';
+  let best = 0;
+  let bestScore = viewportScore(queue[0]);
+  for (let index = 1; index < queue.length; index++) {
+    const score = viewportScore(queue[index]);
+    if (score < bestScore) {
+      best = index;
+      bestScore = score;
+      if (score === 0) break;
+    }
+  }
+  return queue.splice(best, 1)[0];
+}
+
+function runLowPriority(callback, visible) {
+  if (visible) return setTimeout(callback, 0);
+  if ('requestIdleCallback' in window) return requestIdleCallback(callback, { timeout: 900 });
+  return setTimeout(callback, 80);
+}
+
+function waitFor(target, event, timeout = 15000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       cleanup();
@@ -126,8 +159,70 @@ function waitFor(target, event, timeout = 12000) {
   });
 }
 
+function decodedFrame(video, timeout = 5000) {
+  if (!('requestVideoFrameCallback' in video)) return new Promise(resolve => setTimeout(resolve, 70));
+  return new Promise(resolve => {
+    let finished = false;
+    const timer = setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      resolve();
+    }, timeout);
+    video.requestVideoFrameCallback(() => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+async function seekToFrame(video, time) {
+  if (Math.abs(video.currentTime - time) > .005) {
+    video.currentTime = time;
+    await waitFor(video, 'seeked');
+  }
+  if (video.readyState < 2) await waitFor(video, 'loadeddata');
+  await decodedFrame(video);
+}
+
 function canvasBlob(canvas) {
   return new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .82));
+}
+
+function frameLooksBlank(canvas) {
+  const width = Math.min(48, canvas.width);
+  const height = Math.min(32, canvas.height);
+  if (!width || !height) return true;
+  const sample = document.createElement('canvas');
+  sample.width = width;
+  sample.height = height;
+  const context = sample.getContext('2d', { willReadFrequently: true });
+  context.drawImage(canvas, 0, 0, width, height);
+  const data = context.getImageData(0, 0, width, height).data;
+  let total = 0;
+  let total2 = 0;
+  let count = 0;
+  for (let index = 0; index < data.length; index += 16) {
+    const value = (data[index] + data[index + 1] + data[index + 2]) / 3;
+    total += value;
+    total2 += value * value;
+    count++;
+  }
+  const mean = total / Math.max(1, count);
+  const variance = total2 / Math.max(1, count) - mean * mean;
+  return mean < 5 && variance < 8;
+}
+
+function candidateTimes(duration) {
+  if (!Number.isFinite(duration) || duration <= .05) return [0];
+  const end = Math.max(0, duration - .03);
+  const candidates = [
+    Math.min(end, Math.min(2, Math.max(.12, duration * .08))),
+    Math.min(end, Math.min(12, Math.max(.5, duration * .3))),
+    Math.min(end, Math.min(30, Math.max(1, duration * .6)))
+  ];
+  return [...new Set(candidates.map(value => Number(value.toFixed(3))))];
 }
 
 async function cachedThumb(hash) {
@@ -159,6 +254,7 @@ function applyBlob(hash, blob) {
   }
 
   files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"] .media-thumb`).forEach(box => {
+    box.classList.remove('thumb-failed');
     let image = box.querySelector('img.cached-thumb');
     if (!image) {
       image = document.createElement('img');
@@ -173,18 +269,25 @@ function applyBlob(hash, blob) {
   });
 }
 
+function markFailed(hash, message) {
+  files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"] .media-thumb`).forEach(box => {
+    box.classList.add('thumb-failed');
+    box.title = `Preview unavailable: ${message}`;
+  });
+}
+
 async function generate(hash) {
   const existing = await cachedThumb(hash);
   if (existing?.blob) {
     applyBlob(hash, existing.blob);
-    return;
+    return true;
   }
-  if (!files.querySelector(`[data-hash="${CSS.escape(hash)}"]`)) return;
+  if (!cardFor(hash)) return false;
 
   const video = document.createElement('video');
   video.muted = true;
   video.playsInline = true;
-  video.preload = 'metadata';
+  video.preload = 'auto';
   video.src = `/api/objects/${hash}`;
 
   try {
@@ -193,51 +296,75 @@ async function generate(hash) {
     const height = video.videoHeight;
     if (!width || !height) throw new Error('Video has no frame size');
 
-    if (Number.isFinite(video.duration) && video.duration > .05) {
-      const target = Math.min(.1, Math.max(.01, video.duration / 20));
-      if (Math.abs(video.currentTime - target) > .005) {
-        video.currentTime = target;
-        await waitFor(video, 'seeked');
-      }
-    } else if (video.readyState < 2) {
-      await waitFor(video, 'loadeddata');
-    }
-
     const scale = Math.min(1, THUMB_EDGE / Math.max(width, height));
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(width * scale));
     canvas.height = Math.max(1, Math.round(height * scale));
-    canvas.getContext('2d', { alpha: false }).drawImage(video, 0, 0, canvas.width, canvas.height);
+    const context = canvas.getContext('2d', { alpha: false });
+    const times = candidateTimes(video.duration);
+
+    for (let index = 0; index < times.length; index++) {
+      await seekToFrame(video, times[index]);
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      if (index === times.length - 1 || !frameLooksBlank(canvas)) break;
+    }
+
     const blob = await canvasBlob(canvas);
     if (!blob) throw new Error('Could not encode video thumbnail');
     await saveResult(hash, blob, width, height);
     applyBlob(hash, blob);
+    attempts.delete(hash);
+    return true;
   } finally {
     video.removeAttribute('src');
     video.load();
   }
 }
 
+function retry(hash, error) {
+  const count = (attempts.get(hash) || 0) + 1;
+  attempts.set(hash, count);
+  if (count >= MAX_ATTEMPTS || !cardFor(hash)) {
+    markFailed(hash, error.message);
+    return;
+  }
+  const delay = count === 1 ? 500 : 1800;
+  const timer = setTimeout(() => {
+    retryTimers.delete(hash);
+    enqueue(hash, true);
+  }, delay);
+  retryTimers.set(hash, timer);
+}
+
 function pump() {
   if (busy || !queue.length) return;
+  const hash = takeNext();
+  if (!hash) return;
+  const card = cardFor(hash);
+  const rect = card?.getBoundingClientRect();
+  const visible = Boolean(rect && rect.bottom >= 0 && rect.top <= innerHeight);
   busy = true;
-  idle(async () => {
-    const hash = queue.shift();
+  runLowPriority(async () => {
     try {
       await generate(hash);
     } catch (error) {
-      console.warn('Video thumbnail failed', error);
+      console.warn('Video thumbnail failed', hash, error);
+      retry(hash, error);
     } finally {
       queued.delete(hash);
       busy = false;
-      if (queue.length) pump();
+      if (queue.length) setTimeout(pump, 35);
     }
-  });
+  }, visible);
 }
 
 new MutationObserver(scheduleScan).observe(files, { childList: true, subtree: true });
+window.addEventListener('scroll', () => {
+  if (queue.length && !busy) pump();
+}, { passive: true });
 scheduleScan();
 
 window.addEventListener('beforeunload', () => {
   for (const url of urls.values()) URL.revokeObjectURL(url);
+  for (const timer of retryTimers.values()) clearTimeout(timer);
 });
