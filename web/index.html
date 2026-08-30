@@ -29,28 +29,70 @@
     <div id="app" hidden>
       <section id="stats" class="stats"></section>
 
-      <section class="card">
-        <div class="section-head">
+      <section class="card library-card">
+        <div class="section-head library-head">
           <div>
-            <h2>Files</h2>
-            <p>One row per unique object. Original locations are preserved separately.</p>
+            <h2>Library</h2>
+            <p>Unique content is stored once. Every original location is remembered.</p>
           </div>
           <input id="search" type="search" placeholder="Search names and paths">
         </div>
-        <div id="files" class="files"></div>
+        <div class="toolbar">
+          <div id="filters" class="segmented">
+            <button data-type="" class="active">All</button>
+            <button data-type="image">Images</button>
+            <button data-type="video">Video</button>
+            <button data-type="audio">Audio</button>
+            <button data-type="application">Documents</button>
+            <button data-type="other">Other</button>
+          </div>
+          <div id="views" class="segmented compact">
+            <button data-view="grid" class="active">Grid</button>
+            <button data-view="list">List</button>
+          </div>
+        </div>
+        <div id="files" class="files grid"></div>
+        <button id="more" class="more quiet" hidden>Load more</button>
       </section>
 
       <section class="card">
         <div class="section-head">
           <div>
-            <h2>Backup drives</h2>
-            <p>What each managed drive is intended to protect, and what the server currently believes is there.</p>
+            <h2>Backups</h2>
+            <p>What each backup location should contain and what the server currently believes is protected.</p>
           </div>
         </div>
         <div id="drives" class="drives"></div>
       </section>
     </div>
   </main>
+
+  <dialog id="details">
+    <button id="close-details" class="dialog-close quiet" aria-label="Close">×</button>
+    <div id="detail-preview" class="detail-preview"></div>
+    <div class="detail-body">
+      <div class="detail-title-row">
+        <div>
+          <h2 id="detail-name"></h2>
+          <p id="detail-meta"></p>
+        </div>
+        <a id="detail-open" class="button-link" target="_blank">Open original</a>
+      </div>
+      <h3>Known locations</h3>
+      <div id="detail-sources" class="sources"></div>
+      <div class="danger-zone">
+        <div>
+          <strong>Remove from live library</strong>
+          <p>Offline backup copies are left alone.</p>
+        </div>
+        <div class="danger-actions">
+          <button id="delete" class="quiet">Delete</button>
+          <button id="delete-ignore" class="danger">Delete & Ignore</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
   <script type="module" src="/app.js"></script>
 </body>
 </html>
