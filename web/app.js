@@ -69,13 +69,11 @@ function preview(file, large = false) {
 async function loadStats() {
   const s = await request('/api/stats');
   const percent = s.capacityBytes ? Math.min(100, (s.bytes / s.capacityBytes) * 100) : 0;
-  const percentText = s.bytes && percent < 0.1 ? '<0.1%' : `${percent.toFixed(percent < 10 ? 1 : 0)}%`;
   const width = s.bytes ? `max(2px, ${percent}%)` : '0';
   $('#stats').innerHTML = `
     <article class="storage-usage">
       <div class="storage-copy">
         <strong>${formatBytes(s.bytes)} <span>of ${formatBytes(s.capacityBytes)}</span></strong>
-        <b>${percentText}</b>
       </div>
       <div class="storage-bar"><i style="width:${width}"></i></div>
     </article>`;
