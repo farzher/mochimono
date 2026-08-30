@@ -6,7 +6,6 @@ const logout = $('#logout');
 const PAGE = 180;
 const CACHE_NAME = 'mochimono-catalog';
 const CACHE_VERSION = 2;
-const THUMB_EDGE = 768;
 
 let searchTimer;
 let catalog = [];
@@ -38,10 +37,6 @@ let viewerDirty = false;
 let viewerPreloads = [];
 let scrubbing = false;
 let lastScrubAt = 0;
-let thumbBusy = false;
-const thumbQueue = [];
-const thumbQueued = new Set();
-const thumbUrls = new Map();
 
 const topScrollSentinel = document.createElement('div');
 topScrollSentinel.id = 'top-scroll-sentinel';
@@ -137,8 +132,6 @@ async function cacheDelete(hash) {
   transaction.objectStore('files').delete(hash);
   transaction.objectStore('thumbs').delete(hash);
   await done;
-  if (thumbUrls.has(hash)) URL.revokeObjectURL(thumbUrls.get(hash));
-  thumbUrls.delete(hash);
 }
 
 async function cacheImports(nextImports) {
@@ -150,31 +143,6 @@ async function cacheImports(nextImports) {
   const done = idbDone(transaction);
   transaction.objectStore('meta').put({ key: 'catalog', ...cacheMeta });
   await done;
-}
-
-async function loadThumbs(files) {
-  const wanted = files.filter(file => ['image', 'video'].includes(kind(file)) && !thumbUrls.has(file.hash));
-  if (!wanted.length) return;
-  const db = await openCache();
-  if (!db) return;
-  const transaction = db.transaction('thumbs');
-  const store = transaction.objectStore('thumbs');
-  const rows = await Promise.all(wanted.map(file => idbRequest(store.get(file.hash))));
-  await idbDone(transaction);
-  rows.filter(Boolean).forEach(row => {
-    if (!thumbUrls.has(row.hash)) thumbUrls.set(row.hash, URL.createObjectURL(row.blob));
-  });
-  for (const file of wanted) applyCachedThumb(file.hash);
-}
-
-async function saveThumb(hash, blob) {
-  const db = await openCache();
-  if (!db || !blob) return;
-  const transaction = db.transaction('thumbs', 'readwrite');
-  const done = idbDone(transaction);
-  transaction.objectStore('thumbs').put({ hash, blob });
-  await done;
-  if (!thumbUrls.has(hash)) thumbUrls.set(hash, URL.createObjectURL(blob));
 }
 
 function formatBytes(bytes) {
@@ -189,11 +157,13 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 }
 
-const VIDEO_EXTENSIONS = new Set(['m4v', 'mp4', 'mov', 'mkv', 'webm', 'avi']);
+const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff']);
+const VIDEO_EXTENSIONS = new Set(['m4v', 'mp4', 'mov', 'mkv', 'webm', 'avi', 'mpg', 'mpeg', 'm2v', 'mts', 'm2ts', '3gp']);
 function kind(file) {
   const value = file.mime?.split('/')[0] || 'other';
   if (value === 'application' && (!file.mime || file.mime === 'application/octet-stream')) {
     const extension = String(file.filename || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
+    if (IMAGE_EXTENSIONS.has(extension)) return 'image';
     if (VIDEO_EXTENSIONS.has(extension)) return 'video';
   }
   return value;
@@ -217,15 +187,11 @@ function matchesType(file) {
 const objectUrl = file => `/api/objects/${file.hash}`;
 
 function preview(file) {
-  const thumb = thumbUrls.get(file.hash);
-  if (thumb && ['image', 'video'].includes(kind(file))) {
-    return `<img class="cached-thumb" loading="lazy" src="${thumb}" alt="${escapeHtml(file.filename)}">${kind(file) === 'video' ? '<span class="play-badge">▶</span>' : ''}`;
-  }
-  const url = objectUrl(file);
-  if (kind(file) === 'image') return `<img loading="lazy" src="${url}" alt="${escapeHtml(file.filename)}">`;
-  if (kind(file) === 'video') return `<span class="video-thumb-pending" data-video-thumb="${file.hash}"></span><span class="play-badge">▶</span>`;
-  const icon = kind(file) === 'audio' ? '♪' : typeLabel(file) === 'document' ? '▤' : '·';
-  return `<div class="file-icon ${escapeHtml(kind(file))}">${icon}</div>`;
+  const value = kind(file);
+  if (value === 'image') return `<span class="video-thumb-pending" data-video-thumb="${file.hash}"></span>`;
+  if (value === 'video') return `<span class="video-thumb-pending" data-video-thumb="${file.hash}"></span><span class="play-badge">▶</span>`;
+  const icon = value === 'audio' ? '♪' : typeLabel(file) === 'document' ? '▤' : '·';
+  return `<div class="file-icon ${escapeHtml(value)}">${icon}</div>`;
 }
 
 function viewerMedia(file) {
@@ -485,7 +451,6 @@ function renderFiles() {
       : cardsHtml(loaded);
   }
   renderRail();
-  loadThumbs(loaded).catch(console.warn);
 }
 
 function appendMore() {
@@ -514,7 +479,6 @@ function appendMore() {
   } else {
     $('#files').insertAdjacentHTML('beforeend', cardsHtml(next));
   }
-  loadThumbs(next).catch(console.warn);
   updateRailActive();
 }
 
@@ -551,7 +515,6 @@ function prependMore() {
     element.insertAdjacentHTML('afterbegin', cardsHtml(previous));
   }
 
-  loadThumbs(previous).catch(console.warn);
   requestAnimationFrame(() => requestAnimationFrame(() => {
     if (anchorHash) {
       const restored = element.querySelector(`[data-hash="${CSS.escape(anchorHash)}"]`);
@@ -585,77 +548,6 @@ function scrubFromPointer(event, final = false) {
     lastScrubAt = now;
     jumpToIndex(index, false);
   }
-}
-
-function applyCachedThumb(hash) {
-  const url = thumbUrls.get(hash);
-  if (!url) return;
-  for (const card of document.querySelectorAll(`#files [data-hash="${CSS.escape(hash)}"]`)) {
-    const box = card.querySelector('.media-thumb');
-    if (!box || box.querySelector('.cached-thumb')) continue;
-    const old = box.querySelector('img,video,.video-thumb-pending');
-    if (!old) continue;
-    const image = document.createElement('img');
-    image.className = 'cached-thumb';
-    image.loading = 'lazy';
-    image.src = url;
-    image.alt = card.title || '';
-    old.replaceWith(image);
-  }
-}
-
-function learnMedia(element, width, height) {
-  if (!width || !height || element.classList.contains('cached-thumb')) return;
-  const card = element.closest('[data-hash]');
-  if (!card) return;
-  const file = catalog.find(item => item.hash === card.dataset.hash);
-  if (file && (!file.width || !file.height)) {
-    file.width = width;
-    file.height = height;
-    cachePut(file).catch(console.warn);
-  }
-  queueThumb(element, card.dataset.hash, width, height);
-}
-
-function queueThumb(element, hash, width, height) {
-  if (thumbUrls.has(hash) || thumbQueued.has(hash)) return;
-  thumbQueued.add(hash);
-  thumbQueue.push({ element, hash, width, height });
-  pumpThumbs();
-}
-
-function idle(callback) {
-  if ('requestIdleCallback' in window) requestIdleCallback(callback, { timeout: 1200 });
-  else setTimeout(callback, 30);
-}
-
-function canvasBlob(canvas) {
-  return new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .82));
-}
-
-async function pumpThumbs() {
-  if (thumbBusy || !thumbQueue.length) return;
-  thumbBusy = true;
-  idle(async () => {
-    const job = thumbQueue.shift();
-    try {
-      if (job?.element?.isConnected && !thumbUrls.has(job.hash)) {
-        const scale = Math.min(1, THUMB_EDGE / Math.max(job.width, job.height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(job.width * scale));
-        canvas.height = Math.max(1, Math.round(job.height * scale));
-        canvas.getContext('2d', { alpha: false }).drawImage(job.element, 0, 0, canvas.width, canvas.height);
-        const blob = await canvasBlob(canvas);
-        await saveThumb(job.hash, blob);
-      }
-    } catch (error) {
-      console.warn('Thumbnail failed', error);
-    } finally {
-      if (job) thumbQueued.delete(job.hash);
-      thumbBusy = false;
-      if (thumbQueue.length) pumpThumbs();
-    }
-  });
 }
 
 async function loadStats() {
@@ -1037,13 +929,6 @@ $('#files').addEventListener('click', event => {
   const item = event.target.closest('[data-hash]');
   if (item) openViewer(item.dataset.hash);
 });
-
-$('#files').addEventListener('load', event => {
-  if (event.target instanceof HTMLImageElement) learnMedia(event.target, event.target.naturalWidth, event.target.naturalHeight);
-}, true);
-$('#files').addEventListener('loadeddata', event => {
-  if (event.target instanceof HTMLVideoElement) learnMedia(event.target, event.target.videoWidth, event.target.videoHeight);
-}, true);
 
 new IntersectionObserver(entries => {
   if (entries.some(entry => entry.isIntersecting)) prependMore();
