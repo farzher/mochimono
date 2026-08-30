@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, rm, stat, statfs } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
@@ -14,6 +14,7 @@ const DATA_DIR = resolve(process.env.MOCHIMONO_DATA || join(ROOT, 'data'));
 const PORT = Number(process.env.PORT || 8642);
 const HOST = process.env.HOST || '127.0.0.1';
 const TOKEN = process.env.MOCHIMONO_TOKEN || '';
+const CATALOG_BOOT = randomUUID();
 
 if (!TOKEN) {
   console.error('MOCHIMONO_TOKEN is required.');
@@ -23,6 +24,7 @@ if (!TOKEN) {
 await mkdir(DATA_DIR, { recursive: true });
 const db = openCatalog(join(DATA_DIR, 'catalog.sqlite'));
 const now = () => new Date().toISOString();
+const catalogVersion = () => `${CATALOG_BOOT}:${db.prepare('SELECT total_changes() AS changes').get().changes}`;
 
 function json(res, status, data, headers = {}) {
   const body = JSON.stringify(data);
@@ -234,6 +236,36 @@ async function handleApi(req, res, url) {
     const capacityBytes = Number(storage.blocks) * Number(storage.bsize);
     const freeBytes = Number(storage.bavail) * Number(storage.bsize);
     return json(res, 200, { objects: objects.count, bytes: objects.bytes, capacityBytes, freeBytes, sources: sources.count, ignored: ignored.count, unreviewed: unreviewed.count, unbacked: unbacked.count, drives: drives.count });
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/catalog/version') {
+    return json(res, 200, { version: catalogVersion() });
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/catalog') {
+    const after = String(url.searchParams.get('after') || '');
+    const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') || 5000)));
+    const rows = db.prepare(`
+      SELECT o.hash, o.size, o.mime, o.created_at AS createdAt,
+             COALESCE(MIN(s.filename), o.hash) AS filename,
+             COALESCE(MIN(s.original_path), '') AS originalPath,
+             COALESCE(MAX(s.mtime), o.created_at) AS fileDate,
+             GROUP_CONCAT(DISTINCT s.import_id) AS importIds,
+             COALESCE(GROUP_CONCAT(DISTINCT s.filename || ' ' || s.original_path), '') AS searchText,
+             EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
+             (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount
+      FROM objects o
+      LEFT JOIN sources s ON s.object_hash = o.hash
+      WHERE o.state = 'active' AND o.hash > ?
+      GROUP BY o.hash
+      ORDER BY o.hash
+      LIMIT ?
+    `).all(after, limit);
+    return json(res, 200, {
+      files: rows,
+      nextAfter: rows.length === limit ? rows.at(-1).hash : null,
+      version: catalogVersion()
+    });
   }
 
   if (req.method === 'GET' && url.pathname === '/api/imports') {
