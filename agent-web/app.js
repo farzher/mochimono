@@ -48,14 +48,13 @@ async function state() {
     $('#serverUrl').value = current.settings.server;
     const status = $('#serverStatus');
     status.className = `status ${current.server.online ? 'online' : 'offline'}`;
-    status.textContent = current.server.online
-      ? `Server online · ${current.server.stats.objects} objects`
-      : `Server offline · ${current.server.error || 'not configured'}`;
+    status.textContent = current.server.online ? `Online · ${current.server.stats.objects} files` : 'Offline';
+    status.title = current.server.online ? '' : current.server.error || 'Not configured';
 
     activity(current.job);
     if (current.job && current.job.status !== 'running' && lastFinished !== current.job.id) {
       lastFinished = current.job.id;
-      toast(current.job.status === 'done' ? 'Operation complete' : current.job.status === 'canceled' ? 'Operation canceled' : current.job.error);
+      toast(current.job.status === 'done' ? 'Done' : current.job.status === 'canceled' ? 'Canceled' : current.job.error);
       backups();
     }
   } catch (error) {
@@ -67,7 +66,7 @@ function activity(job) {
   const element = $('#activity');
   if (!job) {
     element.className = 'empty';
-    element.textContent = 'Nothing running.';
+    element.textContent = 'Idle';
     return;
   }
 
@@ -75,7 +74,7 @@ function activity(job) {
   const metrics = [];
   for (const [key, label] of [
     ['scanned', 'scanned'], ['new', 'new'], ['duplicates', 'duplicates'], ['ignored', 'ignored'], ['errors', 'errors'],
-    ['copied', 'copied'], ['already', 'already there'], ['checked', 'processed'], ['total', 'total'], ['bad', 'bad'],
+    ['copied', 'copied'], ['already', 'existing'], ['checked', 'checked'], ['total', 'total'], ['bad', 'bad'],
     ['restored', 'restored'], ['skipped', 'skipped'], ['missing', 'missing'], ['conflicts', 'conflicts']
   ]) {
     if (progress[key] != null) metrics.push(`<span class="metric"><b>${esc(progress[key])}</b> ${label}</span>`);
@@ -107,7 +106,7 @@ function activity(job) {
 
 async function backups() {
   const element = $('#backups');
-  element.innerHTML = '<div class="muted">Looking for backups…</div>';
+  element.innerHTML = '<div class="muted">Loading…</div>';
   try {
     const { backups: locations } = await req('/api/backups');
     element.innerHTML = locations.map((location, index) => {
@@ -117,8 +116,8 @@ async function backups() {
       const missing = remote ? Math.max(0, remote.desiredBytes - remote.protectedBytes) : null;
       const coverage = remote ? `
         <div class="coverage"><div class="coverage-bar"><i style="width:${ratio}%"></i></div>
-        <div class="coverage-copy"><span>${bytes(remote.protectedBytes)} of ${bytes(remote.desiredBytes)} protected</span><b>${missing ? `${bytes(missing)} missing` : 'Complete'}</b></div></div>` :
-        '<div class="coverage-copy offline-copy"><span>Server offline</span><b>Local inventory only</b></div>';
+        <div class="coverage-copy"><span>${bytes(remote.protectedBytes)} / ${bytes(remote.desiredBytes)}</span><b>${missing ? `${bytes(missing)} missing` : 'Complete'}</b></div></div>` :
+        '<div class="coverage-copy offline-copy"><span>Offline</span><b>Local only</b></div>';
       return `
         <div class="drive">
           <div class="drive-head">
@@ -129,7 +128,7 @@ async function backups() {
             <span class="badge managed">Backup</span>
           </div>
           ${coverage}
-          <div class="drive-meta">${location.local.count.toLocaleString()} objects · ${bytes(location.local.bytes)} stored · ${bytes(location.freeBytes)} free · protects ${esc(policy)}</div>
+          <div class="drive-meta">${location.local.count.toLocaleString()} files · ${bytes(location.local.bytes)} · ${bytes(location.freeBytes)} free · ${esc(policy)}</div>
           <div class="drive-actions">
             <button class="primary small" data-update="${index}">Update</button>
             <button class="secondary small" data-configure="${index}">Configure</button>
@@ -137,7 +136,7 @@ async function backups() {
             <button class="secondary small" data-verify="${index}">Verify</button>
           </div>
         </div>`;
-    }).join('') || '<div class="muted">No backup locations yet. Choose any folder above to create one.</div>';
+    }).join('') || '<div class="muted">No backups.</div>';
 
     $$('[data-update]').forEach(button => button.onclick = () => runBackup(locations[Number(button.dataset.update)].path, 'update'));
     $$('[data-verify]').forEach(button => button.onclick = () => runBackup(locations[Number(button.dataset.verify)].path, 'verify'));
@@ -172,7 +171,7 @@ function openBackupDialog(path, meta = null) {
   $('#backupTypes').classList.toggle('disabled', everything);
   const selected = new Set(meta?.policy?.types || []);
   $$('#backupTypes input').forEach(input => { input.checked = selected.has(input.value); });
-  $('#initializeBackup').textContent = meta ? 'Save' : 'Initialize';
+  $('#initializeBackup').textContent = 'Save';
   $('#backupDialog').showModal();
 }
 
@@ -202,7 +201,7 @@ $('#activity').addEventListener('click', async event => {
 
 $('#startImport').onclick = async () => {
   const path = $('#importPath').value.trim();
-  if (!path) return toast('Paste a path or choose a folder first');
+  if (!path) return toast('Choose a folder.');
   try {
     await req('/api/import', { method: 'POST', body: JSON.stringify({ path, source: $('#sourceName').value.trim() }) });
     state();
@@ -213,7 +212,7 @@ $('#startImport').onclick = async () => {
 
 $('#addBackup').onclick = () => {
   const path = $('#backupLocation').value.trim();
-  if (!path) return toast('Paste a path or choose a backup folder first');
+  if (!path) return toast('Choose a folder.');
   openBackupDialog(path);
 };
 
@@ -226,7 +225,7 @@ $('#initializeBackup').onclick = async () => {
     });
     $('#backupDialog').close();
     $('#backupLocation').value = '';
-    toast(backupEditing ? 'Backup settings saved' : result.existing ? 'Existing backup added' : 'Backup folder initialized');
+    toast(backupEditing ? 'Saved' : result.existing ? 'Added' : 'Created');
     backups();
   } catch (error) {
     toast(error.message);
@@ -235,7 +234,7 @@ $('#initializeBackup').onclick = async () => {
 
 $('#startRestore').onclick = async () => {
   const destination = $('#restoreDestination').value.trim();
-  if (!destination) return toast('Choose or paste a restore destination');
+  if (!destination) return toast('Choose a destination.');
   try {
     await req('/api/backup/restore', {
       method: 'POST',
@@ -255,7 +254,7 @@ $('#saveSettings').onclick = async () => {
       body: JSON.stringify({ server: $('#serverUrl').value.trim(), token: $('#serverToken').value })
     });
     $('#serverToken').value = '';
-    toast('Settings saved');
+    toast('Saved');
     state();
   } catch (error) {
     toast(error.message);
