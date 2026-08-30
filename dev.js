@@ -40,7 +40,7 @@ console.log('Agent:   http://127.0.0.1:8643');
 console.log(`Data:    ${join(root, 'dev-data')}`);
 console.log('');
 
-run('server.js', {
+run('server-entry.js', {
   MOCHIMONO_TOKEN: token,
   MOCHIMONO_DATA: join(root, 'dev-data'),
   HOST: '127.0.0.1',
@@ -48,7 +48,7 @@ run('server.js', {
 });
 
 setTimeout(() => {
-  if (!stopping) run('agent.js', {
+  if (!stopping) run('agent-entry.js', {
     MOCHIMONO_TOKEN: token,
     MOCHIMONO_URL: serverUrl,
     MOCHIMONO_AGENT_PORT: '8643'
