@@ -11,55 +11,52 @@
   <header>
     <div class="app-brand">
       <span class="mini" aria-hidden="true"></span>
-      <div><h1>Mochimono</h1><span class="agent-label">Agent</span></div>
+      <h1>Mochimono <span class="agent-label">Agent</span></h1>
     </div>
     <div id="serverStatus" class="status">Connecting…</div>
   </header>
 
   <main>
     <section class="card import-card">
-      <div class="section-title"><h2>Import</h2></div>
-      <label>Folder or drive</label>
-      <div class="path-row">
-        <input id="importPath" placeholder="C:\Users\you\Pictures">
+      <h2>Import</h2>
+      <div class="path-row primary-row">
+        <input id="importPath" placeholder="Folder or drive">
         <button id="chooseImport" class="secondary">Browse…</button>
       </div>
-      <label>Source <span>optional</span></label>
-      <input id="sourceName" placeholder="Old laptop, Phone, Photos…">
+      <input id="sourceName" class="source-input" placeholder="Source (optional)">
       <button id="startImport" class="primary wide">Import</button>
     </section>
 
-    <section class="card backup-card">
-      <div class="section-title row">
-        <h2>Backups</h2>
-        <button id="refreshBackups" class="secondary small">Refresh</button>
-      </div>
-      <label>Folder</label>
-      <div class="path-row">
-        <input id="backupLocation" placeholder="C:\MochimonoBackup">
-        <button id="chooseBackup" class="secondary">Browse…</button>
-      </div>
-      <button id="addBackup" class="primary wide">Add</button>
-      <div id="backups" class="drives backup-list"><div class="muted">Loading…</div></div>
+    <section id="activityCard" class="activity-strip" hidden>
+      <div id="activity"></div>
     </section>
 
-    <section class="card activity-card">
-      <div class="section-title"><h2>Activity</h2></div>
-      <div id="activity" class="empty">Idle</div>
-    </section>
-
-    <section class="card settings-card">
-      <details>
-        <summary>Settings</summary>
-        <div class="settings-body">
-          <label>Server</label>
-          <input id="serverUrl" placeholder="http://127.0.0.1:8642">
-          <label>Token</label>
-          <input id="serverToken" type="password" placeholder="Unchanged if blank">
-          <button id="saveSettings" class="secondary">Save</button>
+    <details id="protection" class="drawer">
+      <summary>Protection</summary>
+      <div class="drawer-body">
+        <div class="section-title row">
+          <h2>Backups</h2>
+          <button id="refreshBackups" class="secondary small">Refresh</button>
         </div>
-      </details>
-    </section>
+        <div id="backups" class="drives"><div class="muted">Loading…</div></div>
+        <div class="add-backup">
+          <div class="path-row">
+            <input id="backupLocation" placeholder="Backup folder">
+            <button id="chooseBackup" class="secondary">Browse…</button>
+          </div>
+          <button id="addBackup" class="secondary wide">Add backup</button>
+        </div>
+      </div>
+    </details>
+
+    <details class="drawer">
+      <summary>Settings</summary>
+      <div class="drawer-body settings-body">
+        <input id="serverUrl" placeholder="Server">
+        <input id="serverToken" type="password" placeholder="Token · unchanged if blank">
+        <button id="saveSettings" class="secondary">Save</button>
+      </div>
+    </details>
   </main>
 
   <dialog id="backupDialog">
@@ -67,9 +64,7 @@
       <div><h3>Backup</h3><div id="backupPathLabel" class="picker-path"></div></div>
       <button class="icon" data-close>×</button>
     </div>
-    <label>Name</label>
-    <input id="backupName" placeholder="Backup">
-    <label>Protect</label>
+    <input id="backupName" placeholder="Name">
     <label class="check"><input id="backupEverything" type="checkbox" checked> Everything</label>
     <div id="backupTypes" class="type-grid disabled">
       <label class="check"><input type="checkbox" value="image"> Images</label>
@@ -91,9 +86,8 @@
       <div><h3>Restore</h3><div id="restoreBackupLabel" class="picker-path"></div></div>
       <button class="icon" data-close>×</button>
     </div>
-    <label>Destination</label>
     <div class="path-row">
-      <input id="restoreDestination" placeholder="C:\MochimonoRecovered">
+      <input id="restoreDestination" placeholder="Destination">
       <button id="chooseRestore" class="secondary">Browse…</button>
     </div>
     <div class="dialog-actions">
