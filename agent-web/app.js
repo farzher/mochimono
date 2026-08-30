@@ -3,6 +3,7 @@ const $$ = selector => [...document.querySelectorAll(selector)];
 const activityCard = $('#activityCard');
 const protection = $('#protection');
 const connectionDialog = $('#connectionDialog');
+const deviceDialog = $('#deviceDialog');
 
 let backupPath;
 let backupEditing = false;
@@ -68,7 +69,7 @@ function renderFolders(folders, job) {
       <div class="sync-folder">
         <div class="sync-folder-copy">
           <strong>${esc(folder.path)}</strong>
-          <span>${esc(folder.device)} · ${status}</span>
+          <span>${status}</span>
         </div>
         <div class="sync-folder-actions">
           <button class="secondary small" data-sync-folder="${esc(folder.path)}">Sync</button>
@@ -83,7 +84,7 @@ async function state() {
     const current = await req('/api/state');
     if (!connectionDialog.open) $('#serverUrl').value = current.settings.server;
     defaultDevice = current.settings.device || defaultDevice;
-    if (!$('#deviceName').value) $('#deviceName').value = defaultDevice;
+    $('#deviceLabel').textContent = defaultDevice;
 
     const status = $('#serverStatus');
     status.className = `status ${current.server.online ? 'online' : 'offline'}`;
@@ -94,7 +95,8 @@ async function state() {
     activity(current.job);
     if (current.job && current.job.status !== 'running' && lastFinished !== current.job.id) {
       lastFinished = current.job.id;
-      toast(current.job.status === 'done' ? 'Synced' : current.job.status === 'canceled' ? 'Canceled' : current.job.error);
+      const done = current.job.type === 'sync' ? 'Synced' : 'Done';
+      toast(current.job.status === 'done' ? done : current.job.status === 'canceled' ? 'Canceled' : current.job.error);
       if (protection.open) backups();
     }
   } catch (error) {
@@ -203,6 +205,10 @@ function openRestoreDialog(path) {
 }
 
 $('#serverStatus').onclick = () => connectionDialog.showModal();
+$('#deviceButton').onclick = () => {
+  $('#deviceName').value = defaultDevice;
+  deviceDialog.showModal();
+};
 $('#chooseImport').onclick = () => chooseFolder($('#importPath'));
 $('#chooseBackup').onclick = () => chooseFolder($('#backupLocation'));
 $('#chooseRestore').onclick = () => chooseFolder($('#restoreDestination'));
@@ -235,11 +241,22 @@ $('#folders').addEventListener('click', async event => {
 
 $('#startImport').onclick = async () => {
   const path = $('#importPath').value.trim();
-  const device = $('#deviceName').value.trim() || defaultDevice;
   if (!path) return toast('Choose a folder.');
   try {
-    await req('/api/folders', { method: 'POST', body: JSON.stringify({ path, device }) });
+    await req('/api/folders', { method: 'POST', body: JSON.stringify({ path }) });
     $('#importPath').value = '';
+    state();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+$('#saveDevice').onclick = async () => {
+  const device = $('#deviceName').value.trim();
+  if (!device) return;
+  try {
+    await req('/api/settings', { method: 'POST', body: JSON.stringify({ device }) });
+    deviceDialog.close();
     state();
   } catch (error) {
     toast(error.message);
