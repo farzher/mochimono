@@ -10,6 +10,7 @@ import { pipeline } from 'node:stream/promises';
 import { DatabaseSync } from 'node:sqlite';
 import http from 'node:http';
 import { restoreBackup } from './lib/restore.js';
+import { queueLocalThumbnail, thumbnailAgentStatus } from './lib/thumbnail-agent.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'agent-web');
@@ -164,8 +165,10 @@ async function hashFile(path, onProgress) {
 }
 
 const MIME = new Map([
-  ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.png', 'image/png'], ['.gif', 'image/gif'], ['.webp', 'image/webp'], ['.heic', 'image/heic'], ['.avif', 'image/avif'],
-  ['.mp4', 'video/mp4'], ['.mov', 'video/quicktime'], ['.mkv', 'video/x-matroska'], ['.webm', 'video/webm'], ['.avi', 'video/x-msvideo'],
+  ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.png', 'image/png'], ['.gif', 'image/gif'], ['.webp', 'image/webp'],
+  ['.heic', 'image/heic'], ['.heif', 'image/heif'], ['.avif', 'image/avif'], ['.bmp', 'image/bmp'], ['.tif', 'image/tiff'], ['.tiff', 'image/tiff'],
+  ['.mp4', 'video/mp4'], ['.m4v', 'video/mp4'], ['.mov', 'video/quicktime'], ['.mkv', 'video/x-matroska'], ['.webm', 'video/webm'],
+  ['.avi', 'video/x-msvideo'], ['.mpg', 'video/mpeg'], ['.mpeg', 'video/mpeg'], ['.m2v', 'video/mpeg'], ['.mts', 'video/mp2t'], ['.m2ts', 'video/mp2t'], ['.3gp', 'video/3gpp'],
   ['.mp3', 'audio/mpeg'], ['.m4a', 'audio/mp4'], ['.flac', 'audio/flac'], ['.wav', 'audio/wav'], ['.ogg', 'audio/ogg'],
   ['.txt', 'text/plain'], ['.md', 'text/markdown'], ['.csv', 'text/csv'], ['.html', 'text/html'], ['.css', 'text/css'], ['.js', 'text/javascript'],
   ['.json', 'application/json'], ['.pdf', 'application/pdf'], ['.zip', 'application/zip'], ['.7z', 'application/x-7z-compressed'], ['.rar', 'application/vnd.rar']
@@ -224,6 +227,17 @@ async function uploadFile(record, onProgress) {
   canceled();
 }
 
+function queuePreview(record) {
+  return queueLocalThumbnail({
+    hash: record.hash,
+    path: record.path,
+    size: record.size,
+    mtime: record.mtime,
+    mime: record.mime,
+    filename: basename(record.path)
+  });
+}
+
 async function syncFiles(folder, update, importId = null) {
   const root = resolve(folder);
   const info = await stat(root);
@@ -278,12 +292,21 @@ async function syncFiles(folder, update, importId = null) {
   const hashes = [...unique.keys()];
   const missing = new Set();
   const ignored = new Set();
+  const previewReady = new Set();
 
   update({ phase: 'Checking', path: root, indeterminate: true, current: '' });
   for (let index = 0; index < hashes.length; index += 1000) {
     const result = await api('/api/objects/check', { method: 'POST', body: { hashes: hashes.slice(index, index + 1000) } });
     result.missing.forEach(hash => missing.add(hash));
     result.ignored.forEach(hash => ignored.add(hash));
+  }
+  for (let index = 0; index < hashes.length; index += 500) {
+    const result = await api('/api/thumbs/check', { method: 'POST', body: { hashes: hashes.slice(index, index + 500) } });
+    for (const preview of result.thumbnails || []) previewReady.add(preview.hash);
+  }
+
+  for (const [hash, record] of unique) {
+    if (!missing.has(hash) && !ignored.has(hash) && !previewReady.has(hash)) queuePreview(record);
   }
 
   const missingRecords = [...missing].map(hash => unique.get(hash));
@@ -298,6 +321,7 @@ async function syncFiles(folder, update, importId = null) {
       await uploadFile(record, sent => {
         uploadReport({ current: record.relative, ...transferProgress(base + sent, uploadBytes, uploadStarted) });
       });
+      if (!previewReady.has(record.hash)) queuePreview(record);
       uploadedBytes += record.size;
       uploadReport({ current: record.relative, ...transferProgress(uploadedBytes, uploadBytes, uploadStarted) }, true);
     }
@@ -783,6 +807,7 @@ async function handleApi(req, res, url) {
     return json(res, 200, {
       settings: { server: settings.server, hasToken: Boolean(settings.token), device: settings.device, folders: settings.folders },
       server: await serverState(),
+      previews: thumbnailAgentStatus(),
       job
     });
   }
