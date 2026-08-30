@@ -215,14 +215,15 @@ async function handleApi(req, res, url) {
     const sources = db.prepare("SELECT COUNT(*) AS count FROM sources s JOIN objects o ON o.hash = s.object_hash WHERE o.state = 'active'").get();
     const ignored = db.prepare('SELECT COUNT(*) AS count FROM ignored_hashes').get();
     const unreviewed = db.prepare("SELECT COUNT(*) AS count FROM objects o WHERE o.state = 'active' AND NOT EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash)").get();
+    const unbacked = db.prepare("SELECT COUNT(*) AS count FROM objects o WHERE o.state = 'active' AND NOT EXISTS (SELECT 1 FROM replicas r WHERE r.object_hash = o.hash)").get();
     const drives = db.prepare('SELECT COUNT(*) AS count FROM drives').get();
-    return json(res, 200, { objects: objects.count, bytes: objects.bytes, sources: sources.count, ignored: ignored.count, unreviewed: unreviewed.count, drives: drives.count });
+    return json(res, 200, { objects: objects.count, bytes: objects.bytes, sources: sources.count, ignored: ignored.count, unreviewed: unreviewed.count, unbacked: unbacked.count, drives: drives.count });
   }
 
   if (req.method === 'GET' && url.pathname === '/api/imports') {
     const rows = db.prepare(`
       SELECT i.id, i.source_name AS sourceName, i.created_at AS createdAt,
-             COUNT(s.id) AS files, COALESCE(SUM(o.size), 0) AS referencedBytes
+             COUNT(o.hash) AS files, COALESCE(SUM(o.size), 0) AS referencedBytes
       FROM imports i
       LEFT JOIN sources s ON s.import_id = i.id
       LEFT JOIN objects o ON o.hash = s.object_hash AND o.state = 'active'
@@ -323,6 +324,7 @@ async function handleApi(req, res, url) {
     const q = String(url.searchParams.get('q') || '').slice(0, 200);
     const type = String(url.searchParams.get('type') || '');
     const review = String(url.searchParams.get('review') || '');
+    const backup = String(url.searchParams.get('backup') || '');
     const importId = Math.max(0, Number(url.searchParams.get('import') || 0) || 0);
     const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') || 100)));
     const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
@@ -338,6 +340,7 @@ async function handleApi(req, res, url) {
       FROM objects o
       LEFT JOIN sources s ON s.object_hash = o.hash
       WHERE o.state = 'active' AND ${filter.sql} AND ${reviewSql(review, 'o')}
+        AND (? != 'missing' OR NOT EXISTS (SELECT 1 FROM replicas rb WHERE rb.object_hash = o.hash))
         AND (? = 0 OR EXISTS (
           SELECT 1 FROM sources si WHERE si.object_hash = o.hash AND si.import_id = ?
         ))
@@ -348,7 +351,7 @@ async function handleApi(req, res, url) {
       GROUP BY o.hash
       ORDER BY o.created_at DESC
       LIMIT ? OFFSET ?
-    `).all(...filter.params, importId, importId, q, like, like, like, limit, offset);
+    `).all(...filter.params, backup, importId, importId, q, like, like, like, limit, offset);
     return json(res, 200, { files: rows, limit, offset, hasMore: rows.length === limit });
   }
 
