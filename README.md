@@ -4,6 +4,19 @@ Mochimono is a cloud-first personal archive: dump in files, store identical cont
 
 V1 is deliberately small: plain JavaScript, one Node server, one SQLite catalog, one filesystem object store, one browser UI, and one local agent. There are currently no npm runtime dependencies.
 
+## Development philosophy
+
+Mochimono is in rapid pre-user development. Optimize for quick iteration and the smallest clean codebase that lets us use the product and learn what it should become.
+
+- There are no users or compatibility requirements yet. Breaking changes are fine.
+- Do not add migrations, version compatibility, legacy support, fallback behavior, compatibility shims, or transitional code unless explicitly requested.
+- Prefer replacing or deleting an old design over preserving it alongside a new one.
+- Do not spend time adding test suites, test infrastructure, or broad development verification unless explicitly requested or needed to diagnose a concrete problem.
+- Keep implementations direct and minimal. Avoid abstractions, dependencies, frameworks, and generalized systems until real usage demonstrates a need for them.
+- Plain JavaScript is preferred over TypeScript or additional build tooling.
+
+Runtime integrity checks that are part of Mochimono itself, such as verifying stored file hashes, are product behavior rather than development-test overhead and should remain where they protect user data.
+
 ## Current V1 features
 
 - SHA-256 whole-file identity and exact deduplication
@@ -96,9 +109,5 @@ Verification re-hashes stored objects. Missing/corrupt objects are removed from 
 ## Design rules for V1
 
 One original file equals one immutable object. No chunking, compression, or second backup repository format yet. Backup disks are disaster-recovery repositories, not mirrors; live deletions are not automatically propagated to offline disks.
-
-```bash
-npm test
-```
 
 Add complexity only after real usage demonstrates a need for it.
