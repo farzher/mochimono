@@ -9,7 +9,8 @@ Mochimono syncs folders to one deduplicated library while remembering where ever
 - automatic one-way folder sync
 - exact SHA-256 deduplication
 - original device, path, filename, and mtime provenance
-- grid, list, folder, search, and Inbox views
+- browser metadata cache for instant search, filters, and sorting
+- grid, list, folder, timeline, and Inbox views
 - Keep, Delete, and Delete + Ignore
 - native folder picker in the local Agent
 - offline backup folders with verification and restore
