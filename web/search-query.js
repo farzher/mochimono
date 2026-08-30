@@ -1,6 +1,6 @@
 const search = document.querySelector('#search');
 const valueDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-const SEARCH_INDEX_VERSION = '4';
+const SEARCH_INDEX_VERSION = '5';
 const SEARCH_INDEX_KEY = 'mochimono-search-index-version';
 const nativeFetch = window.fetch.bind(window);
 
@@ -42,6 +42,14 @@ function fileKind(file) {
   return base || 'other';
 }
 
+function typeFields(file) {
+  const kind = fileKind(file);
+  const values = [kind];
+  if (kind === 'image' || kind === 'video') values.push('media');
+  if (kind === 'application' || kind === 'text') values.push('application');
+  return [...new Set(values)].map(value => `__type__${encoded(value)}`);
+}
+
 function yearFor(file) {
   const date = new Date(file.fileDate || file.createdAt || 0);
   return Number.isNaN(date.getTime()) ? '' : String(date.getFullYear());
@@ -53,7 +61,7 @@ function augmentCatalogFile(file) {
     all,
     ...fieldWords('name', file.filename),
     ...fieldWords('path', `${file.originalPath || ''} ${file.searchText || ''}`),
-    `__type__${encoded(fileKind(file))}`,
+    ...typeFields(file),
     `__ext__${encoded(extension(file.filename))}`,
     `__year__${encoded(yearFor(file))}`
   ];
@@ -136,7 +144,7 @@ function queryTerms(raw) {
       continue;
     }
     if (token.field === 'path') {
-      result.push(...fieldWords('path', pathTail(token.text, 3)));
+      result.push(...fieldWords('path', pathTail(token.text, 2)));
       continue;
     }
     if (token.field === 'source') {
@@ -202,8 +210,13 @@ function queryMatchesDetails(raw, details) {
   const hay = detailsHaystacks(details);
   return tokenize(raw).every(token => {
     let wanted = token.text;
-    if (token.field === 'type') wanted = typeToken(wanted);
-    if (token.field === 'path') wanted = pathTail(wanted, 3);
+    if (token.field === 'type') {
+      const type = typeToken(wanted);
+      if (type === 'media') return ['image', 'video'].includes(hay.type);
+      if (type === 'application') return ['application', 'text'].includes(hay.type);
+      return hay.type === type;
+    }
+    if (token.field === 'path') wanted = pathTail(wanted, 2);
     if (!token.field && /[\\/]/.test(wanted)) wanted = pathTail(wanted, 2);
     const terms = words(wanted);
     const field = token.field && hay[token.field] !== undefined ? token.field : 'all';
