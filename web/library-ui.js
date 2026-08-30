@@ -4,15 +4,15 @@ const UI_KEY = 'mochimono-library-ui';
 const files = document.querySelector('#files');
 const folderbar = document.querySelector('#folderbar');
 const source = document.querySelector('#source');
+const collectionFilter = document.querySelector('#collectionFilter');
 const search = document.querySelector('#search');
 const typeFilter = document.querySelector('#typeFilter');
 const sort = document.querySelector('#sort');
-const filterInbox = document.querySelector('#filterInbox');
-const filterUnprotected = document.querySelector('#filterUnprotected');
 const selectToggle = document.querySelector('#selectFiles');
 const selectionBar = document.querySelector('#selectionBar');
 const selectionCount = document.querySelector('#selectionCount');
 const selectAll = document.querySelector('#selectAll');
+const selectionCollection = document.querySelector('#selectionCollection');
 const selectionDelete = document.querySelector('#selectionDelete');
 const selectionIgnore = document.querySelector('#selectionIgnore');
 const selectionClear = document.querySelector('#selectionClear');
@@ -65,9 +65,7 @@ function saveUi() {
   localStorage.setItem(UI_KEY, JSON.stringify({
     view: currentView(),
     sort: sort.value,
-    type: typeFilter.value,
-    inbox: filterInbox.checked,
-    unprotected: filterUnprotected.checked
+    type: typeFilter.value
   }));
 }
 
@@ -81,14 +79,6 @@ function restoreUi() {
   if (['', 'media', 'image', 'video', 'audio', 'application', 'other'].includes(saved.type)) {
     typeFilter.value = saved.type;
     typeFilter.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-  if (typeof saved.inbox === 'boolean') {
-    filterInbox.checked = saved.inbox;
-    filterInbox.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-  if (typeof saved.unprotected === 'boolean') {
-    filterUnprotected.checked = saved.unprotected;
-    filterUnprotected.dispatchEvent(new Event('change', { bubbles: true }));
   }
   if (['grid', 'list', 'folders'].includes(saved.view)) {
     document.querySelector(`#views [data-view="${saved.view}"]`)?.click();
@@ -104,6 +94,7 @@ function syncSelectionUi() {
   selectionBar.hidden = !selectionMode && !count;
   selectToggle.classList.toggle('active', selectionMode);
   selectionCount.textContent = count ? `${count.toLocaleString()} selected` : 'Select files';
+  selectionCollection.disabled = !count;
   selectionDelete.disabled = !count;
   selectionIgnore.disabled = !count;
   syncSelectedClasses();
@@ -173,6 +164,12 @@ async function cachedCatalog() {
   return { records, meta };
 }
 
+async function selectedCollectionHashes(id) {
+  const response = await fetch(`/api/collections/${encodeURIComponent(id)}/hashes`);
+  if (!response.ok) throw new Error('Could not read this collection.');
+  return new Set((await response.json()).hashes || []);
+}
+
 async function selectionUniverse() {
   const sourceId = Number(source.value) || 0;
   if (!folderbar.hidden && sourceId) {
@@ -186,14 +183,15 @@ async function selectionUniverse() {
   const sourceNames = new Map((meta?.imports || []).map(item => [Number(item.id), String(item.sourceName || '')]));
   const terms = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const fileType = typeFilter.value;
+  const collectionId = Number(collectionFilter.value) || 0;
+  const collectionHashes = collectionId ? await selectedCollectionHashes(collectionId) : null;
 
   return records.filter(file => {
     const importIds = Array.isArray(file.importIds)
       ? file.importIds.map(Number)
       : String(file.importIds || '').split(',').map(Number).filter(Boolean);
     if (!mediaTypeMatches(file, fileType)) return false;
-    if (filterInbox.checked && Boolean(file.reviewed)) return false;
-    if (filterUnprotected.checked && Number(file.backupCount) > 0) return false;
+    if (collectionHashes && !collectionHashes.has(file.hash)) return false;
     if (sourceId && !importIds.includes(sourceId)) return false;
     if (terms.length) {
       const names = importIds.map(id => sourceNames.get(id) || '').join(' ');
@@ -277,6 +275,10 @@ selectAll.addEventListener('click', async () => {
     syncSelectionUi();
   }
 });
+selectionCollection.addEventListener('click', () => {
+  if (!selected.size) return;
+  window.dispatchEvent(new CustomEvent('mochimono:add-to-collection', { detail: { hashes: [...selected] } }));
+});
 selectionDelete.addEventListener('click', () => deleteSelected(false));
 selectionIgnore.addEventListener('click', () => deleteSelected(true));
 
@@ -295,13 +297,14 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && document.querySelector('#viewer').hidden && (selectionMode || selected.size)) clearSelection(true);
 });
 
-for (const control of [sort, typeFilter, filterInbox, filterUnprotected]) control.addEventListener('change', saveUi);
+for (const control of [sort, typeFilter]) control.addEventListener('change', saveUi);
 document.querySelector('#views').addEventListener('click', event => {
   if (!event.target.closest('[data-view]')) return;
   clearSelection(true);
   setTimeout(saveUi);
 });
 source.addEventListener('change', () => clearSelection(true));
+collectionFilter.addEventListener('change', () => clearSelection(true));
 search.addEventListener('input', () => { if (selected.size) clearSelection(true); });
 
 new MutationObserver(syncSelectedClasses).observe(files, { childList: true, subtree: true });
