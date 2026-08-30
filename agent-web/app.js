@@ -72,7 +72,7 @@ function renderFolders(folders, job) {
 async function state() {
   try {
     const current = await req('/api/state');
-    $('#serverUrl').value = current.settings.server;
+    if (!connectionDialog.open) $('#serverUrl').value = current.settings.server;
     defaultDevice = current.settings.device || defaultDevice;
     if (!$('#deviceName').value) $('#deviceName').value = defaultDevice;
 
