@@ -1,18 +1,208 @@
-const $=s=>document.querySelector(s);const $$=s=>[...document.querySelectorAll(s)];
-let pickerTarget,pickerCurrent,backupPath,lastFinished;
-async function req(path,opts={}){const r=await fetch(path,{headers:{'content-type':'application/json'},...opts});const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||r.statusText);return d}
-function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function bytes(n){const u=['B','KB','MB','GB','TB'];let v=+n||0,i=0;while(v>=1000&&i<4){v/=1000;i++}return `${v.toFixed(i?1:0)} ${u[i]}`}
-function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('show');clearTimeout(e.t);e.t=setTimeout(()=>e.classList.remove('show'),2500)}
-async function state(){try{const s=await req('/api/state');$('#serverUrl').value=s.settings.server;const x=$('#serverStatus');x.className='status '+(s.server.online?'online':'offline');x.textContent=s.server.online?`Server online · ${s.server.stats.objects} objects`:`Server offline · ${s.server.error||'not configured'}`;activity(s.job);if(s.job&&s.job.status!=='running'&&lastFinished!==s.job.id){lastFinished=s.job.id;toast(s.job.status==='done'?'Operation complete':s.job.error);drives()}}catch(e){toast(e.message)}}
-function activity(j){const e=$('#activity');if(!j){e.className='empty';e.textContent='Nothing running.';return}const p=j.progress||{},m=[];for(const [k,l] of [['scanned','scanned'],['new','new'],['duplicates','duplicates'],['ignored','ignored'],['copied','copied'],['already','already there'],['checked','checked'],['total','total'],['bad','bad']])if(p[k]!=null)m.push(`<span class="metric"><b>${esc(p[k])}</b> ${l}</span>`);if(p.uploaded)m.push(`<span class="metric"><b>${esc(p.uploaded)}</b> uploaded</span>`);if(p.copiedSize)m.push(`<span class="metric"><b>${esc(p.copiedSize)}</b> copied</span>`);e.className='activity';e.innerHTML=`<div class="activity-top"><div><div class="activity-title">${esc(j.label)}</div><div class="activity-phase ${j.status}">${esc(j.status==='running'?p.phase||'Working…':j.status==='done'?'Done':j.error)}</div></div><span class="badge">${j.status}</span></div>${p.current?`<div class="drive-path">${esc(p.current)}</div>`:''}<div class="metrics">${m.join('')}</div>`}
-async function drives(){const e=$('#drives');e.innerHTML='<div class="muted">Looking for drives…</div>';try{const {roots}=await req('/api/roots');e.innerHTML=roots.map((d,i)=>`<div class="drive"><div class="drive-head"><div><div class="drive-name">${esc(d.managed?d.meta.name:d.path)}</div><div class="drive-path">${esc(d.path)}</div></div><span class="badge ${d.managed?'managed':''}">${d.managed?'Mochimono backup':'Available'}</span></div><div class="drive-meta">${bytes(d.freeBytes)} free of ${bytes(d.totalBytes)}</div><div class="drive-actions">${d.managed?`<button class="primary small" data-up="${i}">Update</button><button class="secondary small" data-st="${i}">Status</button><button class="secondary small" data-v="${i}">Verify</button>`:`<button class="primary small" data-init="${i}">Use for backup</button>`}</div></div>`).join('')||'<div class="muted">No drives found.</div>';$$('[data-up]').forEach(b=>b.onclick=()=>runBackup(roots[+b.dataset.up].path,'update'));$$('[data-v]').forEach(b=>b.onclick=()=>runBackup(roots[+b.dataset.v].path,'verify'));$$('[data-st]').forEach(b=>b.onclick=async()=>{try{const s=await req('/api/backup/status?path='+encodeURIComponent(roots[+b.dataset.st].path));toast(`${s.meta.name}: ${s.remote.protectedCount}/${s.remote.desiredCount} protected`)}catch(e){toast(e.message)}});$$('[data-init]').forEach(b=>b.onclick=()=>backupDialog(roots[+b.dataset.init].path))}catch(x){e.innerHTML=`<div class="error">${esc(x.message)}</div>`}}
-async function runBackup(path,kind){try{await req('/api/backup/'+kind,{method:'POST',body:JSON.stringify({path})});state()}catch(e){toast(e.message)}}
-async function picker(target){pickerTarget=target;const r=await req('/api/roots');$('#pickerRoots').innerHTML=r.roots.map((x,i)=>`<button data-r="${i}">${esc(x.path)}</button>`).join('');$$('[data-r]').forEach(b=>b.onclick=()=>folder(r.roots[+b.dataset.r].path));await folder(target.value||r.home);$('#folderDialog').showModal()}
-async function folder(path){try{const d=await req('/api/browse?path='+encodeURIComponent(path));pickerCurrent=d.path;$('#pickerPath').textContent=d.path;$('#pickerUp').disabled=!d.parent;$('#pickerUp').dataset.parent=d.parent||'';$('#pickerDirs').innerHTML=d.directories.map((x,i)=>`<div class="folder" data-d="${i}">📁 ${esc(x.name)}</div>`).join('')||'<div class="folder muted">No subfolders</div>';$$('[data-d]').forEach(x=>x.onclick=()=>folder(d.directories[+x.dataset.d].path))}catch(e){toast(e.message)}}
-function backupDialog(path){backupPath=path;$('#backupPathLabel').textContent=path;$('#backupName').value='';$('#backupEverything').checked=true;$('#backupTypes').classList.add('disabled');$$('#backupTypes input').forEach(i=>i.checked=false);$('#backupDialog').showModal()}
-$('#browseImport').onclick=()=>picker($('#importPath'));$('#pickerUp').onclick=()=>folder($('#pickerUp').dataset.parent);$('#pickerChoose').onclick=()=>{pickerTarget.value=pickerCurrent;$('#folderDialog').close()};$$('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());$('#backupEverything').onchange=e=>$('#backupTypes').classList.toggle('disabled',e.target.checked);$('#refreshDrives').onclick=drives;
-$('#startImport').onclick=async()=>{const path=$('#importPath').value.trim();if(!path)return toast('Choose a folder first');try{await req('/api/import',{method:'POST',body:JSON.stringify({path,source:$('#sourceName').value.trim()})});state()}catch(e){toast(e.message)}};
-$('#initializeBackup').onclick=async()=>{const types=$('#backupEverything').checked?[]:$$('#backupTypes input:checked').map(i=>i.value);try{await req('/api/backup/init',{method:'POST',body:JSON.stringify({path:backupPath,name:$('#backupName').value.trim(),types})});$('#backupDialog').close();toast('Backup initialized');drives()}catch(e){toast(e.message)}};
-$('#saveSettings').onclick=async()=>{try{await req('/api/settings',{method:'POST',body:JSON.stringify({server:$('#serverUrl').value.trim(),token:$('#serverToken').value})});$('#serverToken').value='';toast('Settings saved');state()}catch(e){toast(e.message)}};
-state();drives();setInterval(state,900);
+const $ = selector => document.querySelector(selector);
+const $$ = selector => [...document.querySelectorAll(selector)];
+
+let backupPath;
+let lastFinished;
+
+async function req(path, options = {}) {
+  const response = await fetch(path, { headers: { 'content-type': 'application/json' }, ...options });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  return data;
+}
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+}
+
+function bytes(number) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = Number(number) || 0;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
+  return `${value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
+}
+
+function toast(text) {
+  const element = $('#toast');
+  element.textContent = text;
+  element.classList.add('show');
+  clearTimeout(element.timer);
+  element.timer = setTimeout(() => element.classList.remove('show'), 2500);
+}
+
+async function chooseFolder(target) {
+  try {
+    const result = await req('/api/pick-folder');
+    if (result.path) target.value = result.path;
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function state() {
+  try {
+    const current = await req('/api/state');
+    $('#serverUrl').value = current.settings.server;
+    const status = $('#serverStatus');
+    status.className = `status ${current.server.online ? 'online' : 'offline'}`;
+    status.textContent = current.server.online
+      ? `Server online · ${current.server.stats.objects} objects`
+      : `Server offline · ${current.server.error || 'not configured'}`;
+
+    activity(current.job);
+    if (current.job && current.job.status !== 'running' && lastFinished !== current.job.id) {
+      lastFinished = current.job.id;
+      toast(current.job.status === 'done' ? 'Operation complete' : current.job.error);
+      backups();
+    }
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function activity(job) {
+  const element = $('#activity');
+  if (!job) {
+    element.className = 'empty';
+    element.textContent = 'Nothing running.';
+    return;
+  }
+
+  const progress = job.progress || {};
+  const metrics = [];
+  for (const [key, label] of [
+    ['scanned', 'scanned'], ['new', 'new'], ['duplicates', 'duplicates'], ['ignored', 'ignored'],
+    ['copied', 'copied'], ['already', 'already there'], ['checked', 'checked'], ['total', 'total'], ['bad', 'bad']
+  ]) {
+    if (progress[key] != null) metrics.push(`<span class="metric"><b>${esc(progress[key])}</b> ${label}</span>`);
+  }
+  if (progress.uploaded) metrics.push(`<span class="metric"><b>${esc(progress.uploaded)}</b> uploaded</span>`);
+  if (progress.copiedSize) metrics.push(`<span class="metric"><b>${esc(progress.copiedSize)}</b> copied</span>`);
+
+  element.className = 'activity';
+  element.innerHTML = `
+    <div class="activity-top">
+      <div>
+        <div class="activity-title">${esc(job.label)}</div>
+        <div class="activity-phase ${job.status}">${esc(job.status === 'running' ? progress.phase || 'Working…' : job.status === 'done' ? 'Done' : job.error)}</div>
+      </div>
+      <span class="badge">${job.status}</span>
+    </div>
+    ${progress.current ? `<div class="drive-path">${esc(progress.current)}</div>` : ''}
+    <div class="metrics">${metrics.join('')}</div>`;
+}
+
+async function backups() {
+  const element = $('#backups');
+  element.innerHTML = '<div class="muted">Looking for backups…</div>';
+  try {
+    const { backups: locations } = await req('/api/backups');
+    element.innerHTML = locations.map((location, index) => `
+      <div class="drive">
+        <div class="drive-head">
+          <div>
+            <div class="drive-name">${esc(location.meta.name)}</div>
+            <div class="drive-path">${esc(location.path)}</div>
+          </div>
+          <span class="badge managed">Mochimono backup</span>
+        </div>
+        <div class="drive-meta">${bytes(location.freeBytes)} free of ${bytes(location.totalBytes)}</div>
+        <div class="drive-actions">
+          <button class="primary small" data-update="${index}">Update</button>
+          <button class="secondary small" data-status="${index}">Status</button>
+          <button class="secondary small" data-verify="${index}">Verify</button>
+        </div>
+      </div>`).join('') || '<div class="muted">No backup locations yet. Choose any folder above to create one.</div>';
+
+    $$('[data-update]').forEach(button => button.onclick = () => runBackup(locations[Number(button.dataset.update)].path, 'update'));
+    $$('[data-verify]').forEach(button => button.onclick = () => runBackup(locations[Number(button.dataset.verify)].path, 'verify'));
+    $$('[data-status]').forEach(button => button.onclick = async () => {
+      try {
+        const location = locations[Number(button.dataset.status)];
+        const status = await req(`/api/backup/status?path=${encodeURIComponent(location.path)}`);
+        toast(`${status.meta.name}: ${status.remote.protectedCount}/${status.remote.desiredCount} protected`);
+      } catch (error) {
+        toast(error.message);
+      }
+    });
+  } catch (error) {
+    element.innerHTML = `<div class="error">${esc(error.message)}</div>`;
+  }
+}
+
+async function runBackup(path, action) {
+  try {
+    await req(`/api/backup/${action}`, { method: 'POST', body: JSON.stringify({ path }) });
+    state();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function openBackupDialog(path) {
+  backupPath = path;
+  $('#backupPathLabel').textContent = path;
+  $('#backupName').value = '';
+  $('#backupEverything').checked = true;
+  $('#backupTypes').classList.add('disabled');
+  $$('#backupTypes input').forEach(input => { input.checked = false; });
+  $('#backupDialog').showModal();
+}
+
+$('#chooseImport').onclick = () => chooseFolder($('#importPath'));
+$('#chooseBackup').onclick = () => chooseFolder($('#backupLocation'));
+$('#refreshBackups').onclick = backups;
+$$('[data-close]').forEach(button => button.onclick = () => button.closest('dialog').close());
+$('#backupEverything').onchange = event => $('#backupTypes').classList.toggle('disabled', event.target.checked);
+
+$('#startImport').onclick = async () => {
+  const path = $('#importPath').value.trim();
+  if (!path) return toast('Paste a path or choose a folder first');
+  try {
+    await req('/api/import', { method: 'POST', body: JSON.stringify({ path, source: $('#sourceName').value.trim() }) });
+    state();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+$('#addBackup').onclick = () => {
+  const path = $('#backupLocation').value.trim();
+  if (!path) return toast('Paste a path or choose a backup folder first');
+  openBackupDialog(path);
+};
+
+$('#initializeBackup').onclick = async () => {
+  const types = $('#backupEverything').checked ? [] : $$('#backupTypes input:checked').map(input => input.value);
+  try {
+    const result = await req('/api/backup/init', {
+      method: 'POST',
+      body: JSON.stringify({ path: backupPath, name: $('#backupName').value.trim(), types })
+    });
+    $('#backupDialog').close();
+    $('#backupLocation').value = '';
+    toast(result.existing ? 'Existing backup added' : 'Backup folder initialized');
+    backups();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+$('#saveSettings').onclick = async () => {
+  try {
+    await req('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ server: $('#serverUrl').value.trim(), token: $('#serverToken').value })
+    });
+    $('#serverToken').value = '';
+    toast('Settings saved');
+    state();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+state();
+backups();
+setInterval(state, 900);
