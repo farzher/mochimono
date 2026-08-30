@@ -10,6 +10,7 @@ let loaded = [];
 let offset = 0;
 let hasMore = false;
 let type = '';
+let importId = '';
 let view = 'grid';
 let selected = null;
 
@@ -66,6 +67,15 @@ async function loadStats() {
     <article><strong>${s.ignored.toLocaleString()}</strong><span>ignored hashes</span></article>`;
 }
 
+async function loadImports() {
+  const data = await request('/api/imports');
+  const source = $('#source');
+  source.innerHTML = '<option value="">All sources</option>' + data.imports.map(item =>
+    `<option value="${item.id}">${escapeHtml(item.sourceName)} · ${item.files.toLocaleString()} files</option>`
+  ).join('');
+  source.value = importId;
+}
+
 function renderFiles() {
   const element = $('#files');
   element.className = `files ${view}`;
@@ -103,7 +113,7 @@ async function loadFiles(reset = true) {
     offset = 0;
   }
   const q = $('#search').value.trim();
-  const data = await request(`/api/files?limit=${PAGE}&offset=${offset}&type=${encodeURIComponent(type)}&q=${encodeURIComponent(q)}`);
+  const data = await request(`/api/files?limit=${PAGE}&offset=${offset}&type=${encodeURIComponent(type)}&import=${encodeURIComponent(importId)}&q=${encodeURIComponent(q)}`);
   loaded.push(...data.files);
   offset += data.files.length;
   hasMore = data.hasMore;
@@ -153,7 +163,7 @@ async function removeSelected(ignore) {
   await request(`/api/objects/${selected.hash}/delete`, { method: 'POST', body: { ignore } });
   $('#details').close();
   selected = null;
-  await Promise.all([loadStats(), loadFiles(true), loadDrives()]);
+  await Promise.all([loadStats(), loadFiles(true), loadImports(), loadDrives()]);
 }
 
 async function loadDrives() {
@@ -181,7 +191,7 @@ async function boot() {
     login.hidden = true;
     app.hidden = false;
     logout.hidden = false;
-    await Promise.all([loadStats(), loadFiles(true), loadDrives()]);
+    await Promise.all([loadStats(), loadImports(), loadFiles(true), loadDrives()]);
   } catch (error) {
     if (error.unauthorized) {
       login.hidden = false;
@@ -211,6 +221,11 @@ logout.addEventListener('click', async () => {
 $('#search').addEventListener('input', () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => loadFiles(true).catch(console.error), 200);
+});
+
+$('#source').addEventListener('change', event => {
+  importId = event.target.value;
+  loadFiles(true).catch(console.error);
 });
 
 $('#filters').addEventListener('click', event => {
