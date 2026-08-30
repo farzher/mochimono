@@ -9,84 +9,54 @@
 </head>
 <body>
   <header>
-    <div class="app-brand">
-      <span class="mini" aria-hidden="true"></span>
-      <h1>Mochimono <span class="agent-label">Agent</span></h1>
-    </div>
+    <div class="app-brand"><span class="mini" aria-hidden="true"></span><h1>Mochimono <span class="agent-label">Agent</span></h1></div>
     <button id="serverStatus" class="status">Connecting…</button>
   </header>
 
   <main>
-    <section class="card folders-card">
+    <section class="folders-panel">
       <div class="folders-head">
         <h2>Folders</h2>
-        <button id="deviceButton" class="device-button" title="Rename device">This device: <span id="deviceLabel"></span></button>
+        <button id="deviceButton" class="device-button" title="Rename device">This device · <span id="deviceLabel"></span></button>
       </div>
       <div id="folders" class="sync-folders"><div class="muted">Loading…</div></div>
-      <div class="add-folder">
-        <div class="path-row">
-          <input id="importPath" placeholder="Folder or drive">
-          <button id="chooseImport" class="secondary">Browse…</button>
-          <button id="startImport" class="primary">Add</button>
-        </div>
+      <div class="path-row add-folder">
+        <input id="importPath" placeholder="Folder or drive">
+        <button id="chooseImport" class="secondary">Browse</button>
+        <button id="startImport" class="primary">Add</button>
       </div>
     </section>
 
-    <section id="activityCard" class="activity-strip" hidden>
-      <div id="activity"></div>
-    </section>
+    <section id="activityCard" class="activity-strip" hidden><div id="activity"></div></section>
 
     <details id="protection" class="drawer">
       <summary>Protection</summary>
       <div class="drawer-body">
-        <div class="section-title row">
-          <h2>Backups</h2>
-          <button id="refreshBackups" class="secondary small">Refresh</button>
-        </div>
+        <div class="drawer-actions"><button id="refreshBackups" class="text small">Refresh</button></div>
         <div id="backups" class="drives"><div class="muted">Loading…</div></div>
-        <div class="add-backup">
-          <div class="path-row">
-            <input id="backupLocation" placeholder="Backup folder">
-            <button id="chooseBackup" class="secondary">Browse…</button>
-          </div>
-          <button id="addBackup" class="secondary wide">Add backup</button>
+        <div class="path-row add-backup">
+          <input id="backupLocation" placeholder="Backup folder">
+          <button id="chooseBackup" class="secondary">Browse</button>
+          <button id="addBackup" class="secondary">Add</button>
         </div>
       </div>
     </details>
   </main>
 
   <dialog id="connectionDialog">
-    <div class="dialog-head">
-      <h3>Server</h3>
-      <button class="icon" data-close>×</button>
-    </div>
-    <div class="connect-fields">
-      <input id="serverUrl" placeholder="Server">
-      <input id="serverToken" type="password" placeholder="Token">
-    </div>
-    <div class="dialog-actions">
-      <div class="spacer"></div>
-      <button id="saveSettings" class="primary">Connect</button>
-    </div>
+    <div class="dialog-head"><h3>Server</h3><button class="icon" data-close>×</button></div>
+    <div class="connect-fields"><input id="serverUrl" placeholder="Server"><input id="serverToken" type="password" placeholder="Token"></div>
+    <div class="dialog-actions"><div class="spacer"></div><button id="saveSettings" class="primary">Connect</button></div>
   </dialog>
 
   <dialog id="deviceDialog" class="small-dialog">
-    <div class="dialog-head">
-      <h3>Device</h3>
-      <button class="icon" data-close>×</button>
-    </div>
+    <div class="dialog-head"><h3>Device</h3><button class="icon" data-close>×</button></div>
     <input id="deviceName" placeholder="Device">
-    <div class="dialog-actions">
-      <div class="spacer"></div>
-      <button id="saveDevice" class="primary">Save</button>
-    </div>
+    <div class="dialog-actions"><div class="spacer"></div><button id="saveDevice" class="primary">Save</button></div>
   </dialog>
 
   <dialog id="backupDialog">
-    <div class="dialog-head">
-      <div><h3>Backup</h3><div id="backupPathLabel" class="picker-path"></div></div>
-      <button class="icon" data-close>×</button>
-    </div>
+    <div class="dialog-head"><div><h3>Backup</h3><div id="backupPathLabel" class="picker-path"></div></div><button class="icon" data-close>×</button></div>
     <input id="backupName" placeholder="Name">
     <label class="check"><input id="backupEverything" type="checkbox" checked> Everything</label>
     <div id="backupTypes" class="type-grid disabled">
@@ -97,27 +67,13 @@
       <label class="check"><input type="checkbox" value="application"> Documents</label>
       <label class="check"><input type="checkbox" value="other"> Other</label>
     </div>
-    <div class="dialog-actions">
-      <div class="spacer"></div>
-      <button data-close class="secondary">Cancel</button>
-      <button id="initializeBackup" class="primary">Save</button>
-    </div>
+    <div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="initializeBackup" class="primary">Save</button></div>
   </dialog>
 
   <dialog id="restoreDialog">
-    <div class="dialog-head">
-      <div><h3>Restore</h3><div id="restoreBackupLabel" class="picker-path"></div></div>
-      <button class="icon" data-close>×</button>
-    </div>
-    <div class="path-row">
-      <input id="restoreDestination" placeholder="Destination">
-      <button id="chooseRestore" class="secondary">Browse…</button>
-    </div>
-    <div class="dialog-actions">
-      <div class="spacer"></div>
-      <button data-close class="secondary">Cancel</button>
-      <button id="startRestore" class="primary">Restore</button>
-    </div>
+    <div class="dialog-head"><div><h3>Restore</h3><div id="restoreBackupLabel" class="picker-path"></div></div><button class="icon" data-close>×</button></div>
+    <div class="path-row"><input id="restoreDestination" placeholder="Destination"><button id="chooseRestore" class="secondary">Browse</button></div>
+    <div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="startRestore" class="primary">Restore</button></div>
   </dialog>
 
   <div id="toast" class="toast"></div>
