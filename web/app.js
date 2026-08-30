@@ -11,6 +11,7 @@ let offset = 0;
 let hasMore = false;
 let type = '';
 let importId = '';
+let inboxOnly = false;
 let view = 'grid';
 let selected = null;
 
@@ -64,7 +65,8 @@ async function loadStats() {
     <article><strong>${s.objects.toLocaleString()}</strong><span>unique files</span></article>
     <article><strong>${formatBytes(s.bytes)}</strong><span>cloud library</span></article>
     <article><strong>${s.sources.toLocaleString()}</strong><span>known locations</span></article>
-    <article><strong>${s.ignored.toLocaleString()}</strong><span>ignored hashes</span></article>`;
+    <article><strong>${s.unreviewed.toLocaleString()}</strong><span>in Inbox</span></article>`;
+  $('#inbox').textContent = s.unreviewed ? `Inbox · ${s.unreviewed.toLocaleString()}` : 'Inbox';
 }
 
 async function loadImports() {
@@ -81,11 +83,11 @@ function renderFiles() {
   element.className = `files ${view}`;
 
   if (!loaded.length) {
-    element.innerHTML = '<div class="empty">No files found.</div>';
+    element.innerHTML = `<div class="empty">${inboxOnly ? 'Inbox is empty.' : 'No files found.'}</div>`;
   } else if (view === 'grid') {
     element.innerHTML = loaded.map(file => `
       <button class="file-card" data-hash="${file.hash}">
-        <div class="thumb">${preview(file)}</div>
+        <div class="thumb">${preview(file)}${file.reviewed ? '' : '<span class="inbox-badge">Inbox</span>'}</div>
         <div class="card-copy">
           <strong title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</strong>
           <span>${formatBytes(file.size)}${file.backupCount ? ` · ${file.backupCount} backup${file.backupCount === 1 ? '' : 's'}` : ' · not offline-backed-up'}</span>
@@ -94,7 +96,7 @@ function renderFiles() {
   } else {
     element.innerHTML = loaded.map(file => `
       <button class="file-row" data-hash="${file.hash}">
-        <span class="type">${escapeHtml(typeLabel(file))}</span>
+        <span class="type ${file.reviewed ? '' : 'inbox-type'}">${file.reviewed ? escapeHtml(typeLabel(file)) : 'inbox'}</span>
         <div class="file-main">
           <strong>${escapeHtml(file.filename)}</strong>
           <span>${escapeHtml(file.originalPath || '')}</span>
@@ -113,11 +115,20 @@ async function loadFiles(reset = true) {
     offset = 0;
   }
   const q = $('#search').value.trim();
-  const data = await request(`/api/files?limit=${PAGE}&offset=${offset}&type=${encodeURIComponent(type)}&import=${encodeURIComponent(importId)}&q=${encodeURIComponent(q)}`);
+  const review = inboxOnly ? 'unreviewed' : '';
+  const data = await request(`/api/files?limit=${PAGE}&offset=${offset}&type=${encodeURIComponent(type)}&review=${review}&import=${encodeURIComponent(importId)}&q=${encodeURIComponent(q)}`);
   loaded.push(...data.files);
   offset += data.files.length;
   hasMore = data.hasMore;
   renderFiles();
+}
+
+function renderReviewState() {
+  const reviewed = Boolean(selected?.reviewed);
+  $('#review-status').textContent = reviewed ? 'Reviewed' : 'Inbox';
+  $('#review-copy').textContent = reviewed ? 'You already decided to keep this content.' : 'New content stays here until you decide what to do with it.';
+  $('#review-toggle').textContent = reviewed ? 'Move to Inbox' : 'Keep';
+  $('#review-toggle').className = reviewed ? 'quiet' : '';
 }
 
 async function openDetails(hash) {
@@ -130,10 +141,13 @@ async function openDetails(hash) {
   $('#detail-preview').innerHTML = preview(selected, true);
   $('#detail-sources').innerHTML = '<div class="empty small-empty">Loading locations…</div>';
   $('#detail-backups').innerHTML = '<div class="empty small-empty">Loading backups…</div>';
+  renderReviewState();
   $('#details').showModal();
 
   try {
     const data = await request(`/api/files/${selected.hash}/details`);
+    selected.reviewed = Boolean(data.object.reviewed);
+    renderReviewState();
     $('#detail-sources').innerHTML = data.sources.length ? data.sources.map(source => `
       <article>
         <strong>${escapeHtml(source.sourceName)}</strong>
@@ -152,6 +166,15 @@ async function openDetails(hash) {
     $('#detail-sources').innerHTML = html;
     $('#detail-backups').innerHTML = html;
   }
+}
+
+async function toggleReviewed() {
+  if (!selected) return;
+  const reviewed = !Boolean(selected.reviewed);
+  await request(`/api/objects/${selected.hash}/review`, { method: 'POST', body: { reviewed } });
+  $('#details').close();
+  selected = null;
+  await Promise.all([loadStats(), loadFiles(true)]);
 }
 
 async function removeSelected(ignore) {
@@ -228,6 +251,12 @@ $('#source').addEventListener('change', event => {
   loadFiles(true).catch(console.error);
 });
 
+$('#inbox').addEventListener('click', () => {
+  inboxOnly = !inboxOnly;
+  $('#inbox').classList.toggle('active', inboxOnly);
+  loadFiles(true).catch(console.error);
+});
+
 $('#filters').addEventListener('click', event => {
   const button = event.target.closest('[data-type]');
   if (!button) return;
@@ -251,6 +280,7 @@ $('#files').addEventListener('click', event => {
 
 $('#more').onclick = () => loadFiles(false).catch(console.error);
 $('#close-details').onclick = () => $('#details').close();
+$('#review-toggle').onclick = () => toggleReviewed().catch(console.error);
 $('#delete').onclick = () => removeSelected(false).catch(console.error);
 $('#delete-ignore').onclick = () => removeSelected(true).catch(console.error);
 
