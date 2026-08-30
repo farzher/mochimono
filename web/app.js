@@ -14,7 +14,8 @@ let loaded = [];
 let imports = [];
 let sourceNames = new Map();
 let searchIndex = new Map();
-let displayCount = PAGE;
+let renderOffset = 0;
+let renderLimit = PAGE;
 let hasMore = false;
 let type = '';
 let importId = '';
@@ -79,9 +80,12 @@ async function readCache() {
   const db = await openCache();
   if (!db) return null;
   const transaction = db.transaction(['files', 'meta']);
-  const files = await idbRequest(transaction.objectStore('files').getAll());
-  const meta = await idbRequest(transaction.objectStore('meta').get('catalog'));
-  await idbDone(transaction);
+  const done = idbDone(transaction);
+  const [files, meta] = await Promise.all([
+    idbRequest(transaction.objectStore('files').getAll()),
+    idbRequest(transaction.objectStore('meta').get('catalog'))
+  ]);
+  await done;
   return meta ? { files, meta } : null;
 }
 
@@ -89,27 +93,30 @@ async function writeCache(files, meta) {
   const db = await openCache();
   if (!db) return;
   const transaction = db.transaction(['files', 'meta'], 'readwrite');
+  const done = idbDone(transaction);
   const store = transaction.objectStore('files');
   store.clear();
   for (const file of files) store.put(file);
   transaction.objectStore('meta').put({ key: 'catalog', ...meta });
-  await idbDone(transaction);
+  await done;
 }
 
 async function cachePut(file) {
   const db = await openCache();
   if (!db) return;
   const transaction = db.transaction('files', 'readwrite');
+  const done = idbDone(transaction);
   transaction.objectStore('files').put(file);
-  await idbDone(transaction);
+  await done;
 }
 
 async function cacheDelete(hash) {
   const db = await openCache();
   if (!db) return;
   const transaction = db.transaction('files', 'readwrite');
+  const done = idbDone(transaction);
   transaction.objectStore('files').delete(hash);
-  await idbDone(transaction);
+  await done;
 }
 
 async function cacheImports(nextImports) {
@@ -118,8 +125,9 @@ async function cacheImports(nextImports) {
   const db = await openCache();
   if (!db) return;
   const transaction = db.transaction('meta', 'readwrite');
+  const done = idbDone(transaction);
   transaction.objectStore('meta').put({ key: 'catalog', ...cacheMeta });
-  await idbDone(transaction);
+  await done;
 }
 
 function formatBytes(bytes) {
@@ -278,6 +286,11 @@ function sortFiles(files) {
   return files.sort((a, b) => b.dateMs - a.dateMs || a.hash.localeCompare(b.hash));
 }
 
+function updateWindow() {
+  loaded = filtered.slice(renderOffset, renderOffset + renderLimit);
+  hasMore = renderOffset + renderLimit < filtered.length;
+}
+
 function applyFilters(reset = true) {
   if (view === 'folders') return loadFolder();
   const query = $('#search').value.trim().toLowerCase();
@@ -296,18 +309,18 @@ function applyFilters(reset = true) {
     return true;
   }));
 
-  if (reset) displayCount = PAGE;
-  displayCount = Math.min(displayCount, filtered.length);
-  loaded = filtered.slice(0, displayCount);
-  hasMore = displayCount < filtered.length;
+  if (reset) {
+    renderOffset = 0;
+    renderLimit = PAGE;
+  }
+  updateWindow();
   renderFiles();
 }
 
 function showMore() {
   if (!hasMore || view === 'folders') return;
-  displayCount = Math.min(filtered.length, displayCount + PAGE);
-  loaded = filtered.slice(0, displayCount);
-  hasMore = displayCount < filtered.length;
+  renderLimit += PAGE;
+  updateWindow();
   renderFiles();
 }
 
@@ -339,11 +352,11 @@ function renderFiles() {
   renderDateRail();
 }
 
-async function jumpToMonth(key, index) {
-  if (index >= displayCount) {
-    displayCount = Math.min(filtered.length, index + PAGE);
-    loaded = filtered.slice(0, displayCount);
-    hasMore = displayCount < filtered.length;
+function jumpToMonth(key, index) {
+  if (index < renderOffset || index >= renderOffset + renderLimit) {
+    renderOffset = Math.max(0, index - 12);
+    renderLimit = PAGE;
+    updateWindow();
     renderFiles();
   }
   requestAnimationFrame(() => document.querySelector(`[data-date-group="${CSS.escape(key)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
