@@ -43,7 +43,7 @@ console.log('');
 run('server-entry.js', {
   MOCHIMONO_TOKEN: token,
   MOCHIMONO_DATA: join(root, 'dev-data'),
-  HOST: '127.0.0.1',
+  HOST: '0.0.0.0',
   PORT: '8642'
 });
 
