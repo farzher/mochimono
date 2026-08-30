@@ -88,27 +88,43 @@ async function serverState() {
   catch (error) { return { online: false, error: error.message }; }
 }
 
+function canceled() {
+  if (job?.cancelRequested) throw Object.assign(new Error('Canceled'), { canceled: true });
+}
+
 function startJob(res, type, label, work) {
   if (job?.status === 'running') return json(res, 409, { error: 'Another Agent operation is already running' });
-  job = { id: randomUUID(), type, label, status: 'running', startedAt: new Date().toISOString(), progress: {} };
+  job = { id: randomUUID(), type, label, status: 'running', cancelRequested: false, startedAt: new Date().toISOString(), progress: {} };
   json(res, 202, { job });
   setImmediate(async () => {
     try {
-      const update = patch => { if (job?.status === 'running') job.progress = { ...job.progress, ...patch }; };
+      const update = patch => {
+        canceled();
+        if (job?.status === 'running') job.progress = { ...job.progress, ...patch };
+      };
       const result = await work(update);
-      job = { ...job, status: 'done', finishedAt: new Date().toISOString(), result };
+      canceled();
+      job = { ...job, status: 'done', cancelRequested: false, finishedAt: new Date().toISOString(), result };
     } catch (error) {
-      console.error(error);
-      job = { ...job, status: 'error', finishedAt: new Date().toISOString(), error: error.message };
+      if (!error.canceled) console.error(error);
+      job = {
+        ...job,
+        status: error.canceled ? 'canceled' : 'error',
+        cancelRequested: false,
+        finishedAt: new Date().toISOString(),
+        error: error.message
+      };
     }
   });
 }
 
 async function* filesUnder(directory) {
+  canceled();
   let dir;
   try { dir = await opendir(directory); }
   catch { return; }
   for await (const entry of dir) {
+    canceled();
     if (entry.name === '.mochimono') continue;
     const path = join(directory, entry.name);
     if (entry.isDirectory()) yield* filesUnder(path);
@@ -118,7 +134,10 @@ async function* filesUnder(directory) {
 
 async function hashFile(path) {
   const hash = createHash('sha256');
-  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  for await (const chunk of createReadStream(path)) {
+    canceled();
+    hash.update(chunk);
+  }
   return hash.digest('hex');
 }
 
@@ -140,14 +159,17 @@ function formatBytes(bytes) {
 }
 
 async function uploadFile(record) {
+  canceled();
   await api(`/api/objects/${record.hash}`, {
     method: 'PUT',
     headers: { 'content-length': String(record.size), 'x-mochimono-mime': record.mime },
     body: createReadStream(record.path)
   });
+  canceled();
 }
 
 async function importBatch(importId, records, totals, update) {
+  canceled();
   const firstByHash = new Map();
   for (const record of records) if (!firstByHash.has(record.hash)) firstByHash.set(record.hash, record);
   const check = await api('/api/objects/check', { method: 'POST', body: { hashes: [...firstByHash.keys()] } });
@@ -187,6 +209,7 @@ async function importFolder(folder, sourceName, update) {
   update({ phase: 'Scanning', source, path: root, ...totals });
 
   for await (const path of filesUnder(root)) {
+    canceled();
     try {
       const info = await stat(path);
       const rel = relative(root, path).replaceAll('\\', '/');
@@ -198,7 +221,8 @@ async function importFolder(folder, sourceName, update) {
         await importBatch(created.id, batch, totals, update);
         batch = [];
       }
-    } catch {
+    } catch (error) {
+      if (error.canceled) throw error;
       totals.errors++;
     }
   }
@@ -268,6 +292,7 @@ async function backupInit(path, name, types, configure = false) {
 }
 
 async function downloadVerified(hash, expectedSize, destination) {
+  canceled();
   const response = await api(`/api/objects/${hash}`);
   const temp = `${destination}.tmp-${process.pid}-${Date.now()}`;
   await mkdir(dirname(destination), { recursive: true });
@@ -276,6 +301,7 @@ async function downloadVerified(hash, expectedSize, destination) {
   const verifier = new Transform({ transform(chunk, encoding, callback) { digest.update(chunk); size += chunk.length; callback(null, chunk); } });
   try {
     await pipeline(Readable.fromWeb(response.body), verifier, createWriteStream(temp, { flags: 'wx' }));
+    canceled();
     if (digest.digest('hex') !== hash || size !== expectedSize) throw new Error(`Verification failed for ${hash}`);
     await rm(destination, { force: true });
     await rename(temp, destination);
@@ -290,10 +316,12 @@ async function reportReplicas(id, replicas) {
 }
 
 async function saveCatalogSnapshot(root) {
+  canceled();
   const response = await api('/api/catalog/export');
   const target = join(controlPath(root), 'catalog.sqlite');
   const temp = `${target}.tmp`;
   await pipeline(Readable.fromWeb(response.body), createWriteStream(temp));
+  canceled();
   await rm(target, { force: true });
   await rename(temp, target);
 }
@@ -314,8 +342,10 @@ async function backupUpdate(path, update) {
 
   try {
     do {
+      canceled();
       const page = await api(`/api/drives/${encodeURIComponent(meta.id)}/desired?after=${encodeURIComponent(after)}&limit=1000`);
       for (const object of page.objects) {
+        canceled();
         const destination = backupObjectPath(root, object.hash);
         const local = find.get(object.hash);
         let present = false;
@@ -360,13 +390,16 @@ async function backupVerify(path, update) {
 
   try {
     for (let index = 0; index < rows.length; index++) {
+      canceled();
       const row = rows[index];
       update({ phase: 'Verifying', current: row.hash.slice(0, 12), checked: index, total: rows.length, bad: badCount });
       let ok = false;
       try {
         const path = backupObjectPath(root, row.hash);
         ok = (await stat(path)).size === row.size && await hashFile(path) === row.hash;
-      } catch {}
+      } catch (error) {
+        if (error.canceled) throw error;
+      }
       if (ok) {
         const timestamp = new Date().toISOString();
         mark.run(timestamp, row.hash);
@@ -441,7 +474,9 @@ async function backupLocations() {
   for (const path of [...new Set([...settings.backups, ...discovered])]) {
     try {
       const info = await pathInfo(path);
-      if (info.managed) result.push(info);
+      if (!info.managed) continue;
+      const status = await backupStatus(path);
+      result.push({ ...info, local: status.local, remote: status.remote });
     } catch {}
   }
   return result;
@@ -507,6 +542,11 @@ async function handleApi(req, res, url) {
     settings.server = String(body.server || settings.server).trim().replace(/\/$/, '');
     if (body.token !== '') settings.token = String(body.token ?? settings.token);
     await persistSettings();
+    return json(res, 200, { ok: true });
+  }
+  if (req.method === 'POST' && url.pathname === '/api/job/cancel') {
+    if (job?.status !== 'running') return json(res, 409, { error: 'No operation is running' });
+    job.cancelRequested = true;
     return json(res, 200, { ok: true });
   }
   if (req.method === 'GET' && url.pathname === '/api/pick-folder') return json(res, 200, { path: await pickFolder() });
