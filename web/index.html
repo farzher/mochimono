@@ -15,7 +15,7 @@
       <div class="app-brand"><span class="mini" aria-hidden="true"></span><h1>Mochimono</h1></div>
       <div class="top-actions">
         <div id="stats" class="storage-head"></div>
-        <button id="logout" class="text-button" hidden>Log out</button>
+        <button id="logout" class="logout-button" hidden title="Log out" aria-label="Log out"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 4H5.5A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8M11.5 6.5 15 10l-3.5 3.5M7 10h8"/></svg><span>Log out</span></button>
       </div>
     </header>
 
@@ -55,7 +55,7 @@
             </div>
           </details>
           <div id="activeFilters" class="active-filters"></div>
-          <button id="selectFiles" class="select-toggle" title="Select files">Select</button>
+          <button id="selectFiles" class="select-toggle" hidden aria-hidden="true" tabindex="-1">Select</button>
           <div id="mediaSizeControl" class="media-sizes" aria-label="Preview size">
             <input id="mediaSize" type="range" min="96" max="420" value="170" hidden>
             <button data-media-size="112" title="Small" aria-label="Small previews"><span class="size-glyph size-1"></span></button>
@@ -115,6 +115,7 @@
   <script type="module" src="/video-thumbs.js"></script>
   <script type="module" src="/gallery.js"></script>
   <script type="module" src="/viewer-url.js"></script>
+  <script type="module" src="/browser-ui.js"></script>
   <script type="module" src="/library-ui.js"></script>
   <script type="module" src="/folder-url.js"></script>
 </body>
