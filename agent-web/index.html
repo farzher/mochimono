@@ -10,21 +10,27 @@
 <body>
   <header>
     <div class="app-brand"><span class="mini" aria-hidden="true"></span><h1>Mochimono <span class="agent-label">Agent</span></h1></div>
-    <button id="serverStatus" class="status">Connecting…</button>
+    <div class="agent-meta">
+      <button id="deviceButton" class="device-button" title="Rename device"><span id="deviceLabel"></span></button>
+      <span class="meta-separator">·</span>
+      <button id="serverStatus" class="status">Connecting…</button>
+    </div>
   </header>
 
   <main>
     <section class="folders-panel">
       <div class="folders-head">
         <h2>Folders</h2>
-        <button id="deviceButton" class="device-button" title="Rename device">This device · <span id="deviceLabel"></span></button>
+        <details class="add-control">
+          <summary><span aria-hidden="true">＋</span> Add folder</summary>
+          <div class="add-popover path-row add-folder">
+            <input id="importPath" placeholder="Folder or drive">
+            <button id="chooseImport" class="secondary">Browse</button>
+            <button id="startImport" class="primary">Add</button>
+          </div>
+        </details>
       </div>
       <div id="folders" class="sync-folders"><div class="muted">Loading…</div></div>
-      <div class="path-row add-folder">
-        <input id="importPath" placeholder="Folder or drive">
-        <button id="chooseImport" class="secondary">Browse</button>
-        <button id="startImport" class="primary">Add</button>
-      </div>
     </section>
 
     <section id="activityCard" class="activity-strip" hidden><div id="activity"></div></section>
@@ -34,11 +40,14 @@
       <div class="drawer-body">
         <div class="drawer-actions"><button id="refreshBackups" class="text small">Refresh</button></div>
         <div id="backups" class="drives"><div class="muted">Loading…</div></div>
-        <div class="path-row add-backup">
-          <input id="backupLocation" placeholder="Backup folder">
-          <button id="chooseBackup" class="secondary">Browse</button>
-          <button id="addBackup" class="secondary">Add</button>
-        </div>
+        <details class="add-control backup-add-control">
+          <summary><span aria-hidden="true">＋</span> Add backup</summary>
+          <div class="add-popover path-row add-backup">
+            <input id="backupLocation" placeholder="Backup folder">
+            <button id="chooseBackup" class="secondary">Browse</button>
+            <button id="addBackup" class="primary">Add</button>
+          </div>
+        </details>
       </div>
     </details>
   </main>
