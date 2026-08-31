@@ -4,11 +4,14 @@ const mediaSize = document.querySelector('#mediaSize');
 
 const style = document.createElement('style');
 style.textContent = `
-  .date-group{margin-top:30px}
-  .date-heading{margin:0 0 10px 2px;font-size:14px;color:#ded5d1;letter-spacing:-.01em}
+  .date-group{margin-top:26px}
+  .year-heading{margin:42px 0 15px 2px;color:#f1e9e5;font-size:19px;font-weight:760;letter-spacing:-.025em}
+  .date-group:first-child>.year-heading{margin-top:20px}
+  .date-heading{margin:0 0 10px 2px;font-size:13px;color:#cfc5c1;letter-spacing:-.01em}
   .files.grid .date-grid>.day-row-start{margin-top:22px}
-  .files.grid .date-grid>.day-start{position:relative}
-  .files.grid .date-grid>.day-start::before{content:attr(data-day-label);position:absolute;left:2px;top:-18px;z-index:2;color:#928986;font-size:11px;font-weight:650;line-height:14px;white-space:nowrap;pointer-events:none}
+  .files.grid .date-grid>.day-start{position:relative;overflow:visible}
+  .files.grid .date-grid>.day-start>.thumb{overflow:hidden;border-radius:3px}
+  .files.grid .date-grid>.day-start::before{content:attr(data-day-label);position:absolute;left:2px;top:-18px;z-index:4;color:#958c89;font-size:11px;font-weight:650;line-height:14px;white-space:nowrap;pointer-events:none}
 `;
 document.head.append(style);
 
@@ -27,7 +30,43 @@ function dayKey(date) {
 }
 
 function dayLabel(date) {
-  return date.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function monthName(key) {
+  const [, month] = String(key || '').split('-').map(Number);
+  return Number.isFinite(month)
+    ? new Date(2000, month - 1, 1).toLocaleDateString(undefined, { month: 'long' })
+    : '';
+}
+
+function yearForGroup(group) {
+  const year = Number(String(group.dataset.dateGroup || '').split('-')[0]);
+  return Number.isFinite(year) ? year : null;
+}
+
+function decorateYears(groups) {
+  let previousYear = null;
+  for (const group of groups) {
+    const year = yearForGroup(group);
+    const month = monthName(group.dataset.dateGroup);
+    const monthHeading = group.querySelector(':scope > .date-heading');
+    if (monthHeading && month && monthHeading.textContent !== month) monthHeading.textContent = month;
+
+    let heading = group.querySelector(':scope > .year-heading');
+    const needsYear = year != null && year !== previousYear;
+    if (needsYear) {
+      if (!heading) {
+        heading = document.createElement('h2');
+        heading.className = 'year-heading';
+        group.prepend(heading);
+      }
+      if (heading.textContent !== String(year)) heading.textContent = String(year);
+    } else {
+      heading?.remove();
+    }
+    if (year != null) previousYear = year;
+  }
 }
 
 function decorateGroup(group) {
@@ -47,9 +86,8 @@ function decorateGroup(group) {
     delete card.dataset.dayLabel;
   }
 
-  // Capture the untouched flex rows before adding any spacing. Every card in
-  // a transition row receives the same top margin, so thumbnail baselines stay
-  // perfectly level and the separator consumes no horizontal grid width.
+  // Measure untouched flex rows first. Day separation is vertical only, so the
+  // photo row still consumes exactly the same horizontal width as every other row.
   const rowTop = new Map(cards.map(card => [card, card.offsetTop]));
   const rowStarts = [];
   let previousDay = '';
@@ -79,7 +117,9 @@ function decorateGroup(group) {
 function decorate() {
   frame = 0;
   if (!files || files.classList.contains('folders')) return;
-  for (const group of files.querySelectorAll('.date-group')) decorateGroup(group);
+  const groups = [...files.querySelectorAll('.date-group')];
+  decorateYears(groups);
+  for (const group of groups) decorateGroup(group);
 }
 
 function invalidate(layout = false) {
