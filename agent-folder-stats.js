@@ -20,12 +20,15 @@ function json(res, status, data) {
   res.end(body);
 }
 
-async function capacity(path) {
+async function filesystem(path) {
   try {
     const fs = await statfs(path);
-    return Number(fs.blocks) * Number(fs.bsize);
+    return {
+      capacityBytes: Number(fs.blocks) * Number(fs.bsize),
+      freeBytes: Number(fs.bavail) * Number(fs.bsize)
+    };
   } catch {
-    return 0;
+    return { capacityBytes: 0, freeBytes: 0 };
   }
 }
 
@@ -45,13 +48,13 @@ async function folderStats() {
         path,
         files: Number(row?.files) || 0,
         bytes: Number(row?.bytes) || 0,
-        capacityBytes: await capacity(path)
+        ...await filesystem(path)
       };
     }));
   } catch {
     return Promise.all(folders.map(async item => {
       const path = resolve(String(item?.path || item));
-      return { path, files: 0, bytes: 0, capacityBytes: await capacity(path) };
+      return { path, files: 0, bytes: 0, ...await filesystem(path) };
     }));
   }
 }
