@@ -184,8 +184,6 @@ function decorateTimeline() {
         grid.append(button);
       }
       used.add(key);
-      button.dataset.periodLabel = label;
-      button.querySelector('span:last-child').textContent = label;
       button.style.left = `${card.offsetLeft}px`;
       button.style.top = `${card.offsetTop - 19}px`;
     }
@@ -296,7 +294,7 @@ search.addEventListener('input', () => { if (selected.size) clearSelection(true)
 document.querySelector('#mediaSize')?.addEventListener('input', scheduleTimeline);
 window.addEventListener('resize', scheduleTimeline, { passive: true });
 window.addEventListener('mochimono:locations-updated', () => { syncSelectionUi(); scheduleTimeline(); });
-new MutationObserver(() => { syncSelectedClasses(); scheduleTimeline(); }).observe(files, { childList: true, subtree: true });
+new MutationObserver(() => { syncSelectedClasses(); scheduleTimeline(); }).observe(files, { childList: true });
 
 restoreUi();
 syncSelectionUi();
