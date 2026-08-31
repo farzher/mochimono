@@ -17,7 +17,6 @@ let cachePromise = null;
 let decorateFrame = 0;
 let hoverHash = '';
 let lastFocusedHash = '';
-let viewerWasOpen = !viewer.hidden;
 let richTimer = 0;
 const detailCache = new Map();
 
@@ -329,6 +328,16 @@ function verticalCard(cards, current, direction) {
   return best || current;
 }
 
+function viewerVerticalCard(direction) {
+  const hash = currentViewerHash();
+  if (!hash) return null;
+  const cards = renderedCards();
+  const current = cards.find(card => card.dataset.hash === hash);
+  if (!current) return null;
+  const next = verticalCard(cards, current, direction);
+  return next !== current ? next : null;
+}
+
 function focusCard(card, rich = true) {
   if (!card) return;
   lastFocusedHash = card.dataset.hash;
@@ -384,6 +393,16 @@ document.addEventListener('keydown', event => {
   if (typingTarget(event.target)) return;
 
   if (!viewer.hidden) {
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      const target = viewerVerticalCard(event.key === 'ArrowUp' ? -1 : 1);
+      if (target && window.mochimonoOpenViewer) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        lastFocusedHash = target.dataset.hash;
+        window.mochimonoOpenViewer(lastFocusedHash);
+      }
+      return;
+    }
     if (event.code === 'Space' && !viewerOwnsSpace()) {
       lastFocusedHash = currentViewerHash() || lastFocusedHash;
       event.preventDefault();
@@ -441,17 +460,19 @@ new MutationObserver(() => {
   hideTooltip();
   scheduleDecorate();
 }).observe(views, { subtree: true, attributes: true, attributeFilter: ['class'] });
-new MutationObserver(() => {
-  const open = !viewer.hidden;
-  if (!open && viewerWasOpen) {
-    lastFocusedHash = currentViewerHash() || lastFocusedHash;
-    requestAnimationFrame(() => {
-      const card = lastFocusedHash && files.querySelector(`[data-hash="${CSS.escape(lastFocusedHash)}"]`);
-      if (card) focusCard(card, true);
-    });
+
+window.addEventListener('mochimono-viewer-return', event => {
+  const hash = String(event.detail?.hash || '');
+  if (!hash) return;
+  lastFocusedHash = hash;
+  const card = files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
+  if (card) {
+    for (const item of files.querySelectorAll('.context-keyboard-focus')) item.classList.remove('context-keyboard-focus');
+    card.classList.add('context-keyboard-focus');
+    card.focus({ preventScroll: true });
   }
-  viewerWasOpen = open;
-}).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
+  scheduleDecorate();
+});
 
 source.addEventListener('change', hideTooltip);
 window.addEventListener('scroll', () => {
