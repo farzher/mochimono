@@ -88,8 +88,9 @@ async function serveLibrary(res, pathname) {
       .replace('<script type="module" src="/files/thumbs.js"></script>', '<script type="module" src="/files/client-thumbs.js"></script>')
       .replace('</head>', `<script>document.documentElement.classList.add('client-library')</script><style>
         html.client-library .topbar,html.client-library .protection,html.client-library #login{display:none!important}
-        html.client-library .shell{padding-top:0!important;max-width:none!important}
+        html.client-library .shell{padding-top:72px!important;max-width:none!important}
         html.client-library body{min-height:100vh}
+        @media(max-width:700px){html.client-library .shell{padding-top:64px!important}}
       </style></head>`)
       .replace('</body>', '<script type="module" src="/files/client-drop.js"></script></body>');
     res.writeHead(200, {
