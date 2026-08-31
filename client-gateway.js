@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import http from 'node:http';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
@@ -57,6 +58,7 @@ async function serveLibrary(res, pathname) {
     let html = await readFile(join(WEB_DIR, 'index.html'), 'utf8');
     html = html
       .replace(/(href|src)="\/(?!api\/)/g, '$1="/files/')
+      .replace('<script type="module" src="/files/thumbs.js"></script>', '<script type="module" src="/files/client-thumbs.js"></script>')
       .replace('</head>', `<script>document.documentElement.classList.add('client-library')</script><style>
         html.client-library .topbar,html.client-library .protection,html.client-library #login{display:none!important}
         html.client-library .shell{padding-top:0!important;max-width:none!important}
@@ -128,7 +130,7 @@ async function proxyApi(req, res, url) {
   if (!current.token) return json(res, 401, { error: 'Connect the Client first' });
 
   const headers = {};
-  for (const name of ['content-type', 'content-length', 'range', 'if-none-match', 'if-modified-since', 'x-mochimono-mime']) {
+  for (const name of ['content-type', 'content-length', 'range', 'if-none-match', 'if-modified-since', 'x-mochimono-mime', 'x-mochimono-thumb-version', 'x-mochimono-width', 'x-mochimono-height', 'x-mochimono-duration', 'x-mochimono-source-mime']) {
     if (req.headers[name] != null) headers[name] = req.headers[name];
   }
   headers.authorization = `Bearer ${current.token}`;
@@ -148,7 +150,18 @@ async function proxyApi(req, res, url) {
   }
   res.writeHead(response.status, out);
   if (req.method === 'HEAD' || !response.body) return res.end();
-  Readable.fromWeb(response.body).pipe(res);
+
+  const source = Readable.fromWeb(response.body);
+  const abort = () => source.destroy();
+  res.once('close', abort);
+  try {
+    await pipeline(source, res);
+  } catch (error) {
+    const expectedAbort = res.destroyed || req.destroyed || error?.code === 'ERR_STREAM_PREMATURE_CLOSE' || /terminated|aborted|premature close/i.test(String(error?.message || ''));
+    if (!expectedAbort) throw error;
+  } finally {
+    res.off('close', abort);
+  }
 }
 
 const originalCreateServer = http.createServer;
@@ -169,7 +182,7 @@ http.createServer = function (...args) {
       if (url.pathname.startsWith('/api/') && !isLocalApi(url.pathname)) return await proxyApi(req, res, url);
     } catch (error) {
       if (!res.headersSent) return json(res, error.status || 502, { error: error.message || 'Client gateway error' });
-      return res.destroy();
+      if (!res.destroyed) res.destroy();
     }
     return listener(req, res);
   };
