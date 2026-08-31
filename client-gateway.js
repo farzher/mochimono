@@ -60,15 +60,23 @@ function patchClientApp(source) {
   const replacements = [
     [
       "    backupCount: Number(file.backupCount) || 0,\n    dateMs: Number.isNaN(date.getTime()) ? 0 : date.getTime()",
-      "    backupCount: Number(file.backupCount) || 0,\n    addedMs: Number.isNaN(new Date(file.addedAt || file.createdAt || 0).getTime()) ? 0 : new Date(file.addedAt || file.createdAt || 0).getTime(),\n    dateMs: Number.isNaN(date.getTime()) ? 0 : date.getTime()"
+      "    backupCount: Number(file.backupCount) || 0,\n    fileDateMs: Number.isNaN(date.getTime()) ? 0 : date.getTime(),\n    addedMs: Number.isNaN(new Date(file.addedAt || file.createdAt || 0).getTime()) ? 0 : new Date(file.addedAt || file.createdAt || 0).getTime(),\n    dateMs: Number.isNaN(date.getTime()) ? 0 : date.getTime()"
     ],
     [
       "function dateValue(file) {\n  return new Date(file.dateMs || 0);\n}",
-      "function dateValue(file) {\n  return new Date(sort === 'date-added' ? (file.addedMs || file.dateMs || 0) : (file.dateMs || 0));\n}"
+      "function dateValue(file) {\n  const value = sort === 'date-added' ? (file.addedMs || file.fileDateMs || file.dateMs || 0) : (file.fileDateMs || file.dateMs || 0);\n  return new Date(value);\n}"
     ],
     [
       "function sortFiles(files) {\n  if (sort === 'date-asc')",
-      "function sortFiles(files) {\n  if (sort === 'date-added') return files.sort((a, b) => (b.addedMs || 0) - (a.addedMs || 0) || a.hash.localeCompare(b.hash));\n  if (sort === 'date-asc')"
+      "function sortFiles(files) {\n  if (sort === 'date-added') return files.sort((a, b) => (b.addedMs || b.fileDateMs || 0) - (a.addedMs || a.fileDateMs || 0) || a.hash.localeCompare(b.hash));\n  if (sort === 'date-asc')"
+    ],
+    [
+      "data-hash=\"${file.hash}\" style=\"${media ? `--ratio:${ratio}` : ''}\"",
+      "data-hash=\"${file.hash}\" data-file-date=\"${escapeHtml(file.fileDate || file.createdAt || '')}\" data-added-at=\"${escapeHtml(file.addedAt || file.createdAt || '')}\" style=\"${media ? `--ratio:${ratio}` : ''}\""
+    ],
+    [
+      "<button class=\"file-row\" data-hash=\"${file.hash}\">",
+      "<button class=\"file-row\" data-hash=\"${file.hash}\" data-file-date=\"${escapeHtml(file.fileDate || file.createdAt || '')}\" data-added-at=\"${escapeHtml(file.addedAt || file.createdAt || '')}\">"
     ]
   ];
   for (const [from, to] of replacements) if (source.includes(from)) source = source.replace(from, to);
@@ -88,9 +96,9 @@ async function serveLibrary(res, pathname) {
       .replace('<script type="module" src="/files/thumbs.js"></script>', '<script type="module" src="/files/client-thumbs.js"></script>')
       .replace('</head>', `<script>document.documentElement.classList.add('client-library')</script><style>
         html.client-library .topbar,html.client-library .protection,html.client-library #login{display:none!important}
-        html.client-library .shell{padding-top:72px!important;max-width:none!important}
+        html.client-library .shell{padding-top:64px!important;max-width:none!important}
         html.client-library body{min-height:100vh}
-        @media(max-width:700px){html.client-library .shell{padding-top:64px!important}}
+        @media(max-width:700px){html.client-library .shell{padding-top:58px!important}}
       </style></head>`)
       .replace('</body>', '<script type="module" src="/files/client-drop.js"></script></body>');
     res.writeHead(200, {
