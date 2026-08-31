@@ -112,14 +112,14 @@ async function checkThumbnails(req, res) {
   const serverHashes = [];
 
   await Promise.all(hashes.map(async hash => {
-    const thumb = await providerThumbnail(hash);
-    if (thumb) {
-      ready.set(hash, thumb);
-      return;
-    }
     const file = snapshot.byHash.get(hash);
     if (!file) return;
-    if (file.serverStored) serverHashes.push(hash);
+    if (file.serverStored) {
+      serverHashes.push(hash);
+      return;
+    }
+    const thumb = await providerThumbnail(hash);
+    if (thumb) ready.set(hash, thumb);
     else queueLocalProvider(snapshot, file);
   }));
 
@@ -130,20 +130,15 @@ async function checkThumbnails(req, res) {
         headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
         body: JSON.stringify({ hashes: serverHashes })
       });
-      if (response.ok) {
-        const data = await response.json();
-        for (const item of data.thumbnails || []) ready.set(item.hash, item);
-        const remoteReady = new Set((data.thumbnails || []).map(item => item.hash));
-        for (const hash of serverHashes) {
-          if (remoteReady.has(hash)) continue;
-          queueCanonicalPreview(snapshot, snapshot.byHash.get(hash));
-        }
+      if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
+      const data = await response.json();
+      for (const item of data.thumbnails || []) ready.set(item.hash, item);
+      const remoteReady = new Set((data.thumbnails || []).map(item => item.hash));
+      for (const hash of serverHashes) {
+        if (remoteReady.has(hash)) continue;
+        queueCanonicalPreview(snapshot, snapshot.byHash.get(hash));
       }
-    } catch {
-      for (const hash of serverHashes) queueLocalProvider(snapshot, snapshot.byHash.get(hash));
-    }
-  } else if (serverHashes.length) {
-    for (const hash of serverHashes) queueLocalProvider(snapshot, snapshot.byHash.get(hash));
+    } catch {}
   }
 
   json(res, 200, { thumbnails: [...ready.values()].map(item => ({
