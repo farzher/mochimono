@@ -10,6 +10,7 @@ let backupEditing = false;
 let restorePath;
 let lastFinished;
 let defaultDevice = '';
+let foldersRenderKey = '';
 
 async function req(path, options = {}) {
   const response = await fetch(path, { headers: { 'content-type': 'application/json' }, ...options });
@@ -58,12 +59,16 @@ async function chooseFolder(target) {
 
 function renderFolders(folders, job) {
   const element = $('#folders');
+  const syncingPath = job?.status === 'running' && job.type === 'sync' ? String(job.progress?.path || '') : '';
+  const renderKey = JSON.stringify(folders.map(folder => [folder.path, folder.lastSynced || '', syncingPath === folder.path]));
+  if (renderKey === foldersRenderKey) return;
+  foldersRenderKey = renderKey;
   if (!folders.length) {
     element.innerHTML = '<div class="muted">No folders.</div>';
     return;
   }
   element.innerHTML = folders.map(folder => {
-    const syncing = job?.status === 'running' && job.type === 'sync' && job.progress?.path === folder.path;
+    const syncing = syncingPath === folder.path;
     const status = syncing ? 'Syncing…' : folder.lastSynced ? 'Synced' : 'Pending';
     return `
       <div class="sync-folder">
