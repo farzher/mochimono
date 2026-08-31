@@ -27,9 +27,7 @@ async function req(path, options = {}) {
   return data;
 }
 
-function esc(value) {
-  return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
-}
+const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 
 function bytes(number) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
@@ -44,24 +42,20 @@ function duration(seconds) {
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 function exactDate(value) {
   if (!value) return '';
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleString(undefined, {
-    year: 'numeric', month: 'short', day: 'numeric',
-    hour: 'numeric', minute: '2-digit', second: '2-digit'
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit'
   });
 }
 
 function pathName(path) {
   const clean = String(path || '').replace(/[\\/]+$/, '');
-  const parts = clean.split(/[\\/]+/).filter(Boolean);
-  return parts.at(-1) || clean;
+  return clean.split(/[\\/]+/).filter(Boolean).at(-1) || clean;
 }
 
 function samePath(a, b) {
@@ -81,9 +75,7 @@ async function chooseFolder(target) {
   try {
     const result = await req('/api/pick-folder');
     if (result.path) target.value = result.path;
-  } catch (error) {
-    toast(error.message);
-  }
+  } catch (error) { toast(error.message); }
 }
 
 function toggleInline(element, button) {
@@ -93,43 +85,38 @@ function toggleInline(element, button) {
 }
 
 function folderRow(folder) {
-  return `
-    <article class="storage-item folder-item" data-folder-path="${esc(folder.path)}">
-      <div class="storage-copy">
-        <div class="storage-title">
-          <strong title="${esc(folder.path)}">${esc(folder.path)}</strong>
-          <time class="item-state" data-folder-status>—</time>
-        </div>
-        <div class="storage-meta"><span data-folder-files>— files</span><span>·</span><span data-folder-size>—</span><span>·</span><span data-folder-free>— free</span></div>
-        <div class="storage-meter" title=""><i data-folder-meter></i></div>
-        <div class="item-progress" data-item-progress hidden></div>
-      </div>
-      <div class="item-actions">
-        <button class="action-link" data-sync-folder="${esc(folder.path)}">Sync</button>
-        <button class="icon tiny" data-remove-folder="${esc(folder.path)}" aria-label="Stop syncing" title="Stop syncing">×</button>
-      </div>
-    </article>`;
+  return `<article class="storage-item folder-item" data-folder-path="${esc(folder.path)}">
+    <div class="storage-copy">
+      <div class="storage-title"><strong title="${esc(folder.path)}">${esc(folder.path)}</strong><time class="item-state" data-folder-status>—</time></div>
+      <div class="storage-meta"><span data-folder-files>— files</span><span>·</span><span data-folder-size>—</span><span>·</span><span data-folder-free>— free</span></div>
+      <div class="storage-meter"><i data-folder-meter></i></div>
+      <div class="item-progress" data-item-progress hidden></div>
+    </div>
+    <div class="item-actions"><button class="action-link" data-sync-folder="${esc(folder.path)}">Sync</button><button class="icon tiny" data-remove-folder="${esc(folder.path)}" aria-label="Stop syncing" title="Stop syncing">×</button></div>
+  </article>`;
 }
 
 function progressData(job) {
   if (!job || job.status !== 'running') return null;
   const p = job.progress || {};
-  const total = Number(p.totalBytes) || 0;
-  const done = Math.min(total, Number(p.doneBytes) || 0);
-  const percent = total ? Math.max(0, Math.min(100, done / total * 100)) : 0;
+  const totalBytes = Number(p.totalBytes) || 0;
+  const doneBytes = Math.min(totalBytes, Number(p.doneBytes) || 0);
+  const percent = totalBytes ? Math.max(0, Math.min(100, doneBytes / totalBytes * 100)) : 0;
   const meta = [];
-  if (total) meta.push(`${bytes(done)} / ${bytes(total)}`);
+  if (totalBytes) meta.push(`${bytes(doneBytes)} / ${bytes(totalBytes)}`);
   else if (p.scanned != null) meta.push(`${Number(p.scanned).toLocaleString()} files`);
   else if (p.total != null) meta.push(`${Number(p.checked || 0).toLocaleString()} / ${Number(p.total).toLocaleString()}`);
   if (p.copied != null) meta.push(`${Number(p.copied).toLocaleString()} copied`);
+  if (p.restored != null) meta.push(`${Number(p.restored).toLocaleString()} restored`);
+  if (p.already != null) meta.push(`${Number(p.already).toLocaleString()} already in Mochimono`);
+  if (p.ignored) meta.push(`${Number(p.ignored).toLocaleString()} ignored`);
   if (p.speedBps > 0) meta.push(`${bytes(p.speedBps)}/s`);
   if (p.etaSeconds > 0) meta.push(`${duration(p.etaSeconds)} left`);
   const phase = job.cancelRequested ? 'Canceling…' : p.phase || 'Working…';
   return {
     key: JSON.stringify([phase, meta, p.current || '', percent, Boolean(p.indeterminate), job.cancelRequested]),
-    html: `
-      <div class="inline-progress-head"><strong>${esc(phase)}</strong><button class="action-link" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>Cancel</button></div>
-      <div class="progress-bar ${p.indeterminate || !total ? 'indeterminate' : ''}"><i style="width:${p.indeterminate || !total ? '32%' : `${percent}%`}"></i></div>
+    html: `<div class="inline-progress-head"><strong>${esc(phase)}</strong><button class="action-link" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>Cancel</button></div>
+      <div class="progress-bar ${p.indeterminate || !totalBytes ? 'indeterminate' : ''}"><i style="width:${p.indeterminate || !totalBytes ? '32%' : `${percent}%`}"></i></div>
       <div class="inline-progress-meta"><span>${esc(meta.join(' · '))}</span><span title="${esc(p.current || '')}">${esc(p.current || '')}</span></div>`
   };
 }
@@ -138,53 +125,41 @@ function renderItemProgress(row, job) {
   const element = row?.querySelector('[data-item-progress]');
   if (!element) return;
   const progress = progressData(job);
-  if (!progress) {
-    element.hidden = true;
-    element.dataset.progressKey = '';
-    return;
-  }
-  element.hidden = false;
+  element.hidden = !progress;
+  if (!progress) return void (element.dataset.progressKey = '');
   if (element.dataset.progressKey === progress.key) return;
   element.dataset.progressKey = progress.key;
   element.innerHTML = progress.html;
 }
 
 function folderJob(path, job) {
-  if (job?.status !== 'running' || job.type !== 'sync') return null;
-  return samePath(job.progress?.path, path) ? job : null;
+  return job?.status === 'running' && job.type === 'sync' && samePath(job.progress?.path, path) ? job : null;
 }
 
 function backupJobPath(job) {
   const label = String(job?.label || '');
-  for (const prefix of ['Update ', 'Verify ', 'Restore ']) {
-    if (label.startsWith(prefix)) return label.slice(prefix.length);
-  }
-  return '';
+  return ['Update ', 'Verify ', 'Restore '].map(prefix => label.startsWith(prefix) ? label.slice(prefix.length) : '').find(Boolean) || '';
 }
 
 function backupJob(location, job) {
-  if (job?.status !== 'running' || !['backup', 'verify', 'restore'].includes(job.type)) return null;
-  return samePath(backupJobPath(job), location.path) ? job : null;
+  return job?.status === 'running' && ['backup', 'verify', 'restore'].includes(job.type) && samePath(backupJobPath(job), location.path) ? job : null;
 }
 
 function renderFolders(folders, job) {
   const element = $('#folders');
-  const renderKey = JSON.stringify(folders.map(folder => folder.path));
-  if (renderKey !== foldersRenderKey) {
-    foldersRenderKey = renderKey;
+  const key = JSON.stringify(folders.map(folder => folder.path));
+  if (key !== foldersRenderKey) {
+    foldersRenderKey = key;
     element.innerHTML = folders.length ? folders.map(folderRow).join('') : '<div class="empty-state">No folders</div>';
   }
-
   const byPath = new Map(folders.map(folder => [folder.path, folder]));
   for (const row of element.querySelectorAll('[data-folder-path]')) {
     const folder = byPath.get(row.dataset.folderPath);
     if (!folder) continue;
     const active = folderJob(folder.path, job);
     const label = row.querySelector('[data-folder-status]');
-    const status = active ? 'Syncing' : exactDate(folder.lastSynced) || '—';
-    if (label.textContent !== status) label.textContent = status;
+    label.textContent = active ? 'Syncing' : exactDate(folder.lastSynced) || '—';
     label.className = `item-state ${active ? 'working' : folder.lastSynced ? 'good' : ''}`;
-    row.classList.toggle('working', Boolean(active));
     renderItemProgress(row, active);
   }
 }
@@ -207,29 +182,20 @@ async function refreshFolderStats() {
 }
 
 function backgroundActivity(job, previews = {}) {
-  const previewActive = Number(previews.active) || 0;
-  const previewQueued = (Number(previews.urgent) || 0) + (Number(previews.priority) || 0) + (Number(previews.queued) || 0);
-  if (job?.status === 'running' || (!previewActive && !previewQueued)) {
-    activityCard.hidden = true;
-    return;
-  }
+  const active = Number(previews.active) || 0;
+  const queued = (Number(previews.urgent) || 0) + (Number(previews.priority) || 0) + (Number(previews.queued) || 0);
+  if (job?.status === 'running' || (!active && !queued)) return void (activityCard.hidden = true);
   activityCard.hidden = false;
-  const key = `${previewActive}:${previewQueued}`;
+  const key = `${active}:${queued}`;
   if ($('#activity').dataset.key === key) return;
   $('#activity').dataset.key = key;
-  $('#activity').innerHTML = `<span><strong>Previews</strong>${previewActive ? ` · ${previewActive} working` : ''}${previewQueued ? ` · ${previewQueued.toLocaleString()} queued` : ''}</span><div class="progress-bar indeterminate"><i style="width:32%"></i></div>`;
+  $('#activity').innerHTML = `<span><strong>Previews</strong>${active ? ` · ${active} working` : ''}${queued ? ` · ${queued.toLocaleString()} queued` : ''}</span><div class="progress-bar indeterminate"><i style="width:32%"></i></div>`;
 }
 
-async function recordFinishedBackup(job) {
-  if (job?.status !== 'done') return;
-  const path = backupJobPath(job);
-  if (!path) return;
-  const action = job.type === 'backup' ? 'update' : job.type;
-  if (!['update', 'verify', 'restore'].includes(action)) return;
-  try {
-    await req('/api/backup/history', { method: 'POST', body: JSON.stringify({ path, action }) });
-    backupsRenderKey = '';
-  } catch {}
+async function refreshLibrary() {
+  const library = $('#filesFrame')?.contentWindow?.mochimonoLibrary;
+  try { await library?.refresh?.(); }
+  catch { $('#filesFrame')?.contentWindow?.location.reload(); }
 }
 
 async function state() {
@@ -239,72 +205,68 @@ async function state() {
     if (!connectionDialog.open) $('#serverUrl').value = current.settings.server;
     defaultDevice = current.settings.device || defaultDevice;
     $('#deviceLabel').textContent = defaultDevice;
-
-    const status = $('#serverStatus');
-    status.className = `status ${current.server.online ? 'online' : 'offline'}`;
-    status.textContent = current.server.online ? 'Online' : 'Connect';
-    status.title = current.server.online ? `${current.server.stats.objects.toLocaleString()} files` : current.server.error || 'Connect';
-
     renderFolders(current.settings.folders || [], current.job);
     renderBackupProgress(current.job);
     backgroundActivity(current.job, current.previews);
 
     if (current.job && current.job.status !== 'running' && lastFinished !== current.job.id) {
       lastFinished = current.job.id;
-      await recordFinishedBackup(current.job);
-      toast(current.job.status === 'done' ? (current.job.type === 'sync' ? 'Synced' : 'Done') : current.job.status === 'canceled' ? 'Canceled' : current.job.error);
+      const success = current.job.status === 'done';
+      toast(success ? (current.job.type === 'sync' ? 'Synced' : current.job.type === 'restore' ? 'Restored' : 'Done') : current.job.status === 'canceled' ? 'Canceled' : current.job.error);
+      if (success && current.job.type === 'restore') refreshLibrary();
       backups(true);
       refreshFolderStats();
     }
-
     if (Date.now() - lastBackupRefresh > 12_000) backups();
-  } catch (error) {
-    toast(error.message);
-  }
+    return current;
+  } catch (error) { toast(error.message); return null; }
 }
 
 function backupScope(location) {
-  const policy = location.remote?.policy || location.meta?.policy || {};
+  const policy = location.meta?.policy || location.remote?.policy || {};
   if (policy.all !== false) return 'Everything';
   return `${policy.collectionName ? '✦ ' : ''}${policy.collectionName || `Collection ${policy.collectionId || ''}`.trim()}`;
 }
 
 function backupState(location) {
+  const count = Number(location.local?.count) || 0;
   const remote = location.remote;
-  if (!remote) return { label: 'Offline', className: '' };
-  if (remote.policy?.missing) return { label: 'Collection missing', className: 'bad' };
+  if (remote?.policy?.missing) return { label: 'Scope removed', className: 'warning' };
+  if (!remote) return { label: count ? 'Stored locally' : 'Server unavailable', className: count ? 'good' : '' };
   const missing = Math.max(0, Number(remote.desiredBytes) - Number(remote.protectedBytes));
   if (missing) return { label: `${bytes(missing)} left`, className: 'warning' };
-  const when = exactDate(location.meta?.lastBackupAt || location.local?.oldestVerification);
-  return { label: when || 'Ready', className: 'good' };
+  return { label: exactDate(location.meta?.lastBackupAt || location.local?.oldestVerification) || (count ? 'Stored' : 'Empty'), className: count ? 'good' : '' };
 }
 
 function backupCard(location, index) {
   const remote = location.remote;
-  const protectedBytes = Number(remote?.protectedBytes) || 0;
-  const desiredBytes = Number(remote?.desiredBytes) || 0;
-  const ratio = desiredBytes ? Math.min(100, protectedBytes / desiredBytes * 100) : remote ? 100 : 0;
-  const state = backupState(location);
-  const scope = backupScope(location);
+  const localCount = Number(location.local?.count) || 0;
   const localBytes = Number(location.local?.bytes) || 0;
-  const shownBytes = remote ? protectedBytes : localBytes;
+  const desiredBytes = Number(remote?.desiredBytes) || 0;
+  const protectedBytes = Number(remote?.protectedBytes) || 0;
+  const scopeMissing = Boolean(remote?.policy?.missing);
+  const ratio = desiredBytes ? Math.min(100, protectedBytes / desiredBytes * 100) : 0;
+  const state = backupState(location);
+  const meterTitle = scopeMissing
+    ? `${bytes(localBytes)} stored in this backup`
+    : remote ? `${bytes(protectedBytes)} of ${bytes(desiredBytes)} backed up` : `${bytes(localBytes)} stored in this backup`;
+  const meterWidth = !scopeMissing && remote && protectedBytes ? `max(2px, ${ratio}%)` : localBytes ? '100%' : '0';
 
-  return `
-    <article class="storage-item backup-item" data-backup-index="${index}">
-      <div class="storage-copy">
-        <div class="storage-title"><strong>${esc(location.meta.name)}</strong><time class="item-state ${state.className}">${esc(state.label)}</time></div>
-        <div class="storage-path" title="${esc(location.path)}">${esc(location.path)}</div>
-        <div class="storage-meta"><span>${esc(scope)}</span><span>·</span><span>${bytes(shownBytes)}</span><span>·</span><span>${bytes(location.freeBytes)} free</span></div>
-        <div class="storage-meter backup-meter" title="${remote ? `${bytes(protectedBytes)} of ${bytes(desiredBytes)} backed up` : `${bytes(localBytes)} stored`}"><i style="width:${remote && protectedBytes ? `max(2px, ${ratio}%)` : '0'}"></i></div>
-        <div class="item-progress" data-item-progress hidden></div>
-      </div>
-      <div class="item-actions backup-actions">
-        <button class="action-link primary-action" data-update="${index}">Update</button>
-        <button class="action-link" data-restore="${index}">Restore</button>
-        <button class="action-link" data-verify="${index}">Verify</button>
-        <button class="action-link" data-configure="${index}">Edit</button>
-      </div>
-    </article>`;
+  return `<article class="storage-item backup-item" data-backup-index="${index}">
+    <div class="storage-copy">
+      <div class="storage-title"><strong>${esc(location.meta?.name || pathName(location.path))}</strong><time class="item-state ${state.className}">${esc(state.label)}</time></div>
+      <div class="storage-path" title="${esc(location.path)}">${esc(location.path)}</div>
+      <div class="storage-meta"><span>${esc(backupScope(location))}</span><span>·</span><span>${localCount.toLocaleString()} files</span><span>·</span><span>${bytes(localBytes)}</span><span>·</span><span>${bytes(location.freeBytes)} free</span></div>
+      <div class="storage-meter backup-meter" title="${esc(meterTitle)}"><i style="width:${meterWidth}"></i></div>
+      <div class="item-progress" data-item-progress hidden></div>
+    </div>
+    <div class="item-actions backup-actions">
+      <button class="action-link primary-action" data-update="${index}" ${scopeMissing ? 'disabled title="Choose a current scope first"' : ''}>Update</button>
+      <button class="action-link" data-restore="${index}" ${localCount ? '' : 'disabled'}>Restore</button>
+      <button class="action-link" data-verify="${index}" ${localCount ? '' : 'disabled'}>Verify</button>
+      <button class="action-link" data-configure="${index}">Edit</button>
+    </div>
+  </article>`;
 }
 
 function wireBackupActions() {
@@ -328,22 +290,11 @@ async function backups(force = false) {
   if (backupLoading || (!force && Date.now() - lastBackupRefresh < 5000)) return;
   backupLoading = true;
   try {
-    const { backups: locations } = await req('/api/backups');
-    backupLocations = locations || [];
+    backupLocations = (await req('/api/backups')).backups || [];
     lastBackupRefresh = Date.now();
     const key = JSON.stringify(backupLocations.map(location => [
-      location.path,
-      location.meta?.name,
-      location.meta?.policy,
-      location.meta?.lastBackupAt,
-      location.meta?.lastVerifiedAt,
-      location.local?.count,
-      location.local?.bytes,
-      location.local?.oldestVerification,
-      location.freeBytes,
-      location.remote?.protectedBytes,
-      location.remote?.desiredBytes,
-      location.remote?.policy
+      location.path, location.meta?.name, location.meta?.policy, location.meta?.lastBackupAt,
+      location.meta?.lastVerifiedAt, location.local, location.freeBytes, location.remote
     ]));
     if (key !== backupsRenderKey) {
       backupsRenderKey = key;
@@ -351,19 +302,13 @@ async function backups(force = false) {
       wireBackupActions();
     }
     renderBackupProgress(currentJob);
-  } catch (error) {
-    $('#backups').innerHTML = `<div class="error">${esc(error.message)}</div>`;
-  } finally {
-    backupLoading = false;
-  }
+  } catch (error) { $('#backups').innerHTML = `<div class="error">${esc(error.message)}</div>`; }
+  finally { backupLoading = false; }
 }
 
 async function loadSmartCollections() {
-  try {
-    smartCollections = (await req('/api/backup-collections')).collections || [];
-  } catch {
-    smartCollections = [];
-  }
+  try { smartCollections = (await req('/api/backup-collections')).collections || []; }
+  catch { smartCollections = []; }
 }
 
 function renderBackupScopes(meta = null) {
@@ -371,7 +316,7 @@ function renderBackupScopes(meta = null) {
   const current = meta?.policy?.all === false ? Number(meta.policy.collectionId) || 0 : 0;
   const options = ['<option value="">Everything</option>'];
   if (smartCollections.length) options.push(`<optgroup label="Smart Collections">${smartCollections.map(item => `<option value="${Number(item.id)}">✦ ${esc(item.name)}</option>`).join('')}</optgroup>`);
-  if (current && !smartCollections.some(item => Number(item.id) === current)) options.push(`<option value="${current}">✦ ${esc(meta.policy.collectionName || `Collection ${current}`)}</option>`);
+  if (current && !smartCollections.some(item => Number(item.id) === current)) options.push(`<option value="${current}" disabled>✦ ${esc(meta.policy.collectionName || `Collection ${current}`)} (removed)</option>`);
   select.innerHTML = options.join('');
   select.value = current ? String(current) : '';
 }
@@ -386,43 +331,43 @@ async function openBackupDialog(path, meta = null) {
   backupDialog.showModal();
 }
 
-function openRestoreDialog(path) {
+async function openRestoreDialog(path) {
   restorePath = path;
   $('#restoreBackupLabel').textContent = path;
-  $('#restoreDestination').value = '';
+  $('#restoreSummary').textContent = 'Loading…';
+  $('#restoreSources').replaceChildren();
+  $('#restoreFiles').replaceChildren();
+  $('#startRestore').disabled = true;
   restoreDialog.showModal();
-}
-
-async function runBackup(path, action) {
   try {
-    await req(`/api/backup/${action}`, { method: 'POST', body: JSON.stringify({ path }) });
-    state();
+    const backup = await req(`/api/backup/contents?path=${encodeURIComponent(path)}`);
+    if (restorePath !== path || !restoreDialog.open) return;
+    $('#restoreSummary').innerHTML = `<strong>${Number(backup.count).toLocaleString()} files</strong><span>${bytes(backup.bytes)}</span>`;
+    $('#restoreSources').innerHTML = (backup.sources || []).map(source => `<span>${esc(source.sourceName)} · ${Number(source.files).toLocaleString()}</span>`).join('');
+    $('#restoreFiles').innerHTML = (backup.sample || []).map(file => `<div class="restore-file"><strong>${esc(file.filename)}</strong><span>${esc(file.sourceName)} · ${esc(file.path)}</span></div>`).join('');
+    $('#startRestore').disabled = !Number(backup.count);
   } catch (error) {
-    toast(error.message);
+    $('#restoreSummary').innerHTML = `<span class="error">${esc(error.message)}</span>`;
   }
 }
 
-$('#serverStatus').onclick = () => connectionDialog.showModal();
-$('#deviceButton').onclick = () => {
-  $('#deviceName').value = defaultDevice;
-  deviceDialog.showModal();
-};
+async function runBackup(path, action) {
+  try { await req(`/api/backup/${action}`, { method: 'POST', body: JSON.stringify({ path }) }); state(); }
+  catch (error) { toast(error.message); }
+}
+
+$('#deviceButton').onclick = () => { $('#deviceName').value = defaultDevice; deviceDialog.showModal(); };
 $('#showFolderAdd').onclick = () => toggleInline($('#folderAdd'), $('#showFolderAdd'));
 $('#showBackupAdd').onclick = () => toggleInline($('#backupAdd'), $('#showBackupAdd'));
 $('#chooseImport').onclick = () => chooseFolder($('#importPath'));
 $('#chooseBackup').onclick = () => chooseFolder($('#backupLocation'));
-$('#chooseRestore').onclick = () => chooseFolder($('#restoreDestination'));
 $('#refreshBackups').onclick = () => backups(true);
 $$('[data-close]').forEach(button => button.onclick = () => button.closest('dialog').close());
 
 document.addEventListener('click', async event => {
   if (!event.target.closest('[data-cancel-job]')) return;
-  try {
-    await req('/api/job/cancel', { method: 'POST' });
-    state();
-  } catch (error) {
-    toast(error.message);
-  }
+  try { await req('/api/job/cancel', { method: 'POST' }); state(); }
+  catch (error) { toast(error.message); }
 });
 
 $('#folders').addEventListener('click', async event => {
@@ -433,9 +378,7 @@ $('#folders').addEventListener('click', async event => {
     if (remove) await req('/api/folders/remove', { method: 'POST', body: JSON.stringify({ path: remove.dataset.removeFolder }) });
     await state();
     refreshFolderStats();
-  } catch (error) {
-    toast(error.message);
-  }
+  } catch (error) { toast(error.message); }
 });
 
 $('#startImport').onclick = async () => {
@@ -448,37 +391,28 @@ $('#startImport').onclick = async () => {
     $('#showFolderAdd').classList.remove('active');
     await state();
     refreshFolderStats();
-  } catch (error) {
-    toast(error.message);
-  }
+  } catch (error) { toast(error.message); }
 };
 
 $('#saveDevice').onclick = async () => {
   const device = $('#deviceName').value.trim();
   if (!device) return;
-  try {
-    await req('/api/settings', { method: 'POST', body: JSON.stringify({ device }) });
-    deviceDialog.close();
-    state();
-  } catch (error) {
-    toast(error.message);
-  }
+  try { await req('/api/settings', { method: 'POST', body: JSON.stringify({ device }) }); deviceDialog.close(); state(); }
+  catch (error) { toast(error.message); }
 };
 
 $('#addBackup').onclick = async () => {
   const path = $('#backupLocation').value.trim();
   if (!path) return toast('Choose a folder.');
   let meta = backupLocations.find(item => samePath(item.path, path))?.meta || null;
-  if (!meta) {
-    try { meta = (await req(`/api/backup/status?path=${encodeURIComponent(path)}`)).meta; } catch {}
-  }
+  if (!meta) { try { meta = (await req(`/api/backup/status?path=${encodeURIComponent(path)}`)).meta; } catch {} }
   openBackupDialog(path, meta);
 };
 
 $('#initializeBackup').onclick = async () => {
   const collectionId = Number($('#backupScope').value) || 0;
   const collection = smartCollections.find(item => Number(item.id) === collectionId);
-  const collectionName = collection?.name || (collectionId ? $('#backupScope').selectedOptions[0]?.textContent?.replace(/^✦\s*/, '') || '' : '');
+  if (collectionId && !collection) return toast('Choose a current backup scope.');
   const path = backupPath;
   try {
     const result = await req('/api/backup/init', {
@@ -487,7 +421,7 @@ $('#initializeBackup').onclick = async () => {
     });
     await req('/api/backup/policy', {
       method: 'POST',
-      body: JSON.stringify({ path, collectionId: collectionId || null, collectionName })
+      body: JSON.stringify({ path, collectionId: collectionId || null, collectionName: collection?.name || '' })
     });
     backupDialog.close();
     $('#backupLocation').value = '';
@@ -497,35 +431,18 @@ $('#initializeBackup').onclick = async () => {
     await backups(true);
     if (!backupEditing && !result.existing) await runBackup(path, 'update');
     else toast(backupEditing ? 'Saved' : 'Added');
-  } catch (error) {
-    toast(error.message);
-  }
+  } catch (error) { toast(error.message); }
 };
 
 $('#startRestore').onclick = async () => {
-  const destination = $('#restoreDestination').value.trim();
-  if (!destination) return toast('Choose a destination.');
+  if (!restorePath) return;
+  $('#startRestore').disabled = true;
   try {
-    await req('/api/backup/restore', { method: 'POST', body: JSON.stringify({ path: restorePath, destination }) });
+    await req('/api/backup/restore', { method: 'POST', body: JSON.stringify({ path: restorePath, destination: 'Mochimono' }) });
     restoreDialog.close();
     state();
   } catch (error) {
-    toast(error.message);
-  }
-};
-
-$('#saveSettings').onclick = async () => {
-  try {
-    await req('/api/settings', {
-      method: 'POST',
-      body: JSON.stringify({ server: $('#serverUrl').value.trim(), token: $('#serverToken').value })
-    });
-    $('#serverToken').value = '';
-    connectionDialog.close();
-    backupsRenderKey = '';
-    state();
-    backups(true);
-  } catch (error) {
+    $('#startRestore').disabled = false;
     toast(error.message);
   }
 };
@@ -533,5 +450,5 @@ $('#saveSettings').onclick = async () => {
 state();
 refreshFolderStats();
 backups(true);
-setInterval(state, 900);
-setInterval(refreshFolderStats, 2500);
+setInterval(state, 2000);
+setInterval(refreshFolderStats, 5000);
