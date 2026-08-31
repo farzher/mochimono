@@ -6,7 +6,7 @@ if (location.pathname.startsWith('/files')) {
     .client-drop-target{position:fixed;inset:12px;z-index:80;display:grid;place-items:center;border:2px dashed rgba(239,160,154,.55);border-radius:18px;background:rgba(13,12,14,.9);color:#f4eeea;font:700 22px/1.2 Inter,system-ui,sans-serif;opacity:0;pointer-events:none;transition:opacity .12s}
     .client-drop-target.show{opacity:1}
     .client-import-result{position:fixed;z-index:81;right:18px;bottom:18px;width:min(430px,calc(100vw - 36px));padding:13px 14px;border:1px solid #302b30;border-radius:12px;background:#171518;color:#f4eeea;box-shadow:0 18px 60px rgba(0,0,0,.5);font:12px/1.4 Inter,system-ui,sans-serif}
-    .client-import-result[hidden]{display:none!important}.client-import-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.client-import-head strong{font-size:13px}.client-import-close{border:0;background:transparent;color:#8f8583;font-size:18px;cursor:pointer}.client-import-progress{height:4px;margin:9px 0 6px;border-radius:999px;background:#292529;overflow:hidden}.client-import-progress i{display:block;height:100%;background:#efa09a;transition:width .15s}.client-import-meta{color:#aaa19e}.client-import-dupes{max-height:150px;margin-top:8px;overflow:auto}.client-import-examples{padding:5px 0;color:#817876;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.client-import-dupe{padding:6px 0;border-top:1px solid #262326}.client-import-dupe b{display:block;color:#e7dfdc;font-weight:650}.client-import-dupe span{display:block;color:#8f8583;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.client-import-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:9px}.client-import-actions button{border:0;border-radius:7px;padding:6px 9px;background:#eee8e4;color:#171316;font:650 11px Inter,system-ui,sans-serif;cursor:pointer}.client-import-actions button.secondary{background:#282428;color:#cfc6c3}
+    .client-import-result[hidden]{display:none!important}.client-import-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.client-import-head strong{font-size:13px}.client-import-close{border:0;background:transparent;color:#8f8583;font-size:18px;cursor:pointer}.client-import-progress{height:4px;margin:9px 0 6px;border-radius:999px;background:#292529;overflow:hidden}.client-import-progress i{display:block;height:100%;background:#efa09a;transition:width .15s}.client-import-meta{color:#aaa19e}.client-import-dupes{max-height:150px;margin-top:8px;overflow:auto}.client-import-examples{padding:5px 0;color:#817876;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.client-import-dupe{padding:6px 0;border-top:1px solid #262326}.client-import-dupe b{display:block;color:#e7dfdc;font-weight:650}.client-import-dupe span{display:block;color:#8f8583;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   `;
   document.head.append(style);
 
@@ -22,20 +22,10 @@ if (location.pathname.startsWith('/files')) {
     <div class="client-import-head"><strong data-import-title>Adding files</strong><button class="client-import-close" aria-label="Close">×</button></div>
     <div class="client-import-progress"><i data-import-bar></i></div>
     <div class="client-import-meta" data-import-meta></div>
-    <div class="client-import-dupes" data-import-dupes></div>
-    <div class="client-import-actions" hidden><button class="secondary" data-import-refresh>Refresh</button><button data-import-view>View these files</button></div>`;
+    <div class="client-import-dupes" data-import-dupes></div>`;
   document.body.append(result);
 
-  let lastImportId = 0;
   result.querySelector('.client-import-close').onclick = () => { result.hidden = true; };
-  result.querySelector('[data-import-refresh]').onclick = () => location.reload();
-  result.querySelector('[data-import-view]').onclick = () => {
-    if (!lastImportId) return;
-    const url = new URL(location.href);
-    url.searchParams.set('batch', String(lastImportId));
-    url.searchParams.set('sort', 'added');
-    location.href = url;
-  };
 
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const normalizePath = value => String(value || '').replaceAll('\\', '/').replace(/^\/+/, '');
@@ -114,15 +104,32 @@ if (location.pathname.startsWith('/files')) {
     return where || 'Existing object';
   }
 
+  function liveFile(data, item, importId, addedAt) {
+    if (data.existing) return { hash: data.hash, addedAt, exactImportIds: String(importId) };
+    return {
+      hash: data.hash,
+      size: data.size,
+      mime: item.file.type || 'application/octet-stream',
+      filename: data.name,
+      originalPath: data.path,
+      fileDate: new Date(item.file.lastModified || Date.now()).toISOString(),
+      addedAt,
+      createdAt: addedAt,
+      importIds: [importId],
+      exactImportIds: String(importId),
+      searchText: `${data.name} ${data.path}`,
+      reviewed: false,
+      backupCount: 0
+    };
+  }
+
   async function importDropped(files) {
     if (!files.length) return;
     result.hidden = false;
-    lastImportId = 0;
     result.querySelector('[data-import-title]').textContent = 'Adding files';
     result.querySelector('[data-import-bar]').style.width = '0%';
     result.querySelector('[data-import-meta]').textContent = `${files.length.toLocaleString()} file${files.length === 1 ? '' : 's'}`;
     result.querySelector('[data-import-dupes]').replaceChildren();
-    result.querySelector('.client-import-actions').hidden = true;
 
     const label = files.length === 1 ? files[0].path : files[0].path.split('/')[0] || 'Drop';
     const started = await request('/api/client/import/start', {
@@ -130,7 +137,8 @@ if (location.pathname.startsWith('/files')) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ label })
     });
-    lastImportId = Number(started.importId) || 0;
+    const importId = Number(started.importId) || 0;
+    window.mochimonoAddedBatch?.start(importId);
 
     let added = 0;
     let existing = 0;
@@ -151,12 +159,18 @@ if (location.pathname.startsWith('/files')) {
         body: item.file
       });
       if (data.ignored) ignored++;
-      else if (data.existing) {
-        existing++;
-        duplicates.push(data);
-      } else added++;
+      else {
+        const addedAt = new Date().toISOString();
+        window.mochimonoAddedBatch?.add(data.hash, liveFile(data, item, importId, addedAt));
+        if (data.existing) {
+          existing++;
+          duplicates.push(data);
+        } else added++;
+      }
       result.querySelector('[data-import-bar]').style.width = `${(index + 1) / files.length * 100}%`;
     }
+
+    await window.mochimonoAddedBatch?.finish();
 
     const total = files.length;
     result.querySelector('[data-import-title]').textContent = 'Added to Mochimono';
@@ -173,7 +187,6 @@ if (location.pathname.startsWith('/files')) {
         const prior = item.previous?.[0];
         return `<div class="client-import-dupe"><b>${esc(item.name)}</b><span>${esc(prior ? priorText(prior) : 'Same file already stored')}</span></div>`;
       }).join('')}` : '';
-    result.querySelector('.client-import-actions').hidden = false;
   }
 
   let dragDepth = 0;
