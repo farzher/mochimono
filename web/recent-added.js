@@ -2,30 +2,7 @@ const params = new URL(location.href).searchParams;
 const addedMode = params.get('sort') === 'added';
 const batchId = Math.max(0, Number(params.get('batch') || 0) || 0);
 const modeKey = `${addedMode ? 'added' : 'file'}:${batchId || ''}`;
-const CACHE_MODE_KEY = 'mochimono-catalog-view-mode';
 const PENDING_SORT_KEY = 'mochimono-pending-sort';
-
-async function clearCatalogCache() {
-  if (!('indexedDB' in window)) return;
-  await new Promise(resolve => {
-    let settled = false;
-    const done = () => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    };
-    const request = indexedDB.deleteDatabase('mochimono-catalog');
-    request.onsuccess = done;
-    request.onerror = done;
-    request.onblocked = () => setTimeout(done, 80);
-    setTimeout(done, 300);
-  });
-}
-
-if (localStorage.getItem(CACHE_MODE_KEY) !== modeKey) {
-  await clearCatalogCache();
-  localStorage.setItem(CACHE_MODE_KEY, modeKey);
-}
 
 function ids(value) {
   return String(value || '').split(',').map(Number).filter(Boolean);
@@ -36,17 +13,33 @@ window.fetch = async function(input, init) {
   const response = await nativeFetch(input, init);
   try {
     const url = new URL(typeof input === 'string' ? input : input.url, location.href);
-    if (url.pathname !== '/api/catalog' || !response.ok) return response;
+    if (!response.ok) return response;
+
+    if (url.pathname === '/api/catalog/version') {
+      const data = await response.clone().json();
+      const headers = new Headers(response.headers);
+      headers.delete('content-length');
+      headers.set('content-type', 'application/json; charset=utf-8');
+      return new Response(JSON.stringify({ ...data, version: `${data.version}:${modeKey}` }), {
+        status: response.status,
+        statusText: response.statusText,
+        headers
+      });
+    }
+
+    if (url.pathname !== '/api/catalog') return response;
     const data = await response.clone().json();
     if (!Array.isArray(data.files)) return response;
     let files = data.files;
     if (batchId) files = files.filter(file => ids(file.exactImportIds).includes(batchId));
     if (addedMode) files = files.map(file => ({ ...file, fileDate: file.addedAt || file.createdAt }));
-    const body = JSON.stringify({ ...data, files });
-    return new Response(body, {
+    const headers = new Headers(response.headers);
+    headers.delete('content-length');
+    headers.set('content-type', 'application/json; charset=utf-8');
+    return new Response(JSON.stringify({ ...data, files }), {
       status: response.status,
       statusText: response.statusText,
-      headers: { ...Object.fromEntries(response.headers.entries()), 'content-type': 'application/json; charset=utf-8' }
+      headers
     });
   } catch {
     return response;
