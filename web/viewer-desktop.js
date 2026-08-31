@@ -6,11 +6,12 @@ if (viewer && stage && media) {
   const MIN_SCALE = 1;
   const MAX_SCALE = 4;
   const PAN_START = 5;
-  const CLICK_DELAY = 360;
+  const DOUBLE_CLICK_MS = 380;
+  const DOUBLE_CLICK_DISTANCE = 44;
 
   let zoom = { scale: 1, x: 0, y: 0 };
-  let pan = null;
-  let suppressClick = false;
+  let press = null;
+  let lastClick = null;
   let clickTimer = 0;
 
   const image = () => media.querySelector('img');
@@ -31,6 +32,17 @@ if (viewer && stage && media) {
 
   function protectImages() {
     for (const item of media.querySelectorAll('img')) item.draggable = false;
+  }
+
+  function clearClick() {
+    clearTimeout(clickTimer);
+    clickTimer = 0;
+    lastClick = null;
+  }
+
+  function cancelPendingChrome() {
+    clearTimeout(clickTimer);
+    clickTimer = 0;
   }
 
   function clampPan(scale = zoom.scale, x = zoom.x, y = zoom.y) {
@@ -63,8 +75,8 @@ if (viewer && stage && media) {
 
   function resetZoom(animate = false) {
     zoom = { scale: 1, x: 0, y: 0 };
-    pan = null;
-    suppressClick = false;
+    press = null;
+    clearClick();
     stage.classList.remove('viewer-desktop-panning');
     applyZoom(animate);
   }
@@ -105,6 +117,16 @@ if (viewer && stage && media) {
     return target.closest?.('.viewer-nav,.viewer-bar,.viewer-collections,.viewer-info,dialog,video');
   }
 
+  function rememberSingleClick(clientX, clientY) {
+    lastClick = { time: performance.now(), x: clientX, y: clientY };
+    cancelPendingChrome();
+    clickTimer = setTimeout(() => {
+      clickTimer = 0;
+      lastClick = null;
+      if (!viewer.hidden) toggleChrome();
+    }, DOUBLE_CLICK_MS + 20);
+  }
+
   protectImages();
   new MutationObserver(() => {
     protectImages();
@@ -118,38 +140,106 @@ if (viewer && stage && media) {
     if (event.target.closest?.('img')) event.preventDefault();
   });
 
-  stage.addEventListener('dblclick', event => {
-    if (viewer.hidden || event.button > 0 || event.pointerType === 'touch') return;
-    if (!event.target.closest?.('#viewer-media img')) return;
-    clearTimeout(clickTimer);
-    clickTimer = 0;
+  stage.addEventListener('pointerdown', event => {
+    if (viewer.hidden || event.pointerType !== 'mouse' || event.button !== 0) return;
+    if (activeUi(event.target)) return;
+    const imageHit = Boolean(event.target.closest?.('#viewer-media img'));
+    if (!imageHit) return;
+
+    const doubleCandidate = Boolean(lastClick &&
+      performance.now() - lastClick.time <= DOUBLE_CLICK_MS &&
+      Math.hypot(event.clientX - lastClick.x, event.clientY - lastClick.y) <= DOUBLE_CLICK_DISTANCE);
+    if (doubleCandidate) cancelPendingChrome();
+
+    press = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      startZoomX: zoom.x,
+      startZoomY: zoom.y,
+      startedZoomed: zoomed(),
+      doubleCandidate,
+      panning: false
+    };
     window.getSelection()?.removeAllRanges();
-    toggleZoom(event.clientX, event.clientY);
+    event.preventDefault();
+  }, true);
+
+  stage.addEventListener('pointermove', event => {
+    if (!press || event.pointerId !== press.pointerId) return;
+    const dx = event.clientX - press.x;
+    const dy = event.clientY - press.y;
+    if (!press.startedZoomed || press.doubleCandidate || (!press.panning && Math.hypot(dx, dy) < PAN_START)) return;
+
+    if (!press.panning) {
+      press.panning = true;
+      clearClick();
+      try { stage.setPointerCapture(event.pointerId); } catch {}
+      stage.classList.add('viewer-desktop-panning');
+    }
+    zoom.x = press.startZoomX + dx;
+    zoom.y = press.startZoomY + dy;
+    applyZoom();
     event.preventDefault();
     event.stopImmediatePropagation();
   }, true);
 
+  stage.addEventListener('pointerup', event => {
+    if (!press || event.pointerId !== press.pointerId) return;
+    const current = press;
+    press = null;
+    const travel = Math.hypot(event.clientX - current.x, event.clientY - current.y);
+    stage.classList.remove('viewer-desktop-panning');
+    try { stage.releasePointerCapture(event.pointerId); } catch {}
+
+    if (current.panning) {
+      clearClick();
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    if (travel > PAN_START) {
+      clearClick();
+      event.preventDefault();
+      return;
+    }
+
+    if (current.doubleCandidate) {
+      clearClick();
+      toggleZoom(event.clientX, event.clientY);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    rememberSingleClick(event.clientX, event.clientY);
+    event.preventDefault();
+  }, true);
+
+  stage.addEventListener('pointercancel', event => {
+    if (!press || event.pointerId !== press.pointerId) return;
+    press = null;
+    stage.classList.remove('viewer-desktop-panning');
+    clearClick();
+  }, true);
+
+  // We recognize the two clicks ourselves. Suppress the browser's native
+  // dblclick behavior so it cannot select/drag the image or fire a second zoom.
+  stage.addEventListener('dblclick', event => {
+    if (!event.target.closest?.('#viewer-media img')) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+
+  // Blank viewer area toggles chrome immediately. Image clicks are handled by
+  // the pointer state machine above so a double-click never flashes the UI.
   stage.addEventListener('click', event => {
     if (viewer.hidden || event.button > 0 || activeUi(event.target)) return;
-    if (suppressClick) {
-      suppressClick = false;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      return;
-    }
-
     if (event.target.closest?.('#viewer-media img')) {
-      clearTimeout(clickTimer);
-      if (event.detail >= 2) return;
-      clickTimer = setTimeout(() => {
-        clickTimer = 0;
-        if (!viewer.hidden) toggleChrome();
-      }, CLICK_DELAY);
       event.preventDefault();
-      event.stopImmediatePropagation();
       return;
     }
-
     toggleChrome();
   }, true);
 
@@ -160,60 +250,10 @@ if (viewer && stage && media) {
     const delta = event.deltaY * multiplier;
     const sensitivity = event.ctrlKey ? .006 : .0015;
     setScaleAt(zoom.scale * Math.exp(-delta * sensitivity), event.clientX, event.clientY);
+    clearClick();
     event.preventDefault();
     event.stopImmediatePropagation();
   }, { passive: false, capture: true });
-
-  stage.addEventListener('pointerdown', event => {
-    if (event.pointerType !== 'mouse' || event.button !== 0 || !zoomed()) return;
-    if (!event.target.closest?.('#viewer-media img')) return;
-    pan = {
-      pointerId: event.pointerId,
-      x: event.clientX,
-      y: event.clientY,
-      startX: zoom.x,
-      startY: zoom.y,
-      active: false
-    };
-    window.getSelection()?.removeAllRanges();
-  }, true);
-
-  stage.addEventListener('pointermove', event => {
-    if (!pan || event.pointerId !== pan.pointerId) return;
-    const dx = event.clientX - pan.x;
-    const dy = event.clientY - pan.y;
-    if (!pan.active && Math.hypot(dx, dy) < PAN_START) return;
-    if (!pan.active) {
-      pan.active = true;
-      try { stage.setPointerCapture(event.pointerId); } catch {}
-      stage.classList.add('viewer-desktop-panning');
-      clearTimeout(clickTimer);
-      clickTimer = 0;
-    }
-    zoom.x = pan.startX + dx;
-    zoom.y = pan.startY + dy;
-    applyZoom();
-    event.preventDefault();
-    event.stopImmediatePropagation();
-  }, true);
-
-  stage.addEventListener('pointerup', event => {
-    if (!pan || event.pointerId !== pan.pointerId) return;
-    const active = pan.active;
-    pan = null;
-    stage.classList.remove('viewer-desktop-panning');
-    if (!active) return;
-    suppressClick = true;
-    try { stage.releasePointerCapture(event.pointerId); } catch {}
-    event.preventDefault();
-    event.stopImmediatePropagation();
-  }, true);
-
-  stage.addEventListener('pointercancel', event => {
-    if (!pan || event.pointerId !== pan.pointerId) return;
-    pan = null;
-    stage.classList.remove('viewer-desktop-panning');
-  }, true);
 
   new MutationObserver(() => {
     if (viewer.hidden) resetZoom();
