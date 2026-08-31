@@ -16,6 +16,7 @@ let protection = {
   backed: new Set(), verifiedBacked: new Set(), safeLocal: new Set(), localNeeds: new Set(), needs: new Set(), onlyLocal: new Set(), notLocal: new Set()
 };
 let lastRefresh = 0;
+let lastVersion = '';
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 const words = value => normalizeText(value).split(' ').filter(Boolean);
@@ -112,6 +113,14 @@ async function damagedPrimaryHashes() {
   return hashes;
 }
 
+async function providerVersion() {
+  try {
+    const response = await fetch('/api/catalog/version', { cache: 'no-store' });
+    if (!response.ok) return '';
+    return String((await response.json()).version || '');
+  } catch { return ''; }
+}
+
 async function rebuildProtection() {
   const backed = new Set();
   const verifiedBacked = new Set();
@@ -184,7 +193,14 @@ async function applySelection() {
   }
 }
 
-export async function refreshLocations() {
+export async function refreshLocations(force = false) {
+  if (!force && Date.now() - lastRefresh < 30_000) return;
+  const version = await providerVersion();
+  if (!force && lastVersion && version && version === lastVersion) {
+    lastRefresh = Date.now();
+    return;
+  }
+
   lastRefresh = Date.now();
   let localData = { locations: [], files: [] };
   let driveData = { drives: [] };
@@ -204,6 +220,7 @@ export async function refreshLocations() {
   copies = locationCopies(localData);
   driveHashes = new Map();
   await rebuildProtection();
+  lastVersion = version || lastVersion;
   const search = new Map([...copies].map(([hash, locations]) => [hash, locationTokens(locations)]));
   library()?.setLocationSearch?.(search);
   renderOptions();
@@ -214,7 +231,7 @@ export async function refreshLocations() {
 }
 
 function refreshIfStale() {
-  if (Date.now() - lastRefresh > 30_000) refreshLocations();
+  refreshLocations(false).catch(console.error);
 }
 
 window.mochimonoLocations = {
@@ -234,7 +251,7 @@ window.mochimonoLocations = {
     select.dispatchEvent(new CustomEvent('mochimono:where-selected', { bubbles: true, detail: { value: wanted } }));
     return true;
   },
-  refresh: refreshLocations
+  refresh: () => refreshLocations(true)
 };
 
 select.addEventListener('change', () => applySelection().catch(console.error));
@@ -242,6 +259,6 @@ new MutationObserver(syncOrganizationLabels).observe(source, { childList: true }
 new MutationObserver(syncOrganizationLabels).observe(collection, { childList: true });
 new MutationObserver(syncOrganizationLabels).observe(folderbar, { childList: true, subtree: true });
 syncOrganizationLabels();
-refreshLocations().catch(console.error);
+refreshLocations(true).catch(console.error);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshIfStale(); });
 window.addEventListener('focus', refreshIfStale, { passive: true });
