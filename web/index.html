@@ -17,18 +17,12 @@
   <main class="shell">
     <header class="topbar">
       <div class="app-brand"><span class="mini" aria-hidden="true"></span><h1>Mochimono</h1></div>
-      <div class="top-actions">
-        <div id="stats" class="storage-head"></div>
-        <button id="logout" class="logout-button" hidden>Log out</button>
-      </div>
+      <div class="top-actions"><div id="stats" class="storage-head"></div><button id="logout" class="logout-button" hidden>Log out</button></div>
     </header>
 
     <section id="login" class="login" hidden>
       <h2>Connect</h2>
-      <form id="login-form">
-        <input id="token" type="password" autocomplete="current-password" placeholder="Server token" required>
-        <button>Open</button>
-      </form>
+      <form id="login-form"><input id="token" type="password" autocomplete="current-password" placeholder="Server token" required><button>Open</button></form>
       <p id="login-error" class="error"></p>
     </section>
 
@@ -38,21 +32,9 @@
           <input id="search" class="search" type="search" placeholder="Search files and paths" title="Search normally, or use name:, path:, source:, type:, ext:, or year:">
           <select id="source" aria-label="Source"><option value="">All sources</option></select>
           <select id="collectionFilter" aria-label="Collection"><option value="">Collections</option></select>
-          <select id="typeFilter" aria-label="File type">
-            <option value="">All files</option>
-            <option value="media">Media</option>
-            <option value="image">Images</option>
-            <option value="video">Video</option>
-            <option value="audio">Audio</option>
-            <option value="application">Docs</option>
-            <option value="other">Other</option>
-          </select>
-          <select id="sort" aria-label="Sort">
-            <option value="date-desc">Newest</option>
-            <option value="date-added">Recently added</option>
-            <option value="date-asc">Oldest</option>
-            <option value="size-desc">Largest</option>
-          </select>
+          <select id="typeFilter" aria-label="File type"><option value="">All files</option><option value="media">Media</option><option value="image">Images</option><option value="video">Video</option><option value="audio">Audio</option><option value="application">Docs</option><option value="other">Other</option></select>
+          <select id="sort" aria-label="Sort"><option value="date-desc">Newest</option><option value="date-added">Recently added</option><option value="date-asc">Oldest</option><option value="size-desc">Largest</option></select>
+          <span id="fileCount" class="file-count" aria-live="polite"></span>
           <button id="selectFiles" class="select-toggle" hidden aria-hidden="true" tabindex="-1">Select</button>
           <div id="mediaSizeControl" class="media-sizes" aria-label="Preview size">
             <input id="mediaSize" type="range" min="96" max="420" value="170" hidden>
@@ -67,49 +49,22 @@
             <button data-view="folders" title="Folders" aria-label="Folders"><svg class="view-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.75 6.25h5l1.6-2h3.2l1.25 2h3.45v9.5H2.75z"/></svg></button>
           </div>
         </div>
-        <div id="collectionStrip" class="collection-strip" hidden></div>
         <div id="selectionBar" class="selection-bar" hidden>
-          <strong id="selectionCount">0 selected</strong>
-          <button id="selectAll">Select all</button>
-          <button id="selectionCollection">Add to collection</button>
-          <span class="selection-spacer"></span>
-          <button id="selectionDelete">Delete</button>
-          <button id="selectionIgnore" class="selection-danger">Delete + Ignore</button>
-          <button id="selectionClear" aria-label="Clear selection" title="Clear selection">×</button>
+          <strong id="selectionCount">0 selected</strong><button id="selectAll">Select all</button><button id="selectionCollection">Add to collection</button><span class="selection-spacer"></span><button id="selectionDelete">Delete</button><button id="selectionIgnore" class="selection-danger">Delete + Ignore</button><button id="selectionClear" aria-label="Clear selection" title="Clear selection">×</button>
         </div>
-
         <div id="folderbar" class="folderbar" hidden></div>
         <div id="files" class="files grid"></div>
         <div id="scroll-sentinel" style="height:1px" hidden></div>
         <nav id="dateRail" class="date-rail" aria-label="Browse library" hidden></nav>
       </section>
-
-      <details class="protection">
-        <summary>Protection</summary>
-        <div id="drives" class="drives"></div>
-      </details>
+      <details class="protection"><summary>Protection</summary><div id="drives" class="drives"></div></details>
     </div>
   </main>
 
   <div id="viewer" class="viewer" hidden>
-    <div class="viewer-bar">
-      <button id="viewer-close" class="viewer-icon" aria-label="Close">×</button>
-      <div class="viewer-title"><strong id="viewer-name"></strong><span id="viewer-meta"></span></div>
-      <div class="viewer-actions">
-        <button id="viewer-info-button" class="viewer-action" type="button">Info</button>
-        <a id="viewer-open" class="viewer-action" target="_blank">Open</a>
-        <details id="viewer-menu" class="viewer-menu">
-          <summary aria-label="More">•••</summary>
-          <div><button id="delete" class="viewer-menu-action">Delete</button><button id="delete-ignore" class="viewer-menu-action danger-text">Delete + Ignore</button></div>
-        </details>
-      </div>
-    </div>
+    <div class="viewer-bar"><button id="viewer-close" class="viewer-icon" aria-label="Close">×</button><div class="viewer-title"><strong id="viewer-name"></strong><span id="viewer-meta"></span></div><div class="viewer-actions"><button id="viewer-info-button" class="viewer-action" type="button">Info</button><a id="viewer-open" class="viewer-action" target="_blank">Open</a><details id="viewer-menu" class="viewer-menu"><summary aria-label="More">•••</summary><div><button id="delete" class="viewer-menu-action">Delete</button><button id="delete-ignore" class="viewer-menu-action danger-text">Delete + Ignore</button></div></details></div></div>
     <div id="viewerCollections" class="viewer-collections"></div>
-    <div id="viewer-stage" class="viewer-stage">
-      <button id="viewer-prev" class="viewer-nav viewer-prev" aria-label="Previous">‹</button>
-      <div id="viewer-media" class="viewer-media"></div>
-      <button id="viewer-next" class="viewer-nav viewer-next" aria-label="Next">›</button>
-    </div>
+    <div id="viewer-stage" class="viewer-stage"><button id="viewer-prev" class="viewer-nav viewer-prev" aria-label="Previous">‹</button><div id="viewer-media" class="viewer-media"></div><button id="viewer-next" class="viewer-nav viewer-next" aria-label="Next">›</button></div>
     <aside id="viewerInfo" class="viewer-info" hidden></aside>
   </div>
 
