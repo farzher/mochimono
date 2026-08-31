@@ -6,12 +6,10 @@ const viewerNext = document.querySelector('#viewer-next');
 
 const style = document.createElement('style');
 style.textContent = `
-  html.viewer-open{overflow:hidden!important;overscroll-behavior:none!important}
+  html.viewer-open,html.viewer-open body{overflow:hidden!important;overscroll-behavior:none!important}
   .viewer{overscroll-behavior:none}
+  .viewer:not([hidden]){inset:0!important;width:auto!important;height:auto!important}
   .viewer:not([hidden]) .viewer-stage{touch-action:none!important;overscroll-behavior:none!important}
-  .viewer.viewer-ui-hidden{cursor:auto!important}
-  .viewer.viewer-ui-hidden .viewer-bar{opacity:1!important}
-  .viewer.viewer-ui-hidden .viewer-bar>*{pointer-events:auto!important}
   .viewer:not(.viewer-controls-hidden) .viewer-bar,
   .viewer:not(.viewer-controls-hidden) .viewer-collections{opacity:1!important}
   .viewer:not(.viewer-controls-hidden) .viewer-nav:not(:disabled){opacity:.68!important;pointer-events:auto!important}
@@ -35,20 +33,14 @@ style.textContent = `
 `;
 document.head.append(style);
 
-function clearLegacyFade() {
-  viewer?.classList.remove('viewer-ui-hidden');
-}
-
 function showControls() {
   if (!viewer) return;
   viewer.classList.remove('viewer-controls-hidden');
-  clearLegacyFade();
 }
 
 function toggleControls() {
   if (!viewer || viewer.hidden) return;
   viewer.classList.toggle('viewer-controls-hidden');
-  clearLegacyFade();
 }
 
 window.mochimonoViewerControls = { show: showControls, toggle: toggleControls };
@@ -66,7 +58,9 @@ function lockPage() {
     top: document.body.style.top,
     left: document.body.style.left,
     right: document.body.style.right,
-    width: document.body.style.width
+    width: document.body.style.width,
+    overflow: document.body.style.overflow,
+    overscrollBehavior: document.body.style.overscrollBehavior
   };
   document.documentElement.classList.add('viewer-open');
   document.body.style.position = 'fixed';
@@ -74,6 +68,8 @@ function lockPage() {
   document.body.style.left = '0';
   document.body.style.right = '0';
   document.body.style.width = '100%';
+  document.body.style.overflow = 'hidden';
+  document.body.style.overscrollBehavior = 'none';
 }
 
 function unlockPage() {
@@ -86,6 +82,8 @@ function unlockPage() {
     document.body.style.left = savedBodyStyle.left;
     document.body.style.right = savedBodyStyle.right;
     document.body.style.width = savedBodyStyle.width;
+    document.body.style.overflow = savedBodyStyle.overflow;
+    document.body.style.overscrollBehavior = savedBodyStyle.overscrollBehavior;
   }
   savedBodyStyle = null;
   scrollTo(0, lockedScrollY);
@@ -93,7 +91,6 @@ function unlockPage() {
 
 function syncViewerOpen() {
   if (!viewer) return;
-  clearLegacyFade();
   if (viewer.hidden) unlockPage();
   else {
     lockPage();
@@ -124,9 +121,7 @@ function desktopZoomed() {
 }
 
 function touchZoomed() {
-  return stage?.classList.contains('viewer-touch-zoomed') || (
-    stage?.classList.contains('viewer-zoomed') && !desktopZoomed()
-  );
+  return stage?.classList.contains('viewer-touch-zoomed');
 }
 
 function clampDesktopPan(scale = desktopZoom.scale, x = desktopZoom.x, y = desktopZoom.y) {
