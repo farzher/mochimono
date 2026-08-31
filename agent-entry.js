@@ -1,4 +1,5 @@
 import './agent-folder-stats.js';
+import './agent-backup-policy.js';
 import { startThumbnailAgent } from './lib/thumbnail-agent.js';
 import { startMediaMetadataAgent } from './lib/media-metadata-agent.js';
 
