@@ -1,129 +1,148 @@
 const files = document.querySelector('#files');
 const THUMB_VERSION = 3;
 const states = new Map();
+const requestedAt = new Map();
 let scanFrame = 0;
-let requestTimer = 0;
-const requested = new Map();
-const pending = new Map();
+let checkTimer = 0;
+let checking = false;
 
-function kind(card) {
-  if (card.classList.contains('video-card')) return 'video';
-  return card.classList.contains('media-card') ? 'image' : '';
-}
-
-function filename(card) {
-  return card.title || card.querySelector('strong')?.textContent || '';
-}
+const kind = card => card.classList.contains('video-card') ? 'video' : card.classList.contains('media-card') ? 'image' : '';
+const filename = card => card.dataset.filename || card.querySelector('strong')?.textContent || '';
+const thumbUrl = hash => `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
 
 function visible(card) {
   const rect = card.getBoundingClientRect();
   return rect.bottom >= -200 && rect.top <= innerHeight + 200;
 }
 
-function thumbUrl(hash) {
-  return `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
-}
-
-function mediaBox(card) {
-  return card.querySelector('.media-thumb');
+function cardsFor(hash) {
+  return files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"]`);
 }
 
 function ensurePending(card) {
-  const box = mediaBox(card);
-  if (!box || box.querySelector('.cached-thumb')) return;
-  if (!box.querySelector('.video-thumb-pending')) {
-    const span = document.createElement('span');
-    span.className = 'video-thumb-pending';
-    span.dataset.videoThumb = card.dataset.hash || '';
-    box.prepend(span);
-  }
+  const box = card.querySelector('.media-thumb');
+  if (!box || box.querySelector('.cached-thumb,.video-thumb-pending')) return;
+  const pending = document.createElement('span');
+  pending.className = 'video-thumb-pending';
+  pending.dataset.videoThumb = card.dataset.hash || '';
+  box.prepend(pending);
 }
 
-function apply(hash, source) {
-  const cards = files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"]`);
-  for (const card of cards) {
-    const box = mediaBox(card);
-    if (!box) continue;
+function applyDimensions(hash, width, height) {
+  if (!width || !height) return;
+  const ratio = Math.max(.65, Math.min(2.1, width / height));
+  for (const card of cardsFor(hash)) if (card.classList.contains('media-card')) card.style.setProperty('--ratio', ratio);
+}
+
+function applyReady(hash, width = 0, height = 0) {
+  const state = states.get(hash) || {};
+  state.ready = true;
+  state.loading = false;
+  state.width = width || state.width || 0;
+  state.height = height || state.height || 0;
+  states.set(hash, state);
+  applyDimensions(hash, state.width, state.height);
+
+  for (const card of cardsFor(hash)) {
+    const box = card.querySelector('.media-thumb');
+    if (!box || box.querySelector('img.cached-thumb')) continue;
     const image = document.createElement('img');
     image.className = 'cached-thumb server-thumb';
     image.decoding = 'async';
     image.alt = filename(card);
-    image.src = source.src;
+    image.onload = () => {
+      if (image.naturalWidth && image.naturalHeight) applyDimensions(hash, image.naturalWidth, image.naturalHeight);
+    };
+    image.onerror = () => {
+      image.remove();
+      const current = states.get(hash) || {};
+      current.ready = false;
+      current.loading = false;
+      states.set(hash, current);
+      scheduleCheck(300);
+    };
     const old = box.querySelector('img,.video-thumb-pending');
-    if (old) old.replaceWith(image);
-    else box.prepend(image);
-    if (source.naturalWidth && source.naturalHeight && card.classList.contains('media-card')) {
-      const ratio = Math.max(.65, Math.min(2.1, source.naturalWidth / source.naturalHeight));
-      card.style.setProperty('--ratio', ratio);
-    }
+    old ? old.replaceWith(image) : box.prepend(image);
+    image.src = thumbUrl(hash);
   }
 }
 
-function queueRepair(card) {
-  const hash = card.dataset.hash;
+async function requestRepairs(cards) {
   const now = Date.now();
-  if (!hash || now - (requested.get(hash) || 0) < 10_000) return;
-  requested.set(hash, now);
-  pending.set(hash, {
-    hash,
-    filename: filename(card),
-    kind: kind(card),
-    mime: `${kind(card)}/unknown`
-  });
-  if (!requestTimer) requestTimer = setTimeout(flushRepairs, 30);
-}
-
-async function flushRepairs() {
-  requestTimer = 0;
-  const batch = [...pending.values()].slice(0, 200);
-  batch.forEach(item => pending.delete(item.hash));
+  const batch = [];
+  for (const card of cards) {
+    const hash = card.dataset.hash;
+    if (!hash || now - (requestedAt.get(hash) || 0) < 10_000) continue;
+    requestedAt.set(hash, now);
+    batch.push({ hash, filename: filename(card), kind: kind(card), mime: `${kind(card)}/unknown` });
+  }
   if (!batch.length) return;
   try {
     await fetch('/api/client/previews/request', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ files: batch })
+      body: JSON.stringify({ files: batch.slice(0, 200) })
     });
   } catch {}
-  if (pending.size) requestTimer = setTimeout(flushRepairs, 60);
 }
 
-function probe(card, force = false) {
-  const hash = card.dataset.hash;
-  if (!hash || !kind(card)) return;
-  const state = states.get(hash) || {};
-  const now = Date.now();
-  if (state.ready || state.loading) return;
-  if (!force && state.nextProbe && state.nextProbe > now) return;
-  state.loading = true;
-  states.set(hash, state);
-  ensurePending(card);
+async function checkVisible() {
+  checkTimer = 0;
+  if (checking || document.hidden || !files) return;
+  const cards = [...files.querySelectorAll('.media-card[data-hash]')].filter(visible);
+  if (!cards.length) return;
 
-  const image = new Image();
-  image.decoding = 'async';
-  image.onload = () => {
-    states.set(hash, { ready: true, loading: false });
-    requested.delete(hash);
-    apply(hash, image);
-  };
-  image.onerror = () => {
-    const latest = states.get(hash) || {};
-    latest.loading = false;
-    latest.ready = false;
-    latest.nextProbe = Date.now() + 1800;
-    states.set(hash, latest);
-    if (visible(card)) queueRepair(card);
-  };
-  image.src = thumbUrl(hash);
+  const missingCards = [];
+  const hashes = [];
+  for (const card of cards) {
+    const hash = card.dataset.hash;
+    ensurePending(card);
+    const state = states.get(hash) || {};
+    if (state.ready) {
+      applyReady(hash, state.width, state.height);
+      continue;
+    }
+    if (!hashes.includes(hash)) hashes.push(hash);
+    missingCards.push(card);
+  }
+  if (!hashes.length) return;
+
+  checking = true;
+  try {
+    const response = await fetch('/api/thumbs/check', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hashes: hashes.slice(0, 500) })
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    const ready = new Map((data.thumbnails || []).map(item => [item.hash, item]));
+    for (const hash of hashes) {
+      const thumbnail = ready.get(hash);
+      if (thumbnail) applyReady(hash, Number(thumbnail.width), Number(thumbnail.height));
+      else {
+        const state = states.get(hash) || {};
+        state.ready = false;
+        states.set(hash, state);
+      }
+    }
+    await requestRepairs(missingCards.filter(card => !ready.has(card.dataset.hash)));
+  } catch {}
+  finally {
+    checking = false;
+    if ([...files.querySelectorAll('.media-card[data-hash]')].some(card => visible(card) && !states.get(card.dataset.hash)?.ready)) scheduleCheck(1200);
+  }
+}
+
+function scheduleCheck(delay = 40) {
+  clearTimeout(checkTimer);
+  checkTimer = setTimeout(checkVisible, delay);
 }
 
 function scan() {
   scanFrame = 0;
   if (document.hidden || !files) return;
-  for (const card of files.querySelectorAll('.media-card[data-hash]')) {
-    if (!visible(card)) continue;
-    probe(card);
-  }
+  scheduleCheck(30);
 }
 
 function schedule() {
@@ -135,6 +154,5 @@ if (files) {
   addEventListener('scroll', schedule, { passive: true });
   addEventListener('resize', schedule, { passive: true });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(); });
-  setInterval(schedule, 1800);
   schedule();
 }
