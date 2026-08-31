@@ -49,7 +49,6 @@ if (viewer && stage && media && prev && next) {
     const current = image();
     const active = zoomed();
     stage.classList.toggle('viewer-touch-zoomed', active);
-    stage.classList.toggle('viewer-zoomed', active);
     if (!current) return;
     const clamped = clampPan();
     zoom.x = clamped.x;
