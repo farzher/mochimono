@@ -9,10 +9,17 @@ if (viewer && stage && media) {
   const DOUBLE_TAP_DISTANCE = 44;
   const TAP_TRAVEL = 16;
   const PAN_START = 16;
-  const DOUBLE_TAP_PAN_CANCEL = 30;
+  const ZOOMED_DOUBLE_TAP_CANCEL = 30;
   const SIDE_EDGE = .36;
   const VIDEO_EDGE = .22;
   const MAX_SCALE = 4;
+
+  const style = document.createElement('style');
+  style.textContent = `
+    .viewer-stage.viewer-touch-image{touch-action:none}
+    .viewer-stage.viewer-touch-image .viewer-media>img{touch-action:none}
+  `;
+  document.head.append(style);
 
   const pointers = new Map();
   let zoom = { scale: 1, x: 0, y: 0 };
@@ -25,10 +32,19 @@ if (viewer && stage && media) {
   const zoomed = () => zoom.scale > 1.01;
   const toggleChrome = () => window.mochimonoViewerControls?.toggle();
 
+  function syncMediaMode() {
+    stage.classList.toggle('viewer-touch-image', Boolean(image()));
+  }
+
   function clearTap() {
     clearTimeout(tapTimer);
     tapTimer = 0;
     lastTap = null;
+  }
+
+  function cancelPendingChrome() {
+    clearTimeout(tapTimer);
+    tapTimer = 0;
   }
 
   function clampPan(scale = zoom.scale, x = zoom.x, y = zoom.y) {
@@ -96,15 +112,14 @@ if (viewer && stage && media) {
     return Math.hypot(a.x - b.x, a.y - b.y);
   }
 
-  function currentDoubleCandidate(clientX, clientY, imageHit) {
+  function isDoubleCandidate(clientX, clientY, imageHit) {
     if (!imageHit || !lastTap?.image) return false;
-    const now = performance.now();
-    return now - lastTap.time <= DOUBLE_TAP_MS &&
+    return performance.now() - lastTap.time <= DOUBLE_TAP_MS &&
       Math.hypot(clientX - lastTap.x, clientY - lastTap.y) <= DOUBLE_TAP_DISTANCE;
   }
 
   function beginPinch() {
-    const values = [...pointers.values()];
+    const values = [...pointers.values()].filter(point => point.image);
     if (values.length < 2 || !image()) return;
     const [a, b] = values;
     const cx = (a.x + b.x) / 2;
@@ -121,7 +136,7 @@ if (viewer && stage && media) {
   }
 
   function updatePinch() {
-    const values = [...pointers.values()];
+    const values = [...pointers.values()].filter(point => point.image);
     if (!pinch || values.length < 2) return;
     const [a, b] = values;
     const cx = (a.x + b.x) / 2;
@@ -132,38 +147,25 @@ if (viewer && stage && media) {
     applyZoom();
   }
 
+  function sideButton(clientX, video = false) {
+    const edge = video ? VIDEO_EDGE : SIDE_EDGE;
+    if (clientX < innerWidth * edge) return prev;
+    if (clientX > innerWidth * (1 - edge)) return next;
+    return null;
+  }
+
   function navigateAt(clientX, video = false) {
     if (zoomed()) return false;
-    const edge = video ? VIDEO_EDGE : SIDE_EDGE;
-    const button = clientX < innerWidth * edge
-      ? prev
-      : clientX > innerWidth * (1 - edge)
-        ? next
-        : null;
+    const button = sideButton(clientX, video);
     if (!button || button.disabled) return false;
     clearTap();
     button.click();
     return true;
   }
 
-  function scheduleTap(point, clientX, clientY) {
-    const now = performance.now();
-    const isDouble = Boolean(point.image && lastTap?.image && (
-      point.doubleCandidate ||
-      (now - lastTap.time <= DOUBLE_TAP_MS &&
-        Math.hypot(clientX - lastTap.x, clientY - lastTap.y) <= DOUBLE_TAP_DISTANCE)
-    ));
-
-    clearTimeout(tapTimer);
-    tapTimer = 0;
-
-    if (isDouble) {
-      lastTap = null;
-      toggleZoom(clientX, clientY);
-      return;
-    }
-
-    lastTap = { time: now, x: clientX, y: clientY, image: point.image };
+  function rememberSingleTap(point, clientX, clientY) {
+    lastTap = { time: performance.now(), x: clientX, y: clientY, image: point.image };
+    cancelPendingChrome();
     tapTimer = setTimeout(() => {
       tapTimer = 0;
       lastTap = null;
@@ -181,8 +183,8 @@ if (viewer && stage && media) {
 
     const video = event.target.closest?.('#viewer-media video');
     const rect = video?.getBoundingClientRect();
-    const controlBand = rect ? Math.min(64, rect.height * .22) : 0;
     const imageHit = Boolean(event.target.closest?.('#viewer-media img'));
+    const startedZoomed = zoomed();
     const point = {
       x: event.clientX,
       y: event.clientY,
@@ -191,18 +193,31 @@ if (viewer && stage && media) {
       startedAt: performance.now(),
       image: imageHit,
       video: Boolean(video),
-      videoControls: Boolean(rect && event.clientY >= rect.bottom - controlBand),
-      doubleCandidate: currentDoubleCandidate(event.clientX, event.clientY, imageHit)
+      videoControls: Boolean(rect && event.clientY >= rect.bottom - Math.min(64, rect.height * .22)),
+      startedZoomed,
+      doubleCandidate: isDoubleCandidate(event.clientX, event.clientY, imageHit)
     };
+
+    // Side taps at fit are navigation, never the second half of a zoom gesture.
+    if (!startedZoomed && sideButton(event.clientX, Boolean(video))) point.doubleCandidate = false;
+    if (point.doubleCandidate) cancelPendingChrome();
     pointers.set(event.pointerId, point);
 
-    if (pointers.size >= 2) {
+    // Image/background touches belong to Mochimono. Capture them immediately so
+    // Android cannot turn a tap/swipe into pointercancel midway through it.
+    // Video touches stay uncaptured so native play/seek controls keep working.
+    if (!video) {
+      try { stage.setPointerCapture(event.pointerId); } catch {}
+      event.preventDefault();
+    }
+
+    if ([...pointers.values()].filter(item => item.image).length >= 2) {
       beginPinch();
       event.preventDefault();
       return;
     }
 
-    if (zoomed() && imageHit) {
+    if (startedZoomed && imageHit) {
       pan = {
         pointerId: event.pointerId,
         x: event.clientX,
@@ -221,25 +236,34 @@ if (viewer && stage && media) {
     point.x = event.clientX;
     point.y = event.clientY;
 
-    if (pointers.size >= 2) {
+    const imagePointers = [...pointers.values()].filter(item => item.image);
+    if (imagePointers.length >= 2) {
       if (!pinch) beginPinch();
       updatePinch();
       event.preventDefault();
       return;
     }
 
+    const travel = Math.hypot(event.clientX - point.startX, event.clientY - point.startY);
+
+    // At fit, moving past tap tolerance cancels a possible second tap so a
+    // quick swipe after a tap can never become a zoom.
+    if (!point.startedZoomed && point.doubleCandidate && travel >= TAP_TRAVEL) {
+      point.doubleCandidate = false;
+      clearTap();
+    }
+
     if (!pan || pan.pointerId !== event.pointerId || !zoomed()) return;
     const dx = event.clientX - pan.x;
     const dy = event.clientY - pan.y;
-    const travel = Math.hypot(dx, dy);
-    const threshold = pan.doubleCandidate ? DOUBLE_TAP_PAN_CANCEL : PAN_START;
-    if (!pan.active && travel < threshold) return;
+    const threshold = pan.doubleCandidate ? ZOOMED_DOUBLE_TAP_CANCEL : PAN_START;
+    if (!pan.active && Math.hypot(dx, dy) < threshold) return;
 
     if (!pan.active) {
       pan.active = true;
       pan.doubleCandidate = false;
+      point.doubleCandidate = false;
       clearTap();
-      try { stage.setPointerCapture(event.pointerId); } catch {}
     }
 
     zoom.x = pan.startX + dx;
@@ -258,13 +282,15 @@ if (viewer && stage && media) {
     const dy = point.y - point.startY;
     const travel = Math.hypot(dx, dy);
     const duration = Math.max(1, performance.now() - point.startedAt);
-    const wasPinching = Boolean(pinch) || pointers.size > 1;
+    const wasPinching = Boolean(pinch) || [...pointers.values()].filter(item => item.image).length > 1;
     const wasPanning = pan?.pointerId === event.pointerId && pan.active;
 
     pointers.delete(event.pointerId);
     if (pan?.pointerId === event.pointerId) pan = null;
-    if (pointers.size < 2) pinch = null;
-    try { stage.releasePointerCapture(event.pointerId); } catch {}
+    if ([...pointers.values()].filter(item => item.image).length < 2) pinch = null;
+    if (!point.video) {
+      try { stage.releasePointerCapture(event.pointerId); } catch {}
+    }
 
     if (wasPinching) {
       clearTap();
@@ -279,13 +305,25 @@ if (viewer && stage && media) {
       return;
     }
 
-    if (zoomed()) {
-      const tapLimit = point.doubleCandidate ? DOUBLE_TAP_PAN_CANCEL : TAP_TRAVEL;
-      if (travel > tapLimit) {
+    // A recognized second tap wins over pan jitter. Finishing either zoom-in or
+    // zoom-out clears tap history, so the very next swipe starts fresh.
+    if (point.doubleCandidate) {
+      const limit = point.startedZoomed ? ZOOMED_DOUBLE_TAP_CANCEL : TAP_TRAVEL;
+      if (travel < limit) {
+        toggleZoom(event.clientX, event.clientY);
+        clearTap();
+        event.preventDefault();
+        return;
+      }
+      clearTap();
+    }
+
+    if (point.startedZoomed || zoomed()) {
+      if (travel > TAP_TRAVEL) {
         clearTap();
         return;
       }
-      scheduleTap(point, event.clientX, event.clientY);
+      rememberSingleTap(point, event.clientX, event.clientY);
       event.preventDefault();
       return;
     }
@@ -297,7 +335,7 @@ if (viewer && stage && media) {
     if (swipe && !point.videoControls) {
       clearTap();
       const button = dx < 0 ? next : prev;
-      if (!button?.disabled) button?.click();
+      if (!button?.disabled) button.click();
       event.preventDefault();
       return;
     }
@@ -318,22 +356,25 @@ if (viewer && stage && media) {
       return;
     }
 
-    scheduleTap(point, event.clientX, event.clientY);
+    rememberSingleTap(point, event.clientX, event.clientY);
     event.preventDefault();
   });
 
   stage.addEventListener('pointercancel', event => {
-    if (!pointers.has(event.pointerId)) return;
+    const point = pointers.get(event.pointerId);
+    if (!point) return;
     pointers.delete(event.pointerId);
     if (pan?.pointerId === event.pointerId) pan = null;
-    if (pointers.size < 2) pinch = null;
+    if ([...pointers.values()].filter(item => item.image).length < 2) pinch = null;
     clearTap();
     if (!pointers.size && zoom.scale <= 1.03) resetZoom();
   });
 
+  syncMediaMode();
   new MutationObserver(() => {
     pointers.clear();
     resetZoom();
+    syncMediaMode();
   }).observe(media, { childList: true });
 
   new MutationObserver(() => {
