@@ -1,14 +1,17 @@
+import './collection-delete.js';
+
 const files = document.querySelector('#files');
 const views = document.querySelector('#views');
 const viewer = document.querySelector('#viewer');
 const viewerClose = document.querySelector('#viewer-close');
 const viewerInfo = document.querySelector('#viewer-info-button');
 const viewerOpen = document.querySelector('#viewer-open');
+const viewerPrev = document.querySelector('#viewer-prev');
+const viewerNext = document.querySelector('#viewer-next');
 
 let decorateFrame = 0;
 let lastFocusedHash = '';
 let pointerHash = '';
-let viewerPaging = false;
 
 const style = document.createElement('style');
 style.textContent = `
@@ -104,8 +107,7 @@ function verticalCard(cards, current, direction) {
   return best || current;
 }
 
-function viewerVerticalCard(direction) {
-  const hash = currentViewerHash();
+function viewerVerticalCard(direction, hash = currentViewerHash()) {
   if (!hash) return null;
   const cards = renderedCards();
   const current = cards.find(card => card.dataset.hash === hash);
@@ -114,29 +116,22 @@ function viewerVerticalCard(direction) {
   return next !== current ? next : null;
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+function bridgeViewerGrid(direction, startHash) {
+  const bridge = direction > 0 ? viewerNext : viewerPrev;
+  if (!bridge || bridge.disabled || !window.mochimonoOpenViewer) return null;
 
-async function extendViewerGrid(direction, startHash) {
-  if (viewerPaging) return null;
-  const sentinel = document.querySelector(direction > 0 ? '#scroll-sentinel' : '#top-scroll-sentinel');
-  if (!sentinel || sentinel.hidden) return null;
-  viewerPaging = true;
-  const scrollY = window.scrollY;
-  const before = renderedCards().length;
-  try {
-    sentinel.scrollIntoView({ block: direction > 0 ? 'end' : 'start', behavior: 'auto' });
-    for (let attempt = 0; attempt < 20; attempt++) {
-      await sleep(20);
-      if (renderedCards().length > before) break;
-    }
-    if (viewer.hidden || currentViewerHash() !== startHash) return null;
-    return viewerVerticalCard(direction);
-  } finally {
-    window.scrollTo(0, scrollY);
-    viewerPaging = false;
-  }
+  // A linear step past the rendered window makes app.js recenter the Grid
+  // synchronously. We then navigate from the original card before paint.
+  bridge.click();
+  if (viewer.hidden) return null;
+
+  const target = viewerVerticalCard(direction, startHash);
+  if (target) return target;
+
+  // The bridge step is only an implementation detail. Never leave the viewer
+  // on it if there truly is no spatial row in this direction.
+  window.mochimonoOpenViewer(startHash);
+  return null;
 }
 
 function focusCard(card) {
@@ -203,17 +198,11 @@ document.addEventListener('keydown', event => {
       event.preventDefault();
       event.stopImmediatePropagation();
       const direction = event.key === 'ArrowUp' ? -1 : 1;
-      const target = viewerVerticalCard(direction);
+      const startHash = currentViewerHash();
+      const target = viewerVerticalCard(direction) || bridgeViewerGrid(direction, startHash);
       if (target && window.mochimonoOpenViewer) {
         lastFocusedHash = target.dataset.hash;
         window.mochimonoOpenViewer(lastFocusedHash);
-      } else if (!viewerPaging && window.mochimonoOpenViewer) {
-        const startHash = currentViewerHash();
-        extendViewerGrid(direction, startHash).then(next => {
-          if (!next || viewer.hidden || currentViewerHash() !== startHash) return;
-          lastFocusedHash = next.dataset.hash;
-          window.mochimonoOpenViewer(lastFocusedHash);
-        });
       }
       return;
     }
