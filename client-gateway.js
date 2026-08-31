@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { json, readJson, settings } from './lib/agent-context.js';
+import { clientProviders, handleClientProviderApi } from './lib/client-providers.js';
 import { localLocations } from './lib/local-locations.js';
+import { providerThumbnail, queueProviderThumbnail, serveProviderThumbnail } from './lib/provider-thumbs.js';
 import { queueRemoteThumbnail } from './lib/thumbnail-agent.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
@@ -68,27 +70,69 @@ async function login(req, res) {
 async function requestPreviews(req, res) {
   const { files = [] } = await readJson(req, 128 * 1024);
   if (!Array.isArray(files) || files.length > 200) return json(res, 400, { error: 'files must be an array of at most 200 items' });
+  const snapshot = await clientProviders();
   let queued = 0;
-  for (const file of files) if (queueRemoteThumbnail(file)) queued++;
+  for (const file of files) {
+    const known = snapshot.byHash.get(String(file.hash));
+    if (known && !known.serverStored && snapshot.candidates.has(String(file.hash))) queued += Number(queueProviderThumbnail(file));
+    else queued += Number(queueRemoteThumbnail(file));
+  }
   return json(res, 202, { queued });
 }
 
+async function checkThumbnails(req, res) {
+  const body = await readJson(req, 256 * 1024);
+  if (!Array.isArray(body.hashes) || body.hashes.length > 500) return json(res, 400, { error: 'hashes must be an array of at most 500 items' });
+  const hashes = [...new Set(body.hashes.map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
+  const ready = new Map();
+
+  await Promise.all(hashes.map(async hash => {
+    const thumb = await providerThumbnail(hash);
+    if (thumb) ready.set(hash, thumb);
+  }));
+
+  if (settings.token) {
+    try {
+      const response = await fetch(`${settings.server}/api/thumbs/check`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ hashes })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        for (const item of data.thumbnails || []) if (!ready.has(item.hash)) ready.set(item.hash, item);
+      }
+    } catch {}
+  }
+
+  json(res, 200, { thumbnails: [...ready.values()].map(item => ({
+    hash: item.hash, width: Number(item.width) || 0, height: Number(item.height) || 0,
+    duration: item.duration == null ? null : Number(item.duration)
+  })) });
+}
+
 async function proxyApi(req, res, url) {
-  if (!settings.token) return json(res, 401, { error: 'Connect the Client first' });
+  if (!settings.token) return json(res, 503, { error: 'Mochimono Server is offline or not connected' });
   const headers = { authorization: `Bearer ${settings.token}` };
   for (const name of ['content-type','content-length','range','if-none-match','if-modified-since','x-mochimono-mime','x-mochimono-thumb-version','x-mochimono-width','x-mochimono-height','x-mochimono-duration','x-mochimono-source-mime']) {
     if (req.headers[name] != null) headers[name] = req.headers[name];
   }
   const body = ['GET', 'HEAD'].includes(req.method) ? undefined : req;
   const controller = new AbortController();
-  const response = await fetch(`${settings.server}${url.pathname}${url.search}`, {
-    method: req.method,
-    headers,
-    body,
-    duplex: body ? 'half' : undefined,
-    redirect: 'manual',
-    signal: controller.signal
-  });
+  let response;
+  try {
+    response = await fetch(`${settings.server}${url.pathname}${url.search}`, {
+      method: req.method,
+      headers,
+      body,
+      duplex: body ? 'half' : undefined,
+      redirect: 'manual',
+      signal: controller.signal
+    });
+  } catch {
+    if (!res.headersSent) json(res, 503, { error: 'Mochimono Server is offline' });
+    return;
+  }
 
   const out = {};
   for (const name of ['content-type','content-length','content-range','accept-ranges','cache-control','content-disposition','etag','last-modified']) {
@@ -134,11 +178,18 @@ export async function handleClientGateway(req, res, url) {
     await requestPreviews(req, res);
     return true;
   }
+  if (req.method === 'POST' && url.pathname === '/api/thumbs/check') {
+    await checkThumbnails(req, res);
+    return true;
+  }
+  const thumb = /^\/api\/thumbs\/([a-f0-9]{64})$/.exec(url.pathname);
+  if (thumb && (req.method === 'GET' || req.method === 'HEAD') && await serveProviderThumbnail(req, res, thumb[1])) return true;
   if (url.pathname === '/files' || url.pathname.startsWith('/files/')) {
     if (!await serveLibrary(res, url.pathname)) json(res, 404, { error: 'Not found' });
     return true;
   }
   if (url.pathname.startsWith('/api/')) {
+    if (await handleClientProviderApi(req, res, url)) return true;
     await proxyApi(req, res, url);
     return true;
   }

@@ -23,6 +23,7 @@
             <button data-client-tab="storage">Folders & backups</button>
           </nav>
           <button id="deviceButton" class="device-button"><span class="menu-label">Device</span><span id="deviceLabel"></span></button>
+          <button id="clientConnect" class="client-logout" hidden>Connect Server</button>
           <button id="clientLogout" class="client-logout" hidden>Log out</button>
         </div>
       </details>
@@ -41,8 +42,9 @@
       </div>
       <div id="folderAdd" class="inline-add" hidden>
         <input id="importPath" placeholder="Folder or drive">
-        <button id="chooseImport" class="secondary">Browse</button>
-        <button id="startImport" class="primary">Add</button>
+        <button id="chooseImport" class="secondary">Choose</button>
+        <button id="startBrowse" class="secondary" title="View and search without uploading">Browse</button>
+        <button id="startImport" class="primary" title="Back up this folder to Mochimono">Protect</button>
       </div>
       <div id="folders" class="item-list"><div class="muted">Loading…</div></div>
     </section>
@@ -103,6 +105,7 @@
 
   <div id="toast" class="toast"></div>
   <script type="module" src="/app.js"></script>
+  <script type="module" src="/folder-modes.js"></script>
   <script type="module" src="/client-shell.js"></script>
   <script type="module" src="/relative-time.js"></script>
 </body>

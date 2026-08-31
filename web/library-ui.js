@@ -20,6 +20,7 @@ let anchorHash = '';
 let selected = new Set();
 
 const currentView = () => document.querySelector('#views [data-view].active')?.dataset.view || 'grid';
+const allServerStored = hashes => window.mochimonoLocations?.allServerStored?.(hashes) ?? true;
 
 function saveUi() {
   localStorage.setItem(UI_KEY, JSON.stringify({ view: currentView(), sort: sort.value, type: typeFilter.value }));
@@ -45,10 +46,13 @@ function syncSelectedClasses() {
 
 function syncSelectionUi() {
   const count = selected.size;
+  const mutable = count > 0 && allServerStored(selected);
   selectionBar.hidden = !selectionMode && !count;
   selectToggle.classList.toggle('active', selectionMode);
   selectionCount.textContent = count ? `${count.toLocaleString()} selected` : 'Select files';
-  selectionCollection.disabled = selectionDelete.disabled = selectionIgnore.disabled = !count;
+  selectionCollection.disabled = selectionDelete.disabled = selectionIgnore.disabled = !mutable;
+  const title = count && !mutable ? 'This action requires every selected file to be stored on the Mochimono Server.' : '';
+  selectionCollection.title = selectionDelete.title = selectionIgnore.title = title;
   syncSelectedClasses();
 }
 
@@ -96,7 +100,7 @@ async function selectionUniverse() {
 
 async function deleteSelected(ignore) {
   const hashes = [...selected];
-  if (!hashes.length) return;
+  if (!hashes.length || !allServerStored(hashes)) return;
   const label = ignore ? 'Delete + Ignore' : 'Delete';
   if (!confirm(`${label} ${hashes.length.toLocaleString()} file${hashes.length === 1 ? '' : 's'}?`)) return;
 
@@ -139,7 +143,7 @@ selectAll.addEventListener('click', async () => {
   finally { anchorHash = ''; selectAll.disabled = false; syncSelectionUi(); }
 });
 selectionCollection.addEventListener('click', () => {
-  if (selected.size) window.dispatchEvent(new CustomEvent('mochimono:add-to-collection', { detail: { hashes: [...selected] } }));
+  if (selected.size && allServerStored(selected)) window.dispatchEvent(new CustomEvent('mochimono:add-to-collection', { detail: { hashes: [...selected] } }));
 });
 selectionDelete.addEventListener('click', () => deleteSelected(false));
 selectionIgnore.addEventListener('click', () => deleteSelected(true));
@@ -165,6 +169,7 @@ document.querySelector('#views').addEventListener('click', event => {
 });
 for (const control of [source, collectionFilter]) control.addEventListener('change', () => clearSelection(true));
 search.addEventListener('input', () => { if (selected.size) clearSelection(true); });
+window.addEventListener('mochimono:locations-updated', syncSelectionUi);
 new MutationObserver(syncSelectedClasses).observe(files, { childList: true });
 
 restoreUi();

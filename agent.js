@@ -7,7 +7,9 @@ import { spawn } from 'node:child_process';
 import http from 'node:http';
 import { api, cancelJob, currentJob, DEVICE, json, persistSettings, readJson, serverState, settings, startJob } from './lib/agent-context.js';
 import { addFolder, folderFor, folderStats, queueFolderSync, removeFolder, startSyncService } from './lib/agent-sync.js';
+import { addBrowseFolder, browseFolderFor, browseFolderStats, indexBrowseFolder, protectBrowseFolder, removeBrowseFolder, startBrowseService } from './lib/browse-folders.js';
 import { backupCollections, backupContents, backupInit, backupLocations, backupRestore, backupStatus, backupUpdate, backupVerify, setBackupPolicy } from './lib/agent-backups.js';
+import { invalidateClientProviders } from './lib/client-providers.js';
 import { pickFolder } from './lib/folder-picker.js';
 import { thumbnailAgentStatus } from './lib/thumbnail-agent.js';
 import { handleClientImport } from './client-import.js';
@@ -39,10 +41,20 @@ async function serveStatic(res, pathname) {
   } catch { return false; }
 }
 
+function visibleFolders() {
+  return [
+    ...settings.folders.map(folder => ({ ...folder, protected: true })),
+    ...settings.browseFolders.map(path => ({ path, importId: null, lastSynced: null, protected: false }))
+  ];
+}
+
 async function handleLocalApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/state') {
     json(res, 200, {
-      settings: { server: settings.server, hasToken: Boolean(settings.token), device: settings.device, folders: settings.folders },
+      settings: {
+        server: settings.server, hasToken: Boolean(settings.token), device: settings.device,
+        folders: visibleFolders()
+      },
       server: await serverState(),
       previews: thumbnailAgentStatus(),
       job: currentJob()
@@ -63,6 +75,7 @@ async function handleLocalApi(req, res, url) {
       await Promise.allSettled(ids.map(id => api(`/api/imports/${id}`, { method: 'POST', body: { sourceName: settings.device } })));
     }
     if (settings.token) settings.folders.forEach(folder => queueFolderSync(folder.path, undefined, 0));
+    invalidateClientProviders();
     json(res, 200, { ok: true });
     return true;
   }
@@ -71,6 +84,7 @@ async function handleLocalApi(req, res, url) {
     if (settings.token) await api('/api/auth/revoke-self', { method: 'POST' }).catch(() => {});
     settings.token = '';
     await persistSettings();
+    invalidateClientProviders();
     json(res, 200, { ok: true });
     return true;
   }
@@ -87,25 +101,41 @@ async function handleLocalApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/folder-stats') {
-    json(res, 200, { folders: await folderStats() });
+    const [protectedFolders, browseFolders] = await Promise.all([folderStats(), browseFolderStats()]);
+    json(res, 200, {
+      folders: [
+        ...protectedFolders.map(folder => ({ ...folder, protected: true })),
+        ...browseFolders
+      ]
+    });
     return true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/folders') {
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error: 'Choose a folder' });
-    else json(res, 200, { folder: await addFolder(body.path) });
+    else {
+      const folder = await addFolder(body.path);
+      invalidateClientProviders();
+      json(res, 200, { folder });
+    }
     return true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/folders/sync') {
     const body = await readJson(req);
-    const folder = body.path ? folderFor(body.path) : null;
-    if (!folder) json(res, 404, { error: 'Folder not found' });
-    else {
-      queueFolderSync(folder.path, undefined, 0);
+    const protectedFolder = body.path ? folderFor(body.path) : null;
+    const browseFolder = body.path ? browseFolderFor(body.path) : null;
+    if (protectedFolder) {
+      queueFolderSync(protectedFolder.path, undefined, 0);
       json(res, 200, { ok: true });
-    }
+    } else if (browseFolder) {
+      startJob(res, 'sync', `Sync ${browseFolder}`, async update => {
+        const result = await indexBrowseFolder(browseFolder, update);
+        invalidateClientProviders();
+        return result;
+      });
+    } else json(res, 404, { error: 'Folder not found' });
     return true;
   }
 
@@ -113,7 +143,55 @@ async function handleLocalApi(req, res, url) {
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error: 'Folder required' });
     else {
-      await removeFolder(body.path);
+      if (folderFor(body.path)) await removeFolder(body.path);
+      else if (browseFolderFor(body.path)) await removeBrowseFolder(body.path);
+      else return json(res, 404, { error: 'Folder not found' });
+      invalidateClientProviders();
+      json(res, 200, { ok: true });
+    }
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/browse-folders') {
+    const body = await readJson(req);
+    if (!body.path) json(res, 400, { error: 'Choose a folder' });
+    else {
+      const path = await addBrowseFolder(body.path);
+      invalidateClientProviders();
+      json(res, 200, { path });
+    }
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/browse-folders/index') {
+    const body = await readJson(req);
+    const path = body.path ? browseFolderFor(body.path) : null;
+    if (!path) json(res, 404, { error: 'Folder not found' });
+    else startJob(res, 'sync', `Sync ${path}`, async update => {
+      const result = await indexBrowseFolder(path, update);
+      invalidateClientProviders();
+      return result;
+    });
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/browse-folders/protect') {
+    const body = await readJson(req);
+    if (!body.path) json(res, 400, { error: 'Folder required' });
+    else {
+      const folder = await protectBrowseFolder(body.path, addFolder);
+      invalidateClientProviders();
+      json(res, 200, { folder });
+    }
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/browse-folders/remove') {
+    const body = await readJson(req);
+    if (!body.path) json(res, 400, { error: 'Folder required' });
+    else {
+      await removeBrowseFolder(body.path);
+      invalidateClientProviders();
       json(res, 200, { ok: true });
     }
     return true;
@@ -146,7 +224,11 @@ async function handleLocalApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/backup/init') {
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error: 'Choose a backup folder' });
-    else json(res, 200, await backupInit(body.path, body.name, body.configure === true));
+    else {
+      const result = await backupInit(body.path, body.name, body.configure === true);
+      invalidateClientProviders();
+      json(res, 200, result);
+    }
     return true;
   }
 
@@ -160,21 +242,33 @@ async function handleLocalApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/backup/update') {
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error: 'Choose a backup location' });
-    else startJob(res, 'backup', `Update ${body.path}`, update => backupUpdate(body.path, update));
+    else startJob(res, 'backup', `Update ${body.path}`, async update => {
+      const result = await backupUpdate(body.path, update);
+      invalidateClientProviders();
+      return result;
+    });
     return true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/backup/verify') {
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error: 'Choose a backup location' });
-    else startJob(res, 'verify', `Verify ${body.path}`, update => backupVerify(body.path, update));
+    else startJob(res, 'verify', `Verify ${body.path}`, async update => {
+      const result = await backupVerify(body.path, update);
+      invalidateClientProviders();
+      return result;
+    });
     return true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/backup/restore') {
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error: 'Choose a backup location' });
-    else startJob(res, 'restore', `Restore ${body.path}`, update => backupRestore(body.path, update));
+    else startJob(res, 'restore', `Restore ${body.path}`, async update => {
+      const result = await backupRestore(body.path, update);
+      invalidateClientProviders();
+      return result;
+    });
     return true;
   }
 
@@ -211,6 +305,7 @@ function openBrowser(url) {
 }
 
 startSyncService();
+startBrowseService(invalidateClientProviders);
 server.listen(PORT, HOST, () => {
   const url = `http://${HOST}:${PORT}`;
   console.log(`Mochimono Agent: ${url}`);

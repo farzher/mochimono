@@ -6,6 +6,7 @@ let definitions = [];
 let drives = [];
 let copies = new Map();
 let driveHashes = new Map();
+let serverHashes = new Set();
 let lastRefresh = 0;
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
@@ -41,7 +42,7 @@ function renderOptions() {
     ${local.length ? '<option value="local">This device</option>' : ''}
     <option value="backup">Backups</option>
     <option value="unbacked">Not backed up</option>
-    ${local.length ? `<optgroup label="Local folders">${local.map(location => `<option value="folder:${location.id}">${escapeHtml(location.name)}</option>`).join('')}</optgroup>` : ''}
+    ${local.length ? `<optgroup label="Local folders">${local.map(location => `<option value="folder:${location.id}">${escapeHtml(location.name)}${location.protected === false ? ' · Browse' : ''}${location.available === false ? ' · Offline' : ''}</option>`).join('')}</optgroup>` : ''}
     ${drives.length ? `<optgroup label="Backup drives">${drives.map(drive => `<option value="drive:${encodeURIComponent(drive.id)}">${escapeHtml(drive.name)}</option>`).join('')}</optgroup>` : ''}`;
   select.value = [...select.options].some(option => option.value === current) ? current : '';
 }
@@ -63,8 +64,12 @@ async function backupFiles(id) {
 
 async function applySelection() {
   const value = select.value;
-  if (!value || value === 'server' || value === 'backup' || value === 'unbacked') {
+  if (!value || value === 'backup' || value === 'unbacked') {
     library()?.setLocationFilter?.(value);
+    return;
+  }
+  if (value === 'server') {
+    library()?.setLocationFilter?.('server-only', serverHashes);
     return;
   }
   if (value === 'local') {
@@ -87,19 +92,23 @@ export async function refreshLocations() {
   lastRefresh = Date.now();
   let localData = { locations: [], files: [] };
   let driveData = { drives: [] };
+  let serverData = { hashes: [] };
   await Promise.all([
     fetch('/api/client/locations', { cache: 'no-store' }).then(async response => { if (response.ok) localData = await response.json(); }).catch(() => {}),
-    fetch('/api/drives', { cache: 'no-store' }).then(async response => { if (response.ok) driveData = await response.json(); }).catch(() => {})
+    fetch('/api/drives', { cache: 'no-store' }).then(async response => { if (response.ok) driveData = await response.json(); }).catch(() => {}),
+    fetch('/api/client/server-hashes', { cache: 'no-store' }).then(async response => { if (response.ok) serverData = await response.json(); }).catch(() => {})
   ]);
 
   definitions = localData.locations || [];
   drives = driveData.drives || [];
+  serverHashes = new Set(serverData.hashes || []);
   copies = locationCopies(localData);
   driveHashes = new Map();
   const search = new Map([...copies].map(([hash, locations]) => [hash, locationTokens(locations)]));
   library()?.setLocationSearch?.(search);
   renderOptions();
   await applySelection();
+  window.dispatchEvent(new CustomEvent('mochimono:locations-updated'));
 }
 
 function refreshIfStale() {
@@ -108,6 +117,8 @@ function refreshIfStale() {
 
 window.mochimonoLocations = {
   forHash(hash) { return copies.get(String(hash)) || []; },
+  isServerStored(hash) { return serverHashes.has(String(hash)); },
+  allServerStored(hashes) { return [...hashes || []].every(hash => serverHashes.has(String(hash))); },
   definitions() { return [...definitions, ...drives.map(drive => ({ id: drive.id, kind: 'backup', name: drive.name, available: null, lastSeen: drive.lastSeen }))]; },
   refresh: refreshLocations
 };

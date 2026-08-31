@@ -79,12 +79,12 @@ function render(data, local) {
   const sources = data.sources || [];
   const backups = data.backups || [];
   const locals = localCopies(local);
-  const copyCount = 1 + backups.length + locals.length;
+  const serverStored = data.serverStored !== false;
   const locationCards = [
-    locationCard('Mochimono Server', 'Primary copy', 'Available'),
+    ...(serverStored ? [locationCard('Mochimono Server', 'Primary copy', 'Available')] : []),
     ...locals.map(({ location, paths }) => locationCard(
       location.name || location.deviceName || 'This device',
-      'Local copy',
+      location.protected === false ? 'Local · Browse only' : 'Local copy',
       location.available === false ? 'Offline' : paths.length > 1 ? `${paths.length} paths · available` : 'Available',
       localPath(location, paths[0] || '')
     )),
@@ -94,6 +94,7 @@ function render(data, local) {
       backup.verifiedAt ? `Verified ${formatDate(backup.verifiedAt)}` : backup.lastSeen ? `Seen ${formatDate(backup.lastSeen)}` : 'Stored'
     ))
   ];
+  const copyCount = locationCards.length;
 
   panel.innerHTML = `<div class="viewer-info-head"><strong>Info</strong><button type="button" data-info-close aria-label="Close info">×</button></div>
     <section class="viewer-info-date">
@@ -102,7 +103,7 @@ function render(data, local) {
     </section>
     <section class="viewer-info-sources">
       <h3>${copyCount} ${copyCount === 1 ? 'location' : 'locations'}</h3>
-      ${locationCards.join('')}
+      ${locationCards.length ? locationCards.join('') : '<p>No accessible location recorded.</p>'}
     </section>
     <section class="viewer-info-sources">
       <h3>${sources.length > 1 ? `${sources.length} sources` : 'Source'}</h3>

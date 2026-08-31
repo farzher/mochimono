@@ -40,13 +40,13 @@ const viewerHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects
 const typingTarget = target => Boolean(target?.closest?.('input,select,textarea,[contenteditable="true"]'));
 
 function queryHint(raw) {
-  const field = raw.match(/\b(name|path|source|type|ext|year):/i)?.[1]?.toLowerCase() || '';
-  const terms = normalize(raw.replace(/\b(?:name|path|source|type|ext|year):/gi, ' ').replace(/["']/g, ' ')).split(' ').filter(Boolean);
+  const field = raw.match(/\b(name|path|source|location|type|ext|year):/i)?.[1]?.toLowerCase() || '';
+  const terms = normalize(raw.replace(/\b(?:name|path|source|location|type|ext|year):/gi, ' ').replace(/["']/g, ' ')).split(' ').filter(Boolean);
   return { field, terms };
 }
 
 function filenameTerms(raw, filename) {
-  const field = raw.match(/\b(name|path|source|type|ext|year):/i)?.[1]?.toLowerCase() || '';
+  const field = raw.match(/\b(name|path|source|location|type|ext|year):/i)?.[1]?.toLowerCase() || '';
   if (field && field !== 'name') return [];
   return normalize(raw.replace(/\bname:/gi, ' ').replace(/["']/g, ' ')).split(' ').filter(term => term && normalize(filename).includes(term));
 }
@@ -62,7 +62,7 @@ function sourcePath(source) {
 
 function searchReason(details, raw, filename) {
   const { field, terms } = queryHint(raw);
-  if (!terms.length || field === 'name' || (!field && terms.every(term => normalize(filename).includes(term)))) return null;
+  if (!terms.length || field === 'name' || field === 'location' || (!field && terms.every(term => normalize(filename).includes(term)))) return null;
   const sources = details?.sources || [];
   const ext = filename.match(/\.([^.]+)$/)?.[1] || '';
   const type = String(details?.object?.mime || '').split('/')[0] || 'file';
@@ -96,7 +96,7 @@ function highlighted(element, text, terms) {
 
 function renderReason(badge, reason) {
   const target = badge.querySelector('.file-context-match');
-  const key = reason ? `${reason.text}\0${reason.terms.join('\1')}` : '';
+  const key = reason ? `${reason.text}\0${reason.terms.join('|')}` : '';
   if (badge.dataset.reasonKey === key) return;
   badge.dataset.reasonKey = key;
   badge.classList.toggle('has-match', Boolean(reason));
@@ -146,7 +146,7 @@ function decorate() {
     }
     const name = badge.querySelector('.file-context-name');
     const terms = filenameTerms(raw, filename);
-    const nameKey = `${filename}\0${terms.join('\1')}`;
+    const nameKey = `${filename}\0${terms.join('|')}`;
     if (name.dataset.highlightKey !== nameKey) {
       name.dataset.highlightKey = nameKey;
       highlighted(name, filename, terms);
@@ -207,6 +207,7 @@ function verticalCard(items, current, direction) {
 function focusCard(card) {
   if (!card) return false;
   focusedHash = card.dataset.hash;
+  if (card.tabIndex < 0) card.tabIndex = 0;
   card.focus({ preventScroll: true });
   card.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
   scheduleDecorate();
@@ -214,10 +215,11 @@ function focusCard(card) {
 }
 
 function openCard(card) {
-  if (!card) return;
+  if (!card) return false;
   focusedHash = card.dataset.hash;
   scheduleDecorate();
   window.mochimonoOpenViewer?.(focusedHash) || card.click();
+  return true;
 }
 
 const afterLayout = callback => requestAnimationFrame(() => requestAnimationFrame(callback));
@@ -249,7 +251,7 @@ function navigateGrid(key) {
     return extend(direction, () => {
       const next = cards();
       const start = next.find(card => card.dataset.hash === hash);
-      focusCard(next[next.indexOf(start) + direction]);
+      focusCard(start ? next[next.indexOf(start) + direction] : next[direction > 0 ? 0 : next.length - 1]);
     });
   }
   if (key === 'ArrowUp' || key === 'ArrowDown') {
@@ -308,40 +310,55 @@ files.addEventListener('focusin', event => {
   if (hash) { focusedHash = hash; detailGeneration++; scheduleDecorate(); }
 });
 files.addEventListener('pointerdown', event => {
-  const hash = event.target.closest('[data-hash]')?.dataset.hash;
-  if (hash) { focusedHash = hash; detailGeneration++; scheduleDecorate(); }
+  const card = event.target.closest('[data-hash]');
+  if (!card) return;
+  focusedHash = card.dataset.hash;
+  detailGeneration++;
+  if (event.pointerType !== 'touch') card.focus({ preventScroll: true });
+  scheduleDecorate();
 });
 search?.addEventListener('input', () => { detailGeneration++; for (const timer of detailTimers.values()) clearTimeout(timer); detailTimers.clear(); scheduleDecorate(); });
 
 document.addEventListener('keydown', event => {
-  if (typingTarget(event.target)) return;
+  const viewerOpenNow = !viewer.hidden;
+  if (typingTarget(event.target) && !viewerOpenNow) return;
   if (paging && event.key.startsWith('Arrow')) {
     queuedKey = event.key;
     event.preventDefault();
     event.stopImmediatePropagation();
     return;
   }
-  if (!viewer.hidden) {
+  if (viewerOpenNow) {
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       if (navigate(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); }
       return;
     }
     if ((event.code === 'Space' || event.key === 'Enter') && !document.activeElement?.closest?.('#viewer video,#viewer input,#viewer select,#viewer textarea,#viewer summary,#viewer button,#viewer a')) {
       focusedHash = viewerHash() || focusedHash;
-      event.preventDefault(); event.stopImmediatePropagation(); viewerClose.click(); return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      viewerClose.click();
+      return;
     }
     if (event.key.toLowerCase() === 'i' && !event.ctrlKey && !event.metaKey && !event.altKey) {
-      event.preventDefault(); event.stopImmediatePropagation(); viewerInfo?.click();
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      viewerInfo?.click();
     }
     return;
   }
   if (!['grid','list'].includes(currentView())) return;
-  if (event.key.startsWith('Arrow') && navigate(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); return; }
-  const current = currentCard(cards());
-  if (event.code === 'Space') { event.preventDefault(); event.stopImmediatePropagation(); openCard(current); }
-  else if (event.key === 'Enter') {
-    const active = document.activeElement?.closest?.('[data-hash]');
-    if (active) { event.preventDefault(); event.stopImmediatePropagation(); openCard(active); }
+  if (event.key.startsWith('Arrow') && navigate(event.key)) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
+  if (event.code === 'Space' || event.key === 'Enter') {
+    const current = currentCard(cards());
+    if (openCard(current)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
   }
 }, true);
 
@@ -353,7 +370,8 @@ window.addEventListener('mochimono-viewer-return', event => {
   focusedHash = hash;
   pointerHash = '';
   detailGeneration++;
-  files.querySelector(`[data-hash="${CSS.escape(hash)}"]`)?.focus({ preventScroll: true });
-  scheduleDecorate();
+  const card = files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
+  if (card) focusCard(card);
+  else scheduleDecorate();
 });
 scheduleDecorate();

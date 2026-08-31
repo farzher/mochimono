@@ -5,6 +5,7 @@ const storagePane = $('#storagePane');
 const frame = $('#filesFrame');
 const connection = $('#connectionDialog');
 const connectButton = $('#saveSettings');
+const connectMenuButton = $('#clientConnect');
 const logoutButton = $('#clientLogout');
 const serverStorage = $('#serverStorage');
 const serverStorageText = $('#serverStorageText');
@@ -90,34 +91,47 @@ function unauthorized(state) {
 }
 
 function renderServerStorage(state) {
+  const hasToken = Boolean(state?.settings?.hasToken);
   const stats = state?.server?.online ? state.server.stats : null;
+  connectMenuButton.hidden = hasToken;
+  logoutButton.hidden = !hasToken;
   if (!stats) {
     serverStorage.hidden = true;
-    logoutButton.hidden = !state?.settings?.hasToken || unauthorized(state);
     return;
   }
   const used = Number(stats.bytes) || 0;
   const capacity = Number(stats.capacityBytes) || 0;
   const percent = capacity ? Math.min(100, used / capacity * 100) : 0;
-  serverStorageText.textContent = `${bytes(used)} / ${bytes(capacity)} · ${Math.round(percent)}%`;
+  serverStorageText.textContent = `${bytes(used)} / ${bytes(capacity)}`;
   serverStorageBar.style.width = used ? `max(2px, ${percent}%)` : '0';
   serverStorage.title = `${bytes(used)} of ${bytes(capacity)} used`;
   serverStorage.hidden = false;
-  logoutButton.hidden = false;
+}
+
+async function hasOfflineLibrary(state) {
+  if (state?.settings?.folders?.length) return true;
+  try { return Boolean((await json('/api/backups')).backups?.length); }
+  catch { return false; }
 }
 
 async function refreshShellState(showLogin = false) {
   try {
     const state = await json('/api/state');
     renderServerStorage(state);
-    const needsLogin = !state.settings?.hasToken || unauthorized(state);
-    if (needsLogin && (showLogin || !connection.open) && !connection.open) connection.showModal();
+    const noServer = !state.settings?.hasToken || unauthorized(state);
+    const canBrowseOffline = noServer && await hasOfflineLibrary(state);
+    if (noServer && !canBrowseOffline && showLogin && !connection.open) connection.showModal();
     return state;
   } catch {
     serverStorage.hidden = true;
     return null;
   }
 }
+
+function openConnection() {
+  if (!connection.open) connection.showModal();
+}
+connectMenuButton?.addEventListener('click', openConnection);
 
 connectButton.addEventListener('click', async event => {
   event.preventDefault();
@@ -153,20 +167,21 @@ connectButton.addEventListener('click', async event => {
 logoutButton.addEventListener('click', async () => {
   logoutButton.disabled = true;
   try { await json('/api/auth/revoke-self', { method: 'POST' }); } catch {}
-  frame.src = 'about:blank';
   libraryScrollY = 0;
   syncHeaderScroll();
   serverStorage.hidden = true;
   logoutButton.hidden = true;
+  connectMenuButton.hidden = false;
   logoutButton.disabled = false;
-  if (!connection.open) connection.showModal();
+  frame.src = `/files/?offline=${Date.now()}`;
+  openConnection();
   notify('Logged out');
 });
 
 window.addEventListener('message', event => {
   if (event.source !== frame.contentWindow) return;
   if (event.data?.type === 'mochimono-auth-required') {
-    if (!connection.open) connection.showModal();
+    refreshShellState(true);
     return;
   }
   if (event.data?.type === 'mochimono-viewer-state') {
