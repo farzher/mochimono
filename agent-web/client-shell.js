@@ -25,9 +25,8 @@ if (brand && manageButton) {
 }
 
 function syncHeaderScroll() {
-  const active = !filesPane.hidden;
   const height = header?.offsetHeight || 64;
-  const offset = active ? Math.min(height, Math.max(0, libraryScrollY)) : 0;
+  const offset = filesPane.hidden ? 0 : Math.min(height, Math.max(0, libraryScrollY));
   document.documentElement.style.setProperty('--client-header-scroll', `${offset}px`);
 }
 
@@ -100,7 +99,7 @@ function renderServerStorage(state) {
   const used = Number(stats.bytes) || 0;
   const capacity = Number(stats.capacityBytes) || 0;
   const percent = capacity ? Math.min(100, used / capacity * 100) : 0;
-  serverStorageText.textContent = `${Math.round(percent)}%`;
+  serverStorageText.textContent = `${bytes(used)} / ${bytes(capacity)} · ${Math.round(percent)}%`;
   serverStorageBar.style.width = used ? `max(2px, ${percent}%)` : '0';
   serverStorage.title = `${bytes(used)} of ${bytes(capacity)} used`;
   serverStorage.hidden = false;
@@ -135,10 +134,7 @@ connectButton.addEventListener('click', async event => {
       method: 'POST',
       body: { server, username, password, device: state.settings?.device || 'Mochimono' }
     });
-    await json('/api/settings', {
-      method: 'POST',
-      body: { server, token: login.token }
-    });
+    await json('/api/settings', { method: 'POST', body: { server, token: login.token } });
     $('#serverPassword').value = '';
     $('#serverToken').value = '';
     connection.close();
@@ -156,9 +152,7 @@ connectButton.addEventListener('click', async event => {
 
 logoutButton.addEventListener('click', async () => {
   logoutButton.disabled = true;
-  try {
-    await json('/api/auth/revoke-self', { method: 'POST' });
-  } catch {}
+  try { await json('/api/auth/revoke-self', { method: 'POST' }); } catch {}
   frame.src = 'about:blank';
   libraryScrollY = 0;
   syncHeaderScroll();
