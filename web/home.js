@@ -5,7 +5,6 @@ const source = document.querySelector('#source');
 const collection = document.querySelector('#collectionFilter');
 const locationFilter = document.querySelector('#locationFilter');
 const type = document.querySelector('#typeFilter');
-const sort = document.querySelector('#sort');
 const views = document.querySelector('#views');
 
 const style = document.createElement('style');
@@ -25,29 +24,33 @@ homeButton.setAttribute('aria-label', 'All files');
 homeButton.innerHTML = '<span class="mini" aria-hidden="true"></span>';
 commandbar?.prepend(homeButton);
 
-function resetSelect(control) {
-  if (!control) return;
+function clearValue(control) {
+  if (!control) return false;
+  const changed = Boolean(control.value);
   control.value = '';
-  control.dispatchEvent(new Event('change', { bubbles: true }));
+  return changed;
 }
 
 export function showAllFiles() {
-  const preservedSort = sort?.value || 'date-desc';
   const activeView = views?.querySelector('[data-view].active')?.dataset.view || 'grid';
 
-  if (activeView === 'folders') views?.querySelector('[data-view="grid"]')?.click();
-  resetSelect(collection);
-  resetSelect(source);
-  resetSelect(locationFilter);
-  resetSelect(type);
-  window.mochimonoSearch?.setRaw?.('', true);
+  // Put every control into its final visual state first. Then update the few
+  // internal filter states that need events. This avoids rendering a chain of
+  // intermediate filter states (and the delayed search render) on Home.
+  if (search) search.value = '';
+  clearValue(collection);
+  const typeChanged = clearValue(type);
+  const locationChanged = clearValue(locationFilter);
+  clearValue(source);
 
-  // Smart collections may temporarily apply their own sort while clearing.
-  // Restore whatever the user was already using.
-  if (sort && sort.value !== preservedSort) {
-    sort.value = preservedSort;
-    sort.dispatchEvent(new Event('change', { bubbles: true }));
-  }
+  if (activeView === 'folders') views?.querySelector('[data-view="grid"]')?.click();
+  if (typeChanged) type.dispatchEvent(new Event('change', { bubbles: true }));
+  if (locationChanged) locationFilter.dispatchEvent(new Event('change', { bubbles: true }));
+
+  // Always finish through Source. Besides updating the library's source state,
+  // Collections uses this event to silently drop its active indicator without
+  // replaying a Smart Collection's source/type/search/sort reset sequence.
+  source?.dispatchEvent(new Event('change', { bubbles: true }));
 
   const url = new URL(location.href);
   url.searchParams.delete('collection');
