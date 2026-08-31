@@ -1,120 +1,35 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, rm, stat, statfs } from 'node:fs/promises';
-import { extname, join, resolve, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
-import { openCatalog, backupCatalog } from './lib/db.js';
-import { normalizePolicy, policySql } from './lib/policy.js';
+import { backupCatalog } from './lib/db.js';
 import { objectPath, readObject, removeObject, validHash, writeVerifiedObject } from './lib/store.js';
+import { DATA_DIR, TOKEN, db, json, now, readJson, requireAuth } from './lib/server-context.js';
+import { handleServerAuth } from './server-auth.js';
+import { handleThumbnails, cleanupThumbnail } from './thumbnail-server.js';
+import { handleCollections } from './collections-server.js';
+import { handleBackupPolicy, getDrive } from './backup-policy-server.js';
+import { handleMetadata } from './metadata-server.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'web');
-const DATA_DIR = resolve(process.env.MOCHIMONO_DATA || join(ROOT, 'data'));
 const PORT = Number(process.env.PORT || 8642);
 const HOST = process.env.HOST || '127.0.0.1';
-const TOKEN = process.env.MOCHIMONO_TOKEN || '';
-const CATALOG_BOOT = randomUUID();
+const featureRoutes = [handleThumbnails, handleCollections, handleBackupPolicy, handleMetadata];
 
 if (!TOKEN) {
   console.error('MOCHIMONO_TOKEN is required.');
   process.exit(1);
 }
 
-await mkdir(DATA_DIR, { recursive: true });
-const db = openCatalog(join(DATA_DIR, 'catalog.sqlite'));
-const now = () => new Date().toISOString();
-const catalogVersion = () => `${CATALOG_BOOT}:${db.prepare('SELECT total_changes() AS changes').get().changes}`;
-
-function json(res, status, data, headers = {}) {
-  const body = JSON.stringify(data);
-  res.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'content-length': Buffer.byteLength(body),
-    ...headers
-  });
-  res.end(body);
-}
-
-async function readJson(req, max = 5 * 1024 * 1024) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > max) throw Object.assign(new Error('Request body too large'), { status: 413 });
-    chunks.push(chunk);
-  }
-  if (!size) return {};
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-  catch { throw Object.assign(new Error('Invalid JSON'), { status: 400 }); }
-}
-
-function cookie(req, name) {
-  for (const part of String(req.headers.cookie || '').split(';')) {
-    const [key, ...value] = part.trim().split('=');
-    if (key === name) return decodeURIComponent(value.join('='));
-  }
-  return null;
-}
-
-function sameToken(value) {
-  if (typeof value !== 'string') return false;
-  const a = Buffer.from(value);
-  const b = Buffer.from(TOKEN);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-function authorized(req) {
-  const auth = String(req.headers.authorization || '');
-  return (auth.startsWith('Bearer ') && sameToken(auth.slice(7))) || sameToken(cookie(req, 'mochimono_session'));
-}
-
-function requireAuth(req, res) {
-  if (authorized(req)) return true;
-  json(res, 401, { error: 'Unauthorized' });
-  return false;
-}
-
-function parsePolicy(row) {
-  try { return normalizePolicy(JSON.parse(row.policy_json)); }
-  catch { return normalizePolicy(null); }
-}
-
-function getDrive(id) {
-  return db.prepare('SELECT * FROM drives WHERE id = ?').get(id);
-}
-
-function driveCoverage(row) {
-  const policy = parsePolicy(row);
-  const filter = policySql(policy, 'o');
-  const desired = db.prepare(`
-    SELECT COUNT(*) AS count, COALESCE(SUM(o.size), 0) AS bytes
-    FROM objects o WHERE o.state = 'active' AND ${filter.sql}
-  `).get(...filter.params);
-  const protectedRow = db.prepare(`
-    SELECT COUNT(*) AS count, COALESCE(SUM(o.size), 0) AS bytes
-    FROM objects o
-    JOIN replicas r ON r.object_hash = o.hash AND r.drive_id = ?
-    WHERE o.state = 'active' AND ${filter.sql}
-  `).get(row.id, ...filter.params);
-  return {
-    id: row.id,
-    name: row.name,
-    policy,
-    lastSeen: row.last_seen,
-    desiredCount: desired.count,
-    desiredBytes: desired.bytes,
-    protectedCount: protectedRow.count,
-    protectedBytes: protectedRow.bytes
-  };
-}
-
 function fileTypeSql(type, alias = 'o') {
   if (!type) return { sql: '1=1', params: [] };
   if (type === 'application') return { sql: `(${alias}.mime LIKE 'application/%' OR ${alias}.mime LIKE 'text/%')`, params: [] };
-  if (type === 'other') {
-    return { sql: `(${alias}.mime NOT LIKE 'image/%' AND ${alias}.mime NOT LIKE 'video/%' AND ${alias}.mime NOT LIKE 'audio/%' AND ${alias}.mime NOT LIKE 'text/%' AND ${alias}.mime NOT LIKE 'application/%')`, params: [] };
-  }
+  if (type === 'other') return {
+    sql: `(${alias}.mime NOT LIKE 'image/%' AND ${alias}.mime NOT LIKE 'video/%' AND ${alias}.mime NOT LIKE 'audio/%' AND ${alias}.mime NOT LIKE 'text/%' AND ${alias}.mime NOT LIKE 'application/%')`,
+    params: []
+  };
   if (['image', 'video', 'audio', 'text'].includes(type)) return { sql: `${alias}.mime LIKE ?`, params: [`${type}/%`] };
   return { sql: '1=0', params: [] };
 }
@@ -162,18 +77,12 @@ async function serveStatic(res, pathname) {
 async function serveObject(req, res, hash) {
   const row = db.prepare("SELECT size, mime FROM objects WHERE hash = ? AND state = 'active'").get(hash);
   if (!row) return json(res, 404, { error: 'Object not found' });
-
   let info;
   try { info = await stat(objectPath(DATA_DIR, hash)); }
   catch { return json(res, 503, { error: 'Object is cataloged but missing from primary storage' }); }
 
-  const headers = {
-    'content-type': row.mime,
-    'accept-ranges': 'bytes',
-    'cache-control': 'private, max-age=3600'
-  };
+  const headers = { 'content-type': row.mime, 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=3600' };
   const range = req.headers.range;
-
   if (!range) {
     res.writeHead(200, { ...headers, 'content-length': info.size });
     if (req.method === 'HEAD') return res.end();
@@ -185,7 +94,6 @@ async function serveObject(req, res, hash) {
     res.writeHead(416, { 'content-range': `bytes */${info.size}` });
     return res.end();
   }
-
   let start = match[1] ? Number(match[1]) : 0;
   let end = match[2] ? Number(match[2]) : info.size - 1;
   if (!match[1] && match[2]) {
@@ -197,11 +105,7 @@ async function serveObject(req, res, hash) {
     return res.end();
   }
   end = Math.min(end, info.size - 1);
-  res.writeHead(206, {
-    ...headers,
-    'content-range': `bytes ${start}-${end}/${info.size}`,
-    'content-length': end - start + 1
-  });
+  res.writeHead(206, { ...headers, 'content-range': `bytes ${start}-${end}/${info.size}`, 'content-length': end - start + 1 });
   if (req.method === 'HEAD') return res.end();
   readObject(DATA_DIR, hash, { start, end }).pipe(res);
 }
@@ -212,23 +116,7 @@ function hashSet(sql, hashes) {
   return new Set(db.prepare(`${sql} (${marks})`).all(...hashes).map(row => row.hash));
 }
 
-async function handleApi(req, res, url) {
-  if (req.method === 'POST' && url.pathname === '/api/login') {
-    const body = await readJson(req);
-    if (!sameToken(body.token)) return json(res, 401, { error: 'Invalid token' });
-    return json(res, 200, { ok: true }, {
-      'set-cookie': `mochimono_session=${encodeURIComponent(TOKEN)}; HttpOnly; SameSite=Strict; Path=/`
-    });
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/logout') {
-    return json(res, 200, { ok: true }, {
-      'set-cookie': 'mochimono_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'
-    });
-  }
-
-  if (!requireAuth(req, res)) return;
-
+async function handleCoreApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true });
 
   if (req.method === 'GET' && url.pathname === '/api/stats') {
@@ -239,39 +127,16 @@ async function handleApi(req, res, url) {
     const unbacked = db.prepare("SELECT COUNT(*) AS count FROM objects o WHERE o.state = 'active' AND NOT EXISTS (SELECT 1 FROM replicas r WHERE r.object_hash = o.hash)").get();
     const drives = db.prepare('SELECT COUNT(*) AS count FROM drives').get();
     const storage = await statfs(DATA_DIR);
-    const capacityBytes = Number(storage.blocks) * Number(storage.bsize);
-    const freeBytes = Number(storage.bavail) * Number(storage.bsize);
-    return json(res, 200, { objects: objects.count, bytes: objects.bytes, capacityBytes, freeBytes, sources: sources.count, ignored: ignored.count, unreviewed: unreviewed.count, unbacked: unbacked.count, drives: drives.count });
-  }
-
-  if (req.method === 'GET' && url.pathname === '/api/catalog/version') {
-    return json(res, 200, { version: catalogVersion() });
-  }
-
-  if (req.method === 'GET' && url.pathname === '/api/catalog') {
-    const after = String(url.searchParams.get('after') || '');
-    const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') || 5000)));
-    const rows = db.prepare(`
-      SELECT o.hash, o.size, o.mime, o.created_at AS createdAt,
-             COALESCE(MIN(s.filename), o.hash) AS filename,
-             COALESCE(MIN(s.original_path), '') AS originalPath,
-             COALESCE(MAX(s.mtime), o.created_at) AS fileDate,
-             GROUP_CONCAT(DISTINCT (SELECT MIN(i2.id) FROM imports i2 WHERE i2.source_name = i.source_name)) AS importIds,
-             COALESCE(GROUP_CONCAT(DISTINCT s.filename || ' ' || s.original_path), '') AS searchText,
-             EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
-             (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount
-      FROM objects o
-      LEFT JOIN sources s ON s.object_hash = o.hash
-      LEFT JOIN imports i ON i.id = s.import_id
-      WHERE o.state = 'active' AND o.hash > ?
-      GROUP BY o.hash
-      ORDER BY o.hash
-      LIMIT ?
-    `).all(after, limit);
     return json(res, 200, {
-      files: rows,
-      nextAfter: rows.length === limit ? rows.at(-1).hash : null,
-      version: catalogVersion()
+      objects: Number(objects.count) || 0,
+      bytes: Number(objects.bytes) || 0,
+      capacityBytes: Number(storage.blocks) * Number(storage.bsize),
+      freeBytes: Number(storage.bavail) * Number(storage.bsize),
+      sources: Number(sources.count) || 0,
+      ignored: Number(ignored.count) || 0,
+      unreviewed: Number(unreviewed.count) || 0,
+      unbacked: Number(unbacked.count) || 0,
+      drives: Number(drives.count) || 0
     });
   }
 
@@ -291,8 +156,7 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/imports') {
-    const body = await readJson(req);
-    const sourceName = String(body.sourceName || '').trim();
+    const sourceName = String((await readJson(req)).sourceName || '').trim();
     if (!sourceName) return json(res, 400, { error: 'sourceName is required' });
     const result = db.prepare('INSERT INTO imports(source_name, created_at) VALUES(?, ?)').run(sourceName, now());
     return json(res, 201, { id: Number(result.lastInsertRowid), sourceName });
@@ -303,8 +167,7 @@ async function handleApi(req, res, url) {
     const sourceName = String((await readJson(req)).sourceName || '').trim();
     if (!sourceName) return json(res, 400, { error: 'sourceName is required' });
     const result = db.prepare('UPDATE imports SET source_name = ? WHERE id = ?').run(sourceName, Number(importMatch[1]));
-    if (!result.changes) return json(res, 404, { error: 'Import not found' });
-    return json(res, 200, { ok: true, sourceName });
+    return result.changes ? json(res, 200, { ok: true, sourceName }) : json(res, 404, { error: 'Import not found' });
   }
 
   if (req.method === 'GET' && url.pathname === '/api/folders') {
@@ -312,39 +175,32 @@ async function handleApi(req, res, url) {
     if (!Number.isInteger(importId) || importId < 1) return json(res, 400, { error: 'Valid import is required' });
     const source = db.prepare('SELECT id, source_name AS sourceName, created_at AS createdAt FROM imports WHERE id = ?').get(importId);
     if (!source) return json(res, 404, { error: 'Source not found' });
-
     const path = cleanRelativePath(url.searchParams.get('path'));
     const prefix = path ? `${path}/` : '';
     const prefixLength = prefix.length;
     const folders = db.prepare(`
       WITH scoped AS (
         SELECT substr(s.original_path, ? + 1) AS rest
-        FROM sources s
-        JOIN objects o ON o.hash = s.object_hash
+        FROM sources s JOIN objects o ON o.hash = s.object_hash
         WHERE s.import_id IN (SELECT id FROM imports WHERE source_name = ?) AND o.state = 'active'
           AND substr(s.original_path, 1, ?) = ?
       )
       SELECT substr(rest, 1, instr(rest, '/') - 1) AS name, COUNT(*) AS files
-      FROM scoped
-      WHERE instr(rest, '/') > 0
-      GROUP BY name
-      ORDER BY lower(name), name
+      FROM scoped WHERE instr(rest, '/') > 0
+      GROUP BY name ORDER BY lower(name), name
     `).all(prefixLength, source.sourceName, prefixLength, prefix);
-
     const files = db.prepare(`
       SELECT o.hash, o.size, o.mime, o.created_at AS createdAt,
              MIN(s.filename) AS filename, MIN(s.original_path) AS originalPath, MAX(s.mtime) AS mtime,
              EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
              (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount
-      FROM sources s
-      JOIN objects o ON o.hash = s.object_hash
+      FROM sources s JOIN objects o ON o.hash = s.object_hash
       WHERE s.import_id IN (SELECT id FROM imports WHERE source_name = ?) AND o.state = 'active'
         AND substr(s.original_path, 1, ?) = ?
         AND instr(substr(s.original_path, ? + 1), '/') = 0
       GROUP BY o.hash, s.original_path
       ORDER BY lower(filename), filename
     `).all(source.sourceName, prefixLength, prefix, prefixLength);
-
     return json(res, 200, { source, path, folders, files });
   }
 
@@ -380,7 +236,6 @@ async function handleApi(req, res, url) {
       return json(res, 400, { error: error.message });
     }
   }
-
   if (objectMatch && (req.method === 'GET' || req.method === 'HEAD')) return serveObject(req, res, objectMatch[1]);
 
   const reviewMatch = /^\/api\/objects\/([a-f0-9]{64})\/review$/.exec(url.pathname);
@@ -401,7 +256,7 @@ async function handleApi(req, res, url) {
     db.prepare("UPDATE objects SET state = 'deleted' WHERE hash = ?").run(hash);
     db.prepare('DELETE FROM reviewed_hashes WHERE hash = ?').run(hash);
     if (body.ignore === true) db.prepare('INSERT OR IGNORE INTO ignored_hashes(hash, ignored_at) VALUES(?, ?)').run(hash, now());
-    await removeObject(DATA_DIR, hash);
+    await Promise.all([removeObject(DATA_DIR, hash), cleanupThumbnail(hash)]);
     return json(res, 200, { ok: true, ignored: body.ignore === true });
   }
 
@@ -410,12 +265,10 @@ async function handleApi(req, res, url) {
     const importId = Number(body.importId);
     if (!Number.isInteger(importId) || !db.prepare('SELECT 1 FROM imports WHERE id = ?').get(importId)) return json(res, 400, { error: 'Valid importId is required' });
     if (!Array.isArray(body.sources) || body.sources.length > 1000) return json(res, 400, { error: 'sources must be an array of at most 1000 records' });
-
     const hashes = body.sources.map(source => String(source.hash));
     for (const hash of hashes) if (!validHash(hash)) return json(res, 400, { error: `Invalid hash: ${hash}` });
     const active = hashSet("SELECT hash FROM objects WHERE state = 'active' AND hash IN", [...new Set(hashes)]);
     for (const hash of hashes) if (!active.has(hash)) return json(res, 400, { error: `Unknown active object: ${hash}` });
-
     const insert = db.prepare(`
       INSERT INTO sources(object_hash, import_id, original_path, filename, mtime, created_at)
       VALUES(?, ?, ?, ?, ?, ?)
@@ -444,7 +297,6 @@ async function handleApi(req, res, url) {
     const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
     const filter = fileTypeSql(type, 'o');
     const like = `%${q}%`;
-    const order = fileSortSql(sort);
     const rows = db.prepare(`
       SELECT o.hash, o.size, o.mime, o.created_at AS createdAt,
              COALESCE(MIN(s.filename), o.hash) AS filename,
@@ -459,40 +311,17 @@ async function handleApi(req, res, url) {
         AND (? != 'missing' OR NOT EXISTS (SELECT 1 FROM replicas rb WHERE rb.object_hash = o.hash))
         AND (? = 0 OR EXISTS (
           SELECT 1 FROM sources si JOIN imports ii ON ii.id = si.import_id
-          WHERE si.object_hash = o.hash
-            AND ii.source_name = (SELECT source_name FROM imports WHERE id = ?)
+          WHERE si.object_hash = o.hash AND ii.source_name = (SELECT source_name FROM imports WHERE id = ?)
         ))
         AND (? = '' OR EXISTS (
           SELECT 1 FROM sources sx JOIN imports ix ON ix.id = sx.import_id
           WHERE sx.object_hash = o.hash AND (sx.filename LIKE ? OR sx.original_path LIKE ? OR ix.source_name LIKE ?)
         ))
       GROUP BY o.hash
-      ORDER BY ${order}
+      ORDER BY ${fileSortSql(sort)}
       LIMIT ? OFFSET ?
     `).all(...filter.params, backup, importId, importId, q, like, like, like, limit, offset);
     return json(res, 200, { files: rows, limit, offset, hasMore: rows.length === limit });
-  }
-
-  const detailsMatch = /^\/api\/files\/([a-f0-9]{64})\/details$/.exec(url.pathname);
-  if (detailsMatch && req.method === 'GET') {
-    const hash = detailsMatch[1];
-    const object = db.prepare(`
-      SELECT o.hash, o.size, o.mime, o.created_at AS createdAt,
-             EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed
-      FROM objects o WHERE o.hash = ? AND o.state = 'active'
-    `).get(hash);
-    if (!object) return json(res, 404, { error: 'File not found' });
-    const sources = db.prepare(`
-      SELECT s.original_path AS path, s.filename, s.mtime, i.source_name AS sourceName, i.created_at AS importedAt
-      FROM sources s JOIN imports i ON i.id = s.import_id
-      WHERE s.object_hash = ? ORDER BY i.created_at DESC, s.original_path
-    `).all(hash);
-    const backups = db.prepare(`
-      SELECT d.id, d.name, d.last_seen AS lastSeen, r.verified_at AS verifiedAt
-      FROM replicas r JOIN drives d ON d.id = r.drive_id
-      WHERE r.object_hash = ? ORDER BY d.name
-    `).all(hash);
-    return json(res, 200, { object, sources, backups });
   }
 
   const sourcesMatch = /^\/api\/files\/([a-f0-9]{64})\/sources$/.exec(url.pathname);
@@ -503,41 +332,6 @@ async function handleApi(req, res, url) {
       WHERE s.object_hash = ? ORDER BY i.created_at DESC, s.original_path
     `).all(sourcesMatch[1]);
     return json(res, 200, { sources: rows });
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/drives/register') {
-    const body = await readJson(req);
-    const id = String(body.id || '').trim();
-    const name = String(body.name || '').trim();
-    if (!id || !name) return json(res, 400, { error: 'id and name are required' });
-    const policy = normalizePolicy(body.policy);
-    db.prepare(`
-      INSERT INTO drives(id, name, policy_json, last_seen) VALUES(?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET name = excluded.name, policy_json = excluded.policy_json, last_seen = excluded.last_seen
-    `).run(id, name, JSON.stringify(policy), now());
-    return json(res, 200, driveCoverage(getDrive(id)));
-  }
-
-  if (req.method === 'GET' && url.pathname === '/api/drives') {
-    const rows = db.prepare('SELECT * FROM drives ORDER BY name').all();
-    return json(res, 200, { drives: rows.map(driveCoverage) });
-  }
-
-  const desiredMatch = /^\/api\/drives\/([^/]+)\/desired$/.exec(url.pathname);
-  if (desiredMatch && req.method === 'GET') {
-    const id = decodeURIComponent(desiredMatch[1]);
-    const drive = getDrive(id);
-    if (!drive) return json(res, 404, { error: 'Backup not registered' });
-    const filter = policySql(parsePolicy(drive), 'o');
-    const after = String(url.searchParams.get('after') || '');
-    const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') || 1000)));
-    const rows = db.prepare(`
-      SELECT o.hash, o.size, o.mime FROM objects o
-      WHERE o.state = 'active' AND o.hash > ? AND ${filter.sql}
-      ORDER BY o.hash LIMIT ?
-    `).all(after, ...filter.params, limit);
-    db.prepare('UPDATE drives SET last_seen = ? WHERE id = ?').run(now(), id);
-    return json(res, 200, { objects: rows, nextAfter: rows.length === limit ? rows.at(-1).hash : null });
   }
 
   const replicasMatch = /^\/api\/drives\/([^/]+)\/replicas$/.exec(url.pathname);
@@ -585,8 +379,9 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/catalog/export') {
-    const temp = join(DATA_DIR, 'tmp', `catalog-export-${Date.now()}-${process.pid}.sqlite`);
-    await mkdir(join(DATA_DIR, 'tmp'), { recursive: true });
+    const tempDir = join(DATA_DIR, 'tmp');
+    const temp = join(tempDir, `catalog-export-${Date.now()}-${process.pid}.sqlite`);
+    await mkdir(tempDir, { recursive: true });
     await backupCatalog(db, temp);
     const info = await stat(temp);
     res.writeHead(200, { 'content-type': 'application/vnd.sqlite3', 'content-length': info.size, 'content-disposition': 'attachment; filename="catalog.sqlite"' });
@@ -595,13 +390,18 @@ async function handleApi(req, res, url) {
     return stream.pipe(res);
   }
 
-  return json(res, 404, { error: 'Not found' });
+  json(res, 404, { error: 'Not found' });
 }
 
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-    if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
+    if (await handleServerAuth(req, res, url)) return;
+    if (url.pathname.startsWith('/api/')) {
+      if (!requireAuth(req, res)) return;
+      for (const route of featureRoutes) if (await route(req, res, url)) return;
+      return await handleCoreApi(req, res, url);
+    }
     if (await serveStatic(res, decodeURIComponent(url.pathname))) return;
     json(res, 404, { error: 'Not found' });
   } catch (error) {
