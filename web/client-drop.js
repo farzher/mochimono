@@ -104,23 +104,100 @@ if (location.pathname.startsWith('/files')) {
     return where || 'Existing object';
   }
 
+  function commonDirectory(items) {
+    const directories = items.map(item => normalizePath(item.path).split('/').filter(Boolean).slice(0, -1));
+    if (!directories.length || directories.some(parts => !parts.length)) return '';
+    const common = [...directories[0]];
+    for (const parts of directories.slice(1)) {
+      let length = 0;
+      while (length < common.length && length < parts.length && common[length].toLowerCase() === parts[length].toLowerCase()) length++;
+      common.length = length;
+      if (!common.length) return '';
+    }
+    return common.join('/');
+  }
+
+  function queryValue(value) {
+    return String(value || '').replaceAll('"', '').trim();
+  }
+
+  function showDroppedFiles(files) {
+    window.mochimonoAddedBatch?.clear?.();
+    const directory = commonDirectory(files);
+    const query = directory
+      ? `path:"${queryValue(directory)}"`
+      : files.length === 1
+        ? `name:"${queryValue(files[0].file.name)}"`
+        : '';
+    if (query) window.mochimonoSearch?.setRaw(query);
+    const sort = document.querySelector('#sort');
+    if (sort && sort.value !== 'date-added') {
+      sort.value = 'date-added';
+      sort.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+
   function liveFile(data, item, importId, addedAt) {
-    if (data.existing) return { hash: data.hash, addedAt, exactImportIds: String(importId) };
-    return {
+    const base = {
       hash: data.hash,
-      size: data.size,
-      mime: item.file.type || 'application/octet-stream',
       filename: data.name,
       originalPath: data.path,
-      fileDate: new Date(item.file.lastModified || Date.now()).toISOString(),
+      searchText: `${data.name} ${data.path}`,
       addedAt,
+      exactImportIds: String(importId)
+    };
+    if (data.existing) return base;
+    return {
+      ...base,
+      size: data.size,
+      mime: item.file.type || 'application/octet-stream',
+      fileDate: new Date(item.file.lastModified || Date.now()).toISOString(),
       createdAt: addedAt,
       importIds: [importId],
-      exactImportIds: String(importId),
-      searchText: `${data.name} ${data.path}`,
       reviewed: false,
       backupCount: 0
     };
+  }
+
+  let liveTimer = 0;
+  let livePending = [];
+
+  function visibleAnchor() {
+    if (scrollY <= 4) return null;
+    const bottom = document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0;
+    const card = [...document.querySelectorAll('#files [data-hash]')].find(item => item.getBoundingClientRect().bottom > bottom + 1);
+    return card ? { hash: card.dataset.hash, top: card.getBoundingClientRect().top } : null;
+  }
+
+  function restoreAnchor(anchor) {
+    if (!anchor) return;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const card = document.querySelector(`#files [data-hash="${CSS.escape(anchor.hash)}"]`);
+      if (!card) return;
+      const delta = card.getBoundingClientRect().top - anchor.top;
+      if (Math.abs(delta) > .5) scrollBy(0, delta);
+    }));
+  }
+
+  function flushLive() {
+    clearTimeout(liveTimer);
+    liveTimer = 0;
+    if (!livePending.length) return;
+    const batch = livePending;
+    livePending = [];
+    const anchor = visibleAnchor();
+    for (const file of batch) {
+      window.mochimonoFileDates?.set(file.hash, { fileDate: file.fileDate || file.createdAt || file.addedAt, addedAt: file.addedAt });
+    }
+    window.mochimonoLibrary?.upsertMany?.(batch);
+    window.dispatchEvent(new CustomEvent('mochimono-dates-updated'));
+    restoreAnchor(anchor);
+  }
+
+  function queueLive(file) {
+    livePending.push(file);
+    if (livePending.length >= 16) return flushLive();
+    if (!liveTimer) liveTimer = setTimeout(flushLive, 450);
   }
 
   async function importDropped(files) {
@@ -130,6 +207,7 @@ if (location.pathname.startsWith('/files')) {
     result.querySelector('[data-import-bar]').style.width = '0%';
     result.querySelector('[data-import-meta]').textContent = `${files.length.toLocaleString()} file${files.length === 1 ? '' : 's'}`;
     result.querySelector('[data-import-dupes]').replaceChildren();
+    showDroppedFiles(files);
 
     const label = files.length === 1 ? files[0].path : files[0].path.split('/')[0] || 'Drop';
     const started = await request('/api/client/import/start', {
@@ -138,7 +216,7 @@ if (location.pathname.startsWith('/files')) {
       body: JSON.stringify({ label })
     });
     const importId = Number(started.importId) || 0;
-    window.mochimonoAddedBatch?.start(importId);
+    const liveStartedAt = Date.now();
 
     let added = 0;
     let existing = 0;
@@ -160,8 +238,10 @@ if (location.pathname.startsWith('/files')) {
       });
       if (data.ignored) ignored++;
       else {
-        const addedAt = new Date().toISOString();
-        window.mochimonoAddedBatch?.add(data.hash, liveFile(data, item, importId, addedAt));
+        // During the live view, keep upload order stable: each later file sorts
+        // just after the previous one instead of repeatedly jumping to the top.
+        const addedAt = new Date(liveStartedAt - index).toISOString();
+        queueLive(liveFile(data, item, importId, addedAt));
         if (data.existing) {
           existing++;
           duplicates.push(data);
@@ -170,19 +250,19 @@ if (location.pathname.startsWith('/files')) {
       result.querySelector('[data-import-bar]').style.width = `${(index + 1) / files.length * 100}%`;
     }
 
-    await window.mochimonoAddedBatch?.finish();
+    flushLive();
+    try { await window.mochimonoLibrary?.refresh?.(); } catch {}
 
     const total = files.length;
     const handled = added + existing + ignored;
     result.querySelector('[data-import-title]').textContent = 'Added to Mochimono';
     const parts = [`${handled.toLocaleString()} / ${total.toLocaleString()}`, `${added.toLocaleString()} new`];
-    if (existing) parts.push(`${existing.toLocaleString()} already here`);
     if (ignored) parts.push(`${ignored.toLocaleString()} ignored`);
     result.querySelector('[data-import-meta]').textContent = parts.join(' · ');
 
     const duplicateBox = result.querySelector('[data-import-dupes]');
     duplicateBox.innerHTML = duplicates.length ? `
-      <div class="client-import-examples">${existing.toLocaleString()} already here</div>
+      <div class="client-import-examples">Already here</div>
       ${duplicates.map(item => {
         const prior = item.previous?.[0];
         return `<div class="client-import-dupe"><b>${esc(item.name)}</b><span>${esc(prior ? priorText(prior) : 'Same file already stored')}</span></div>`;
@@ -214,6 +294,7 @@ if (location.pathname.startsWith('/files')) {
     try {
       await importDropped(await droppedFiles(event.dataTransfer));
     } catch (error) {
+      flushLive();
       result.hidden = false;
       result.querySelector('[data-import-title]').textContent = 'Import failed';
       result.querySelector('[data-import-meta]').textContent = error.message;
