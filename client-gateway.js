@@ -52,30 +52,14 @@ function staticType(path) {
   return 'application/octet-stream';
 }
 
+// The Client reuses the normal library. This hook only exposes existing library
+// operations to Client-only drag/drop UI. If app.js changes, serving the library
+// must still work, so a missing marker simply means no live-import enhancement.
 function patchClientApp(source) {
-  const replacements = [
-    [
-      "    backupCount: Number(file.backupCount) || 0,\n    dateMs: Number.isNaN(date.getTime()) ? 0 : date.getTime()",
-      "    backupCount: Number(file.backupCount) || 0,\n    addedMs: Number.isNaN(new Date(file.addedAt || file.createdAt || 0).getTime()) ? 0 : new Date(file.addedAt || file.createdAt || 0).getTime(),\n    dateMs: Number.isNaN(date.getTime()) ? 0 : date.getTime()"
-    ],
-    [
-      "function dateValue(file) {\n  return new Date(file.dateMs || 0);\n}",
-      "function dateValue(file) {\n  return new Date(sort === 'date-added' ? (file.addedMs || file.dateMs || 0) : (file.dateMs || 0));\n}"
-    ],
-    [
-      "function sortFiles(files) {\n  if (sort === 'date-asc')",
-      "function sortFiles(files) {\n  if (sort === 'date-added') return files.sort((a, b) => (b.addedMs || 0) - (a.addedMs || 0) || a.hash.localeCompare(b.hash));\n  if (sort === 'date-asc')"
-    ],
-    [
-      "boot().catch(error => {",
-      `window.mochimonoLibrary = {\n  setSort(value) {\n    sort = String(value || 'date-desc');\n    $('#sort').value = sort;\n    applyFilters(true);\n  },\n  setBatch(hashes) {\n    setCollectionHashes(hashes instanceof Set ? hashes : null);\n  },\n  upsert(file) {\n    if (!file?.hash) return;\n    const index = catalog.findIndex(item => item.hash === file.hash);\n    if (index >= 0) {\n      const current = catalog[index];\n      const exact = [...new Set([\n        ...String(current.exactImportIds || '').split(',').map(Number).filter(Boolean),\n        ...String(file.exactImportIds || '').split(',').map(Number).filter(Boolean)\n      ])];\n      catalog[index] = normalizeFile({ ...current, ...file, exactImportIds: exact.join(',') });\n    } else {\n      catalog.push(normalizeFile(file));\n    }\n    rebuildIndexes();\n    applyFilters(false);\n  },\n  refresh() { return syncCatalog(true); }\n};\n\nboot().catch(error => {`
-    ]
-  ];
-  for (const [from, to] of replacements) {
-    if (!source.includes(from)) throw new Error('Client app patch no longer matches web/app.js');
-    source = source.replace(from, to);
-  }
-  return source;
+  const marker = 'boot().catch(error => {';
+  if (!source.includes(marker)) return source;
+  const hook = `window.mochimonoLibrary = {\n  setSort(value) {\n    sort = String(value || 'date-desc');\n    $('#sort').value = sort;\n    applyFilters(true);\n  },\n  setBatch(hashes) {\n    setCollectionHashes(hashes instanceof Set ? hashes : null);\n  },\n  upsert(file) {\n    if (!file?.hash) return;\n    const index = catalog.findIndex(item => item.hash === file.hash);\n    if (index >= 0) {\n      const current = catalog[index];\n      catalog[index] = normalizeFile({ ...current, ...file });\n    } else {\n      catalog.push(normalizeFile(file));\n    }\n    rebuildIndexes();\n    applyFilters(false);\n  },\n  refresh() { return syncCatalog(true); }\n};\n\n`;
+  return source.replace(marker, `${hook}${marker}`);
 }
 
 async function serveLibrary(res, pathname) {
