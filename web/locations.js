@@ -1,4 +1,5 @@
 import { normalizeText } from './search-query.js';
+import './protection-indicators.js';
 
 const select = document.querySelector('#locationFilter');
 const source = document.querySelector('#source');
@@ -11,7 +12,7 @@ let copies = new Map();
 let driveHashes = new Map();
 let serverHashes = new Set();
 let protection = {
-  backed: new Set(), verifiedBacked: new Set(), safeLocal: new Set(), needs: new Set(), onlyLocal: new Set(), notLocal: new Set()
+  backed: new Set(), verifiedBacked: new Set(), safeLocal: new Set(), localNeeds: new Set(), needs: new Set(), onlyLocal: new Set(), notLocal: new Set()
 };
 let lastRefresh = 0;
 
@@ -56,7 +57,9 @@ function renderOptions() {
   const protectionOptions = `
     <optgroup label="Protection">
       <option value="safe-local">Safe to free from this PC · ${count(protection.safeLocal)}</option>
+      <option value="local-needs">Not safe to free yet · ${count(protection.localNeeds)}</option>
       <option value="needs-protection">Needs protection · ${count(protection.needs)}</option>
+      <option value="verified-backup">Verified backup copies · ${count(protection.verifiedBacked)}</option>
       <option value="only-local">Only on this PC · ${count(protection.onlyLocal)}</option>
       <option value="not-local">Not on this PC · ${count(protection.notLocal)}</option>
     </optgroup>`;
@@ -105,10 +108,12 @@ async function rebuildProtection() {
   }));
   const local = new Set(copies.keys());
   const known = union(local, serverHashes, backed);
+  const safeLocal = new Set([...local].filter(hash => serverHashes.has(hash) && verifiedBacked.has(hash)));
   protection = {
     backed,
     verifiedBacked,
-    safeLocal: new Set([...local].filter(hash => serverHashes.has(hash) && verifiedBacked.has(hash))),
+    safeLocal,
+    localNeeds: new Set([...local].filter(hash => !safeLocal.has(hash))),
     needs: new Set([...known].filter(hash => !serverHashes.has(hash) || !verifiedBacked.has(hash))),
     onlyLocal: new Set([...local].filter(hash => !serverHashes.has(hash) && !backed.has(hash))),
     notLocal: new Set([...known].filter(hash => !local.has(hash)))
@@ -119,7 +124,9 @@ async function applySelection() {
   const value = select.value;
   const titles = {
     'safe-local': 'Files on this PC that also exist in Mochimono and on a verified backup',
+    'local-needs': 'Files on this PC that are not yet safe to remove locally',
     'needs-protection': 'Files missing either the Mochimono copy or a verified independent backup copy',
+    'verified-backup': 'Files with at least one verified independent backup copy',
     'only-local': 'Files whose only known copy is on this PC',
     'not-local': 'Files with no indexed copy on this PC',
     local: 'Files in folders Mochimono is browsing or protecting on this PC',
@@ -144,7 +151,9 @@ async function applySelection() {
     return;
   }
   if (value === 'safe-local') return library()?.setLocationFilter?.(value, protection.safeLocal);
+  if (value === 'local-needs') return library()?.setLocationFilter?.(value, protection.localNeeds);
   if (value === 'needs-protection') return library()?.setLocationFilter?.(value, protection.needs);
+  if (value === 'verified-backup') return library()?.setLocationFilter?.(value, protection.verifiedBacked);
   if (value === 'only-local') return library()?.setLocationFilter?.(value, protection.onlyLocal);
   if (value === 'not-local') return library()?.setLocationFilter?.(value, protection.notLocal);
   if (value.startsWith('folder:')) {
@@ -197,6 +206,14 @@ window.mochimonoLocations = {
   isSafeToFree(hash) { return protection.safeLocal.has(String(hash)); },
   allServerStored(hashes) { return [...hashes || []].every(hash => serverHashes.has(String(hash))); },
   definitions() { return [...definitions, ...drives.map(drive => ({ id: drive.id, kind: 'backup', name: drive.name, available: null, lastSeen: drive.lastSeen }))]; },
+  async select(value) {
+    const wanted = String(value || '');
+    if (![...select.options].some(option => option.value === wanted)) return false;
+    select.value = wanted;
+    await applySelection();
+    select.dispatchEvent(new CustomEvent('mochimono:where-selected', { bubbles: true, detail: { value: wanted } }));
+    return true;
+  },
   refresh: refreshLocations
 };
 
