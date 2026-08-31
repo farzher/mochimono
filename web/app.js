@@ -693,6 +693,16 @@ function updateViewerNav() {
   $('#viewer-next').disabled = index < 0 || index >= items.length - 1;
 }
 
+function ensureViewerGridWindow() {
+  if (!selected || view === 'folders') return;
+  const index = filteredIndex.get(selected.hash);
+  if (!Number.isInteger(index) || (index >= renderOffset && index < renderOffset + renderLimit)) return;
+  renderOffset = Math.max(0, index - PAGE);
+  renderLimit = PAGE * 2;
+  updateWindow();
+  renderFiles();
+}
+
 function loadFullViewerImage(file) {
   const shown = $('#viewer-media img[data-full-src]');
   if (!shown) return;
@@ -722,6 +732,7 @@ function loadFullViewerImage(file) {
 
 function renderViewerState() {
   if (!selected) return;
+  ensureViewerGridWindow();
   viewerImageLoad = null;
   $('#viewer-name').textContent = selected.filename;
   $('#viewer-meta').textContent = `${shortDate(normalizeFile(selected))} · ${formatBytes(selected.size)}`;
@@ -755,8 +766,28 @@ function openViewer(hash, fallback = null) {
 
 window.mochimonoOpenViewer = openViewer;
 
+function revealViewerHash(hash) {
+  if (!hash) return requestAnimationFrame(() => window.scrollTo(0, viewerScrollY));
+  if (view !== 'folders') {
+    const index = filteredIndex.get(hash);
+    if (Number.isInteger(index) && (index < renderOffset || index >= renderOffset + renderLimit)) {
+      renderOffset = Math.max(0, index - PAGE);
+      renderLimit = PAGE * 2;
+      updateWindow();
+      renderFiles();
+    }
+  }
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const card = $('#files').querySelector(`[data-hash="${CSS.escape(hash)}"]`);
+    if (card) card.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' });
+    else window.scrollTo(0, viewerScrollY);
+    window.dispatchEvent(new CustomEvent('mochimono-viewer-return', { detail: { hash } }));
+  }));
+}
+
 function closeViewer() {
   if ($('#viewer').hidden) return;
+  const returnHash = selected?.hash || '';
   $('#viewer').hidden = true;
   $('#viewer-menu').open = false;
   $('#viewer-media').innerHTML = '';
@@ -768,7 +799,7 @@ function closeViewer() {
     if (view === 'folders') loadFolder().catch(console.error);
     else applyFilters(false);
   }
-  requestAnimationFrame(() => window.scrollTo(0, viewerScrollY));
+  revealViewerHash(returnHash);
 }
 
 function navigateViewer(step) {
