@@ -62,19 +62,19 @@ function renderOptions() {
       <option value="local-needs">Not safe to free yet · ${count(protection.localNeeds)}</option>
       <option value="needs-protection">Needs protection · ${count(protection.needs)}</option>
       <option value="verified-backup">Verified backup copies · ${count(protection.verifiedBacked)}</option>
-      <option value="only-local">Only on this PC · ${count(protection.onlyLocal)}</option>
-      <option value="not-local">Not on this PC · ${count(protection.notLocal)}</option>
+      <option value="only-local">Only indexed on this PC · ${count(protection.onlyLocal)}</option>
+      <option value="not-local">No indexed local copy · ${count(protection.notLocal)}</option>
     </optgroup>`;
   select.innerHTML = `
     <option value="">Everywhere</option>
-    <option value="local">This PC · ${count(new Set(copies.keys()))}</option>
+    <option value="local">Indexed on this PC · ${count(new Set(copies.keys()))}</option>
     <option value="server">Mochimono · ${count(serverHashes)}</option>
     <option value="backup">Backups · ${count(protection.backed)}</option>
     ${protectionOptions}
     ${local.length ? `<optgroup label="Folders on this PC">${local.map(location => `<option value="folder:${location.id}">${escapeHtml(location.name)}${location.protected === false ? ' · Browse only' : ''}${location.available === false ? ' · Offline' : ''}</option>`).join('')}</optgroup>` : ''}
     ${drives.length ? `<optgroup label="Backup drives">${drives.map(drive => `<option value="drive:${encodeURIComponent(drive.id)}">${escapeHtml(drive.name)}</option>`).join('')}</optgroup>` : ''}`;
   select.value = [...select.options].some(option => option.value === current) ? current : '';
-  select.setAttribute('aria-label', 'Where files are stored');
+  select.setAttribute('aria-label', 'Where Mochimono knows files are stored');
   syncOrganizationLabels();
 }
 
@@ -148,17 +148,17 @@ async function rebuildProtection() {
 async function applySelection() {
   const value = select.value;
   const titles = {
-    'safe-local': 'Files on this PC that also exist in healthy Mochimono storage and on a verified backup',
-    'local-needs': 'Files on this PC that are not yet safe to remove locally',
+    'safe-local': 'Files in indexed local folders that also exist in healthy Mochimono storage and on a verified backup',
+    'local-needs': 'Files in indexed local folders that are not yet safe to remove locally',
     'needs-protection': 'Files missing either a healthy Mochimono copy or a verified independent backup copy',
     'verified-backup': 'Files with at least one verified independent backup copy',
-    'only-local': 'Files whose only known copy is on this PC',
-    'not-local': 'Files with no indexed copy on this PC',
+    'only-local': 'Files whose only known copy is in a folder Mochimono indexes on this PC',
+    'not-local': 'Files with no copy in folders Mochimono currently Browse/Protect-indexes on this PC',
     local: 'Files in folders Mochimono is browsing or protecting on this PC',
     server: 'Files with a healthy stored Mochimono copy',
     backup: 'Files present on at least one backup'
   };
-  select.title = titles[value] || 'Where files are stored';
+  select.title = titles[value] || 'Where Mochimono knows files are stored';
   if (!value) {
     library()?.setLocationFilter?.('');
     return;
