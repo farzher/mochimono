@@ -33,6 +33,16 @@ function sync() {
   if (heading) text(heading, 'Add to group');
   const input = picker?.querySelector('[data-picker-input]');
   if (input && input.placeholder !== 'Find or create a group') input.placeholder = 'Find or create a group';
+
+  const saveView = document.querySelector('[data-save-view]');
+  if (saveView) text(saveView, 'Save as smart group');
+  const saveDialog = document.querySelector('.save-view-dialog');
+  const saveHeading = saveDialog?.querySelector('.collection-picker-head strong');
+  if (saveHeading) text(saveHeading, 'Save smart group');
+  const saveName = saveDialog?.querySelector('[data-save-name]');
+  if (saveName && saveName.placeholder !== 'Group name') saveName.placeholder = 'Group name';
+  const saveButton = saveDialog?.querySelector('.collection-create');
+  if (saveButton) text(saveButton, 'Save smart group');
 }
 
 let queued = false;
