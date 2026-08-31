@@ -75,8 +75,14 @@ async function ensureConnected() {
 }
 
 window.addEventListener('message', event => {
-  if (event.source !== frame.contentWindow || event.data?.type !== 'mochimono-auth-required') return;
-  if (!connection.open) connection.showModal();
+  if (event.source !== frame.contentWindow) return;
+  if (event.data?.type === 'mochimono-auth-required') {
+    if (!connection.open) connection.showModal();
+    return;
+  }
+  if (event.data?.type === 'mochimono-viewer-state') {
+    document.body.classList.toggle('library-viewer-open', Boolean(event.data.open));
+  }
 });
 
 ensureConnected();
