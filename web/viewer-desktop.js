@@ -6,6 +6,11 @@ viewerDesktopStyle.textContent = `
     user-select:none;
     -webkit-user-select:none;
     -webkit-user-drag:none;
+    width:100vw;
+    height:auto;
+    max-width:100vw;
+    max-height:100dvh;
+    object-fit:contain;
   }
 `;
 document.head.append(viewerDesktopStyle);
