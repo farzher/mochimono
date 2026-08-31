@@ -1,6 +1,5 @@
 const files = document.querySelector('#files');
 const views = document.querySelector('#views');
-const source = document.querySelector('#source');
 const viewer = document.querySelector('#viewer');
 const viewerClose = document.querySelector('#viewer-close');
 const viewerInfo = document.querySelector('#viewer-info-button');
@@ -15,10 +14,8 @@ let fileInfo = new Map();
 let sourceNames = new Map();
 let cachePromise = null;
 let decorateFrame = 0;
-let hoverHash = '';
 let lastFocusedHash = '';
-let richTimer = 0;
-const detailCache = new Map();
+let pointerHash = '';
 
 const style = document.createElement('style');
 style.textContent = `
@@ -27,41 +24,26 @@ style.textContent = `
   .grid-context-toggle.active{background:var(--surface3);color:#fff}
   .grid-context-toggle span{width:16px;height:16px;display:grid;place-items:center;border:1.5px solid currentColor;border-radius:50%;font:800 10px/1 system-ui}
   .file-card.media-card{position:relative}
-  .file-context-badge{position:absolute;z-index:3;left:5px;right:5px;bottom:5px;min-width:0;padding:5px 6px;border-radius:6px;background:rgba(7,7,8,.76);backdrop-filter:blur(5px);pointer-events:none;text-shadow:0 1px 2px #000;opacity:.9}
+  .file-context-badge{position:absolute;z-index:3;left:0;right:0;bottom:0;min-width:0;padding:28px 8px 7px;background:linear-gradient(to bottom,transparent 0,rgba(5,5,6,.3) 35%,rgba(5,5,6,.9) 100%);pointer-events:none;text-shadow:0 1px 3px #000;opacity:0;transform:translateY(3px);transition:opacity .1s ease,transform .1s ease}
   .file-context-badge strong,.file-context-badge span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .file-context-badge strong{color:#f2ece8;font-size:9px;font-weight:720;line-height:1.2}
-  .file-context-badge span{margin-top:2px;color:#aaa09d;font-size:8px;font-weight:620;line-height:1.2}
+  .file-context-badge strong{color:#fff;font-size:10px;font-weight:720;line-height:1.2}
+  .file-context-badge span{margin-top:2px;color:#c7bfbc;font-size:8px;font-weight:600;line-height:1.2}
+  .file-card.context-pointer-hover .file-context-badge,
+  .file-card.context-keyboard-focus .file-context-badge,
+  .file-card:focus-visible .file-context-badge{opacity:1;transform:none}
+  .files.has-context-hover .file-card.context-keyboard-focus:not(.context-pointer-hover) .file-context-badge{opacity:0;transform:translateY(3px)}
   .file-card.context-keyboard-focus,.file-row.context-keyboard-focus{box-shadow:0 0 0 3px rgba(239,160,154,.9)!important;outline:none}
-  .file-context-tooltip{position:fixed;z-index:120;width:min(430px,calc(100vw - 24px));padding:12px;border:1px solid #474047;border-radius:11px;background:rgba(24,22,25,.985);box-shadow:0 16px 44px rgba(0,0,0,.58);color:#f3ece8;pointer-events:none;font-size:11px;line-height:1.35}
-  .file-context-tooltip[hidden]{display:none!important}
-  .file-context-tooltip .context-label{margin-bottom:5px;color:#82797a;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.07em}
-  .file-context-tooltip>strong{display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .context-meta{margin-top:3px;color:#aaa09d}
-  .context-meta span+span:before{content:' · ';color:#665f60}
-  .context-primary-path{margin-top:8px;padding:7px 8px;border-radius:7px;background:#171519;color:#d5cbc7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .context-section{margin-top:10px;padding-top:8px;border-top:1px solid #393438}
-  .context-section-label{color:#807778;font-size:9px;font-weight:760;text-transform:uppercase;letter-spacing:.055em}
-  .context-location{margin-top:6px;min-width:0}
-  .context-location b{display:block;color:#ddd3cf;font-size:10px}
-  .context-location span{display:block;color:#9b918e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .context-collections{margin-top:5px;color:#cbb6d8}
-  .context-empty{margin-top:5px;color:#756d6d}
-  @media(max-width:700px){.file-context-tooltip{display:none!important}.file-context-badge strong{font-size:8px}.file-context-badge span{font-size:7px}}
+  @media(max-width:700px){.file-context-badge{padding:24px 7px 6px}.file-context-badge strong{font-size:9px}.file-context-badge span{font-size:7px}}
 `;
 document.head.append(style);
 
 const toggle = document.createElement('button');
 toggle.type = 'button';
 toggle.className = 'grid-context-toggle';
-toggle.title = 'Show file details';
-toggle.setAttribute('aria-label', 'Show file details');
+toggle.title = 'Show file context';
+toggle.setAttribute('aria-label', 'Show file context');
 toggle.innerHTML = '<span aria-hidden="true">i</span>';
 mediaSizeControl.after(toggle);
-
-const tooltip = document.createElement('div');
-tooltip.className = 'file-context-tooltip';
-tooltip.hidden = true;
-document.body.append(tooltip);
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
@@ -110,14 +92,23 @@ function formatBytes(bytes) {
   let value = Number(bytes || 0);
   let unit = 0;
   while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
-  return `${value < 10 && unit ? value.toFixed(2) : value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
+  return `${value < 10 && unit ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
 
-function formatDate(value) {
+function shortDate(value) {
   const date = new Date(value || 0);
-  return Number.isNaN(date.getTime()) || !date.getTime()
-    ? ''
-    : date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  if (Number.isNaN(date.getTime()) || !date.getTime()) return '';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+}
+
+function overlayContext(file) {
+  const parts = [];
+  const context = briefContext(file);
+  const date = shortDate(file?.fileDate || file?.createdAt);
+  if (context) parts.push(context);
+  if (date) parts.push(date);
+  if (file?.size) parts.push(formatBytes(file.size));
+  return parts.join(' · ') || 'No folder recorded';
 }
 
 function openCache() {
@@ -172,11 +163,13 @@ function decorate() {
       badge.className = 'file-context-badge';
       card.append(badge);
     }
-    badge.innerHTML = `<strong>${escapeHtml(cardName(card, file))}</strong><span>${escapeHtml(briefContext(file) || 'No folder recorded')}</span>`;
+    badge.innerHTML = `<strong>${escapeHtml(cardName(card, file))}</strong><span>${escapeHtml(overlayContext(file))}</span>`;
   }
   for (const card of files.querySelectorAll('[data-hash]')) {
     card.classList.toggle('context-keyboard-focus', card.dataset.hash === lastFocusedHash);
+    card.classList.toggle('context-pointer-hover', card.dataset.hash === pointerHash);
   }
+  files.classList.toggle('has-context-hover', Boolean(pointerHash));
 }
 
 function scheduleDecorate() {
@@ -185,105 +178,6 @@ function scheduleDecorate() {
 
 function currentViewerHash() {
   return viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
-}
-
-function cachedBase(hash) {
-  const file = fileInfo.get(hash);
-  const card = files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
-  const meta = [];
-  const date = formatDate(file?.fileDate || file?.createdAt);
-  if (date) meta.push(date);
-  if (file?.size) meta.push(formatBytes(file.size));
-  if (file?.width && file?.height) meta.push(`${file.width}×${file.height}`);
-  if (file?.mime) meta.push(file.mime);
-  const primary = normalizePath(file?.originalPath);
-  return `<div class="context-label">File details</div><strong>${escapeHtml(cardName(card, file))}</strong>
-    ${meta.length ? `<div class="context-meta">${meta.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : ''}
-    ${primary ? `<div class="context-primary-path" title="${escapeHtml(primary)}">${escapeHtml(primary)}</div>` : ''}`;
-}
-
-async function loadDetails(hash) {
-  if (detailCache.has(hash)) return detailCache.get(hash);
-  const promise = Promise.allSettled([
-    fetch(`/api/files/${hash}/details`).then(response => response.ok ? response.json() : null),
-    fetch(`/api/collections/file/${hash}`).then(response => response.ok ? response.json() : null)
-  ]).then(([details, collections]) => ({
-    details: details.status === 'fulfilled' ? details.value : null,
-    collections: collections.status === 'fulfilled' ? collections.value : null
-  }));
-  detailCache.set(hash, promise);
-  return promise;
-}
-
-function positionTooltip(card) {
-  if (!card || tooltip.hidden) return;
-  const rect = card.getBoundingClientRect();
-  const width = Math.min(430, innerWidth - 24);
-  let left = rect.right + 9;
-  if (left + width > innerWidth - 12) left = rect.left - width - 9;
-  if (left < 12) left = Math.max(12, Math.min(innerWidth - width - 12, rect.left));
-  const top = Math.max(12, Math.min(innerHeight - tooltip.offsetHeight - 12, rect.top));
-  tooltip.style.left = `${left}px`;
-  tooltip.style.top = `${top}px`;
-}
-
-function renderRich(hash, data) {
-  const cached = fileInfo.get(hash);
-  const object = data.details?.object || {};
-  const sources = data.details?.sources || [];
-  const collections = data.collections?.collections || [];
-  const card = files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
-  const primary = sources[0];
-  const meta = [];
-  const date = formatDate(primary?.mtime || cached?.fileDate || object.createdAt);
-  if (date) meta.push(date);
-  if (object.size || cached?.size) meta.push(formatBytes(object.size || cached.size));
-  if (cached?.width && cached?.height) meta.push(`${cached.width}×${cached.height}`);
-  if (object.mime || cached?.mime) meta.push(object.mime || cached.mime);
-
-  let html = `<div class="context-label">File details</div><strong>${escapeHtml(primary?.filename || cardName(card, cached))}</strong>`;
-  if (meta.length) html += `<div class="context-meta">${meta.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>`;
-  if (primary?.path) html += `<div class="context-primary-path" title="${escapeHtml(primary.path)}">${escapeHtml(primary.path)}</div>`;
-
-  html += '<div class="context-section"><div class="context-section-label">Locations</div>';
-  if (sources.length) {
-    html += sources.slice(0, 8).map(item => `
-      <div class="context-location"><b>${escapeHtml(item.sourceName || 'Source')}</b><span title="${escapeHtml(item.path || '')}">${escapeHtml(item.path || '')}</span></div>`).join('');
-    if (sources.length > 8) html += `<div class="context-empty">+${sources.length - 8} more locations</div>`;
-  } else {
-    html += '<div class="context-empty">No recorded source locations.</div>';
-  }
-  html += '</div>';
-
-  if (collections.length) {
-    html += `<div class="context-section"><div class="context-section-label">Collections</div><div class="context-collections">${escapeHtml(collections.map(item => item.name).join(' · '))}</div></div>`;
-  }
-  return html;
-}
-
-function showTooltip(card, rich = true) {
-  if (!card || !viewer.hidden || !['grid', 'list'].includes(currentView()) || innerWidth <= 700) return;
-  const hash = card.dataset.hash;
-  if (!hash) return;
-  hoverHash = hash;
-  tooltip.innerHTML = cachedBase(hash);
-  tooltip.hidden = false;
-  positionTooltip(card);
-  clearTimeout(richTimer);
-  if (!rich) return;
-  richTimer = setTimeout(async () => {
-    const data = await loadDetails(hash);
-    if (hoverHash !== hash || tooltip.hidden) return;
-    tooltip.innerHTML = renderRich(hash, data);
-    positionTooltip(card);
-  }, 90);
-}
-
-function hideTooltip() {
-  clearTimeout(richTimer);
-  richTimer = 0;
-  hoverHash = '';
-  tooltip.hidden = true;
 }
 
 function renderedCards() {
@@ -338,23 +232,31 @@ function viewerVerticalCard(direction) {
   return next !== current ? next : null;
 }
 
-function focusCard(card, rich = true) {
+function focusCard(card) {
   if (!card) return;
   lastFocusedHash = card.dataset.hash;
-  for (const item of files.querySelectorAll('.context-keyboard-focus')) item.classList.remove('context-keyboard-focus');
-  card.classList.add('context-keyboard-focus');
+  pointerHash = '';
   card.focus({ preventScroll: true });
   card.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
-  requestAnimationFrame(() => showTooltip(card, rich));
+  scheduleDecorate();
 }
 
 function typingTarget(target) {
   return Boolean(target?.closest?.('input,select,textarea,[contenteditable="true"]'));
 }
 
-function viewerOwnsSpace() {
+function viewerControlFocused() {
   const active = document.activeElement;
   return Boolean(active && viewer.contains(active) && active.closest('video,input,select,textarea,summary,button,a'));
+}
+
+function openCurrent(card) {
+  if (!card) return;
+  lastFocusedHash = card.dataset.hash;
+  pointerHash = '';
+  scheduleDecorate();
+  if (window.mochimonoOpenViewer) window.mochimonoOpenViewer(lastFocusedHash);
+  else card.click();
 }
 
 toggle.addEventListener('click', () => {
@@ -365,28 +267,31 @@ toggle.addEventListener('click', () => {
 
 files.addEventListener('pointermove', event => {
   if (event.pointerType === 'touch') return;
-  const card = event.target.closest('[data-hash]');
-  if (!card) return hideTooltip();
-  if (hoverHash !== card.dataset.hash || tooltip.hidden) showTooltip(card, true);
+  const card = event.target.closest('.file-card.media-card[data-hash]');
+  const hash = card?.dataset.hash || '';
+  if (hash === pointerHash) return;
+  pointerHash = hash;
+  scheduleDecorate();
 });
 
-files.addEventListener('pointerleave', hideTooltip);
+files.addEventListener('pointerleave', () => {
+  if (!pointerHash) return;
+  pointerHash = '';
+  scheduleDecorate();
+});
 
 files.addEventListener('focusin', event => {
   const card = event.target.closest('[data-hash]');
   if (!card) return;
   lastFocusedHash = card.dataset.hash;
   scheduleDecorate();
-  requestAnimationFrame(() => showTooltip(card, true));
-});
-
-files.addEventListener('focusout', event => {
-  if (!event.relatedTarget?.closest?.('[data-hash]')) hideTooltip();
 });
 
 files.addEventListener('pointerdown', event => {
   const card = event.target.closest('[data-hash]');
-  if (card) lastFocusedHash = card.dataset.hash;
+  if (!card) return;
+  lastFocusedHash = card.dataset.hash;
+  scheduleDecorate();
 });
 
 document.addEventListener('keydown', event => {
@@ -394,16 +299,16 @@ document.addEventListener('keydown', event => {
 
   if (!viewer.hidden) {
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
       const target = viewerVerticalCard(event.key === 'ArrowUp' ? -1 : 1);
       if (target && window.mochimonoOpenViewer) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
         lastFocusedHash = target.dataset.hash;
         window.mochimonoOpenViewer(lastFocusedHash);
       }
       return;
     }
-    if (event.code === 'Space' && !viewerOwnsSpace()) {
+    if ((event.code === 'Space' || event.key === 'Enter') && !viewerControlFocused()) {
       lastFocusedHash = currentViewerHash() || lastFocusedHash;
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -426,38 +331,36 @@ document.addEventListener('keydown', event => {
   if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
     const index = Math.max(0, cards.indexOf(current));
     const step = event.key === 'ArrowLeft' ? -1 : 1;
-    focusCard(cards[Math.max(0, Math.min(cards.length - 1, index + step))], !event.repeat);
+    focusCard(cards[Math.max(0, Math.min(cards.length - 1, index + step))]);
     event.preventDefault();
     event.stopImmediatePropagation();
     return;
   }
   if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-    focusCard(verticalCard(cards, current, event.key === 'ArrowUp' ? -1 : 1), !event.repeat);
+    focusCard(verticalCard(cards, current, event.key === 'ArrowUp' ? -1 : 1));
     event.preventDefault();
     event.stopImmediatePropagation();
     return;
   }
   if (event.code === 'Space') {
-    if (!current) return;
-    lastFocusedHash = current.dataset.hash;
     event.preventDefault();
     event.stopImmediatePropagation();
-    hideTooltip();
-    if (window.mochimonoOpenViewer) window.mochimonoOpenViewer(lastFocusedHash);
-    else current.click();
+    openCurrent(current);
+    return;
   }
-}, true);
-
-document.addEventListener('keyup', event => {
-  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key) || !viewer.hidden) return;
-  const card = lastFocusedHash && files.querySelector(`[data-hash="${CSS.escape(lastFocusedHash)}"]`);
-  if (card) showTooltip(card, true);
+  if (event.key === 'Enter') {
+    const active = document.activeElement?.closest?.('[data-hash]');
+    if (!active) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openCurrent(active);
+  }
 }, true);
 
 new MutationObserver(scheduleDecorate).observe(files, { childList: true, subtree: true });
 new MutationObserver(() => {
+  pointerHash = '';
   syncToggle();
-  hideTooltip();
   scheduleDecorate();
 }).observe(views, { subtree: true, attributes: true, attributeFilter: ['class'] });
 
@@ -465,23 +368,11 @@ window.addEventListener('mochimono-viewer-return', event => {
   const hash = String(event.detail?.hash || '');
   if (!hash) return;
   lastFocusedHash = hash;
+  pointerHash = '';
   const card = files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
-  if (card) {
-    for (const item of files.querySelectorAll('.context-keyboard-focus')) item.classList.remove('context-keyboard-focus');
-    card.classList.add('context-keyboard-focus');
-    card.focus({ preventScroll: true });
-  }
+  card?.focus({ preventScroll: true });
   scheduleDecorate();
 });
-
-source.addEventListener('change', hideTooltip);
-window.addEventListener('scroll', () => {
-  if (tooltip.hidden) return;
-  const card = hoverHash && files.querySelector(`[data-hash="${CSS.escape(hoverHash)}"]`);
-  if (card) positionTooltip(card);
-  else hideTooltip();
-}, { passive: true });
-window.addEventListener('resize', hideTooltip, { passive: true });
 
 refreshCache();
 setTimeout(refreshCache, 700);
