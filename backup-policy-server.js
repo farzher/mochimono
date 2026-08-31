@@ -181,7 +181,8 @@ export function driveCoverage(row) {
 
 export async function handleBackupPolicy(req, res, url) {
   const desired = /^\/api\/drives\/([^/]+)\/desired$/.exec(url.pathname);
-  const driveRoute = url.pathname === '/api/drives/register' || url.pathname === '/api/drives' || Boolean(desired);
+  const files = /^\/api\/drives\/([^/]+)\/files$/.exec(url.pathname);
+  const driveRoute = url.pathname === '/api/drives/register' || url.pathname === '/api/drives' || Boolean(desired) || Boolean(files);
   if (!driveRoute) return false;
 
   if (req.method === 'POST' && url.pathname === '/api/drives/register') {
@@ -200,6 +201,24 @@ export async function handleBackupPolicy(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/api/drives') {
     json(res, 200, { drives: db.prepare('SELECT * FROM drives ORDER BY name').all().map(driveCoverage) });
+    return true;
+  }
+
+  if (files && req.method === 'GET') {
+    const id = decodeURIComponent(files[1]);
+    if (!getDrive(id)) {
+      json(res, 404, { error: 'Backup not registered' });
+      return true;
+    }
+    const after = String(url.searchParams.get('after') || '');
+    const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') || 5000)));
+    const rows = db.prepare(`
+      SELECT r.object_hash AS hash, r.verified_at AS verifiedAt
+      FROM replicas r JOIN objects o ON o.hash = r.object_hash
+      WHERE r.drive_id = ? AND o.state = 'active' AND r.object_hash > ?
+      ORDER BY r.object_hash LIMIT ?
+    `).all(id, after, limit);
+    json(res, 200, { files: rows, nextAfter: rows.length === limit ? rows.at(-1).hash : null });
     return true;
   }
 

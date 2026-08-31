@@ -122,51 +122,49 @@ function progressData(job) {
 }
 
 function renderItemProgress(row, job) {
-  const element = row?.querySelector('[data-item-progress]');
-  if (!element) return;
-  const progress = progressData(job);
-  element.hidden = !progress;
-  if (!progress) return void (element.dataset.progressKey = '');
-  if (element.dataset.progressKey === progress.key) return;
-  element.dataset.progressKey = progress.key;
-  element.innerHTML = progress.html;
+  const container = row?.querySelector('[data-item-progress]');
+  if (!container) return;
+  const data = progressData(job);
+  if (!data) {
+    container.hidden = true;
+    container.replaceChildren();
+    delete container.dataset.key;
+    return;
+  }
+  container.hidden = false;
+  if (container.dataset.key !== data.key) {
+    container.dataset.key = data.key;
+    container.innerHTML = data.html;
+  }
 }
 
-function folderJob(path, job) {
-  return job?.status === 'running' && job.type === 'sync' && samePath(job.progress?.path, path) ? job : null;
-}
-
-function backupJobPath(job) {
-  const label = String(job?.label || '');
-  return ['Update ', 'Verify ', 'Restore '].map(prefix => label.startsWith(prefix) ? label.slice(prefix.length) : '').find(Boolean) || '';
+function folderJob(folder, job) {
+  return job?.type === 'sync' && job.status === 'running' && job.label === `Sync ${pathName(folder.path) || folder.path}` ? job : null;
 }
 
 function backupJob(location, job) {
-  return job?.status === 'running' && ['backup', 'verify', 'restore'].includes(job.type) && samePath(backupJobPath(job), location.path) ? job : null;
+  if (!job || job.status !== 'running') return null;
+  const labels = [`Update ${location.path}`, `Verify ${location.path}`, `Restore ${location.path}`];
+  return labels.includes(job.label) ? job : null;
 }
 
 function renderFolders(folders, job) {
-  const element = $('#folders');
-  const key = JSON.stringify(folders.map(folder => folder.path));
+  const key = JSON.stringify(folders.map(folder => [folder.path, folder.importId, folder.lastSynced]));
   if (key !== foldersRenderKey) {
     foldersRenderKey = key;
-    element.innerHTML = folders.length ? folders.map(folderRow).join('') : '<div class="empty-state">No folders</div>';
+    $('#folders').innerHTML = folders.length ? folders.map(folderRow).join('') : '<div class="empty-state">No protected folders</div>';
   }
-  const byPath = new Map(folders.map(folder => [folder.path, folder]));
-  for (const row of element.querySelectorAll('[data-folder-path]')) {
-    const folder = byPath.get(row.dataset.folderPath);
+  for (const row of $('#folders').querySelectorAll('[data-folder-path]')) {
+    const folder = folders.find(item => samePath(item.path, row.dataset.folderPath));
     if (!folder) continue;
-    const active = folderJob(folder.path, job);
-    const label = row.querySelector('[data-folder-status]');
-    label.textContent = active ? 'Syncing' : exactDate(folder.lastSynced) || '—';
-    label.className = `item-state ${active ? 'working' : folder.lastSynced ? 'good' : ''}`;
-    renderItemProgress(row, active);
+    row.querySelector('[data-folder-status]').textContent = exactDate(folder.lastSynced) || 'Not synced yet';
+    renderItemProgress(row, folderJob(folder, job));
   }
 }
 
 async function refreshFolderStats() {
   try {
-    const { folders = [] } = await req('/api/folder-stats');
+    const folders = (await req('/api/folder-stats')).folders || [];
     for (const item of folders) {
       const row = [...$('#folders').querySelectorAll('[data-folder-path]')].find(node => samePath(node.dataset.folderPath, item.path));
       if (!row) continue;
@@ -193,9 +191,11 @@ function backgroundActivity(job, previews = {}) {
 }
 
 async function refreshLibrary() {
-  const library = $('#filesFrame')?.contentWindow?.mochimonoLibrary;
-  try { await library?.refresh?.(); }
-  catch { $('#filesFrame')?.contentWindow?.location.reload(); }
+  const frame = $('#filesFrame')?.contentWindow;
+  try {
+    await frame?.mochimonoLibrary?.refresh?.();
+    await frame?.mochimonoLocations?.refresh?.();
+  } catch { if (frame) frame.location.reload(); }
 }
 
 async function state() {
@@ -213,7 +213,7 @@ async function state() {
       lastFinished = current.job.id;
       const success = current.job.status === 'done';
       toast(success ? (current.job.type === 'sync' ? 'Synced' : current.job.type === 'restore' ? 'Restored' : 'Done') : current.job.status === 'canceled' ? 'Canceled' : current.job.error);
-      if (success && current.job.type === 'restore') refreshLibrary();
+      if (success && ['sync', 'backup', 'verify', 'restore'].includes(current.job.type)) refreshLibrary();
       backups(true);
       refreshFolderStats();
     }

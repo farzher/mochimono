@@ -45,7 +45,7 @@ function pathQuery(text) {
 
 function tokens(raw) {
   const result = [];
-  const regex = /(?:^|\s)(?:(name|path|source|type|ext|year):(?:"([^"]*)"|'([^']*)'|([^\s]+))|"([^"]*)"|'([^']*)'|([^\s]+))/giu;
+  const regex = /(?:^|\s)(?:(name|path|source|location|type|ext|year):(?:"([^"]*)"|'([^']*)'|([^\s]+))|"([^"]*)"|'([^']*)'|([^\s]+))/giu;
   let match;
   while ((match = regex.exec(String(raw || '')))) {
     const text = match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[6] ?? match[7] ?? '';
@@ -54,9 +54,14 @@ function tokens(raw) {
   return result;
 }
 
+function localLocations(file) {
+  return Array.isArray(file?.localLocations) ? file.localLocations : [];
+}
+
 export function buildSearchText(file, sourceNames = new Map()) {
   const kind = fileKind(file);
   const year = new Date(file.fileDate || file.createdAt || 0).getFullYear();
+  const local = localLocations(file);
   const values = [
     normalizeText(`${file.filename || ''} ${file.originalPath || ''} ${file.searchText || ''}`),
     ...fieldWords('name', file.filename),
@@ -65,8 +70,17 @@ export function buildSearchText(file, sourceNames = new Map()) {
     ...(['image','video'].includes(kind) ? ['__type__media'] : []),
     ...(['application','text'].includes(kind) ? ['__type__application'] : []),
     `__ext__${encoded(extension(file.filename))}`,
-    ...(Number.isFinite(year) ? [`__year__${year}`] : [])
+    ...(Number.isFinite(year) ? [`__year__${year}`] : []),
+    '__location__server',
+    ...fieldWords('location', 'Mochimono Server'),
+    ...(Number(file.backupCount) > 0 ? ['__location__backup'] : []),
+    ...(local.length ? ['__location__local'] : [])
   ];
+  for (const location of local) {
+    const text = `${location.name || ''} ${location.deviceName || ''} ${location.rootPath || ''}`;
+    values.push(...fieldWords('location', text));
+    values.push(normalizeText(text));
+  }
   for (const id of file.importIds || []) {
     values.push(`__sourceid__${id}`);
     values.push(normalizeText(sourceNames.get(Number(id)) || ''));
@@ -89,6 +103,7 @@ export function queryTerms(raw, sourceOptions = []) {
     if (token.field === 'name') result.push(...fieldWords('name', token.text));
     else if (token.field === 'path') result.push(...fieldWords('path', pathQuery(token.text)));
     else if (token.field === 'source') result.push(sourceToken(token.text));
+    else if (token.field === 'location') result.push(...fieldWords('location', token.text));
     else if (token.field === 'type') result.push(`__type__${encoded(typeAlias(token.text))}`);
     else if (token.field === 'ext') result.push(`__ext__${encoded(token.text.replace(/^\./, ''))}`);
     else if (token.field === 'year') result.push(`__year__${encoded(token.text)}`);
@@ -109,17 +124,20 @@ function sourcePath(source) {
 function detailsFields(details) {
   const object = details?.object || {};
   const sources = Array.isArray(details?.sources) ? details.sources : [];
+  const locations = Array.isArray(details?.locations) ? details.locations : [];
   const names = sources.map(item => item.filename || '');
   const paths = sources.flatMap(item => [sourcePath(item), item.path || '', item.rootPath || '']);
   const sourceNames = sources.map(item => normalizeText(item.sourceName || item.deviceName || '')).filter(Boolean);
+  const locationNames = locations.map(item => normalizeText(`${item.kind || ''} ${item.name || ''} ${item.path || ''}`)).filter(Boolean);
   const filename = names[0] || object.filename || '';
   const date = new Date(details?.date?.fileDate || object.createdAt || 0);
   return {
-    all: normalizeText(`${names.join(' ')} ${paths.join(' ')} ${sourceNames.join(' ')}`),
+    all: normalizeText(`${names.join(' ')} ${paths.join(' ')} ${sourceNames.join(' ')} ${locationNames.join(' ')}`),
     name: normalizeText(names.join(' ')),
     path: normalizeText(paths.join(' ')),
     source: sourceNames.join(' '),
     sourceNames,
+    location: locationNames.join(' '),
     type: normalizeText(fileKind({ filename, mime: object.mime })),
     ext: normalizeText(extension(filename)),
     year: Number.isNaN(date.getTime()) ? '' : String(date.getFullYear())

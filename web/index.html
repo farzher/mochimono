@@ -29,9 +29,10 @@
     <div id="app" hidden>
       <section class="library">
         <div class="commandbar">
-          <input id="search" class="search" type="search" placeholder="Search files and paths" title="Search normally, or use name:, path:, source:, type:, ext:, or year:">
+          <input id="search" class="search" type="search" placeholder="Search files and paths" title="Search normally, or use name:, path:, source:, location:, type:, ext:, or year:">
           <select id="source" aria-label="Source"><option value="">All sources</option></select>
           <select id="collectionFilter" aria-label="Collection"><option value="">Collections</option></select>
+          <select id="locationFilter" aria-label="Storage location"><option value="">All locations</option><option value="server">Mochimono Server</option><option value="backup">Backups</option><option value="unbacked">Not backed up</option></select>
           <select id="typeFilter" aria-label="File type"><option value="">All files</option><option value="media">Media</option><option value="image">Images</option><option value="video">Video</option><option value="audio">Audio</option><option value="application">Docs</option><option value="other">Other</option></select>
           <select id="sort" aria-label="Sort"><option value="date-desc">Newest</option><option value="date-added">Recently added</option><option value="date-asc">Oldest</option><option value="size-desc">Largest</option></select>
           <span id="fileCount" class="file-count" aria-live="polite"></span>
@@ -72,6 +73,7 @@
   <script src="/viewer-touch.js"></script>
   <script type="module" src="/browser-shortcuts.js"></script>
   <script type="module" src="/app.js"></script>
+  <script type="module" src="/locations.js"></script>
   <script type="module" src="/thumbs.js"></script>
   <script type="module" src="/gallery.js"></script>
   <script type="module" src="/viewer-url.js"></script>

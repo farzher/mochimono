@@ -51,17 +51,72 @@ function sourceCard(source) {
   </article>`;
 }
 
-function render(data) {
+function locationCard(title, kind, detail = '', path = '') {
+  return `<article class="viewer-info-source">
+    <strong>${escapeHtml(title)}</strong>
+    ${path ? `<div class="viewer-info-path" title="${escapeHtml(path)}">${escapeHtml(path)}</div>` : ''}
+    <dl><div><dt>${escapeHtml(kind)}</dt><dd>${escapeHtml(detail || 'Available')}</dd></div></dl>
+  </article>`;
+}
+
+function localCopies(local) {
+  const definitions = new Map((local?.locations || []).map(location => [location.id, location]));
+  const grouped = new Map();
+  for (const [, id, relativePath] of local?.files || []) {
+    const location = definitions.get(id);
+    if (!location) continue;
+    if (!grouped.has(id)) grouped.set(id, { location, paths: [] });
+    grouped.get(id).paths.push(relativePath);
+  }
+  return [...grouped.values()];
+}
+
+function localPath(location, relative) {
+  return fullPath({ rootPath: location.rootPath, path: relative });
+}
+
+function render(data, local) {
   const sources = data.sources || [];
+  const backups = data.backups || [];
+  const locals = localCopies(local);
+  const copyCount = 1 + backups.length + locals.length;
+  const locationCards = [
+    locationCard('Mochimono Server', 'Primary copy', 'Available'),
+    ...locals.map(({ location, paths }) => locationCard(
+      location.name || location.deviceName || 'This device',
+      'Local copy',
+      location.available === false ? 'Offline' : paths.length > 1 ? `${paths.length} paths · available` : 'Available',
+      localPath(location, paths[0] || '')
+    )),
+    ...backups.map(backup => locationCard(
+      backup.name || 'Backup',
+      'Backup copy',
+      backup.verifiedAt ? `Verified ${formatDate(backup.verifiedAt)}` : backup.lastSeen ? `Seen ${formatDate(backup.lastSeen)}` : 'Stored'
+    ))
+  ];
+
   panel.innerHTML = `<div class="viewer-info-head"><strong>Info</strong><button type="button" data-info-close aria-label="Close info">×</button></div>
     <section class="viewer-info-date">
       <span>${escapeHtml(dateLabel(data.date?.dateSource))}</span>
       <strong>${escapeHtml(formatDate(data.date?.fileDate))}</strong>
     </section>
     <section class="viewer-info-sources">
-      <h3>${sources.length > 1 ? `${sources.length} source copies` : 'Source'}</h3>
+      <h3>${copyCount} ${copyCount === 1 ? 'location' : 'locations'}</h3>
+      ${locationCards.join('')}
+    </section>
+    <section class="viewer-info-sources">
+      <h3>${sources.length > 1 ? `${sources.length} sources` : 'Source'}</h3>
       ${sources.length ? sources.map(sourceCard).join('') : '<p>No provenance recorded.</p>'}
     </section>`;
+}
+
+async function clientLocations(hash) {
+  try {
+    const response = await fetch(`/api/client/locations?hash=${encodeURIComponent(hash)}`, { cache: 'no-store' });
+    return response.ok ? await response.json() : { locations: [], files: [] };
+  } catch {
+    return { locations: [], files: [] };
+  }
 }
 
 async function load() {
@@ -70,11 +125,14 @@ async function load() {
   if (!hash || panel.hidden) return;
   panel.innerHTML = '<div class="viewer-info-head"><strong>Info</strong><button type="button" data-info-close aria-label="Close info">×</button></div><p class="viewer-info-loading">Loading…</p>';
   try {
-    const response = await fetch(`/api/provenance/${hash}`);
+    const [response, local] = await Promise.all([
+      fetch(`/api/provenance/${hash}`),
+      clientLocations(hash)
+    ]);
     if (!response.ok) throw new Error(`${response.status}`);
     const data = await response.json();
     if (mine !== generation || panel.hidden || hash !== currentHash()) return;
-    render(data);
+    render(data, local);
   } catch {
     if (mine === generation && !panel.hidden) panel.insertAdjacentHTML('beforeend', '<p class="viewer-info-loading">Could not load file info.</p>');
   }

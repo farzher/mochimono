@@ -19,6 +19,7 @@ let loaded = [];
 let imports = [];
 let sourceNames = new Map();
 let searchIndex = new Map();
+let locationSearch = new Map();
 let renderOffset = 0;
 let renderLimit = PAGE;
 let hasMore = false;
@@ -26,6 +27,8 @@ let hasPrevious = false;
 let type = '';
 let importId = '';
 let collectionHashes = null;
+let locationFilter = '';
+let locationHashes = null;
 let view = 'grid';
 let sort = 'date-desc';
 let selected = null;
@@ -68,7 +71,7 @@ async function request(path, options = {}) {
 
 function formatBytes(bytes) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  let value = Number(bytes || 0);
+  let value = Number(bytes) || 0;
   let unit = 0;
   while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
   return `${value < 10 && unit ? value.toFixed(2) : value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
@@ -91,6 +94,13 @@ function matchesType(file) {
   if (type === 'application') return value === 'application' || value === 'text';
   if (type === 'other') return !['image','video','audio','text','application'].includes(value);
   return value === type;
+}
+
+function matchesLocation(file) {
+  if (!locationFilter || locationFilter === 'server') return true;
+  if (locationFilter === 'backup') return file.backupCount > 0;
+  if (locationFilter === 'unbacked') return file.backupCount === 0;
+  return Boolean(locationHashes?.has(file.hash));
 }
 
 window.mochimonoSearch = {
@@ -144,7 +154,10 @@ function normalizeFile(file) {
 
 function rebuildIndexes() {
   sourceNames = new Map(imports.map(item => [Number(item.id), String(item.sourceName || '')]));
-  searchIndex = new Map(catalog.map(file => [file.hash, buildSearchText(file, sourceNames)]));
+  searchIndex = new Map(catalog.map(file => [
+    file.hash,
+    `${buildSearchText(file, sourceNames)} ${locationSearch.get(file.hash) || ''}`.trim()
+  ]));
 }
 
 function renderFileCount(count = filtered.length) {
@@ -297,7 +310,7 @@ function applyFilters(reset = true, preserve = false) {
   const sourceId = Number(importId) || 0;
   const folderHashes = folderImportId && folderPath && folderData ? new Set(folderData.files.map(file => file.hash)) : null;
   filtered = sortFiles(catalog.filter(file => {
-    if (!matchesType(file) || (collectionHashes && !collectionHashes.has(file.hash))) return false;
+    if (!matchesType(file) || !matchesLocation(file) || (collectionHashes && !collectionHashes.has(file.hash))) return false;
     if (sourceId && !file.importIds.includes(sourceId)) return false;
     if (folderHashes && !folderHashes.has(file.hash)) return false;
     return !terms.length || terms.every(term => (searchIndex.get(file.hash) || '').includes(term));
@@ -543,6 +556,7 @@ function setView(next) {
   $('#sort').hidden = folderMode;
   $('#typeFilter').hidden = folderMode;
   $('#collectionFilter').hidden = folderMode;
+  $('#locationFilter').hidden = folderMode;
   $('#mediaSizeControl').hidden = view !== 'grid';
   $$('#views button').forEach(item => item.classList.toggle('active', item.dataset.view === view));
   if (folderMode) {
@@ -689,6 +703,7 @@ async function removeSelected(ignore) {
   await request(`/api/objects/${hash}/delete`, { method: 'POST', body: { ignore } });
   catalog = catalog.filter(file => file.hash !== hash);
   searchIndex.delete(hash);
+  locationSearch.delete(hash);
   fileDates.delete(hash);
   viewerDirty = false;
   closeViewer();
@@ -707,6 +722,16 @@ async function loadDrives() {
 
 window.mochimonoLibrary = {
   setSort(value) { sort = String(value || 'date-desc'); $('#sort').value = sort; applyFilters(true); },
+  setLocationFilter(mode, hashes = null) {
+    locationFilter = String(mode || '');
+    locationHashes = hashes instanceof Set ? hashes : hashes ? new Set(hashes) : null;
+    applyFilters(true);
+  },
+  setLocationSearch(entries) {
+    locationSearch = entries instanceof Map ? entries : new Map(entries || []);
+    rebuildIndexes();
+    applyFilters(false, true);
+  },
   upsert(file) { this.upsertMany(file ? [file] : []); },
   upsertMany(items) {
     if (!items?.length) return;
@@ -730,10 +755,10 @@ window.mochimonoLibrary = {
     const removed = new Set(hashes || []);
     if (!removed.size) return;
     catalog = catalog.filter(file => !removed.has(file.hash));
-    for (const hash of removed) { searchIndex.delete(hash); fileDates.delete(hash); }
+    for (const hash of removed) { searchIndex.delete(hash); locationSearch.delete(hash); fileDates.delete(hash); }
     applyFilters(false, true);
   },
-  state: () => ({ total: catalog.length, filtered: filtered.length, offset: renderOffset, loaded: loaded.length, hasMore, hasPrevious, view, sort })
+  state: () => ({ total: catalog.length, filtered: filtered.length, offset: renderOffset, loaded: loaded.length, hasMore, hasPrevious, view, sort, locationFilter })
 };
 
 async function boot() {

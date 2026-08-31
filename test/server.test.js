@@ -34,7 +34,7 @@ async function api(base, token, path, options = {}) {
   return data;
 }
 
-test('server stores, catalogs, scopes, and deletes objects', async t => {
+test('server stores, catalogs, scopes, locates, and deletes objects', async t => {
   const data = await mkdtemp(join(tmpdir(), 'mochimono-server-'));
   const port = 19000 + Math.floor(Math.random() * 1000);
   const base = `http://127.0.0.1:${port}`;
@@ -93,6 +93,13 @@ test('server stores, catalogs, scopes, and deletes objects', async t => {
   assert.equal(drive.desiredCount, 1);
   const desired = await api(base, token, '/api/drives/test-drive/desired');
   assert.deepEqual(desired.objects.map(item => item.hash), [hash]);
+
+  await api(base, token, '/api/drives/test-drive/replicas', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ replicas: [{ hash, verifiedAt: '2026-08-31T12:00:00.000Z' }] })
+  });
+  const stored = await api(base, token, '/api/drives/test-drive/files');
+  assert.deepEqual(stored.files, [{ hash, verifiedAt: '2026-08-31T12:00:00.000Z' }]);
 
   await api(base, token, `/api/smart-collections/${smart.id}`, { method: 'DELETE' });
   const drives = await api(base, token, '/api/drives');

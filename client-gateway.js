@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { json, readJson, settings } from './lib/agent-context.js';
+import { localLocations } from './lib/local-locations.js';
 import { queueRemoteThumbnail } from './lib/thumbnail-agent.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
@@ -121,6 +122,12 @@ async function proxyApi(req, res, url) {
 export async function handleClientGateway(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/client/login') {
     await login(req, res);
+    return true;
+  }
+  if (req.method === 'GET' && url.pathname === '/api/client/locations') {
+    const hash = String(url.searchParams.get('hash') || '');
+    if (hash && !/^[a-f0-9]{64}$/.test(hash)) json(res, 400, { error: 'Invalid SHA-256 hash' });
+    else json(res, 200, localLocations(hash));
     return true;
   }
   if (req.method === 'POST' && url.pathname === '/api/client/previews/request') {
