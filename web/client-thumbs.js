@@ -163,30 +163,45 @@ const observer = files ? new IntersectionObserver(entries => {
   }
 }, { rootMargin: '800px 0px' }) : null;
 
-function syncObserved() {
-  if (!files || !observer) return;
-  for (const card of observed) {
-    if (card.isConnected) continue;
-    observer.unobserve(card);
-    observed.delete(card);
-    nearby.delete(card);
-  }
-  for (const card of files.querySelectorAll('[data-hash]')) {
+function cardsIn(node) {
+  if (!(node instanceof Element)) return [];
+  const cards = [];
+  if (node.matches('[data-hash]')) cards.push(node);
+  cards.push(...node.querySelectorAll('[data-hash]'));
+  return cards;
+}
+
+function observeTree(node) {
+  if (!observer) return;
+  for (const card of cardsIn(node)) {
     if (observed.has(card) || !kind(card)) continue;
     observed.add(card);
     observer.observe(card);
   }
 }
 
+function forgetTree(node) {
+  if (!observer) return;
+  for (const card of cardsIn(node)) {
+    if (!observed.delete(card)) continue;
+    nearby.delete(card);
+    observer.unobserve(card);
+  }
+}
+
 if (files) {
-  const mutations = new MutationObserver(() => syncObserved());
+  for (const card of files.querySelectorAll('[data-hash]')) observeTree(card);
+  const mutations = new MutationObserver(records => {
+    for (const record of records) {
+      for (const node of record.removedNodes) forgetTree(node);
+      for (const node of record.addedNodes) observeTree(node);
+    }
+  });
   mutations.observe(files, { childList: true, subtree: true });
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
-      syncObserved();
       missRounds = 0;
       scheduleCheck();
     }
   });
-  syncObserved();
 }
