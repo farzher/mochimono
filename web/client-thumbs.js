@@ -6,8 +6,18 @@ let scanFrame = 0;
 let checkTimer = 0;
 let checking = false;
 
-const kind = card => card.classList.contains('video-card') ? 'video' : card.classList.contains('media-card') ? 'image' : '';
-const filename = card => card.dataset.filename || card.querySelector('strong')?.textContent || '';
+const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
+const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
+const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
+const filename = card => card.dataset.filename || card.title || card.querySelector('strong')?.textContent || '';
+const kind = card => {
+  if (card.classList.contains('video-card')) return 'video';
+  if (card.classList.contains('media-card')) return 'image';
+  const ext = extension(filename(card));
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video';
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
+  return '';
+};
 const thumbUrl = hash => `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
 
 function visible(card) {
@@ -19,8 +29,20 @@ function cardsFor(hash) {
   return files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"]`);
 }
 
-function ensurePending(card) {
-  const box = card.querySelector('.media-thumb');
+function mediaBox(card, mediaKind = kind(card)) {
+  let box = card.querySelector('.media-thumb');
+  if (box) return box;
+  if (!card.classList.contains('file-row') && !card.classList.contains('file-folder-row')) return null;
+
+  box = document.createElement('span');
+  box.className = `tiny-preview media-thumb ${mediaKind === 'video' ? 'video' : ''}`;
+  const old = card.classList.contains('file-row') ? card.querySelector('.type') : card.querySelector('.document-icon');
+  old?.replaceWith(box);
+  return box;
+}
+
+function ensurePending(card, mediaKind = kind(card)) {
+  const box = mediaBox(card, mediaKind);
   if (!box || box.querySelector('.cached-thumb,.video-thumb-pending')) return;
   const pending = document.createElement('span');
   pending.className = 'video-thumb-pending';
@@ -44,7 +66,9 @@ function applyReady(hash, width = 0, height = 0) {
   applyDimensions(hash, state.width, state.height);
 
   for (const card of cardsFor(hash)) {
-    const box = card.querySelector('.media-thumb');
+    const mediaKind = kind(card);
+    if (!mediaKind) continue;
+    const box = mediaBox(card, mediaKind);
     if (!box || box.querySelector('img.cached-thumb')) continue;
     const image = document.createElement('img');
     image.className = 'cached-thumb server-thumb';
@@ -72,9 +96,10 @@ async function requestRepairs(cards) {
   const batch = [];
   for (const card of cards) {
     const hash = card.dataset.hash;
-    if (!hash || now - (requestedAt.get(hash) || 0) < 10_000) continue;
+    const mediaKind = kind(card);
+    if (!hash || !mediaKind || now - (requestedAt.get(hash) || 0) < 10_000) continue;
     requestedAt.set(hash, now);
-    batch.push({ hash, filename: filename(card), kind: kind(card), mime: `${kind(card)}/unknown` });
+    batch.push({ hash, filename: filename(card), kind: mediaKind, mime: `${mediaKind}/unknown` });
   }
   if (!batch.length) return;
   try {
@@ -86,17 +111,22 @@ async function requestRepairs(cards) {
   } catch {}
 }
 
+function visibleMediaCards() {
+  return [...files.querySelectorAll('[data-hash]')].filter(card => kind(card) && visible(card));
+}
+
 async function checkVisible() {
   checkTimer = 0;
   if (checking || document.hidden || !files) return;
-  const cards = [...files.querySelectorAll('.media-card[data-hash]')].filter(visible);
+  const cards = visibleMediaCards();
   if (!cards.length) return;
 
   const missingCards = [];
   const hashes = [];
   for (const card of cards) {
     const hash = card.dataset.hash;
-    ensurePending(card);
+    const mediaKind = kind(card);
+    ensurePending(card, mediaKind);
     const state = states.get(hash) || {};
     if (state.ready) {
       applyReady(hash, state.width, state.height);
@@ -130,7 +160,7 @@ async function checkVisible() {
   } catch {}
   finally {
     checking = false;
-    if ([...files.querySelectorAll('.media-card[data-hash]')].some(card => visible(card) && !states.get(card.dataset.hash)?.ready)) scheduleCheck(1200);
+    if (visibleMediaCards().some(card => !states.get(card.dataset.hash)?.ready)) scheduleCheck(1200);
   }
 }
 
