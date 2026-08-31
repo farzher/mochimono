@@ -47,13 +47,13 @@ async function imagePreview(blob) {
   }
 }
 
-async function videoPreview(blob) {
+async function videoPreview(source) {
   const video = document.createElement('video');
-  const url = URL.createObjectURL(blob);
+  const ownedUrl = source instanceof Blob ? URL.createObjectURL(source) : '';
   video.muted = true;
   video.playsInline = true;
   video.preload = 'metadata';
-  video.src = url;
+  video.src = ownedUrl || String(source);
   try {
     if (video.readyState < 1) await waitFor(video, 'loadedmetadata');
     if (!video.videoWidth || !video.videoHeight) throw new Error('Video has no frame size');
@@ -73,7 +73,7 @@ async function videoPreview(blob) {
   } finally {
     video.removeAttribute('src');
     video.load();
-    URL.revokeObjectURL(url);
+    if (ownedUrl) URL.revokeObjectURL(ownedUrl);
   }
 }
 
@@ -84,12 +84,17 @@ async function canonicalExists(hash) {
 
 async function repair(job) {
   if (await canonicalExists(job.hash)) return;
-  const source = await fetch(`/api/objects/${job.hash}`);
-  if (!source.ok) throw new Error('Object unavailable');
-  const blob = await source.blob();
-  const mime = blob.type || job.mime || 'application/octet-stream';
-  const kind = mime.startsWith('video/') || job.video ? 'video' : 'image';
-  const result = kind === 'video' ? await videoPreview(blob) : await imagePreview(blob);
+  let result;
+  let mime = job.mime || 'application/octet-stream';
+  if (job.video) {
+    result = await videoPreview(`/api/objects/${job.hash}`);
+  } else {
+    const source = await fetch(`/api/objects/${job.hash}`);
+    if (!source.ok) throw new Error('Object unavailable');
+    const blob = await source.blob();
+    mime = blob.type || mime;
+    result = await imagePreview(blob);
+  }
   if (await canonicalExists(job.hash)) return;
   const response = await fetch(`/api/thumbs/${job.hash}`, {
     method: 'PUT',
