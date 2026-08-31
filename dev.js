@@ -52,6 +52,7 @@ setTimeout(() => {
     MOCHIMONO_TOKEN: token,
     MOCHIMONO_URL: serverUrl,
     MOCHIMONO_AGENT_PORT: '8643',
+    MOCHIMONO_THUMBNAIL_WORKERS: process.env.MOCHIMONO_THUMBNAIL_WORKERS || '2',
     MOCHIMONO_NO_OPEN: '1'
   });
 }, 250);
