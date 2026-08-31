@@ -1,10 +1,11 @@
 const files = document.querySelector('#files');
 const THUMB_VERSION = 3;
 const states = new Map();
-const requestedAt = new Map();
-let scanFrame = 0;
+const observed = new Set();
+const nearby = new Set();
 let checkTimer = 0;
 let checking = false;
+let missRounds = 0;
 
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
@@ -19,11 +20,6 @@ const kind = card => {
   return '';
 };
 const thumbUrl = hash => `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
-
-function visible(card) {
-  const rect = card.getBoundingClientRect();
-  return rect.bottom >= -200 && rect.top <= innerHeight + 200;
-}
 
 function cardsFor(hash) {
   return files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"]`);
@@ -59,7 +55,6 @@ function applyDimensions(hash, width, height) {
 function applyReady(hash, width = 0, height = 0) {
   const state = states.get(hash) || {};
   state.ready = true;
-  state.loading = false;
   state.width = width || state.width || 0;
   state.height = height || state.height || 0;
   states.set(hash, state);
@@ -73,6 +68,7 @@ function applyReady(hash, width = 0, height = 0) {
     const image = document.createElement('img');
     image.className = 'cached-thumb server-thumb';
     image.decoding = 'async';
+    image.loading = 'lazy';
     image.alt = filename(card);
     image.onload = () => {
       if (image.naturalWidth && image.naturalHeight) applyDimensions(hash, image.naturalWidth, image.naturalHeight);
@@ -81,9 +77,9 @@ function applyReady(hash, width = 0, height = 0) {
       image.remove();
       const current = states.get(hash) || {};
       current.ready = false;
-      current.loading = false;
       states.set(hash, current);
-      scheduleCheck(300);
+      missRounds = 0;
+      scheduleCheck(250);
     };
     const old = box.querySelector('img,.video-thumb-pending');
     old ? old.replaceWith(image) : box.prepend(image);
@@ -91,37 +87,16 @@ function applyReady(hash, width = 0, height = 0) {
   }
 }
 
-async function requestRepairs(cards) {
-  const now = Date.now();
-  const batch = [];
-  for (const card of cards) {
-    const hash = card.dataset.hash;
-    const mediaKind = kind(card);
-    if (!hash || !mediaKind || now - (requestedAt.get(hash) || 0) < 10_000) continue;
-    requestedAt.set(hash, now);
-    batch.push({ hash, filename: filename(card), kind: mediaKind, mime: `${mediaKind}/unknown` });
-  }
-  if (!batch.length) return;
-  try {
-    await fetch('/api/client/previews/request', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ files: batch.slice(0, 200) })
-    });
-  } catch {}
+function nearbyCards() {
+  return [...nearby].filter(card => card.isConnected && kind(card));
 }
 
-function visibleMediaCards() {
-  return [...files.querySelectorAll('[data-hash]')].filter(card => kind(card) && visible(card));
-}
-
-async function checkVisible() {
+async function checkNearby() {
   checkTimer = 0;
   if (checking || document.hidden || !files) return;
-  const cards = visibleMediaCards();
+  const cards = nearbyCards();
   if (!cards.length) return;
 
-  const missingCards = [];
   const hashes = [];
   for (const card of cards) {
     const hash = card.dataset.hash;
@@ -132,14 +107,13 @@ async function checkVisible() {
       applyReady(hash, state.width, state.height);
       continue;
     }
-    if (!hashes.includes(hash)) hashes.push(hash);
-    missingCards.push(card);
+    if (hash && !hashes.includes(hash)) hashes.push(hash);
   }
   if (!hashes.length) return;
 
   checking = true;
+  let becameReady = 0;
   try {
-    await requestRepairs(missingCards);
     const response = await fetch('/api/thumbs/check', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -150,8 +124,10 @@ async function checkVisible() {
     const ready = new Map((data.thumbnails || []).map(item => [item.hash, item]));
     for (const hash of hashes) {
       const thumbnail = ready.get(hash);
-      if (thumbnail) applyReady(hash, Number(thumbnail.width), Number(thumbnail.height));
-      else {
+      if (thumbnail) {
+        if (!states.get(hash)?.ready) becameReady++;
+        applyReady(hash, Number(thumbnail.width), Number(thumbnail.height));
+      } else {
         const state = states.get(hash) || {};
         state.ready = false;
         states.set(hash, state);
@@ -160,29 +136,57 @@ async function checkVisible() {
   } catch {}
   finally {
     checking = false;
-    if (visibleMediaCards().some(card => !states.get(card.dataset.hash)?.ready)) scheduleCheck(1200);
+    if (becameReady) missRounds = 0;
+    else missRounds = Math.min(5, missRounds + 1);
+    if (nearbyCards().some(card => !states.get(card.dataset.hash)?.ready)) {
+      scheduleCheck(Math.min(5000, 500 * 2 ** Math.max(0, missRounds - 1)));
+    }
   }
 }
 
-function scheduleCheck(delay = 40) {
+function scheduleCheck(delay = 30) {
   clearTimeout(checkTimer);
-  checkTimer = setTimeout(checkVisible, delay);
+  checkTimer = setTimeout(checkNearby, delay);
 }
 
-function scan() {
-  scanFrame = 0;
-  if (document.hidden || !files) return;
-  scheduleCheck(30);
-}
+const observer = files ? new IntersectionObserver(entries => {
+  let entered = false;
+  for (const entry of entries) {
+    if (entry.isIntersecting) {
+      nearby.add(entry.target);
+      entered = true;
+    } else nearby.delete(entry.target);
+  }
+  if (entered) {
+    missRounds = 0;
+    scheduleCheck();
+  }
+}, { rootMargin: '800px 0px' }) : null;
 
-function schedule() {
-  if (!scanFrame) scanFrame = requestAnimationFrame(scan);
+function syncObserved() {
+  if (!files || !observer) return;
+  for (const card of observed) {
+    if (card.isConnected) continue;
+    observer.unobserve(card);
+    observed.delete(card);
+    nearby.delete(card);
+  }
+  for (const card of files.querySelectorAll('[data-hash]')) {
+    if (observed.has(card) || !kind(card)) continue;
+    observed.add(card);
+    observer.observe(card);
+  }
 }
 
 if (files) {
-  new MutationObserver(schedule).observe(files, { childList: true, subtree: true });
-  addEventListener('scroll', schedule, { passive: true });
-  addEventListener('resize', schedule, { passive: true });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(); });
-  schedule();
+  const mutations = new MutationObserver(() => syncObserved());
+  mutations.observe(files, { childList: true, subtree: true });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      syncObserved();
+      missRounds = 0;
+      scheduleCheck();
+    }
+  });
+  syncObserved();
 }
