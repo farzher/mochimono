@@ -67,17 +67,9 @@ async function login(req, res) {
   return json(res, response.status, response.ok ? { token: data.token, username: data.username } : { error: data.error || 'Login failed' });
 }
 
-async function requestPreviews(req, res) {
-  const { files = [] } = await readJson(req, 128 * 1024);
-  if (!Array.isArray(files) || files.length > 200) return json(res, 400, { error: 'files must be an array of at most 200 items' });
-  const snapshot = await clientProviders();
-  let queued = 0;
-  for (const file of files) {
-    const known = snapshot.byHash.get(String(file.hash));
-    if (known && !known.serverStored && snapshot.candidates.has(String(file.hash))) queued += Number(queueProviderThumbnail(file));
-    else queued += Number(queueRemoteThumbnail(file));
-  }
-  return json(res, 202, { queued });
+function queueLocalProvider(snapshot, file) {
+  if (!file || !snapshot.candidates.has(file.hash)) return false;
+  return queueProviderThumbnail({ hash: file.hash, filename: file.filename, mime: file.mime });
 }
 
 async function checkThumbnails(req, res) {
@@ -86,6 +78,7 @@ async function checkThumbnails(req, res) {
   const hashes = [...new Set(body.hashes.map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
   const ready = new Map();
   const snapshot = await clientProviders();
+  const serverHashes = [];
 
   await Promise.all(hashes.map(async hash => {
     const thumb = await providerThumbnail(hash);
@@ -94,23 +87,33 @@ async function checkThumbnails(req, res) {
       return;
     }
     const file = snapshot.byHash.get(hash);
-    if (file && !file.serverStored && snapshot.candidates.has(hash)) {
-      queueProviderThumbnail({ hash, filename: file.filename, mime: file.mime });
-    }
+    if (!file) return;
+    if (file.serverStored) serverHashes.push(hash);
+    else queueLocalProvider(snapshot, file);
   }));
 
-  if (settings.token) {
+  if (settings.token && serverHashes.length) {
     try {
       const response = await fetch(`${settings.server}/api/thumbs/check`, {
         method: 'POST',
         headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ hashes })
+        body: JSON.stringify({ hashes: serverHashes })
       });
       if (response.ok) {
         const data = await response.json();
-        for (const item of data.thumbnails || []) if (!ready.has(item.hash)) ready.set(item.hash, item);
+        for (const item of data.thumbnails || []) ready.set(item.hash, item);
+        const remoteReady = new Set((data.thumbnails || []).map(item => item.hash));
+        for (const hash of serverHashes) {
+          if (remoteReady.has(hash)) continue;
+          const file = snapshot.byHash.get(hash);
+          if (file) queueRemoteThumbnail({ hash, size: file.size, filename: file.filename, mime: file.mime });
+        }
       }
-    } catch {}
+    } catch {
+      for (const hash of serverHashes) queueLocalProvider(snapshot, snapshot.byHash.get(hash));
+    }
+  } else if (serverHashes.length) {
+    for (const hash of serverHashes) queueLocalProvider(snapshot, snapshot.byHash.get(hash));
   }
 
   json(res, 200, { thumbnails: [...ready.values()].map(item => ({
@@ -180,10 +183,6 @@ export async function handleClientGateway(req, res, url) {
     const hash = String(url.searchParams.get('hash') || '');
     if (hash && !/^[a-f0-9]{64}$/.test(hash)) json(res, 400, { error: 'Invalid SHA-256 hash' });
     else json(res, 200, localLocations(hash));
-    return true;
-  }
-  if (req.method === 'POST' && url.pathname === '/api/client/previews/request') {
-    await requestPreviews(req, res);
     return true;
   }
   if (req.method === 'POST' && url.pathname === '/api/thumbs/check') {
