@@ -4,21 +4,32 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0d0c0e">
-  <title>Mochimono Client</title>
+  <title>Mochimono</title>
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/client-shell.css">
 </head>
 <body>
-  <header>
-    <div class="app-brand"><span class="mini" aria-hidden="true"></span><h1>Mochimono <span class="agent-label">Client</span></h1></div>
-    <nav class="client-tabs" aria-label="Client">
-      <button class="active" data-client-tab="files">Files</button>
-      <button data-client-tab="storage">Storage</button>
-    </nav>
-    <div class="agent-meta">
-      <button id="deviceButton" class="device-button" title="Rename device"><span id="deviceLabel"></span></button>
-      <span class="meta-separator">·</span>
-      <button id="serverStatus" class="status">Connecting…</button>
+  <header class="client-header">
+    <div class="app-brand"><span class="mini" aria-hidden="true"></span><h1>Mochimono</h1></div>
+    <div class="client-head-actions">
+      <nav class="client-tabs" aria-label="Mochimono">
+        <button class="active" data-client-tab="files" title="Library" aria-label="Library">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.25" y="3.25" width="5.5" height="5.5" rx=".8"/><rect x="11.25" y="3.25" width="5.5" height="5.5" rx=".8"/><rect x="3.25" y="11.25" width="5.5" height="5.5" rx=".8"/><rect x="11.25" y="11.25" width="5.5" height="5.5" rx=".8"/></svg>
+        </button>
+        <button data-client-tab="storage" title="Storage" aria-label="Storage">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.25 5.25h13.5v9.5H3.25zM5.5 12.25h.01M8 12.25h.01"/></svg>
+        </button>
+      </nav>
+      <div id="serverStorage" class="client-storage" hidden>
+        <span id="serverStorageText"></span>
+        <i><b id="serverStorageBar"></b></i>
+      </div>
+      <div class="agent-meta">
+        <button id="deviceButton" class="device-button" title="Rename device"><span id="deviceLabel"></span></button>
+        <span class="meta-separator">·</span>
+        <button id="serverStatus" class="status">Connecting…</button>
+      </div>
+      <button id="clientLogout" class="client-logout" hidden>Log out</button>
     </div>
   </header>
 
