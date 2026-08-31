@@ -19,21 +19,23 @@ window.fetch = async function(input, init) {
   return response;
 };
 
-// The Client exposes native added-date sorting through its local app bridge.
-// Keep direct Server access useful too: the app already treats unknown date sorts
-// as descending, so substitute the added timestamp comparator there.
-const nativeSort = Array.prototype.sort;
-Array.prototype.sort = function(compare) {
-  const select = document.querySelector('#sort');
-  if (select?.value === 'date-added' && this.length && this[0]?.hash && this[0]?.addedAt) {
-    return nativeSort.call(this, (a, b) => {
-      const left = new Date(a?.addedAt || a?.createdAt || 0).getTime() || 0;
-      const right = new Date(b?.addedAt || b?.createdAt || 0).getTime() || 0;
-      return right - left || String(a?.hash || '').localeCompare(String(b?.hash || ''));
-    });
-  }
-  return nativeSort.call(this, compare);
-};
+// Direct Server access still uses the older library sort implementation. The
+// Client gets added-date sorting from its local library bridge, so do not patch
+// Array.prototype there.
+if (!document.documentElement.classList.contains('client-library')) {
+  const nativeSort = Array.prototype.sort;
+  Array.prototype.sort = function(compare) {
+    const select = document.querySelector('#sort');
+    if (select?.value === 'date-added' && this.length && this[0]?.hash && this[0]?.addedAt) {
+      return nativeSort.call(this, (a, b) => {
+        const left = new Date(a?.addedAt || a?.createdAt || 0).getTime() || 0;
+        const right = new Date(b?.addedAt || b?.createdAt || 0).getTime() || 0;
+        return right - left || String(a?.hash || '').localeCompare(String(b?.hash || ''));
+      });
+    }
+    return nativeSort.call(this, compare);
+  };
+}
 
 const style = document.createElement('style');
 style.textContent = `
@@ -94,7 +96,7 @@ window.mochimonoAddedBatch = {
         addedAt: file.addedAt || file.createdAt || file.fileDate
       });
       window.dispatchEvent(new CustomEvent('mochimono-dates-updated'));
-      if (window.mochimonoLibrary) window.mochimonoLibrary.upsert(file);
+      window.mochimonoLibrary?.upsert(file);
     }
     scheduleBatch();
   },
