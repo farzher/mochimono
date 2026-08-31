@@ -30,10 +30,6 @@ function dayLabel(date) {
   return date.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
-function sameRow(a, b) {
-  return Math.abs(a.offsetTop - b.offsetTop) <= 1;
-}
-
 function decorateGroup(group) {
   const container = group.querySelector(':scope > .date-grid,:scope > .date-list');
   if (!container) return;
@@ -51,8 +47,10 @@ function decorateGroup(group) {
     delete card.dataset.dayLabel;
   }
 
-  // Read row positions only after clearing the previous decoration so the
-  // spacing itself never influences which cards belong to a row.
+  // Capture the untouched flex rows before adding any spacing. Every card in
+  // a transition row receives the same top margin, so thumbnail baselines stay
+  // perfectly level and the separator consumes no horizontal grid width.
+  const rowTop = new Map(cards.map(card => [card, card.offsetTop]));
   const rowStarts = [];
   let previousDay = '';
   for (const item of entries) {
@@ -68,8 +66,9 @@ function decorateGroup(group) {
 
   if (container.classList.contains('date-grid')) {
     for (const start of rowStarts) {
+      const top = rowTop.get(start);
       for (const card of cards) {
-        if (sameRow(card, start)) card.classList.add('day-row-start');
+        if (Math.abs((rowTop.get(card) ?? 0) - top) <= 1) card.classList.add('day-row-start');
       }
     }
   }
