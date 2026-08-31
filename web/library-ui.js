@@ -15,9 +15,9 @@ const selectionDelete = document.querySelector('#selectionDelete');
 const selectionIgnore = document.querySelector('#selectionIgnore');
 const selectionClear = document.querySelector('#selectionClear');
 
-// Keep bulk actions completely outside the library flow. Selection must never
-// change command/gallery geometry, even if view-specific styles change.
-document.body.append(selectionBar);
+// Dock bulk actions to the sticky filter bar without putting them in document
+// flow. Selection stays visible with the filters and can never move the gallery.
+document.querySelector('.commandbar')?.append(selectionBar);
 
 let selectionMode = false;
 let anchorHash = '';
