@@ -4,8 +4,10 @@ import { join, resolve } from 'node:path';
 import http from 'node:http';
 
 const CONFIG_PATH = join(homedir(), '.mochimono', 'agent.json');
+const AGENT_PORT = Number(process.env.MOCHIMONO_AGENT_PORT || 8643);
 const driveMetaPath = root => join(resolve(root), '.mochimono', 'drive.json');
 const now = () => new Date().toISOString();
+const trackedJobs = new Set();
 
 function json(res, status, data) {
   const body = JSON.stringify(data);
@@ -63,6 +65,71 @@ async function writeMeta(path, meta) {
   await writeFile(driveMetaPath(path), `${JSON.stringify(meta, null, 2)}\n`);
 }
 
+async function stamp(path, action) {
+  const fields = { update: 'lastBackupAt', verify: 'lastVerifiedAt', restore: 'lastRestoreAt' };
+  const field = fields[action];
+  if (!field) return null;
+  const meta = await readMeta(path);
+  meta[field] = now();
+  await writeMeta(path, meta);
+  return meta[field];
+}
+
+const sleep = ms => new Promise(resolvePromise => setTimeout(resolvePromise, ms));
+
+async function watchJob(job, action, path) {
+  if (!job?.id || trackedJobs.has(job.id)) return;
+  trackedJobs.add(job.id);
+  try {
+    while (true) {
+      await sleep(250);
+      let state;
+      try {
+        const response = await fetch(`http://127.0.0.1:${AGENT_PORT}/api/state`, { cache: 'no-store' });
+        if (!response.ok) continue;
+        state = await response.json();
+      } catch {
+        continue;
+      }
+      if (state.job?.id !== job.id) return;
+      if (state.job.status === 'running') continue;
+      if (state.job.status === 'done') await stamp(path, action);
+      return;
+    }
+  } catch {}
+  finally {
+    trackedJobs.delete(job.id);
+  }
+}
+
+function captureBackupJob(req, res, url, listener) {
+  if (req.method !== 'POST') return false;
+  const actions = new Map([
+    ['/api/backup/update', ['update', 'Update ']],
+    ['/api/backup/verify', ['verify', 'Verify ']],
+    ['/api/backup/restore', ['restore', 'Restore ']]
+  ]);
+  const match = actions.get(url.pathname);
+  if (!match) return false;
+  const [action, prefix] = match;
+  const originalEnd = res.end;
+  res.end = function (chunk, encoding, callback) {
+    res.end = originalEnd;
+    try {
+      if (res.statusCode === 202 && chunk) {
+        const data = JSON.parse(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk));
+        const job = data?.job;
+        const label = String(job?.label || '');
+        const path = label.startsWith(prefix) ? label.slice(prefix.length) : '';
+        if (path) watchJob(job, action, path);
+      }
+    } catch {}
+    return originalEnd.call(this, chunk, encoding, callback);
+  };
+  listener(req, res);
+  return true;
+}
+
 const originalCreateServer = http.createServer;
 http.createServer = function (...args) {
   const context = this;
@@ -97,18 +164,12 @@ http.createServer = function (...args) {
       if (req.method === 'POST' && url.pathname === '/api/backup/history') {
         const body = await readJson(req);
         if (!body.path) return json(res, 400, { error: 'Backup folder required' });
-        const fields = {
-          update: 'lastBackupAt',
-          verify: 'lastVerifiedAt',
-          restore: 'lastRestoreAt'
-        };
-        const field = fields[String(body.action || '')];
-        if (!field) return json(res, 400, { error: 'Invalid backup action' });
-        const meta = await readMeta(body.path);
-        meta[field] = now();
-        await writeMeta(body.path, meta);
-        return json(res, 200, { ok: true, [field]: meta[field] });
+        const at = await stamp(body.path, String(body.action || ''));
+        if (!at) return json(res, 400, { error: 'Invalid backup action' });
+        return json(res, 200, { ok: true, at });
       }
+
+      if (captureBackupJob(req, res, url, listener)) return;
     } catch (error) {
       return json(res, error.status || 500, { error: error.message || 'Backup policy error' });
     }
