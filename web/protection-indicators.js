@@ -3,6 +3,7 @@ const files = document.querySelector('#files');
 let state = {
   local: new Set(),
   server: new Set(),
+  damagedServer: new Set(),
   backed: new Set(),
   verifiedBacked: new Set(),
   safeLocal: new Set(),
@@ -44,6 +45,7 @@ function protectionFor(hash) {
   const backed = state.backed.has(hash);
   const verified = state.verifiedBacked.has(hash);
 
+  if (state.damagedServer.has(hash)) return { key: 'damaged-server', className: 'danger', label: 'Mochimono copy damaged', grid: 'Repair needed' };
   if (state.onlyLocal.has(hash)) return { key: 'only-local', className: 'danger', label: 'Only on this PC', grid: 'Only here' };
   if (local && !server) return { key: 'not-server', className: 'danger', label: backed ? 'Not in Mochimono' : 'Local only', grid: backed ? 'Not in Mochimono' : 'Local only' };
   if (local && server && !verified) return { key: 'needs-backup', className: 'warn', label: backed ? 'Verify backup' : 'Needs backup', grid: backed ? 'Verify backup' : 'Needs backup' };
