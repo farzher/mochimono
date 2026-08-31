@@ -18,6 +18,7 @@ let backupLocations = [];
 let smartCollections = [];
 let backupLoading = false;
 let lastBackupRefresh = 0;
+let currentJob = null;
 
 async function req(path, options = {}) {
   const response = await fetch(path, { headers: { 'content-type': 'application/json' }, ...options });
@@ -47,14 +48,25 @@ function duration(seconds) {
   return `${hours}h ${minutes % 60}m`;
 }
 
-function pathParts(path) {
-  const raw = String(path || '');
-  const clean = raw.replace(/[\\/]+$/, '') || raw;
-  const index = Math.max(clean.lastIndexOf('\\'), clean.lastIndexOf('/'));
-  return {
-    name: index >= 0 ? clean.slice(index + 1) || clean : clean,
-    parent: index >= 0 ? clean.slice(0, index) : ''
-  };
+function exactDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', second: '2-digit'
+  });
+}
+
+function pathName(path) {
+  const clean = String(path || '').replace(/[\\/]+$/, '');
+  const parts = clean.split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1) || clean;
+}
+
+function samePath(a, b) {
+  const clean = value => String(value || '').replace(/[\\/]+$/, '').toLowerCase();
+  return clean(a) === clean(b);
 }
 
 function toast(text) {
@@ -81,17 +93,16 @@ function toggleInline(element, button) {
 }
 
 function folderRow(folder) {
-  const path = pathParts(folder.path);
   return `
     <article class="storage-item folder-item" data-folder-path="${esc(folder.path)}">
-      <span class="folder-glyph" aria-hidden="true"></span>
       <div class="storage-copy">
-        <div class="storage-title"><strong>${esc(path.name || folder.path)}</strong><span class="item-state" data-folder-status>Pending</span></div>
-        ${path.parent ? `<div class="storage-path" title="${esc(folder.path)}">${esc(path.parent)}</div>` : ''}
-        <div class="storage-meta">
-          <span data-folder-files>— files</span><span>·</span><span data-folder-size>—</span><span>·</span><span data-folder-free>— free</span>
+        <div class="storage-title">
+          <strong title="${esc(folder.path)}">${esc(folder.path)}</strong>
+          <time class="item-state" data-folder-status>—</time>
         </div>
-        <div class="storage-meter" title="Folder size relative to drive capacity"><i data-folder-meter></i></div>
+        <div class="storage-meta"><span data-folder-files>— files</span><span>·</span><span data-folder-size>—</span><span>·</span><span data-folder-free>— free</span></div>
+        <div class="storage-meter" title=""><i data-folder-meter></i></div>
+        <div class="item-progress" data-item-progress hidden></div>
       </div>
       <div class="item-actions">
         <button class="action-link" data-sync-folder="${esc(folder.path)}">Sync</button>
@@ -100,71 +111,8 @@ function folderRow(folder) {
     </article>`;
 }
 
-function renderFolders(folders, job) {
-  const element = $('#folders');
-  const renderKey = JSON.stringify(folders.map(folder => folder.path));
-  if (renderKey !== foldersRenderKey) {
-    foldersRenderKey = renderKey;
-    element.innerHTML = folders.length ? folders.map(folderRow).join('') : '<div class="empty-state">No folders yet</div>';
-  }
-
-  const syncingPath = job?.status === 'running' && job.type === 'sync' ? String(job.progress?.path || '') : '';
-  const byPath = new Map(folders.map(folder => [folder.path, folder]));
-  for (const row of element.querySelectorAll('[data-folder-path]')) {
-    const folder = byPath.get(row.dataset.folderPath);
-    if (!folder) continue;
-    const syncing = syncingPath === folder.path;
-    const state = syncing ? 'Syncing' : folder.lastSynced ? 'Synced' : 'Pending';
-    const label = row.querySelector('[data-folder-status]');
-    if (label.textContent !== state) label.textContent = state;
-    label.className = `item-state ${syncing ? 'working' : folder.lastSynced ? 'good' : 'idle'}`;
-    label.title = folder.lastSynced ? new Date(folder.lastSynced).toLocaleString() : '';
-    row.classList.toggle('working', syncing);
-  }
-  $('#folderSummary').textContent = folders.length ? `${folders.length} ${folders.length === 1 ? 'folder' : 'folders'}` : '';
-}
-
-async function refreshFolderStats() {
-  try {
-    const data = await req('/api/folder-stats');
-    const stats = data.folders || [];
-    let totalBytes = 0;
-    let totalFiles = 0;
-    for (const item of stats) {
-      const row = [...$('#folders').querySelectorAll('[data-folder-path]')].find(node => node.dataset.folderPath === item.path);
-      if (!row) continue;
-      totalBytes += Number(item.bytes) || 0;
-      totalFiles += Number(item.files) || 0;
-      row.querySelector('[data-folder-files]').textContent = `${Number(item.files).toLocaleString()} files`;
-      row.querySelector('[data-folder-size]').textContent = bytes(item.bytes);
-      row.querySelector('[data-folder-free]').textContent = `${bytes(item.freeBytes)} free`;
-      const ratio = item.capacityBytes ? Math.min(100, Number(item.bytes) / Number(item.capacityBytes) * 100) : 0;
-      const meter = row.querySelector('[data-folder-meter]');
-      meter.style.width = item.bytes ? `max(2px, ${ratio}%)` : '0';
-      meter.parentElement.title = `${bytes(item.bytes)} of ${bytes(item.capacityBytes)}`;
-    }
-    const count = stats.length;
-    $('#folderSummary').textContent = count ? `${totalFiles.toLocaleString()} files · ${bytes(totalBytes)}` : '';
-  } catch {}
-}
-
-function activity(job, previews = {}) {
-  const previewActive = Number(previews.active) || 0;
-  const previewQueued = (Number(previews.urgent) || 0) + (Number(previews.priority) || 0) + (Number(previews.queued) || 0);
-  const working = job?.status === 'running';
-  if (!working && !previewActive && !previewQueued) {
-    activityCard.hidden = true;
-    return;
-  }
-
-  activityCard.hidden = false;
-  if (!working) {
-    $('#activity').innerHTML = `
-      <div class="activity-head"><div><span class="pulse"></span><strong>Previews</strong></div><span>${previewActive ? `${previewActive} working` : ''}${previewActive && previewQueued ? ' · ' : ''}${previewQueued ? `${previewQueued.toLocaleString()} queued` : ''}</span></div>
-      <div class="progress-bar indeterminate"><i style="width:32%"></i></div>`;
-    return;
-  }
-
+function progressData(job) {
+  if (!job || job.status !== 'running') return null;
   const p = job.progress || {};
   const total = Number(p.totalBytes) || 0;
   const done = Math.min(total, Number(p.doneBytes) || 0);
@@ -176,21 +124,118 @@ function activity(job, previews = {}) {
   if (p.copied != null) meta.push(`${Number(p.copied).toLocaleString()} copied`);
   if (p.speedBps > 0) meta.push(`${bytes(p.speedBps)}/s`);
   if (p.etaSeconds > 0) meta.push(`${duration(p.etaSeconds)} left`);
-  if (previewActive || previewQueued) meta.push(`${previewActive} previews · ${previewQueued.toLocaleString()} queued`);
+  const phase = job.cancelRequested ? 'Canceling…' : p.phase || 'Working…';
+  return {
+    key: JSON.stringify([phase, meta, p.current || '', percent, Boolean(p.indeterminate), job.cancelRequested]),
+    html: `
+      <div class="inline-progress-head"><strong>${esc(phase)}</strong><button class="action-link" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>Cancel</button></div>
+      <div class="progress-bar ${p.indeterminate || !total ? 'indeterminate' : ''}"><i style="width:${p.indeterminate || !total ? '32%' : `${percent}%`}"></i></div>
+      <div class="inline-progress-meta"><span>${esc(meta.join(' · '))}</span><span title="${esc(p.current || '')}">${esc(p.current || '')}</span></div>`
+  };
+}
 
-  const phase = job.cancelRequested ? 'Canceling…' : p.phase || job.label || 'Working…';
-  $('#activity').innerHTML = `
-    <div class="activity-head">
-      <div><span class="pulse"></span><strong>${esc(phase)}</strong><span class="activity-label">${esc(job.label || '')}</span></div>
-      <button class="action-link" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>Cancel</button>
-    </div>
-    <div class="progress-bar ${p.indeterminate || !total ? 'indeterminate' : ''}"><i style="width:${p.indeterminate || !total ? '32%' : `${percent}%`}"></i></div>
-    <div class="activity-foot"><span>${esc(meta.join(' · '))}</span><span title="${esc(p.current || '')}">${esc(p.current || '')}</span></div>`;
+function renderItemProgress(row, job) {
+  const element = row?.querySelector('[data-item-progress]');
+  if (!element) return;
+  const progress = progressData(job);
+  if (!progress) {
+    element.hidden = true;
+    element.dataset.progressKey = '';
+    return;
+  }
+  element.hidden = false;
+  if (element.dataset.progressKey === progress.key) return;
+  element.dataset.progressKey = progress.key;
+  element.innerHTML = progress.html;
+}
+
+function folderJob(path, job) {
+  if (job?.status !== 'running' || job.type !== 'sync') return null;
+  return samePath(job.progress?.path, path) ? job : null;
+}
+
+function backupJobPath(job) {
+  const label = String(job?.label || '');
+  for (const prefix of ['Update ', 'Verify ', 'Restore ']) {
+    if (label.startsWith(prefix)) return label.slice(prefix.length);
+  }
+  return '';
+}
+
+function backupJob(location, job) {
+  if (job?.status !== 'running' || !['backup', 'verify', 'restore'].includes(job.type)) return null;
+  return samePath(backupJobPath(job), location.path) ? job : null;
+}
+
+function renderFolders(folders, job) {
+  const element = $('#folders');
+  const renderKey = JSON.stringify(folders.map(folder => folder.path));
+  if (renderKey !== foldersRenderKey) {
+    foldersRenderKey = renderKey;
+    element.innerHTML = folders.length ? folders.map(folderRow).join('') : '<div class="empty-state">No folders</div>';
+  }
+
+  const byPath = new Map(folders.map(folder => [folder.path, folder]));
+  for (const row of element.querySelectorAll('[data-folder-path]')) {
+    const folder = byPath.get(row.dataset.folderPath);
+    if (!folder) continue;
+    const active = folderJob(folder.path, job);
+    const label = row.querySelector('[data-folder-status]');
+    const status = active ? 'Syncing' : exactDate(folder.lastSynced) || '—';
+    if (label.textContent !== status) label.textContent = status;
+    label.className = `item-state ${active ? 'working' : folder.lastSynced ? 'good' : ''}`;
+    row.classList.toggle('working', Boolean(active));
+    renderItemProgress(row, active);
+  }
+}
+
+async function refreshFolderStats() {
+  try {
+    const { folders = [] } = await req('/api/folder-stats');
+    for (const item of folders) {
+      const row = [...$('#folders').querySelectorAll('[data-folder-path]')].find(node => samePath(node.dataset.folderPath, item.path));
+      if (!row) continue;
+      row.querySelector('[data-folder-files]').textContent = `${Number(item.files).toLocaleString()} files`;
+      row.querySelector('[data-folder-size]').textContent = bytes(item.bytes);
+      row.querySelector('[data-folder-free]').textContent = `${bytes(item.freeBytes)} free`;
+      const ratio = item.capacityBytes ? Math.min(100, Number(item.bytes) / Number(item.capacityBytes) * 100) : 0;
+      const meter = row.querySelector('[data-folder-meter]');
+      meter.style.width = item.bytes ? `max(2px, ${ratio}%)` : '0';
+      meter.parentElement.title = `${bytes(item.bytes)} of ${bytes(item.capacityBytes)}`;
+    }
+  } catch {}
+}
+
+function backgroundActivity(job, previews = {}) {
+  const previewActive = Number(previews.active) || 0;
+  const previewQueued = (Number(previews.urgent) || 0) + (Number(previews.priority) || 0) + (Number(previews.queued) || 0);
+  if (job?.status === 'running' || (!previewActive && !previewQueued)) {
+    activityCard.hidden = true;
+    return;
+  }
+  activityCard.hidden = false;
+  const key = `${previewActive}:${previewQueued}`;
+  if ($('#activity').dataset.key === key) return;
+  $('#activity').dataset.key = key;
+  $('#activity').innerHTML = `<span><strong>Previews</strong>${previewActive ? ` · ${previewActive} working` : ''}${previewQueued ? ` · ${previewQueued.toLocaleString()} queued` : ''}</span><div class="progress-bar indeterminate"><i style="width:32%"></i></div>`;
+}
+
+async function recordFinishedBackup(job) {
+  if (job?.status !== 'done') return;
+  const path = backupJobPath(job);
+  if (!path) return;
+  const action = job.type === 'backup' ? 'update' : job.type;
+  if (!['update', 'verify', 'restore'].includes(action)) return;
+  try {
+    await req('/api/backup/history', { method: 'POST', body: JSON.stringify({ path, action }) });
+    backupsRenderKey = '';
+  } catch {}
 }
 
 async function state() {
   try {
     const current = await req('/api/state');
+    currentJob = current.job;
     if (!connectionDialog.open) $('#serverUrl').value = current.settings.server;
     defaultDevice = current.settings.device || defaultDevice;
     $('#deviceLabel').textContent = defaultDevice;
@@ -201,12 +246,13 @@ async function state() {
     status.title = current.server.online ? `${current.server.stats.objects.toLocaleString()} files` : current.server.error || 'Connect';
 
     renderFolders(current.settings.folders || [], current.job);
-    activity(current.job, current.previews);
+    renderBackupProgress(current.job);
+    backgroundActivity(current.job, current.previews);
 
     if (current.job && current.job.status !== 'running' && lastFinished !== current.job.id) {
       lastFinished = current.job.id;
-      const done = current.job.type === 'sync' ? 'Synced' : 'Done';
-      toast(current.job.status === 'done' ? done : current.job.status === 'canceled' ? 'Canceled' : current.job.error);
+      await recordFinishedBackup(current.job);
+      toast(current.job.status === 'done' ? (current.job.type === 'sync' ? 'Synced' : 'Done') : current.job.status === 'canceled' ? 'Canceled' : current.job.error);
       backups(true);
       refreshFolderStats();
     }
@@ -219,21 +265,18 @@ async function state() {
 
 function backupScope(location) {
   const policy = location.remote?.policy || location.meta?.policy || {};
-  if (policy.all !== false) return { label: 'Everything', smart: false };
-  return {
-    label: policy.collectionName || `Collection ${policy.collectionId || ''}`.trim(),
-    smart: true,
-    missing: Boolean(policy.missing)
-  };
+  if (policy.all !== false) return 'Everything';
+  return `${policy.collectionName ? '✦ ' : ''}${policy.collectionName || `Collection ${policy.collectionId || ''}`.trim()}`;
 }
 
 function backupState(location) {
   const remote = location.remote;
-  if (!remote) return { label: 'Offline', className: 'idle' };
+  if (!remote) return { label: 'Offline', className: '' };
   if (remote.policy?.missing) return { label: 'Collection missing', className: 'bad' };
   const missing = Math.max(0, Number(remote.desiredBytes) - Number(remote.protectedBytes));
-  if (!missing) return { label: 'Complete', className: 'good' };
-  return { label: `${bytes(missing)} missing`, className: 'warning' };
+  if (missing) return { label: `${bytes(missing)} left`, className: 'warning' };
+  const when = exactDate(location.meta?.lastBackupAt || location.local?.oldestVerification);
+  return { label: when || 'Ready', className: 'good' };
 }
 
 function backupCard(location, index) {
@@ -241,25 +284,19 @@ function backupCard(location, index) {
   const protectedBytes = Number(remote?.protectedBytes) || 0;
   const desiredBytes = Number(remote?.desiredBytes) || 0;
   const ratio = desiredBytes ? Math.min(100, protectedBytes / desiredBytes * 100) : remote ? 100 : 0;
-  const scope = backupScope(location);
   const state = backupState(location);
-  const totalBytes = Number(location.totalBytes) || 0;
-  const freeBytes = Number(location.freeBytes) || 0;
-  const driveUsed = Math.max(0, totalBytes - freeBytes);
-  const capacityRatio = totalBytes ? Math.min(100, driveUsed / totalBytes * 100) : 0;
+  const scope = backupScope(location);
+  const localBytes = Number(location.local?.bytes) || 0;
+  const shownBytes = remote ? protectedBytes : localBytes;
 
   return `
     <article class="storage-item backup-item" data-backup-index="${index}">
-      <span class="drive-glyph" aria-hidden="true"></span>
       <div class="storage-copy">
-        <div class="storage-title"><strong>${esc(location.meta.name)}</strong><span class="item-state ${state.className}">${esc(state.label)}</span></div>
+        <div class="storage-title"><strong>${esc(location.meta.name)}</strong><time class="item-state ${state.className}">${esc(state.label)}</time></div>
         <div class="storage-path" title="${esc(location.path)}">${esc(location.path)}</div>
-        <div class="backup-scope ${scope.missing ? 'missing' : ''}">${scope.smart ? '<span>✦</span>' : ''}${esc(scope.label)}</div>
-        <div class="backup-coverage">
-          <div class="storage-meter coverage-meter"><i style="width:${protectedBytes ? `max(2px, ${ratio}%)` : '0'}"></i></div>
-          <div class="coverage-values"><span>${remote ? `${bytes(protectedBytes)} / ${bytes(desiredBytes)}` : `${Number(location.local.count).toLocaleString()} files · ${bytes(location.local.bytes)}`}</span><span>${bytes(freeBytes)} free</span></div>
-        </div>
-        <div class="capacity-line" title="${bytes(driveUsed)} used of ${bytes(totalBytes)}"><i style="width:${capacityRatio}%"></i></div>
+        <div class="storage-meta"><span>${esc(scope)}</span><span>·</span><span>${bytes(shownBytes)}</span><span>·</span><span>${bytes(location.freeBytes)} free</span></div>
+        <div class="storage-meter backup-meter" title="${remote ? `${bytes(protectedBytes)} of ${bytes(desiredBytes)} backed up` : `${bytes(localBytes)} stored`}"><i style="width:${remote && protectedBytes ? `max(2px, ${ratio}%)` : '0'}"></i></div>
+        <div class="item-progress" data-item-progress hidden></div>
       </div>
       <div class="item-actions backup-actions">
         <button class="action-link primary-action" data-update="${index}">Update</button>
@@ -280,6 +317,13 @@ function wireBackupActions() {
   });
 }
 
+function renderBackupProgress(job) {
+  for (const row of $('#backups').querySelectorAll('[data-backup-index]')) {
+    const location = backupLocations[Number(row.dataset.backupIndex)];
+    if (location) renderItemProgress(row, backupJob(location, job));
+  }
+}
+
 async function backups(force = false) {
   if (backupLoading || (!force && Date.now() - lastBackupRefresh < 5000)) return;
   backupLoading = true;
@@ -291,21 +335,22 @@ async function backups(force = false) {
       location.path,
       location.meta?.name,
       location.meta?.policy,
+      location.meta?.lastBackupAt,
+      location.meta?.lastVerifiedAt,
       location.local?.count,
       location.local?.bytes,
+      location.local?.oldestVerification,
       location.freeBytes,
-      location.totalBytes,
       location.remote?.protectedBytes,
       location.remote?.desiredBytes,
       location.remote?.policy
     ]));
     if (key !== backupsRenderKey) {
       backupsRenderKey = key;
-      $('#backups').innerHTML = backupLocations.length ? backupLocations.map(backupCard).join('') : '<div class="empty-state">No backups yet</div>';
+      $('#backups').innerHTML = backupLocations.length ? backupLocations.map(backupCard).join('') : '<div class="empty-state">No backups</div>';
       wireBackupActions();
     }
-    const protectedBytes = backupLocations.reduce((sum, location) => sum + (Number(location.remote?.protectedBytes) || Number(location.local?.bytes) || 0), 0);
-    $('#backupSummary').textContent = backupLocations.length ? `${backupLocations.length} ${backupLocations.length === 1 ? 'drive' : 'drives'} · ${bytes(protectedBytes)}` : '';
+    renderBackupProgress(currentJob);
   } catch (error) {
     $('#backups').innerHTML = `<div class="error">${esc(error.message)}</div>`;
   } finally {
@@ -325,12 +370,8 @@ function renderBackupScopes(meta = null) {
   const select = $('#backupScope');
   const current = meta?.policy?.all === false ? Number(meta.policy.collectionId) || 0 : 0;
   const options = ['<option value="">Everything</option>'];
-  if (smartCollections.length) {
-    options.push(`<optgroup label="Smart Collections">${smartCollections.map(item => `<option value="${Number(item.id)}">✦ ${esc(item.name)}</option>`).join('')}</optgroup>`);
-  }
-  if (current && !smartCollections.some(item => Number(item.id) === current)) {
-    options.push(`<option value="${current}">✦ ${esc(meta.policy.collectionName || `Collection ${current}`)}</option>`);
-  }
+  if (smartCollections.length) options.push(`<optgroup label="Smart Collections">${smartCollections.map(item => `<option value="${Number(item.id)}">✦ ${esc(item.name)}</option>`).join('')}</optgroup>`);
+  if (current && !smartCollections.some(item => Number(item.id) === current)) options.push(`<option value="${current}">✦ ${esc(meta.policy.collectionName || `Collection ${current}`)}</option>`);
   select.innerHTML = options.join('');
   select.value = current ? String(current) : '';
 }
@@ -339,7 +380,7 @@ async function openBackupDialog(path, meta = null) {
   backupPath = path;
   backupEditing = Boolean(meta);
   $('#backupPathLabel').textContent = path;
-  $('#backupName').value = meta?.name || pathParts(path).name || '';
+  $('#backupName').value = meta?.name || pathName(path) || '';
   await loadSmartCollections();
   renderBackupScopes(meta);
   backupDialog.showModal();
@@ -374,7 +415,7 @@ $('#chooseRestore').onclick = () => chooseFolder($('#restoreDestination'));
 $('#refreshBackups').onclick = () => backups(true);
 $$('[data-close]').forEach(button => button.onclick = () => button.closest('dialog').close());
 
-$('#activity').addEventListener('click', async event => {
+document.addEventListener('click', async event => {
   if (!event.target.closest('[data-cancel-job]')) return;
   try {
     await req('/api/job/cancel', { method: 'POST' });
@@ -427,7 +468,7 @@ $('#saveDevice').onclick = async () => {
 $('#addBackup').onclick = async () => {
   const path = $('#backupLocation').value.trim();
   if (!path) return toast('Choose a folder.');
-  let meta = backupLocations.find(item => item.path.toLowerCase() === path.toLowerCase())?.meta || null;
+  let meta = backupLocations.find(item => samePath(item.path, path))?.meta || null;
   if (!meta) {
     try { meta = (await req(`/api/backup/status?path=${encodeURIComponent(path)}`)).meta; } catch {}
   }
@@ -438,22 +479,24 @@ $('#initializeBackup').onclick = async () => {
   const collectionId = Number($('#backupScope').value) || 0;
   const collection = smartCollections.find(item => Number(item.id) === collectionId);
   const collectionName = collection?.name || (collectionId ? $('#backupScope').selectedOptions[0]?.textContent?.replace(/^✦\s*/, '') || '' : '');
+  const path = backupPath;
   try {
     const result = await req('/api/backup/init', {
       method: 'POST',
-      body: JSON.stringify({ path: backupPath, name: $('#backupName').value.trim(), types: [], configure: backupEditing })
+      body: JSON.stringify({ path, name: $('#backupName').value.trim(), types: [], configure: backupEditing })
     });
     await req('/api/backup/policy', {
       method: 'POST',
-      body: JSON.stringify({ path: backupPath, collectionId: collectionId || null, collectionName })
+      body: JSON.stringify({ path, collectionId: collectionId || null, collectionName })
     });
     backupDialog.close();
     $('#backupLocation').value = '';
     $('#backupAdd').hidden = true;
     $('#showBackupAdd').classList.remove('active');
-    toast(backupEditing ? 'Saved' : result.existing ? 'Added' : 'Created');
     backupsRenderKey = '';
-    backups(true);
+    await backups(true);
+    if (!backupEditing && !result.existing) await runBackup(path, 'update');
+    else toast(backupEditing ? 'Saved' : 'Added');
   } catch (error) {
     toast(error.message);
   }
