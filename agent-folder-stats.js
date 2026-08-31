@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, statfs } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -20,6 +20,15 @@ function json(res, status, data) {
   res.end(body);
 }
 
+async function capacity(path) {
+  try {
+    const fs = await statfs(path);
+    return Number(fs.blocks) * Number(fs.bsize);
+  } catch {
+    return 0;
+  }
+}
+
 async function folderStats() {
   let saved = {};
   try { saved = JSON.parse(await readFile(CONFIG_PATH, 'utf8')); } catch {}
@@ -29,13 +38,21 @@ async function folderStats() {
   try {
     db ||= new DatabaseSync(INDEX_PATH, { timeout: 5000 });
     const stats = db.prepare('SELECT COUNT(*) AS files, COALESCE(SUM(size), 0) AS bytes FROM file_hashes WHERE root = ?');
-    return folders.map(item => {
+    return await Promise.all(folders.map(async item => {
       const path = resolve(String(item?.path || item));
       const row = stats.get(keyFor(path));
-      return { path, files: Number(row?.files) || 0, bytes: Number(row?.bytes) || 0 };
-    });
+      return {
+        path,
+        files: Number(row?.files) || 0,
+        bytes: Number(row?.bytes) || 0,
+        capacityBytes: await capacity(path)
+      };
+    }));
   } catch {
-    return folders.map(item => ({ path: resolve(String(item?.path || item)), files: 0, bytes: 0 }));
+    return Promise.all(folders.map(async item => {
+      const path = resolve(String(item?.path || item));
+      return { path, files: 0, bytes: 0, capacityBytes: await capacity(path) };
+    }));
   }
 }
 
