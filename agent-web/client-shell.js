@@ -5,6 +5,10 @@ const storagePane = $('#storagePane');
 const frame = $('#filesFrame');
 const connection = $('#connectionDialog');
 const connectButton = $('#saveSettings');
+const logoutButton = $('#clientLogout');
+const serverStorage = $('#serverStorage');
+const serverStorageText = $('#serverStorageText');
+const serverStorageBar = $('#serverStorageBar');
 
 function showTab(name) {
   const files = name !== 'storage';
@@ -36,6 +40,44 @@ function notify(text) {
   toast.timer = setTimeout(() => toast.classList.remove('show'), 2800);
 }
 
+function bytes(number) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  let value = Number(number) || 0;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
+  return `${value < 10 && unit ? value.toFixed(2) : value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
+}
+
+function renderServerStorage(state) {
+  const stats = state?.server?.online ? state.server.stats : null;
+  if (!stats) {
+    serverStorage.hidden = true;
+    logoutButton.hidden = !state?.settings?.hasToken;
+    return;
+  }
+  const used = Number(stats.bytes) || 0;
+  const capacity = Number(stats.capacityBytes) || 0;
+  const percent = capacity ? Math.min(100, used / capacity * 100) : 0;
+  serverStorageText.innerHTML = `${bytes(used)} <small>of ${bytes(capacity)}</small>`;
+  serverStorageBar.style.width = used ? `max(2px, ${percent}%)` : '0';
+  serverStorage.hidden = false;
+  logoutButton.hidden = false;
+}
+
+async function refreshShellState(showLogin = false) {
+  try {
+    const state = await json('/api/state');
+    renderServerStorage(state);
+    if ((!state.settings?.hasToken || !state.server?.online) && (showLogin || !connection.open)) {
+      if (!connection.open) connection.showModal();
+    }
+    return state;
+  } catch {
+    serverStorage.hidden = true;
+    return null;
+  }
+}
+
 connectButton.addEventListener('click', async event => {
   event.preventDefault();
   event.stopImmediatePropagation();
@@ -49,7 +91,7 @@ connectButton.addEventListener('click', async event => {
     const state = await json('/api/state').catch(() => ({ settings: {} }));
     const login = await json('/api/client/login', {
       method: 'POST',
-      body: { server, username, password, device: state.settings?.device || 'Mochimono Client' }
+      body: { server, username, password, device: state.settings?.device || 'Mochimono' }
     });
     await json('/api/settings', {
       method: 'POST',
@@ -59,6 +101,7 @@ connectButton.addEventListener('click', async event => {
     $('#serverToken').value = '';
     connection.close();
     frame.src = `/files/?connected=${Date.now()}`;
+    await refreshShellState();
     notify('Connected');
   } catch (error) {
     notify(error.message);
@@ -67,12 +110,18 @@ connectButton.addEventListener('click', async event => {
   }
 }, { capture: true });
 
-async function ensureConnected() {
+logoutButton.addEventListener('click', async () => {
+  logoutButton.disabled = true;
   try {
-    const state = await json('/api/state');
-    if (!state.settings?.hasToken && !connection.open) connection.showModal();
+    await json('/api/auth/revoke-self', { method: 'POST' });
   } catch {}
-}
+  frame.src = 'about:blank';
+  serverStorage.hidden = true;
+  logoutButton.hidden = true;
+  logoutButton.disabled = false;
+  if (!connection.open) connection.showModal();
+  notify('Logged out');
+});
 
 window.addEventListener('message', event => {
   if (event.source !== frame.contentWindow) return;
@@ -85,4 +134,5 @@ window.addEventListener('message', event => {
   }
 });
 
-ensureConnected();
+refreshShellState(true);
+setInterval(refreshShellState, 5000);
