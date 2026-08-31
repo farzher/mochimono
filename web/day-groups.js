@@ -20,7 +20,9 @@ let layoutVersion = 0;
 
 function dateFor(card) {
   const meta = window.mochimonoFileDates?.get(card.dataset.hash);
-  const value = sort?.value === 'date-added' ? meta?.addedAt : meta?.fileDate;
+  const value = sort?.value === 'date-added'
+    ? (card.dataset.addedAt || meta?.addedAt)
+    : (card.dataset.fileDate || meta?.fileDate);
   const date = new Date(value || 0);
   return Number.isNaN(date.getTime()) ? null : date;
 }
@@ -29,29 +31,35 @@ function dayKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+function monthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
 function dayLabel(date) {
   return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
-function monthName(key) {
-  const [, month] = String(key || '').split('-').map(Number);
-  return Number.isFinite(month)
-    ? new Date(2000, month - 1, 1).toLocaleDateString(undefined, { month: 'long' })
-    : '';
+function monthName(date) {
+  return date?.toLocaleDateString(undefined, { month: 'long' }) || '';
 }
 
-function yearForGroup(group) {
-  const year = Number(String(group.dataset.dateGroup || '').split('-')[0]);
-  return Number.isFinite(year) ? year : null;
+function groupDate(group) {
+  const card = group.querySelector(':scope > .date-grid > [data-hash],:scope > .date-list > [data-hash]');
+  return card ? dateFor(card) : null;
 }
 
 function decorateYears(groups) {
   let previousYear = null;
+  let previousMonth = '';
   for (const group of groups) {
-    const year = yearForGroup(group);
-    const month = monthName(group.dataset.dateGroup);
+    const date = groupDate(group);
+    const year = date?.getFullYear() ?? null;
+    const month = date ? monthKey(date) : '';
     const monthHeading = group.querySelector(':scope > .date-heading');
-    if (monthHeading && month && monthHeading.textContent !== month) monthHeading.textContent = month;
+    if (monthHeading) {
+      monthHeading.textContent = monthName(date);
+      monthHeading.hidden = Boolean(month && month === previousMonth);
+    }
 
     let heading = group.querySelector(':scope > .year-heading');
     const needsYear = year != null && year !== previousYear;
@@ -61,11 +69,13 @@ function decorateYears(groups) {
         heading.className = 'year-heading';
         group.prepend(heading);
       }
-      if (heading.textContent !== String(year)) heading.textContent = String(year);
+      heading.textContent = String(year);
     } else {
       heading?.remove();
     }
+    group.classList.toggle('timeline-continuation', Boolean(month && month === previousMonth));
     if (year != null) previousYear = year;
+    if (month) previousMonth = month;
   }
 }
 
@@ -86,8 +96,6 @@ function decorateGroup(group) {
     delete card.dataset.dayLabel;
   }
 
-  // Measure untouched flex rows first. Day separation is vertical only, so the
-  // photo row still consumes exactly the same horizontal width as every other row.
   const rowTop = new Map(cards.map(card => [card, card.offsetTop]));
   const rowStarts = [];
   let previousDay = '';
