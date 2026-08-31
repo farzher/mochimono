@@ -10,7 +10,6 @@ const GRID_FOLDERS_KEY = 'mochimono-grid-folders';
 let restoring = false;
 let syncFrame = 0;
 let gridFolderGeneration = 0;
-let gridNavigating = false;
 let gridFoldersEnabled = localStorage.getItem(GRID_FOLDERS_KEY) !== '0';
 
 const gridFolderToggle = document.createElement('button');
@@ -61,8 +60,7 @@ function replaceFolderParams(state) {
 
 function syncUrl() {
   syncFrame = 0;
-  if (restoring || gridNavigating) return;
-  replaceFolderParams(folderState());
+  if (!restoring) replaceFolderParams(folderState());
 }
 
 function scheduleSync() {
@@ -122,60 +120,42 @@ function waitFor(find, timeout = 8000) {
       const value = find();
       if (value) return resolve(value);
       if (performance.now() - started >= timeout) return reject(new Error('Folder location is no longer available.'));
-      setTimeout(check, 40);
+      setTimeout(check, 30);
     };
     check();
   });
 }
 
-async function enterSourceFromGrid(id) {
-  const option = [...source.options].find(item => item.value === String(id));
-  if (!option) return;
-  gridNavigating = true;
-  try {
-    views.querySelector('[data-view="folders"]')?.click();
-    await waitFor(() => currentView() === 'folders');
-    source.value = option.value;
-    source.dispatchEvent(new Event('change', { bubbles: true }));
-    await waitFor(() => folderState()?.source === option.textContent.trim());
-    views.querySelector('[data-view="grid"]')?.click();
-    await waitFor(() => currentView() === 'grid');
-  } catch (error) {
-    console.warn(error.message);
-  } finally {
-    gridNavigating = false;
-    scheduleSync();
-    refreshGridFolders();
-  }
+function dispatchFolderClick(attribute, value) {
+  const bridge = document.createElement('button');
+  bridge.type = 'button';
+  bridge.hidden = true;
+  bridge.dataset[attribute] = value;
+  files.append(bridge);
+  bridge.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  bridge.remove();
 }
 
-async function enterFolderFromGrid(name) {
+async function enterSource(id) {
+  const option = [...source.options].find(item => item.value === String(id));
+  if (!option) return;
+  dispatchFolderClick('folderSource', option.value);
+  await waitFor(() => folderState()?.source === option.textContent.trim());
+}
+
+async function enterFolder(name) {
   const before = folderState();
   if (!before) return;
   const wantedPath = before.path ? `${before.path}/${name}` : name;
-  gridNavigating = true;
-  try {
-    views.querySelector('[data-view="folders"]')?.click();
-    await waitFor(() => currentView() === 'folders');
-    const row = await waitFor(() => [...files.querySelectorAll('[data-folder-name]')].find(item => item.dataset.folderName === name));
-    row.click();
-    await waitFor(() => folderState()?.path === wantedPath);
-    views.querySelector('[data-view="grid"]')?.click();
-    await waitFor(() => currentView() === 'grid');
-  } catch (error) {
-    console.warn(error.message);
-  } finally {
-    gridNavigating = false;
-    scheduleSync();
-    refreshGridFolders();
-  }
+  dispatchFolderClick('folderName', name);
+  await waitFor(() => folderState()?.path === wantedPath);
 }
 
 async function refreshGridFolders() {
   syncGridFolderToggle();
   const generation = ++gridFolderGeneration;
-  if (!gridFoldersEnabled || currentView() !== 'grid' || restoring || gridNavigating) {
-    if (!gridNavigating) gridFolderStrip.hidden = true;
+  if (!gridFoldersEnabled || currentView() !== 'grid' || restoring) {
+    gridFolderStrip.hidden = true;
     return;
   }
 
@@ -216,22 +196,8 @@ async function restoreFolder() {
   restoring = true;
   try {
     const option = await waitFor(() => [...source.options].find(item => item.textContent === wantedSource));
-    const desiredView = currentView();
-    if (desiredView !== 'folders') views.querySelector('[data-view="folders"]')?.click();
-    await waitFor(() => currentView() === 'folders');
-
-    source.value = option.value;
-    source.dispatchEvent(new Event('change', { bubbles: true }));
-    await waitFor(() => folderbar.querySelector('[data-folder-depth="0"]')?.textContent.trim() === wantedSource);
-
-    for (let depth = 0; depth < parts.length; depth++) {
-      const part = parts[depth];
-      const row = await waitFor(() => [...files.querySelectorAll('[data-folder-name]')].find(item => item.dataset.folderName === part));
-      row.click();
-      await waitFor(() => folderbar.querySelector(`[data-folder-depth="${depth + 1}"]`)?.textContent.trim() === part);
-    }
-
-    if (desiredView !== 'folders') views.querySelector(`[data-view="${desiredView}"]`)?.click();
+    await enterSource(option.value);
+    for (const part of parts) await enterFolder(part);
   } catch (error) {
     console.warn(error.message);
   } finally {
@@ -249,12 +215,16 @@ gridFolderToggle.addEventListener('click', () => {
 
 gridFolderStrip.addEventListener('click', event => {
   const sourceCard = event.target.closest('[data-grid-folder-source]');
-  if (sourceCard) {
-    enterSourceFromGrid(sourceCard.dataset.gridFolderSource);
-    return;
-  }
   const folderCard = event.target.closest('[data-grid-folder-name]');
-  if (folderCard) enterFolderFromGrid(folderCard.dataset.gridFolderName);
+  const action = sourceCard
+    ? enterSource(sourceCard.dataset.gridFolderSource)
+    : folderCard
+      ? enterFolder(folderCard.dataset.gridFolderName)
+      : null;
+  action?.then(() => {
+    scheduleSync();
+    refreshGridFolders();
+  }).catch(error => console.warn(error.message));
 });
 
 new MutationObserver(() => {
@@ -270,7 +240,7 @@ new MutationObserver(() => {
 new MutationObserver(refreshGridFolders).observe(source, { childList: true });
 
 source.addEventListener('change', () => {
-  if (!restoring && !gridNavigating && currentView() !== 'folders') {
+  if (!restoring && currentView() !== 'folders') {
     clearFolderUi();
     replaceFolderParams(null);
   }
