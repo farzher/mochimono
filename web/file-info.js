@@ -6,7 +6,6 @@ const viewerCollections = document.querySelector('#viewerCollections');
 const button = document.querySelector('#viewer-info-button');
 const panel = document.querySelector('#viewerInfo');
 let generation = 0;
-let lastData = null;
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
@@ -81,12 +80,15 @@ function protectionState(data, local) {
     note: 'This is the only known copy. Keep it here until Mochimono has stored and backed it up.', locals, backups, verified, server, copies, safe
   };
   if (server && backups.length && localPaths > 0) return {
-    key: verified.length ? 'good' : 'warn', label: `Protected · ${copies} copies`, title: 'Protected',
-    note: verified.length ? 'Copies exist on this PC, in Mochimono, and on a verified backup.' : 'A backup copy exists, but it has not been verified yet.', locals, backups, verified, server, copies, safe
+    key: 'warn', label: `Backup not verified · ${copies} copies`, title: 'Needs backup verification',
+    note: 'Copies exist on this PC and in Mochimono, and a backup is present, but no backup copy has been verified yet.', locals, backups, verified, server, copies, safe
   };
-  if (server && backups.length && !localPaths) return {
-    key: verified.length ? 'good' : 'warn', label: `Protected · ${copies} copies`, title: 'Not on this PC',
-    note: verified.length ? 'This file is not using local PC space. It remains in Mochimono and on a verified backup.' : 'This file is not on this PC. A backup exists but has not been verified yet.', locals, backups, verified, server, copies, safe
+  if (server && backups.length && !localPaths) return verified.length ? {
+    key: 'good', label: `Protected · ${copies} copies`, title: 'Not on this PC',
+    note: 'This file is not using local PC space. It remains in Mochimono and on a verified backup.', locals, backups, verified, server, copies, safe
+  } : {
+    key: 'warn', label: `Backup not verified · ${copies} copies`, title: 'Not on this PC',
+    note: 'This file is not on this PC. A backup copy exists, but it has not been verified yet.', locals, backups, verified, server, copies, safe
   };
   if (server && localPaths > 0) return {
     key: 'warn', label: 'In Mochimono · backup needed', title: 'Needs another backup',
@@ -158,7 +160,6 @@ function renderPanel(data, local, groups) {
   const filename = object.filename || sources[0]?.filename || document.querySelector('#viewer-name')?.textContent || 'File';
   const mime = object.mime || 'application/octet-stream';
   const editableGroups = state.server;
-  lastData = { data, local, groups, state };
 
   panel.innerHTML = `<div class="viewer-info-head"><div><strong>${escapeHtml(filename)}</strong><span>${escapeHtml(bytes(object.size))}</span></div><button type="button" data-info-close aria-label="Close details">×</button></div>
     <section class="viewer-protection ${state.key}">
@@ -266,8 +267,10 @@ panel?.addEventListener('click', event => {
     const id = remove.dataset.removeGroup;
     const existing = viewerCollections?.querySelector(`[data-remove-collection="${CSS.escape(id)}"]`);
     if (existing) existing.click();
-    else fetch(`/api/collections/${encodeURIComponent(id)}/items/${currentHash()}`, { method: 'DELETE' }).then(() => load(true));
-    window.dispatchEvent(new CustomEvent('mochimono:groups-changed'));
+    else fetch(`/api/collections/${encodeURIComponent(id)}/items/${currentHash()}`, { method: 'DELETE' }).then(() => {
+      window.dispatchEvent(new CustomEvent('mochimono:groups-changed'));
+      load(true);
+    });
   }
 });
 
