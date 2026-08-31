@@ -171,9 +171,17 @@ if (viewer && viewerOpen && prev && next && actions) {
     return [];
   }
 
+  function nativeButtons() {
+    const hashes = window.mochimonoLibrary?.filteredHashes?.() || [];
+    const index = hashes.indexOf(currentHash());
+    prev.disabled = index <= 0;
+    next.disabled = index < 0 || index >= hashes.length - 1;
+  }
+
   function updateButtons() {
     if (mode === 'view') {
       count.textContent = '';
+      nativeButtons();
       return;
     }
     const index = context.findIndex(file => file.hash === currentHash());
@@ -190,7 +198,7 @@ if (viewer && viewerOpen && prev && next && actions) {
       anchorHash = '';
       context = [];
       count.textContent = '';
-      window.mochimonoLibrary?.refreshViewerNav?.();
+      nativeButtons();
       return;
     }
     anchorHash = currentHash();
@@ -241,9 +249,7 @@ if (viewer && viewerOpen && prev && next && actions) {
     navigate(event.key === 'ArrowLeft' ? -1 : 1);
   }, true);
 
-  new MutationObserver(() => {
-    if (mode !== 'view') requestAnimationFrame(updateButtons);
-  }).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
+  new MutationObserver(() => requestAnimationFrame(updateButtons)).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
 
   new MutationObserver(() => {
     if (!viewer.hidden) return;
