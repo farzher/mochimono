@@ -4,6 +4,11 @@ let keyboardMode = false;
 
 const style = document.createElement('style');
 style.textContent = `
+  #files .file-card.media-card.context-keyboard-focus,
+  #files .file-row.context-keyboard-focus,
+  #files .folder-row.context-keyboard-focus{box-shadow:none!important;outline:none!important}
+  #files .file-card:not(.media-card).context-keyboard-focus{box-shadow:none!important;outline:none!important}
+  #files .file-card:not(.media-card).context-keyboard-focus.selected{box-shadow:inset 0 0 0 2px var(--pink)!important}
   #files [data-hash]{position:relative}
   .keyboard-cursor-marker{
     position:absolute;
@@ -13,14 +18,11 @@ style.textContent = `
     width:8px;
     height:8px;
     border-radius:50%;
-    background:rgba(232,224,220,.88);
-    box-shadow:0 0 0 2px rgba(10,9,11,.72);
+    background:rgba(216,207,203,.9);
+    box-shadow:0 0 0 2px rgba(10,9,11,.68);
     pointer-events:none;
-    animation:keyboard-cursor-in .12s ease-out;
   }
   .file-row .keyboard-cursor-marker,.folder-row .keyboard-cursor-marker{right:8px;top:50%;transform:translateY(-50%)}
-  @keyframes keyboard-cursor-in{from{opacity:.2;transform:scale(.7)}to{opacity:1;transform:scale(1)}}
-  @media(prefers-reduced-motion:reduce){.keyboard-cursor-marker{animation:none}}
 `;
 document.head.append(style);
 
@@ -74,4 +76,11 @@ files?.addEventListener('focusout', () => requestAnimationFrame(() => {
   clearMarkers();
 }));
 
-new MutationObserver(applyCursor).observe(files, { childList: true, subtree: true });
+new MutationObserver(mutations => {
+  const galleryChanged = mutations.some(mutation =>
+    [...mutation.addedNodes, ...mutation.removedNodes].some(node =>
+      !(node instanceof Element && node.classList.contains('keyboard-cursor-marker'))
+    )
+  );
+  if (galleryChanged) requestAnimationFrame(applyCursor);
+}).observe(files, { childList: true, subtree: true });
