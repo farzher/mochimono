@@ -1,6 +1,3 @@
-import './client-thumbnail-stability.js';
-import './client-thumbnail-repair.js';
-
 if (location.pathname.startsWith('/files')) {
   const viewer = document.querySelector('#viewer');
   const report = () => window.parent.postMessage({
