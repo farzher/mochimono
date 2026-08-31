@@ -19,7 +19,7 @@ if (storagePane) {
     button.storage-protection-line:hover{background:rgba(92,143,102,.1);border-color:rgba(126,184,137,.26)}
     .storage-protection-line>div{min-width:0}.storage-protection-line strong{display:block;color:#c8dfcd;font-size:12px}.storage-protection-line span{display:block;margin-top:2px;color:#8e8582;font-size:9px;line-height:1.35}.storage-protection-line b{flex:0 0 auto;color:#dce8df;font-size:14px}.storage-protection-line em{flex:0 0 auto;color:#8fac96;font-size:9px;font-style:normal}
     .storage-attention{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;margin-top:7px;padding:9px 11px;border:0;border-radius:10px;background:rgba(255,255,255,.025);color:#918885;font-size:10px;text-align:left;box-shadow:none}.storage-attention:hover{background:rgba(255,255,255,.045)}.storage-attention b{color:#d8c09d;font-weight:700}.storage-attention em{flex:0 0 auto;color:#a38e73;font-size:9px;font-style:normal}
-    .folder-protection{margin-top:5px;color:#817977;font-size:9px}.folder-protection .safe{color:#9ebfa5}.folder-protection .warn{color:#c8a97e}
+    .folder-protection{display:inline-flex;align-items:center;gap:3px;margin-top:5px;padding:0;border:0;border-radius:0;background:transparent;color:#817977;font-size:9px;font-weight:500;text-align:left;box-shadow:none}.folder-protection:hover{background:transparent;color:#aaa09d}.folder-protection .safe{color:#9ebfa5}.folder-protection .warn{color:#c8a97e}.folder-protection:after{content:'›';margin-left:3px;color:#655e5d}
     @media(max-width:900px){.storage-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media(max-width:520px){.storage-summary-grid{grid-template-columns:1fr 1fr}.storage-summary-card{padding:10px}.storage-summary-card>strong{font-size:15px}.storage-protection-line{align-items:flex-start;flex-wrap:wrap;gap:4px}.storage-protection-line em{margin-left:auto}}
   `;
@@ -106,10 +106,13 @@ if (storagePane) {
       const stats = statsForLocation(definition.id, local.files || [], byHash, server, verified);
       let line = row.querySelector('.folder-protection');
       if (!line) {
-        line = document.createElement('div');
+        line = document.createElement('button');
+        line.type = 'button';
         line.className = 'folder-protection';
         row.querySelector('.storage-copy')?.append(line);
       }
+      line.dataset.openWhere = `folder:${definition.id}`;
+      line.title = 'View this folder in the library';
       const parts = [];
       if (stats.safe) parts.push(`<span class="safe">${esc(bytes(stats.safe))} safe to free</span>`);
       if (stats.needs) parts.push(`<span class="warn">${esc(bytes(stats.needs))} needs protection</span>`);
@@ -179,10 +182,12 @@ if (storagePane) {
     }
   }
 
-  target.addEventListener('click', event => {
+  function openFromClick(event) {
     const open = event.target.closest('[data-open-where]');
     if (open) openLibraryWhere(open.dataset.openWhere).catch(() => {});
-  });
+  }
+  target.addEventListener('click', openFromClick);
+  folders?.addEventListener('click', openFromClick);
 
   new MutationObserver(() => {
     if (!storagePane.hidden) refresh(true);
