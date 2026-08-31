@@ -13,12 +13,7 @@
     <div class="app-brand"><span class="mini" aria-hidden="true"></span><h1>Mochimono</h1></div>
     <div class="client-head-actions">
       <nav class="client-tabs" aria-label="Mochimono">
-        <button class="active" data-client-tab="files" title="Library" aria-label="Library">
-          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.25" y="3.25" width="5.5" height="5.5" rx=".8"/><rect x="11.25" y="3.25" width="5.5" height="5.5" rx=".8"/><rect x="3.25" y="11.25" width="5.5" height="5.5" rx=".8"/><rect x="11.25" y="11.25" width="5.5" height="5.5" rx=".8"/></svg>
-        </button>
-        <button data-client-tab="storage" title="Storage" aria-label="Storage">
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.25 5.25h13.5v9.5H3.25zM5.5 12.25h.01M8 12.25h.01"/></svg>
-        </button>
+        <button data-client-tab="storage" title="Manage folders and backups" aria-label="Manage folders and backups">Manage</button>
       </nav>
       <div id="serverStorage" class="client-storage" hidden>
         <span id="serverStorageText"></span>
@@ -36,7 +31,7 @@
   </header>
 
   <main id="filesPane" class="files-pane">
-    <iframe id="filesFrame" src="/files/" title="Mochimono Files"></iframe>
+    <iframe id="filesFrame" src="/files/" title="Mochimono Library"></iframe>
   </main>
 
   <main id="storagePane" class="dashboard" hidden>
