@@ -1,3 +1,5 @@
+import './context-ui.js';
+
 const folderbar = document.querySelector('#folderbar');
 const files = document.querySelector('#files');
 const source = document.querySelector('#source');
@@ -8,6 +10,7 @@ const GRID_FOLDERS_KEY = 'mochimono-grid-folders';
 let restoring = false;
 let syncFrame = 0;
 let gridFolderGeneration = 0;
+let gridNavigating = false;
 let gridFoldersEnabled = localStorage.getItem(GRID_FOLDERS_KEY) !== '0';
 
 const gridFolderToggle = document.createElement('button');
@@ -58,7 +61,7 @@ function replaceFolderParams(state) {
 
 function syncUrl() {
   syncFrame = 0;
-  if (restoring) return;
+  if (restoring || gridNavigating) return;
   replaceFolderParams(folderState());
 }
 
@@ -82,16 +85,6 @@ function syncGridFolderToggle() {
   gridFolderToggle.hidden = currentView() !== 'grid';
   gridFolderToggle.classList.toggle('active', gridFoldersEnabled);
   gridFolderToggle.setAttribute('aria-pressed', String(gridFoldersEnabled));
-}
-
-function proxyFolderClick(kind, value) {
-  const proxy = document.createElement('button');
-  proxy.hidden = true;
-  if (kind === 'source') proxy.dataset.folderSource = value;
-  else proxy.dataset.folderName = value;
-  files.append(proxy);
-  proxy.click();
-  proxy.remove();
 }
 
 function sourceCards(imports) {
@@ -122,20 +115,71 @@ function renderGridFolderStrip(label, cards) {
   gridFolderStrip.innerHTML = `<div class="grid-folder-head"><span>${escapeHtml(label)}</span></div><div class="grid-folder-grid">${cards}</div>`;
 }
 
+function waitFor(find, timeout = 8000) {
+  return new Promise((resolve, reject) => {
+    const started = performance.now();
+    const check = () => {
+      const value = find();
+      if (value) return resolve(value);
+      if (performance.now() - started >= timeout) return reject(new Error('Folder location is no longer available.'));
+      setTimeout(check, 40);
+    };
+    check();
+  });
+}
+
+async function enterSourceFromGrid(id) {
+  const option = [...source.options].find(item => item.value === String(id));
+  if (!option) return;
+  gridNavigating = true;
+  try {
+    views.querySelector('[data-view="folders"]')?.click();
+    await waitFor(() => currentView() === 'folders');
+    source.value = option.value;
+    source.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => folderState()?.source === option.textContent.trim());
+    views.querySelector('[data-view="grid"]')?.click();
+    await waitFor(() => currentView() === 'grid');
+  } catch (error) {
+    console.warn(error.message);
+  } finally {
+    gridNavigating = false;
+    scheduleSync();
+    refreshGridFolders();
+  }
+}
+
+async function enterFolderFromGrid(name) {
+  const before = folderState();
+  if (!before) return;
+  const wantedPath = before.path ? `${before.path}/${name}` : name;
+  gridNavigating = true;
+  try {
+    views.querySelector('[data-view="folders"]')?.click();
+    await waitFor(() => currentView() === 'folders');
+    const row = await waitFor(() => [...files.querySelectorAll('[data-folder-name]')].find(item => item.dataset.folderName === name));
+    row.click();
+    await waitFor(() => folderState()?.path === wantedPath);
+    views.querySelector('[data-view="grid"]')?.click();
+    await waitFor(() => currentView() === 'grid');
+  } catch (error) {
+    console.warn(error.message);
+  } finally {
+    gridNavigating = false;
+    scheduleSync();
+    refreshGridFolders();
+  }
+}
+
 async function refreshGridFolders() {
   syncGridFolderToggle();
   const generation = ++gridFolderGeneration;
-  if (!gridFoldersEnabled || currentView() !== 'grid' || restoring) {
-    gridFolderStrip.hidden = true;
+  if (!gridFoldersEnabled || currentView() !== 'grid' || restoring || gridNavigating) {
+    if (!gridNavigating) gridFolderStrip.hidden = true;
     return;
   }
 
   const state = folderState();
-  if (!state && source.value) {
-    proxyFolderClick('source', source.value);
-    return;
-  }
-
   try {
     if (!state) {
       const response = await fetch('/api/imports');
@@ -147,10 +191,7 @@ async function refreshGridFolders() {
     }
 
     const importId = source.value;
-    if (!importId) {
-      renderGridFolderStrip('', '');
-      return;
-    }
+    if (!importId) return renderGridFolderStrip('', '');
     const response = await fetch(`/api/folders?import=${encodeURIComponent(importId)}&path=${encodeURIComponent(state.path)}`);
     if (!response.ok) throw new Error(`${response.status}`);
     const data = await response.json();
@@ -164,19 +205,6 @@ async function refreshGridFolders() {
       gridFolderStrip.hidden = true;
     }
   }
-}
-
-function waitFor(find, timeout = 8000) {
-  return new Promise((resolve, reject) => {
-    const started = performance.now();
-    const check = () => {
-      const value = find();
-      if (value) return resolve(value);
-      if (performance.now() - started >= timeout) return reject(new Error('Folder location is no longer available.'));
-      setTimeout(check, 60);
-    };
-    check();
-  });
 }
 
 async function restoreFolder() {
@@ -222,11 +250,11 @@ gridFolderToggle.addEventListener('click', () => {
 gridFolderStrip.addEventListener('click', event => {
   const sourceCard = event.target.closest('[data-grid-folder-source]');
   if (sourceCard) {
-    proxyFolderClick('source', sourceCard.dataset.gridFolderSource);
+    enterSourceFromGrid(sourceCard.dataset.gridFolderSource);
     return;
   }
   const folderCard = event.target.closest('[data-grid-folder-name]');
-  if (folderCard) proxyFolderClick('folder', folderCard.dataset.gridFolderName);
+  if (folderCard) enterFolderFromGrid(folderCard.dataset.gridFolderName);
 });
 
 new MutationObserver(() => {
@@ -242,7 +270,7 @@ new MutationObserver(() => {
 new MutationObserver(refreshGridFolders).observe(source, { childList: true });
 
 source.addEventListener('change', () => {
-  if (!restoring && currentView() !== 'folders') {
+  if (!restoring && !gridNavigating && currentView() !== 'folders') {
     clearFolderUi();
     replaceFolderParams(null);
   }
