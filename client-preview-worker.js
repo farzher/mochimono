@@ -1,6 +1,5 @@
 import { createWriteStream } from 'node:fs';
 import { mkdir, readFile, rm } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -84,6 +83,11 @@ function kindFor(item) {
   return '';
 }
 
+function sourceMime(item) {
+  const value = String(item.mime || '');
+  return value && !value.endsWith('/unknown') ? value : 'application/octet-stream';
+}
+
 async function canonicalExists(settings, hash) {
   try {
     const response = await fetch(`${settings.server}/api/thumbs/${hash}`, { method: 'HEAD', headers: auth(settings) });
@@ -113,9 +117,9 @@ async function imagePreview(settings, item) {
   }
 }
 
-function ffmpegFrame(settings, item, seek = .5) {
-  return new Promise(async (resolvePromise, reject) => {
-    const binary = await ffmpegBinary();
+async function ffmpegFrame(settings, item, seek = .5) {
+  const binary = await ffmpegBinary();
+  return new Promise((resolvePromise, reject) => {
     const args = [
       '-nostdin','-hide_banner','-loglevel','error','-threads','1','-filter_threads','1',
       '-headers', `Authorization: Bearer ${settings.token}\r\n`,
@@ -137,6 +141,7 @@ function ffmpegFrame(settings, item, seek = .5) {
       reject(new Error('Preview timed out'));
     }, 20_000);
     child.stdout.on('data', chunk => {
+      if (settled) return;
       bytes += chunk.length;
       if (bytes > MAX_OUTPUT) {
         settled = true;
@@ -183,7 +188,7 @@ async function upload(settings, item, result) {
       'x-mochimono-thumb-version': String(THUMB_VERSION),
       'x-mochimono-width': String(result.width || 0),
       'x-mochimono-height': String(result.height || 0),
-      'x-mochimono-source-mime': item.mime || `${item.kind}/unknown`
+      'x-mochimono-source-mime': sourceMime(item)
     },
     body: result.blob
   });
