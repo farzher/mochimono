@@ -6,6 +6,7 @@ const connectionDialog = $('#connectionDialog');
 const deviceDialog = $('#deviceDialog');
 const backupDialog = $('#backupDialog');
 const restoreDialog = $('#restoreDialog');
+const VERIFY_STALE_MS = 180 * 24 * 60 * 60 * 1000;
 
 let backupPath = '';
 let backupEditing = false;
@@ -52,6 +53,18 @@ function exactDate(value) {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString(undefined, {
     year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit'
   });
+}
+
+function ageLabel(value) {
+  if (!value) return '';
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return '';
+  const days = Math.max(0, Math.floor((Date.now() - time) / 86400000));
+  if (days < 1) return 'today';
+  if (days < 30) return `${days}d ago`;
+  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+  const years = days / 365;
+  return `${years < 2 ? years.toFixed(1) : Math.floor(years)}y ago`;
 }
 
 function pathName(path) {
@@ -110,6 +123,9 @@ function progressData(job) {
   if (p.copied != null) meta.push(`${Number(p.copied).toLocaleString()} copied`);
   if (p.restored != null) meta.push(`${Number(p.restored).toLocaleString()} restored`);
   if (p.already != null) meta.push(`${Number(p.already).toLocaleString()} already in Mochimono`);
+  if (p.repaired) meta.push(`${Number(p.repaired).toLocaleString()} backup repaired`);
+  if (p.primaryRepaired) meta.push(`${Number(p.primaryRepaired).toLocaleString()} Mochimono repaired`);
+  if (p.bad) meta.push(`${Number(p.bad).toLocaleString()} still damaged`);
   if (p.ignored) meta.push(`${Number(p.ignored).toLocaleString()} ignored`);
   if (p.speedBps > 0) meta.push(`${bytes(p.speedBps)}/s`);
   if (p.etaSeconds > 0) meta.push(`${duration(p.etaSeconds)} left`);
@@ -199,6 +215,22 @@ async function refreshLibrary() {
   } catch { if (frame) frame.location.reload(); }
 }
 
+function finishedToast(job) {
+  if (job.status === 'canceled') return 'Canceled';
+  if (job.status !== 'done') return job.error;
+  if (job.type === 'sync') return 'Synced';
+  if (job.type === 'restore') return 'Restored';
+  if (job.type === 'verify') {
+    const result = job.result || {};
+    const parts = ['Verified'];
+    if (result.repaired) parts.push(`${Number(result.repaired).toLocaleString()} backup repaired`);
+    if (result.primaryRepaired) parts.push(`${Number(result.primaryRepaired).toLocaleString()} Mochimono repaired`);
+    if (result.bad) parts.push(`${Number(result.bad).toLocaleString()} still damaged`);
+    return parts.join(' · ');
+  }
+  return 'Done';
+}
+
 async function state() {
   try {
     const current = await req('/api/state');
@@ -214,7 +246,7 @@ async function state() {
     if (current.job && current.job.status !== 'running' && lastFinished !== current.job.id) {
       lastFinished = current.job.id;
       const success = current.job.status === 'done';
-      toast(success ? (current.job.type === 'sync' ? 'Synced' : current.job.type === 'restore' ? 'Restored' : 'Done') : current.job.status === 'canceled' ? 'Canceled' : current.job.error);
+      toast(finishedToast(current.job));
       if (success && ['sync', 'backup', 'verify', 'restore'].includes(current.job.type)) refreshLibrary();
       backups(true);
       refreshFolderStats();
@@ -230,6 +262,21 @@ function backupScope(location) {
   return `${policy.collectionName ? '✦ ' : ''}${policy.collectionName || `Collection ${policy.collectionId || ''}`.trim()}`;
 }
 
+function backupVerification(location) {
+  const count = Number(location.local?.count) || 0;
+  if (!count) return { label: 'No files to verify', stale: false, missing: true };
+  const value = location.meta?.lastVerifiedAt || location.local?.oldestVerification || null;
+  const time = value ? new Date(value).getTime() : NaN;
+  const stale = !Number.isFinite(time) || Date.now() - time > VERIFY_STALE_MS;
+  const bad = Number(location.meta?.lastVerifyBad) || 0;
+  const repaired = Number(location.meta?.lastVerifyRepaired) || 0;
+  const primaryRepaired = Number(location.meta?.lastVerifyPrimaryRepaired) || 0;
+  if (!value) return { label: 'Never fully verified', stale: true, bad, repaired, primaryRepaired, value: null };
+  const repair = [repaired ? `${repaired} backup repaired` : '', primaryRepaired ? `${primaryRepaired} Mochimono repaired` : ''].filter(Boolean).join(' · ');
+  const base = stale ? `Verify recommended · last checked ${ageLabel(value)}` : `Verified ${ageLabel(value)}`;
+  return { label: `${base}${repair ? ` · ${repair}` : ''}`, stale, bad, repaired, primaryRepaired, value };
+}
+
 function backupState(location) {
   const count = Number(location.local?.count) || 0;
   const remote = location.remote;
@@ -237,6 +284,9 @@ function backupState(location) {
   if (!remote) return { label: count ? 'Stored locally' : 'Server unavailable', className: count ? 'good' : '' };
   const missing = Math.max(0, Number(remote.desiredBytes) - Number(remote.protectedBytes));
   if (missing) return { label: `${bytes(missing)} left`, className: 'warning' };
+  const verification = backupVerification(location);
+  if (verification.bad) return { label: `${verification.bad.toLocaleString()} damaged`, className: 'warning' };
+  if (verification.stale && count) return { label: 'Verify recommended', className: 'warning' };
   return { label: exactDate(location.meta?.lastBackupAt || location.local?.oldestVerification) || (count ? 'Stored' : 'Empty'), className: count ? 'good' : '' };
 }
 
@@ -249,6 +299,7 @@ function backupCard(location, index) {
   const scopeMissing = Boolean(remote?.policy?.missing);
   const ratio = desiredBytes ? Math.min(100, protectedBytes / desiredBytes * 100) : 0;
   const state = backupState(location);
+  const verification = backupVerification(location);
   const meterTitle = scopeMissing
     ? `${bytes(localBytes)} stored in this backup`
     : remote ? `${bytes(protectedBytes)} of ${bytes(desiredBytes)} backed up` : `${bytes(localBytes)} stored in this backup`;
@@ -258,14 +309,14 @@ function backupCard(location, index) {
     <div class="storage-copy">
       <div class="storage-title"><strong>${esc(location.meta?.name || pathName(location.path))}</strong><time class="item-state ${state.className}">${esc(state.label)}</time></div>
       <div class="storage-path" title="${esc(location.path)}">${esc(location.path)}</div>
-      <div class="storage-meta"><span>${esc(backupScope(location))}</span><span>·</span><span>${localCount.toLocaleString()} files</span><span>·</span><span>${bytes(localBytes)}</span><span>·</span><span>${bytes(location.freeBytes)} free</span></div>
+      <div class="storage-meta"><span>${esc(backupScope(location))}</span><span>·</span><span>${localCount.toLocaleString()} files</span><span>·</span><span>${bytes(localBytes)}</span><span>·</span><span>${bytes(location.freeBytes)} free</span><span>·</span><span title="${esc(verification.value ? `Last full SHA-256 verification: ${exactDate(verification.value)}` : 'This backup has not had a complete SHA-256 verification yet')}">${esc(verification.label)}</span></div>
       <div class="storage-meter backup-meter" title="${esc(meterTitle)}"><i style="width:${meterWidth}"></i></div>
       <div class="item-progress" data-item-progress hidden></div>
     </div>
     <div class="item-actions backup-actions">
       <button class="action-link primary-action" data-update="${index}" ${scopeMissing ? 'disabled title="Choose a current scope first"' : ''}>Update</button>
       <button class="action-link" data-restore="${index}" ${localCount ? '' : 'disabled'}>Restore</button>
-      <button class="action-link" data-verify="${index}" ${localCount ? '' : 'disabled'}>Verify</button>
+      <button class="action-link ${verification.stale && localCount ? 'primary-action' : ''}" data-verify="${index}" ${localCount ? `title="${verification.stale ? 'Full SHA-256 verification recommended' : 'Recheck every file with SHA-256'}"` : 'disabled'}>Verify</button>
       <button class="action-link" data-configure="${index}">Edit</button>
     </div>
   </article>`;
@@ -296,7 +347,8 @@ async function backups(force = false) {
     lastBackupRefresh = Date.now();
     const key = JSON.stringify(backupLocations.map(location => [
       location.path, location.meta?.name, location.meta?.policy, location.meta?.lastBackupAt,
-      location.meta?.lastVerifiedAt, location.local, location.freeBytes, location.remote
+      location.meta?.lastVerifiedAt, location.meta?.lastVerifyBad, location.meta?.lastVerifyRepaired,
+      location.meta?.lastVerifyPrimaryRepaired, location.local, location.freeBytes, location.remote
     ]));
     if (key !== backupsRenderKey) {
       backupsRenderKey = key;
