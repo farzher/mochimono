@@ -27,7 +27,6 @@ async function serveLibrary(res, pathname) {
     let html = await readFile(join(WEB_DIR, 'index.html'), 'utf8');
     html = html
       .replace(/(href|src)="\/(?!api\/)/g, '$1="/files/')
-      .replace('<script type="module" src="/files/thumbs.js"></script>', '<script type="module" src="/files/client-thumbs.js"></script>')
       .replace('</head>', `<script>document.documentElement.classList.add('client-library')</script><style>
         html.client-library .topbar,html.client-library .protection,html.client-library #login{display:none!important}
         html.client-library .shell{padding-top:64px!important;max-width:none!important}
