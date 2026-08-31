@@ -30,9 +30,9 @@
       <section class="library">
         <div class="commandbar">
           <input id="search" class="search" type="search" placeholder="Search files and paths" title="Search normally, or use name:, path:, source:, location:, type:, ext:, or year:">
-          <select id="source" aria-label="Source"><option value="">All sources</option></select>
-          <select id="collectionFilter" aria-label="Collection"><option value="">Collections</option></select>
-          <select id="locationFilter" aria-label="Storage location"><option value="">All locations</option><option value="server">Mochimono Server</option><option value="backup">Backups</option><option value="unbacked">Not backed up</option></select>
+          <select id="source" aria-label="Origin"><option value="">Origin</option></select>
+          <select id="collectionFilter" aria-label="Groups"><option value="">Groups</option></select>
+          <select id="locationFilter" aria-label="Where files are stored"><option value="">Everywhere</option></select>
           <select id="typeFilter" aria-label="File type"><option value="">All files</option><option value="media">Media</option><option value="image">Images</option><option value="video">Video</option><option value="audio">Audio</option><option value="application">Docs</option><option value="other">Other</option></select>
           <select id="sort" aria-label="Sort"><option value="date-desc">Newest</option><option value="date-added">Recently added</option><option value="date-asc">Oldest</option><option value="size-desc">Largest</option></select>
           <span id="fileCount" class="file-count" aria-live="polite"></span>
@@ -51,7 +51,7 @@
           </div>
         </div>
         <div id="selectionBar" class="selection-bar" hidden>
-          <strong id="selectionCount">0 selected</strong><button id="selectAll">Select all</button><button id="selectionCollection">Add to collection</button><span class="selection-spacer"></span><button id="selectionDelete">Delete</button><button id="selectionIgnore" class="selection-danger">Delete + Ignore</button><button id="selectionClear" aria-label="Clear selection" title="Clear selection">×</button>
+          <strong id="selectionCount">0 selected</strong><button id="selectAll">Select all</button><button id="selectionCollection">Add to group</button><span class="selection-spacer"></span><button id="selectionDelete">Delete</button><button id="selectionIgnore" class="selection-danger">Delete + Ignore</button><button id="selectionClear" aria-label="Clear selection" title="Clear selection">×</button>
         </div>
         <div id="folderbar" class="folderbar" hidden></div>
         <div id="files" class="files grid"></div>
@@ -63,7 +63,7 @@
   </main>
 
   <div id="viewer" class="viewer" hidden>
-    <div class="viewer-bar"><button id="viewer-close" class="viewer-icon" aria-label="Close">×</button><div class="viewer-title"><strong id="viewer-name"></strong><span id="viewer-meta"></span></div><div class="viewer-actions"><button id="viewer-info-button" class="viewer-action" type="button">Info</button><a id="viewer-open" class="viewer-action" target="_blank">Open</a><details id="viewer-menu" class="viewer-menu"><summary aria-label="More">•••</summary><div><button id="delete" class="viewer-menu-action">Delete</button><button id="delete-ignore" class="viewer-menu-action danger-text">Delete + Ignore</button></div></details></div></div>
+    <div class="viewer-bar"><button id="viewer-close" class="viewer-icon" aria-label="Close">×</button><div class="viewer-title"><strong id="viewer-name"></strong><span id="viewer-meta"></span></div><div class="viewer-actions"><button id="viewer-info-button" class="viewer-action" type="button">Details</button><a id="viewer-open" class="viewer-action" target="_blank">Open</a><details id="viewer-menu" class="viewer-menu"><summary aria-label="More">•••</summary><div><button id="delete" class="viewer-menu-action">Delete</button><button id="delete-ignore" class="viewer-menu-action danger-text">Delete + Ignore</button></div></details></div></div>
     <div id="viewerCollections" class="viewer-collections"></div>
     <div id="viewer-stage" class="viewer-stage"><button id="viewer-prev" class="viewer-nav viewer-prev" aria-label="Previous">‹</button><div id="viewer-media" class="viewer-media"></div><button id="viewer-next" class="viewer-nav viewer-next" aria-label="Next">›</button></div>
     <aside id="viewerInfo" class="viewer-info" hidden></aside>
@@ -82,6 +82,7 @@
   <script type="module" src="/library-ui.js"></script>
   <script type="module" src="/selection-cursor.js"></script>
   <script type="module" src="/collections.js"></script>
+  <script type="module" src="/group-language.js"></script>
   <script type="module" src="/file-info.js"></script>
   <script type="module" src="/folder-url.js"></script>
   <script type="module" src="/home.js"></script>
