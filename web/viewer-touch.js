@@ -9,7 +9,6 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
   const DOUBLE_TAP_DISTANCE = 44;
   const TAP_TRAVEL = 12;
   const PAN_START = 18;
-  const DOUBLE_TAP_PAN_CANCEL = 30;
   const SIDE_EDGE = .36;
   const VIDEO_EDGE = .22;
   const MAX_SCALE = 4;
@@ -22,6 +21,7 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
   document.head.append(style);
 
   const pointers = new Map();
+  const consumedPointers = new Set();
   const videoPointerIds = new Set();
   let zoom = { scale: 1, x: 0, y: 0 };
   let pan = null;
@@ -87,13 +87,9 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
     return Math.max(2.25, Math.min(MAX_SCALE, scale || 2.25));
   }
 
-  function toggleZoom(clientX, clientY) {
+  function zoomIn(clientX, clientY) {
     const current = image();
-    if (!current) return;
-    if (zoomed()) {
-      resetZoom(true);
-      return;
-    }
+    if (!current || zoomed()) return;
     const scale = naturalScale(current);
     zoom.scale = scale;
     zoom.x = (1 - scale) * (clientX - innerWidth / 2);
@@ -178,6 +174,20 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
     else videoPointerIds.add(event.pointerId);
 
     const imageHit = Boolean(event.target.closest?.('#viewer-media img'));
+    const startedZoomed = zoomed();
+    const doubleCandidate = isDoubleTap(event.clientX, event.clientY, imageHit);
+
+    // Zoom-out is atomic. Once the second tap is recognized while zoomed, do
+    // the reset immediately and consume the rest of this pointer sequence so
+    // it can never fall through into pan, swipe, navigation, or another tap.
+    if (startedZoomed && doubleCandidate) {
+      clearTap();
+      consumedPointers.add(event.pointerId);
+      resetZoom(true);
+      event.preventDefault();
+      return;
+    }
+
     const rect = video?.getBoundingClientRect();
     const point = {
       x: event.clientX,
@@ -185,7 +195,7 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
       startX: event.clientX,
       startY: event.clientY,
       startedAt: performance.now(),
-      startedZoomed: zoomed(),
+      startedZoomed,
       image: imageHit,
       video: Boolean(video),
       videoControls: Boolean(rect && event.clientY >= rect.bottom - Math.min(64, rect.height * .22)),
@@ -195,7 +205,7 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
 
     // Side taps at fit are always navigation and never participate in zoom.
     if (!(!point.startedZoomed && sideButton(event.clientX, Boolean(video)))) {
-      point.doubleCandidate = isDoubleTap(event.clientX, event.clientY, imageHit);
+      point.doubleCandidate = doubleCandidate;
     }
     if (point.doubleCandidate) {
       clearTimeout(tapTimer);
@@ -216,8 +226,7 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
         startY: event.clientY,
         zoomX: zoom.x,
         zoomY: zoom.y,
-        active: false,
-        threshold: point.doubleCandidate ? DOUBLE_TAP_PAN_CANCEL : PAN_START
+        active: false
       };
       try {
         touchStage.setPointerCapture(event.pointerId);
@@ -228,6 +237,12 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
   }, true);
 
   touchStage.addEventListener('pointermove', event => {
+    if (consumedPointers.has(event.pointerId)) {
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      return;
+    }
+
     const point = pointers.get(event.pointerId);
     if (!point) return;
     if (!point.video) event.stopImmediatePropagation();
@@ -255,7 +270,7 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
     }
 
     if (!pan || pan.pointerId !== event.pointerId) return;
-    if (!pan.active && travel < pan.threshold) return;
+    if (!pan.active && travel < PAN_START) return;
     if (!pan.active) {
       pan.active = true;
       point.doubleCandidate = false;
@@ -268,6 +283,13 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
   }, true);
 
   touchStage.addEventListener('pointerup', event => {
+    if (consumedPointers.has(event.pointerId)) {
+      consumedPointers.delete(event.pointerId);
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      return;
+    }
+
     const point = pointers.get(event.pointerId);
     if (!point) return;
     if (!point.video) event.stopImmediatePropagation();
@@ -303,12 +325,6 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
     }
 
     if (point.startedZoomed) {
-      if (point.doubleCandidate && travel < DOUBLE_TAP_PAN_CANCEL) {
-        clearTap();
-        toggleZoom(event.clientX, event.clientY);
-        event.preventDefault();
-        return;
-      }
       if (travel >= PAN_START) {
         clearTap();
         event.preventDefault();
@@ -321,7 +337,7 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
 
     if (point.doubleCandidate && travel < TAP_TRAVEL) {
       clearTap();
-      toggleZoom(event.clientX, event.clientY);
+      zoomIn(event.clientX, event.clientY);
       event.preventDefault();
       return;
     }
@@ -361,6 +377,12 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
   }, true);
 
   touchStage.addEventListener('pointercancel', event => {
+    if (consumedPointers.has(event.pointerId)) {
+      consumedPointers.delete(event.pointerId);
+      event.stopImmediatePropagation();
+      return;
+    }
+
     const point = pointers.get(event.pointerId);
     if (!point) return;
     if (!point.video) event.stopImmediatePropagation();
@@ -380,9 +402,15 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
     });
   }
 
-  new MutationObserver(() => resetZoom()).observe(touchMedia, { childList: true });
   new MutationObserver(() => {
-    if (touchViewer.hidden) resetZoom();
+    consumedPointers.clear();
+    resetZoom();
+  }).observe(touchMedia, { childList: true });
+  new MutationObserver(() => {
+    if (touchViewer.hidden) {
+      consumedPointers.clear();
+      resetZoom();
+    }
   }).observe(touchViewer, { attributes: true, attributeFilter: ['hidden'] });
   window.addEventListener('resize', () => {
     if (zoomed()) applyZoom();
