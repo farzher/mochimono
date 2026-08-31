@@ -22,7 +22,6 @@
           <nav class="client-tabs" aria-label="Mochimono">
             <button data-client-tab="storage">Folders & backups</button>
           </nav>
-          <div class="client-menu-info"><span>Server</span><button id="serverStatus" class="status">Connecting…</button></div>
           <button id="deviceButton" class="device-button"><span class="menu-label">Device</span><span id="deviceLabel"></span></button>
           <button id="clientLogout" class="client-logout" hidden>Log out</button>
         </div>
@@ -96,8 +95,10 @@
 
   <dialog id="restoreDialog">
     <div class="dialog-head"><div><h3>Restore</h3><div id="restoreBackupLabel" class="picker-path"></div></div><button class="icon" data-close>×</button></div>
-    <div class="path-row"><input id="restoreDestination" placeholder="Destination"><button id="chooseRestore" class="secondary">Browse</button></div>
-    <div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="startRestore" class="primary">Restore</button></div>
+    <div id="restoreSummary" class="restore-summary">Loading…</div>
+    <div id="restoreSources" class="restore-sources"></div>
+    <div id="restoreFiles" class="restore-files"></div>
+    <div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="startRestore" class="primary">Restore to Mochimono</button></div>
   </dialog>
 
   <div id="toast" class="toast"></div>
