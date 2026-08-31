@@ -15,7 +15,8 @@ Mochimono syncs folders to one deduplicated library while remembering where ever
 - grid, list, folder, timeline, and Inbox views
 - Keep, Delete, and Delete + Ignore
 - native folder picker in the local Agent
-- offline backup folders with verification and restore
+- offline backup folders with verification, repair, and restore
+- primary object integrity scrubbing and damaged-copy quarantine
 - cancellable sync and backup jobs
 
 Local deletion never deletes the cloud copy.
@@ -50,6 +51,7 @@ Server settings:
 ```text
 MOCHIMONO_TOKEN
 MOCHIMONO_DATA
+MOCHIMONO_SCRUB_DAYS           primary SHA-256 scrub interval; default 30, 0 disables automatic scrubs
 HOST
 PORT
 ```
@@ -101,6 +103,23 @@ Backup folder:
 Derived previews are disposable and are not copied into offline backup repositories.
 
 Mochimono never formats or partitions drives.
+
+### Integrity
+
+Each object is content-addressed by its SHA-256 hash. Incoming object bytes are hashed before they are accepted.
+
+The primary store periodically scrubs active objects by rereading them and comparing their SHA-256 hashes with their object IDs. The default automatic interval is 30 days. A scrub also runs SQLite `quick_check` on the primary catalog. Objects found missing or corrupt are quarantined and no longer count as healthy Mochimono copies until repaired.
+
+Offline backups are intentionally not scrubbed merely because a drive is connected. Use **Verify** after reconnecting an archival drive. The Agent recommends verification after about six months without a full check. Verify hashes every backup object, checks the backup SQLite inventory and catalog snapshot, and repairs when a known-good independent copy exists:
+
+- a damaged backup object can be replaced from a healthy Mochimono copy;
+- a healthy backup object can repair a primary object already identified as damaged;
+- a damaged backup catalog snapshot can be refreshed from the healthy server catalog;
+- damage that has no known-good remaining copy is reported instead of hidden.
+
+Verification age is informational: an offline copy does not stop being a backup simply because it has been unplugged for a long time.
+
+Mochimono does not add parity or Reed–Solomon data to individual objects. Its recovery model is deliberately simple: cryptographic checksums, independent copies, periodic scrubbing, and repair from a verified good copy.
 
 ## Principles
 
