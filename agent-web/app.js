@@ -60,28 +60,35 @@ async function chooseFolder(target) {
 function renderFolders(folders, job) {
   const element = $('#folders');
   const syncingPath = job?.status === 'running' && job.type === 'sync' ? String(job.progress?.path || '') : '';
-  const renderKey = JSON.stringify(folders.map(folder => [folder.path, folder.lastSynced || '', syncingPath === folder.path]));
-  if (renderKey === foldersRenderKey) return;
-  foldersRenderKey = renderKey;
-  if (!folders.length) {
-    element.innerHTML = '<div class="muted">No folders.</div>';
-    return;
-  }
-  element.innerHTML = folders.map(folder => {
-    const syncing = syncingPath === folder.path;
-    const status = syncing ? 'Syncing…' : folder.lastSynced ? 'Synced' : 'Pending';
-    return `
-      <div class="sync-folder">
+  const renderKey = JSON.stringify(folders.map(folder => folder.path));
+  if (renderKey !== foldersRenderKey) {
+    foldersRenderKey = renderKey;
+    if (!folders.length) {
+      element.innerHTML = '<div class="muted">No folders.</div>';
+      return;
+    }
+    element.innerHTML = folders.map(folder => `
+      <div class="sync-folder" data-folder-path="${esc(folder.path)}">
         <div class="sync-folder-copy">
           <strong>${esc(folder.path)}</strong>
-          <span>${status}</span>
+          <span data-folder-status></span>
         </div>
         <div class="sync-folder-actions">
           <button class="secondary small" data-sync-folder="${esc(folder.path)}">Sync</button>
           <button class="icon tiny" data-remove-folder="${esc(folder.path)}" aria-label="Remove" title="Stop syncing">×</button>
         </div>
-      </div>`;
-  }).join('');
+      </div>`).join('');
+  }
+  if (!folders.length) return;
+  const byPath = new Map(folders.map(folder => [folder.path, folder]));
+  for (const row of element.querySelectorAll('.sync-folder[data-folder-path]')) {
+    const folder = byPath.get(row.dataset.folderPath);
+    if (!folder) continue;
+    const syncing = syncingPath === folder.path;
+    const status = syncing ? 'Syncing…' : folder.lastSynced ? 'Synced' : 'Pending';
+    const label = row.querySelector('[data-folder-status]');
+    if (label && label.textContent !== status) label.textContent = status;
+  }
 }
 
 async function state() {
