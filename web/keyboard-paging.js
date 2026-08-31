@@ -162,7 +162,14 @@ document.addEventListener('keydown', event => {
   if (!viewer.hidden && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) return;
   if (viewer.hidden && currentView() !== 'grid') return;
 
-  if (pending || navigate(event.key)) {
+  if (pending) {
+    queuedKey = event.key;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
+
+  if (navigate(event.key)) {
     event.preventDefault();
     event.stopImmediatePropagation();
   }
