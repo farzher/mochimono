@@ -22,7 +22,7 @@
           <nav class="client-tabs" aria-label="Mochimono">
             <button data-client-tab="storage">Folders & backups</button>
           </nav>
-          <button id="deviceButton" class="device-button"><span class="menu-label">Device</span><span id="deviceLabel"></span></button>
+          <button id="deviceButton" class="device-button"><span class="menu-label">Settings</span><span id="deviceLabel"></span></button>
           <button id="clientConnect" class="client-logout" hidden>Connect Server</button>
           <button id="clientLogout" class="client-logout" hidden>Log out</button>
         </div>
@@ -89,8 +89,18 @@
   </dialog>
 
   <dialog id="deviceDialog" class="small-dialog">
-    <div class="dialog-head"><h3>Device</h3><button class="icon" data-close>×</button></div>
-    <input id="deviceName" placeholder="Device">
+    <div class="dialog-head"><h3>Settings</h3><button class="icon" data-close>×</button></div>
+    <div class="field-stack">
+      <label class="field-label" for="deviceName">Device</label>
+      <input id="deviceName" placeholder="Device">
+      <label class="field-label" for="uploadWorkers">Upload concurrency</label>
+      <select id="uploadWorkers">
+        <option value="1">1 upload</option>
+        <option value="2">2 uploads</option>
+        <option value="4">4 uploads</option>
+      </select>
+      <div class="folder-mode-note">Parallel files sent to the Mochimono server. Try 1 for large files or slower server disks; 2–4 can help with many small files.</div>
+    </div>
     <div class="dialog-actions"><div class="spacer"></div><button id="saveDevice" class="primary">Save</button></div>
   </dialog>
 
