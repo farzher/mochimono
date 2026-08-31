@@ -11,12 +11,13 @@ import { handleThumbnails, cleanupThumbnail } from './thumbnail-server.js';
 import { handleCollections } from './collections-server.js';
 import { handleBackupPolicy, getDrive } from './backup-policy-server.js';
 import { handleMetadata } from './metadata-server.js';
+import { handleIntegrity } from './integrity-server.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'web');
 const PORT = Number(process.env.PORT || 8642);
 const HOST = process.env.HOST || '127.0.0.1';
-const featureRoutes = [handleThumbnails, handleCollections, handleBackupPolicy, handleMetadata];
+const featureRoutes = [handleThumbnails, handleCollections, handleBackupPolicy, handleMetadata, handleIntegrity];
 
 if (!TOKEN) {
   console.error('MOCHIMONO_TOKEN is required.');
@@ -27,8 +28,7 @@ function fileTypeSql(type, alias = 'o') {
   if (!type) return { sql: '1=1', params: [] };
   if (type === 'application') return { sql: `(${alias}.mime LIKE 'application/%' OR ${alias}.mime LIKE 'text/%')`, params: [] };
   if (type === 'other') return {
-    sql: `(${alias}.mime NOT LIKE 'image/%' AND ${alias}.mime NOT LIKE 'video/%' AND ${alias}.mime NOT LIKE 'audio/%' AND ${alias}.mime NOT LIKE 'text/%' AND ${alias}.mime NOT LIKE 'application/%')`,
-    params: []
+    sql: `(${alias}.mime NOT LIKE 'image/%' AND ${alias}.mime NOT LIKE 'video/%' AND ${alias}.mime NOT LIKE 'audio/%' AND ${alias}.mime NOT LIKE 'text/%' AND ${alias}.mime NOT LIKE 'application/%')`, params: []
   };
   if (['image', 'video', 'audio', 'text'].includes(type)) return { sql: `${alias}.mime LIKE ?`, params: [`${type}/%`] };
   return { sql: '1=0', params: [] };
@@ -77,6 +77,8 @@ async function serveStatic(res, pathname) {
 async function serveObject(req, res, hash) {
   const row = db.prepare("SELECT size, mime FROM objects WHERE hash = ? AND state = 'active'").get(hash);
   if (!row) return json(res, 404, { error: 'Object not found' });
+  const integrity = db.prepare('SELECT status FROM object_integrity WHERE hash = ?').get(hash);
+  if (integrity && integrity.status !== 'healthy') return json(res, 503, { error: `Object is marked ${integrity.status}; restore or repair it before use` });
   let info;
   try { info = await stat(objectPath(DATA_DIR, hash)); }
   catch { return json(res, 503, { error: 'Object is cataloged but missing from primary storage' }); }
@@ -211,7 +213,7 @@ async function handleCoreApi(req, res, url) {
     for (const hash of hashes) if (!validHash(hash)) return json(res, 400, { error: `Invalid hash: ${hash}` });
     const unique = [...new Set(hashes)];
     const ignored = hashSet('SELECT hash FROM ignored_hashes WHERE hash IN', unique);
-    const active = hashSet("SELECT hash FROM objects WHERE state = 'active' AND hash IN", unique);
+    const active = hashSet("SELECT o.hash FROM objects o WHERE o.state = 'active' AND NOT EXISTS (SELECT 1 FROM object_integrity oi WHERE oi.hash = o.hash AND oi.status != 'healthy') AND o.hash IN", unique);
     const result = { known: [], missing: [], ignored: [] };
     for (const hash of hashes) {
       if (ignored.has(hash)) result.ignored.push(hash);
@@ -225,12 +227,18 @@ async function handleCoreApi(req, res, url) {
   if (objectMatch && req.method === 'PUT') {
     const hash = objectMatch[1];
     try {
-      const stored = await writeVerifiedObject({ root: DATA_DIR, hash, input: req });
+      const bad = db.prepare("SELECT 1 FROM object_integrity WHERE hash = ? AND status != 'healthy'").get(hash);
+      const stored = await writeVerifiedObject({ root: DATA_DIR, hash, input: req, replace: Boolean(bad) });
       const mime = String(req.headers['x-mochimono-mime'] || 'application/octet-stream').slice(0, 200);
       db.prepare(`
         INSERT INTO objects(hash, size, mime, state, created_at) VALUES(?, ?, ?, 'active', ?)
         ON CONFLICT(hash) DO UPDATE SET size = excluded.size, mime = excluded.mime, state = 'active'
       `).run(hash, stored.size, mime, now());
+      const timestamp = now();
+      db.prepare(`
+        INSERT INTO object_integrity(hash, status, checked_at, verified_at, error) VALUES(?, 'healthy', ?, ?, NULL)
+        ON CONFLICT(hash) DO UPDATE SET status='healthy', checked_at=excluded.checked_at, verified_at=excluded.verified_at, error=NULL
+      `).run(hash, timestamp, timestamp);
       return json(res, 201, { hash, size: stored.size });
     } catch (error) {
       return json(res, 400, { error: error.message });
@@ -255,6 +263,7 @@ async function handleCoreApi(req, res, url) {
     if (!db.prepare('SELECT 1 FROM objects WHERE hash = ?').get(hash)) return json(res, 404, { error: 'Object not found' });
     db.prepare("UPDATE objects SET state = 'deleted' WHERE hash = ?").run(hash);
     db.prepare('DELETE FROM reviewed_hashes WHERE hash = ?').run(hash);
+    db.prepare('DELETE FROM object_integrity WHERE hash = ?').run(hash);
     if (body.ignore === true) db.prepare('INSERT OR IGNORE INTO ignored_hashes(hash, ignored_at) VALUES(?, ?)').run(hash, now());
     await Promise.all([removeObject(DATA_DIR, hash), cleanupThumbnail(hash)]);
     return json(res, 200, { ok: true, ignored: body.ignore === true });
