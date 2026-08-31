@@ -70,7 +70,7 @@ connectButton.addEventListener('click', async event => {
 async function ensureConnected() {
   try {
     const state = await json('/api/state');
-    if (!state.settings?.hasToken && !connection.open) connection.showModal();
+    if ((!state.settings?.hasToken || !state.server?.online) && !connection.open) connection.showModal();
   } catch {}
 }
 
