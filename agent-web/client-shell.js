@@ -9,28 +9,46 @@ const logoutButton = $('#clientLogout');
 const serverStorage = $('#serverStorage');
 const serverStorageText = $('#serverStorageText');
 const serverStorageBar = $('#serverStorageBar');
-
 const header = document.querySelector('.client-header');
 const brand = document.querySelector('.app-brand');
 const tabNav = document.querySelector('.client-tabs');
-if (header && brand && tabNav) {
+const manageButton = tabs.find(button => button.dataset.clientTab === 'storage');
+const filesButton = tabs.find(button => button.dataset.clientTab === 'files');
+
+if (header && brand && tabNav && manageButton) {
   const primary = document.createElement('div');
   primary.className = 'client-primary';
   header.prepend(primary);
   primary.append(brand, tabNav);
-  for (const button of tabs) button.replaceChildren(document.createTextNode(button.dataset.clientTab === 'storage' ? 'Storage' : 'Files'));
+  filesButton?.remove();
+  manageButton.replaceChildren(document.createTextNode('Manage'));
+  manageButton.title = 'Manage folders and backups';
+  manageButton.setAttribute('aria-label', 'Manage folders and backups');
+  brand.tabIndex = 0;
+  brand.setAttribute('role', 'button');
+  brand.title = 'Library';
 }
 
 function showTab(name) {
   const files = name !== 'storage';
   filesPane.hidden = !files;
   storagePane.hidden = files;
-  for (const button of tabs) button.classList.toggle('active', button.dataset.clientTab === (files ? 'files' : 'storage'));
-  localStorage.setItem('mochimono-client-tab', files ? 'files' : 'storage');
+  if (manageButton) {
+    manageButton.classList.toggle('active', !files);
+    manageButton.textContent = files ? 'Manage' : 'Library';
+    manageButton.title = files ? 'Manage folders and backups' : 'Back to library';
+    manageButton.setAttribute('aria-label', manageButton.title);
+  }
 }
 
-for (const button of tabs) button.addEventListener('click', () => showTab(button.dataset.clientTab));
-showTab(localStorage.getItem('mochimono-client-tab') || 'files');
+manageButton?.addEventListener('click', () => showTab(storagePane.hidden ? 'storage' : 'files'));
+brand?.addEventListener('click', () => showTab('files'));
+brand?.addEventListener('keydown', event => {
+  if (event.key !== 'Enter' && event.code !== 'Space') return;
+  event.preventDefault();
+  showTab('files');
+});
+showTab('files');
 
 async function json(path, options = {}) {
   const response = await fetch(path, {
@@ -115,6 +133,7 @@ connectButton.addEventListener('click', async event => {
     $('#serverToken').value = '';
     connection.close();
     frame.src = `/files/?connected=${Date.now()}`;
+    showTab('files');
     await refreshShellState();
     notify('Connected');
   } catch (error) {
