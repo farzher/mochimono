@@ -4,7 +4,6 @@ const sort = document.querySelector('#sort');
 const style = document.createElement('style');
 style.textContent = `
   .date-group{margin-top:30px}
-  .date-group.year-start{margin-top:42px}
   .date-heading{margin-bottom:10px;font-size:14px;color:#ded5d1;letter-spacing:-.01em}
   .day-break{flex:0 0 100%;width:100%;height:29px;display:flex;align-items:flex-end;padding:0 0 6px 2px;color:#928986;font-size:11px;font-weight:650;pointer-events:none}
   .day-break:not(.first-day){height:43px;padding-top:14px}
@@ -16,9 +15,7 @@ let frame = 0;
 
 function dateFor(card) {
   const meta = window.mochimonoFileDates?.get(card.dataset.hash);
-  const value = sort?.value === 'date-added'
-    ? meta?.addedAt
-    : meta?.fileDate;
+  const value = sort?.value === 'date-added' ? meta?.addedAt : meta?.fileDate;
   const date = new Date(value || 0);
   return Number.isNaN(date.getTime()) ? null : date;
 }
@@ -61,7 +58,7 @@ function decorate() {
     }
 
     const year = firstDate?.getFullYear() ?? null;
-    group.classList.toggle('year-start', year != null && previousYear != null && year !== previousYear);
+    group.style.marginTop = year != null && previousYear != null && year !== previousYear ? '42px' : '';
     if (year != null) previousYear = year;
   }
 }
@@ -71,6 +68,6 @@ function schedule() {
 }
 
 if (files) new MutationObserver(schedule).observe(files, { childList: true, subtree: true });
-sort?.addEventListener('change', () => requestAnimationFrame(schedule));
+sort?.addEventListener('change', schedule);
 window.addEventListener('mochimono-dates-updated', schedule);
 schedule();
