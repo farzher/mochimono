@@ -11,20 +11,14 @@ const serverStorageText = $('#serverStorageText');
 const serverStorageBar = $('#serverStorageBar');
 const header = document.querySelector('.client-header');
 const brand = document.querySelector('.app-brand');
-const tabNav = document.querySelector('.client-tabs');
 const manageButton = tabs.find(button => button.dataset.clientTab === 'storage');
-const filesButton = tabs.find(button => button.dataset.clientTab === 'files');
+const clientMenu = document.querySelector('.client-menu');
 let libraryScrollY = 0;
 
-if (header && brand && tabNav && manageButton) {
-  const primary = document.createElement('div');
-  primary.className = 'client-primary';
-  header.prepend(primary);
-  primary.append(brand, tabNav);
-  filesButton?.remove();
-  manageButton.replaceChildren(document.createTextNode('Manage'));
-  manageButton.title = 'Manage folders and backups';
-  manageButton.setAttribute('aria-label', 'Manage folders and backups');
+if (brand && manageButton) {
+  manageButton.textContent = 'Folders & backups';
+  manageButton.title = 'Folders and backups';
+  manageButton.setAttribute('aria-label', 'Folders and backups');
   brand.tabIndex = 0;
   brand.setAttribute('role', 'button');
   brand.title = 'Library';
@@ -32,7 +26,7 @@ if (header && brand && tabNav && manageButton) {
 
 function syncHeaderScroll() {
   const active = !filesPane.hidden;
-  const height = header?.offsetHeight || 72;
+  const height = header?.offsetHeight || 64;
   const offset = active ? Math.min(height, Math.max(0, libraryScrollY)) : 0;
   document.documentElement.style.setProperty('--client-header-scroll', `${offset}px`);
 }
@@ -44,10 +38,11 @@ function showTab(name) {
   document.body.classList.toggle('client-library-active', files);
   if (manageButton) {
     manageButton.classList.toggle('active', !files);
-    manageButton.textContent = files ? 'Manage' : 'Library';
-    manageButton.title = files ? 'Manage folders and backups' : 'Back to library';
+    manageButton.textContent = files ? 'Folders & backups' : 'Library';
+    manageButton.title = files ? 'Folders and backups' : 'Back to library';
     manageButton.setAttribute('aria-label', manageButton.title);
   }
+  clientMenu?.removeAttribute('open');
   syncHeaderScroll();
 }
 
@@ -57,6 +52,9 @@ brand?.addEventListener('keydown', event => {
   if (event.key !== 'Enter' && event.code !== 'Space') return;
   event.preventDefault();
   showTab('files');
+});
+clientMenu?.addEventListener('click', event => {
+  if (event.target.closest('button') && !event.target.closest('[data-client-tab]')) queueMicrotask(() => clientMenu.removeAttribute('open'));
 });
 showTab('files');
 addEventListener('resize', syncHeaderScroll, { passive: true });
@@ -102,8 +100,9 @@ function renderServerStorage(state) {
   const used = Number(stats.bytes) || 0;
   const capacity = Number(stats.capacityBytes) || 0;
   const percent = capacity ? Math.min(100, used / capacity * 100) : 0;
-  serverStorageText.innerHTML = `${bytes(used)} <small>of ${bytes(capacity)}</small>`;
+  serverStorageText.textContent = `${Math.round(percent)}%`;
   serverStorageBar.style.width = used ? `max(2px, ${percent}%)` : '0';
+  serverStorage.title = `${bytes(used)} of ${bytes(capacity)} used`;
   serverStorage.hidden = false;
   logoutButton.hidden = false;
 }
