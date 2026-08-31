@@ -1,12 +1,21 @@
 import fs from 'node:fs';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, extname, join, relative, resolve } from 'node:path';
 
 const originalOpendir = fs.promises.opendir.bind(fs.promises);
 const originalWatch = fs.watch.bind(fs);
 const originalSpawn = childProcess.spawn.bind(childProcess);
 const gitRootCache = new Map();
+
+const ALWAYS_IGNORED_DIRS = new Set(['.git', '.mochimono', 'node_modules']);
+const GENERATED_DIRS = new Set([
+  '.cache', '.gradle', '.mypy_cache', '.next', '.nuxt', '.parcel-cache', '.pytest_cache', '.ruff_cache',
+  '.svelte-kit', '.tox', '.turbo', '.venv', '__pycache__', 'bin', 'build', 'coverage', 'dist', 'obj', 'out',
+  'target', 'venv'
+]);
+const GENERATED_EXTENSIONS = new Set(['.class', '.ilk', '.log', '.o', '.obj', '.pyc', '.pyo', '.temp', '.tmp']);
+const GENERATED_FILES = new Set(['.ds_store', 'thumbs.db']);
 
 function pathKey(path) {
   return process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
@@ -30,12 +39,23 @@ function gitRoot(path) {
   return null;
 }
 
-function gitPath(root, path) {
-  return relative(root, resolve(path)).replaceAll('\\', '/');
+function parts(path) {
+  return String(path || '').replaceAll('\\', '/').split('/').filter(Boolean);
 }
 
-function intrinsicallyIgnored(path) {
-  return String(path || '').replaceAll('\\', '/').split('/').some(part => part === '.git' || part === '.mochimono');
+function alwaysIgnored(path) {
+  return parts(path).some(part => ALWAYS_IGNORED_DIRS.has(part.toLowerCase()));
+}
+
+function generatedCandidate(path) {
+  const names = parts(path).map(part => part.toLowerCase());
+  if (names.some(part => GENERATED_DIRS.has(part))) return true;
+  const name = names.at(-1) || '';
+  return GENERATED_FILES.has(name) || GENERATED_EXTENSIONS.has(extname(name));
+}
+
+function gitPath(root, path) {
+  return relative(root, resolve(path)).replaceAll('\\', '/');
 }
 
 function gitIgnored(root, paths) {
@@ -57,12 +77,16 @@ function gitIgnored(root, paths) {
     child.on('error', () => finish(new Set()));
     child.on('close', code => {
       if (code !== 0 && code !== 1) return finish(new Set());
-      const ignored = Buffer.concat(chunks).toString('utf8').split('\0').filter(Boolean);
-      finish(new Set(ignored));
+      finish(new Set(Buffer.concat(chunks).toString('utf8').split('\0').filter(Boolean)));
     });
     child.stdin.on('error', () => {});
     child.stdin.end(`${clean.join('\0')}\0`);
   });
+}
+
+function ignoredByDevelopmentRules(root, absolute, ignored) {
+  const rel = gitPath(root, absolute);
+  return alwaysIgnored(rel) || (generatedCandidate(rel) && ignored.has(rel));
 }
 
 fs.promises.opendir = async function filteredOpendir(directory, options) {
@@ -72,16 +96,13 @@ fs.promises.opendir = async function filteredOpendir(directory, options) {
 
   const root = gitRoot(directory);
   if (!root) {
-    const visible = entries.filter(entry => !intrinsicallyIgnored(entry.name));
+    const visible = entries.filter(entry => !alwaysIgnored(entry.name));
     return { async *[Symbol.asyncIterator]() { yield* visible; } };
   }
 
   const childPaths = entries.map(entry => join(directory, entry.name));
   const ignored = await gitIgnored(root, childPaths);
-  const visible = entries.filter((entry, index) => {
-    if (intrinsicallyIgnored(entry.name)) return false;
-    return !ignored.has(gitPath(root, childPaths[index]));
-  });
+  const visible = entries.filter((entry, index) => !ignoredByDevelopmentRules(root, childPaths[index], ignored));
   return { async *[Symbol.asyncIterator]() { yield* visible; } };
 };
 
@@ -95,7 +116,7 @@ fs.watch = function filteredWatch(path, options, listener) {
   const base = resolve(path);
   const root = gitRoot(base);
   if (!root) return originalWatch(base, options, (event, filename) => {
-    if (filename != null && intrinsicallyIgnored(String(filename))) return;
+    if (filename != null && alwaysIgnored(String(filename))) return;
     listener(event, filename);
   });
 
@@ -110,9 +131,8 @@ fs.watch = function filteredWatch(path, options, listener) {
     const ignored = await gitIgnored(root, paths);
     for (let index = 0; index < batch.length; index++) {
       const [event, filename] = batch[index];
-      if (intrinsicallyIgnored(filename)) continue;
-      if (ignored.has(gitPath(root, paths[index]))) continue;
-      if (String(filename).replaceAll('\\', '/').split('/').at(-1) === '.gitignore') listener(event, null);
+      if (ignoredByDevelopmentRules(root, paths[index], ignored)) continue;
+      if (parts(filename).at(-1)?.toLowerCase() === '.gitignore') listener(event, null);
       else listener(event, filename);
     }
   };
@@ -120,7 +140,7 @@ fs.watch = function filteredWatch(path, options, listener) {
   return originalWatch(base, options, (event, filename) => {
     if (filename == null) return listener(event, filename);
     const value = String(filename);
-    if (intrinsicallyIgnored(value)) return;
+    if (alwaysIgnored(value)) return;
     pending.set(value, [event, value]);
     clearTimeout(timer);
     timer = setTimeout(flush, 100);
