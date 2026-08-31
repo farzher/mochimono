@@ -8,7 +8,7 @@ import { json, readJson, settings } from './lib/agent-context.js';
 import { clientProviders, handleClientProviderApi } from './lib/client-providers.js';
 import { localLocations } from './lib/local-locations.js';
 import { providerThumbnail, queueProviderThumbnail, serveProviderThumbnail } from './lib/provider-thumbs.js';
-import { queueRemoteThumbnail } from './lib/thumbnail-agent.js';
+import { queueLocalThumbnail, queueRemoteThumbnail } from './lib/thumbnail-agent.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'web');
@@ -78,10 +78,29 @@ async function thumbnailProviders(hashes) {
   return thumbnailSnapshot;
 }
 
+function firstCandidate(snapshot, hash) {
+  return snapshot.candidates.get(String(hash))?.[0] || null;
+}
+
 function queueLocalProvider(snapshot, file) {
-  const candidate = snapshot.candidates.get(file?.hash)?.[0];
+  const candidate = firstCandidate(snapshot, file?.hash);
   if (!file || !candidate) return false;
   return queueProviderThumbnail({ hash: file.hash, filename: file.filename, mime: file.mime, candidate });
+}
+
+function queueCanonicalPreview(snapshot, file) {
+  if (!file) return false;
+  const candidate = firstCandidate(snapshot, file.hash);
+  if (candidate?.path) {
+    return queueLocalThumbnail({
+      hash: file.hash,
+      path: candidate.path,
+      size: file.size,
+      mime: file.mime,
+      filename: file.filename
+    });
+  }
+  return queueRemoteThumbnail({ hash: file.hash, size: file.size, filename: file.filename, mime: file.mime });
 }
 
 async function checkThumbnails(req, res) {
@@ -117,8 +136,7 @@ async function checkThumbnails(req, res) {
         const remoteReady = new Set((data.thumbnails || []).map(item => item.hash));
         for (const hash of serverHashes) {
           if (remoteReady.has(hash)) continue;
-          const file = snapshot.byHash.get(hash);
-          if (file) queueRemoteThumbnail({ hash, size: file.size, filename: file.filename, mime: file.mime });
+          queueCanonicalPreview(snapshot, snapshot.byHash.get(hash));
         }
       }
     } catch {
