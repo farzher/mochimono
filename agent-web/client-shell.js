@@ -178,12 +178,33 @@ logoutButton.addEventListener('click', async () => {
   notify('Logged out');
 });
 
-function chooseLocalFolder(mode) {
-  showTab('storage');
+function refreshLibraryFrame() {
+  frame.contentWindow?.mochimonoLibrary?.refresh?.().catch?.(() => {});
+  frame.contentWindow?.mochimonoLocations?.refresh?.().catch?.(() => {});
+}
+
+async function chooseLocalFolder(mode) {
   const normalized = mode === 'browse' ? 'browse' : 'protect';
-  window.dispatchEvent(new CustomEvent('mochimono-folder-intent-ui', { detail: { mode: normalized } }));
-  if ($('#folderAdd')?.hidden) $('#showFolderAdd')?.click();
-  setTimeout(() => $('#chooseImport')?.click(), 0);
+  notify(normalized === 'browse' ? 'Confirm the folder you dropped' : 'Confirm the folder you want to protect');
+  try {
+    const picked = await json('/api/pick-folder');
+    const path = String(picked.path || '').trim();
+    if (!path) return;
+
+    if (normalized === 'browse') {
+      await json('/api/browse-folders', { method: 'POST', body: { path } });
+    } else {
+      await json('/api/folders', { method: 'POST', body: { path } });
+    }
+
+    showTab('files');
+    await refreshShellState();
+    refreshLibraryFrame();
+    setTimeout(refreshLibraryFrame, 500);
+    notify(normalized === 'browse' ? 'Browsing local folder' : 'Protecting local folder');
+  } catch (error) {
+    notify(error.message);
+  }
 }
 
 window.addEventListener('message', event => {
