@@ -11,6 +11,7 @@ let drives = [];
 let copies = new Map();
 let driveHashes = new Map();
 let serverHashes = new Set();
+let damagedServer = new Set();
 let protection = {
   backed: new Set(), verifiedBacked: new Set(), safeLocal: new Set(), localNeeds: new Set(), needs: new Set(), onlyLocal: new Set(), notLocal: new Set()
 };
@@ -96,6 +97,21 @@ async function backupFiles(id) {
   return result;
 }
 
+async function damagedPrimaryHashes() {
+  const hashes = new Set();
+  let after = '';
+  try {
+    do {
+      const response = await fetch(`/api/integrity/bad?limit=5000&after=${encodeURIComponent(after)}`, { cache: 'no-store' });
+      if (!response.ok) return hashes;
+      const page = await response.json();
+      for (const object of page.objects || []) hashes.add(object.hash);
+      after = page.nextAfter || '';
+    } while (after);
+  } catch {}
+  return hashes;
+}
+
 async function rebuildProtection() {
   const backed = new Set();
   const verifiedBacked = new Set();
@@ -107,7 +123,7 @@ async function rebuildProtection() {
     } catch {}
   }));
   const local = new Set(copies.keys());
-  const known = union(local, serverHashes, backed);
+  const known = union(local, serverHashes, backed, damagedServer);
   const safeLocal = new Set([...local].filter(hash => serverHashes.has(hash) && verifiedBacked.has(hash)));
   protection = {
     backed,
@@ -123,14 +139,14 @@ async function rebuildProtection() {
 async function applySelection() {
   const value = select.value;
   const titles = {
-    'safe-local': 'Files on this PC that also exist in Mochimono and on a verified backup',
+    'safe-local': 'Files on this PC that also exist in healthy Mochimono storage and on a verified backup',
     'local-needs': 'Files on this PC that are not yet safe to remove locally',
-    'needs-protection': 'Files missing either the Mochimono copy or a verified independent backup copy',
+    'needs-protection': 'Files missing either a healthy Mochimono copy or a verified independent backup copy',
     'verified-backup': 'Files with at least one verified independent backup copy',
     'only-local': 'Files whose only known copy is on this PC',
     'not-local': 'Files with no indexed copy on this PC',
     local: 'Files in folders Mochimono is browsing or protecting on this PC',
-    server: 'Files stored in Mochimono',
+    server: 'Files with a healthy stored Mochimono copy',
     backup: 'Files present on at least one backup'
   };
   select.title = titles[value] || 'Where files are stored';
@@ -173,15 +189,18 @@ export async function refreshLocations() {
   let localData = { locations: [], files: [] };
   let driveData = { drives: [] };
   let serverData = { hashes: [] };
+  let bad = new Set();
   await Promise.all([
     fetch('/api/client/locations', { cache: 'no-store' }).then(async response => { if (response.ok) localData = await response.json(); }).catch(() => {}),
     fetch('/api/drives', { cache: 'no-store' }).then(async response => { if (response.ok) driveData = await response.json(); }).catch(() => {}),
-    fetch('/api/client/server-hashes', { cache: 'no-store' }).then(async response => { if (response.ok) serverData = await response.json(); }).catch(() => {})
+    fetch('/api/client/server-hashes', { cache: 'no-store' }).then(async response => { if (response.ok) serverData = await response.json(); }).catch(() => {}),
+    damagedPrimaryHashes().then(value => { bad = value; })
   ]);
 
   definitions = localData.locations || [];
   drives = driveData.drives || [];
-  serverHashes = new Set(serverData.hashes || []);
+  damagedServer = bad;
+  serverHashes = new Set((serverData.hashes || []).filter(hash => !damagedServer.has(hash)));
   copies = locationCopies(localData);
   driveHashes = new Map();
   await rebuildProtection();
@@ -190,7 +209,7 @@ export async function refreshLocations() {
   renderOptions();
   await applySelection();
   window.dispatchEvent(new CustomEvent('mochimono:locations-updated', { detail: {
-    local: new Set(copies.keys()), server: new Set(serverHashes), ...protection
+    local: new Set(copies.keys()), server: new Set(serverHashes), damagedServer: new Set(damagedServer), ...protection
   } }));
 }
 
@@ -201,6 +220,7 @@ function refreshIfStale() {
 window.mochimonoLocations = {
   forHash(hash) { return copies.get(String(hash)) || []; },
   isServerStored(hash) { return serverHashes.has(String(hash)); },
+  isServerDamaged(hash) { return damagedServer.has(String(hash)); },
   isBackedUp(hash) { return protection.backed.has(String(hash)); },
   isVerifiedBackup(hash) { return protection.verifiedBacked.has(String(hash)); },
   isSafeToFree(hash) { return protection.safeLocal.has(String(hash)); },
