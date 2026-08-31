@@ -8,12 +8,11 @@ const logout = $('#logout');
 const filesElement = $('#files');
 const PAGE = 180;
 const WINDOW = PAGE * 4;
-const CACHE_NAME = 'mochimono-catalog-v3';
-const CACHE_VERSION = 1;
 const THUMB_VERSION = 3;
 
 let searchTimer;
 let catalog = [];
+let catalogVersion = '';
 let filtered = [];
 let filteredIndex = new Map();
 let loaded = [];
@@ -35,8 +34,6 @@ let folderPath = '';
 let folderData = null;
 let folderLoadGeneration = 0;
 let scrollFrame = 0;
-let cacheMeta = null;
-let cacheDbPromise;
 let viewerScrollY = 0;
 let viewerDirty = false;
 let viewerPreloads = [];
@@ -69,86 +66,6 @@ async function request(path, options = {}) {
   return response.json();
 }
 
-const idbRequest = request => new Promise((resolve, reject) => {
-  request.onsuccess = () => resolve(request.result);
-  request.onerror = () => reject(request.error);
-});
-const idbDone = transaction => new Promise((resolve, reject) => {
-  transaction.oncomplete = resolve;
-  transaction.onerror = () => reject(transaction.error);
-  transaction.onabort = () => reject(transaction.error);
-});
-
-function openCache() {
-  if (!('indexedDB' in window)) return Promise.resolve(null);
-  if (!cacheDbPromise) {
-    cacheDbPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(CACHE_NAME, CACHE_VERSION);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'hash' });
-        if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
-        if (!db.objectStoreNames.contains('thumbs')) db.createObjectStore('thumbs', { keyPath: 'hash' });
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    }).catch(error => {
-      console.warn('IndexedDB unavailable', error);
-      return null;
-    });
-  }
-  return cacheDbPromise;
-}
-
-async function readCache() {
-  const db = await openCache();
-  if (!db) return null;
-  const transaction = db.transaction(['files', 'meta']);
-  const done = idbDone(transaction);
-  const [files, meta] = await Promise.all([
-    idbRequest(transaction.objectStore('files').getAll()),
-    idbRequest(transaction.objectStore('meta').get('catalog'))
-  ]);
-  await done;
-  return meta ? { files, meta } : null;
-}
-
-async function writeCache(files, meta) {
-  const db = await openCache();
-  if (!db) return;
-  const transaction = db.transaction(['files', 'meta'], 'readwrite');
-  const done = idbDone(transaction);
-  const store = transaction.objectStore('files');
-  store.clear();
-  for (const file of files) store.put(file);
-  transaction.objectStore('meta').put({ key: 'catalog', ...meta });
-  await done;
-}
-
-async function cacheDeleteMany(hashes) {
-  const db = await openCache();
-  if (!db || !hashes?.length) return;
-  const transaction = db.transaction(['files', 'thumbs'], 'readwrite');
-  const done = idbDone(transaction);
-  const files = transaction.objectStore('files');
-  const thumbs = transaction.objectStore('thumbs');
-  for (const hash of hashes) { files.delete(hash); thumbs.delete(hash); }
-  await done;
-}
-
-const cacheDelete = hash => cacheDeleteMany([hash]);
-
-async function cacheImports(nextImports) {
-  if (!cacheMeta) return;
-  cacheMeta = { ...cacheMeta, imports: nextImports };
-  const db = await openCache();
-  if (!db) return;
-  const transaction = db.transaction('meta', 'readwrite');
-  const done = idbDone(transaction);
-  transaction.objectStore('meta').put({ key: 'catalog', ...cacheMeta });
-  await done;
-}
-
 function formatBytes(bytes) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
   let value = Number(bytes || 0);
@@ -158,7 +75,7 @@ function formatBytes(bytes) {
 }
 
 function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+  return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 }
 
 function typeLabel(file) {
@@ -172,7 +89,7 @@ function matchesType(file) {
   const value = kind(file);
   if (type === 'media') return value === 'image' || value === 'video';
   if (type === 'application') return value === 'application' || value === 'text';
-  if (type === 'other') return !['image', 'video', 'audio', 'text', 'application'].includes(value);
+  if (type === 'other') return !['image','video','audio','text','application'].includes(value);
   return value === type;
 }
 
@@ -194,8 +111,7 @@ function preview(file) {
   const value = kind(file);
   if (value === 'image') return `<span class="video-thumb-pending" data-video-thumb="${file.hash}"></span>`;
   if (value === 'video') return `<span class="video-thumb-pending" data-video-thumb="${file.hash}"></span><span class="play-badge">▶</span>`;
-  const icon = value === 'audio' ? '♪' : typeLabel(file) === 'document' ? '▤' : '·';
-  return `<div class="file-icon ${escapeHtml(value)}">${icon}</div>`;
+  return `<div class="file-icon ${escapeHtml(value)}">${value === 'audio' ? '♪' : typeLabel(file) === 'document' ? '▤' : '·'}</div>`;
 }
 
 function viewerMedia(file) {
@@ -206,12 +122,8 @@ function viewerMedia(file) {
 }
 
 function normalizeFile(file) {
-  const importIds = Array.isArray(file.importIds)
-    ? file.importIds.map(Number).filter(Boolean)
-    : String(file.importIds || '').split(',').map(Number).filter(Boolean);
-  const exactImportIds = Array.isArray(file.exactImportIds)
-    ? file.exactImportIds.map(Number).filter(Boolean)
-    : String(file.exactImportIds || '').split(',').map(Number).filter(Boolean);
+  const importIds = Array.isArray(file.importIds) ? file.importIds.map(Number).filter(Boolean) : String(file.importIds || '').split(',').map(Number).filter(Boolean);
+  const exactImportIds = Array.isArray(file.exactImportIds) ? file.exactImportIds.map(Number).filter(Boolean) : String(file.exactImportIds || '').split(',').map(Number).filter(Boolean);
   const fileDate = new Date(file.fileDate || file.createdAt || 0);
   const addedDate = new Date(file.addedAt || file.createdAt || 0);
   const normalized = {
@@ -226,10 +138,7 @@ function normalizeFile(file) {
     dateMs: Number.isNaN(fileDate.getTime()) ? 0 : fileDate.getTime(),
     addedMs: Number.isNaN(addedDate.getTime()) ? 0 : addedDate.getTime()
   };
-  fileDates.set(normalized.hash, {
-    fileDate: normalized.fileDate || normalized.createdAt,
-    addedAt: normalized.addedAt || normalized.createdAt
-  });
+  fileDates.set(normalized.hash, { fileDate: normalized.fileDate || normalized.createdAt, addedAt: normalized.addedAt || normalized.createdAt });
   return normalized;
 }
 
@@ -238,24 +147,21 @@ function rebuildIndexes() {
   searchIndex = new Map(catalog.map(file => [file.hash, buildSearchText(file, sourceNames)]));
 }
 
-function timelineMs(file) {
-  return sort === 'date-added' ? (file.addedMs || file.dateMs || 0) : (file.dateMs || 0);
+function renderFileCount(count = filtered.length) {
+  const element = $('#fileCount');
+  if (!element) return;
+  element.textContent = `${Number(count).toLocaleString()} / ${catalog.length.toLocaleString()} files`;
+  element.title = `${Number(count).toLocaleString()} in this view · ${catalog.length.toLocaleString()} total`;
 }
 
+function timelineMs(file) { return sort === 'date-added' ? file.addedMs || file.dateMs || 0 : file.dateMs || 0; }
 const timelineDate = file => new Date(timelineMs(file));
 const fileDate = file => new Date(file.dateMs || 0);
 const shortDate = file => fileDate(file).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-
-function monthKey(file) {
-  const date = timelineDate(file);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-}
+const monthKey = file => `${timelineDate(file).getFullYear()}-${String(timelineDate(file).getMonth() + 1).padStart(2, '0')}`;
 const monthName = file => timelineDate(file).toLocaleDateString(undefined, { month: 'long' });
 const monthRailLabel = file => timelineDate(file).toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
-function dayKey(file) {
-  const date = timelineDate(file);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
+const dayKey = file => `${timelineDate(file).getFullYear()}-${String(timelineDate(file).getMonth() + 1).padStart(2, '0')}-${String(timelineDate(file).getDate()).padStart(2, '0')}`;
 const dayLabel = file => timelineDate(file).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 
 function dateGroups(items) {
@@ -281,33 +187,16 @@ function timelineGroups() {
 }
 
 function mediaRatio(file) {
-  if (!file.width || !file.height) return 4 / 3;
-  return Math.max(.65, Math.min(2.1, file.width / file.height));
+  return file.width && file.height ? Math.max(.65, Math.min(2.1, file.width / file.height)) : 4 / 3;
 }
 
 function gridCard(file) {
-  const media = ['image', 'video'].includes(kind(file));
-  return `
-    <button class="file-card ${media ? 'media-card' : ''} ${kind(file) === 'video' ? 'video-card' : ''}"
-      data-hash="${file.hash}"
-      data-filename="${escapeHtml(file.filename)}"
-      data-day="${dayKey(file)}"
-      data-day-label="${escapeHtml(dayLabel(file))}"
-      style="${media ? `--ratio:${mediaRatio(file)}` : ''}"
-      title="${escapeHtml(file.filename)}">
-      <div class="thumb ${media ? 'media-thumb' : ''}">${preview(file)}</div>
-      ${media ? '' : `<div class="card-copy"><strong>${escapeHtml(file.filename)}</strong><span>${formatBytes(file.size)}</span></div>`}
-    </button>`;
+  const media = ['image','video'].includes(kind(file));
+  return `<button class="file-card ${media ? 'media-card' : ''} ${kind(file) === 'video' ? 'video-card' : ''}" data-hash="${file.hash}" data-filename="${escapeHtml(file.filename)}" data-day="${dayKey(file)}" data-day-label="${escapeHtml(dayLabel(file))}" style="${media ? `--ratio:${mediaRatio(file)}` : ''}" title="${escapeHtml(file.filename)}"><div class="thumb ${media ? 'media-thumb' : ''}">${preview(file)}</div>${media ? '' : `<div class="card-copy"><strong>${escapeHtml(file.filename)}</strong><span>${formatBytes(file.size)}</span></div>`}</button>`;
 }
 
 function listRow(file) {
-  return `
-    <button class="file-row" data-hash="${file.hash}" data-day="${dayKey(file)}" data-day-label="${escapeHtml(dayLabel(file))}">
-      <span class="type">${escapeHtml(typeLabel(file))}</span>
-      <div class="file-main"><strong>${escapeHtml(file.filename)}</strong><span>${escapeHtml(file.originalPath || '')}</span></div>
-      <span class="refs">${escapeHtml(shortDate(file))}</span>
-      <span class="size">${formatBytes(file.size)}</span>
-    </button>`;
+  return `<button class="file-row" data-hash="${file.hash}" data-day="${dayKey(file)}" data-day-label="${escapeHtml(dayLabel(file))}"><span class="type">${escapeHtml(typeLabel(file))}</span><div class="file-main"><strong>${escapeHtml(file.filename)}</strong><span>${escapeHtml(file.originalPath || '')}</span></div><span class="refs">${escapeHtml(shortDate(file))}</span><span class="size">${formatBytes(file.size)}</span></button>`;
 }
 
 const cardsHtml = items => items.map(file => view === 'grid' ? gridCard(file) : listRow(file)).join('');
@@ -317,10 +206,7 @@ function groupsHtml(groups) {
   return groups.map(group => {
     const year = group.year !== previousYear ? `<h2 class="year-heading">${group.year}</h2>` : '';
     previousYear = group.year;
-    return `<section class="date-group" data-date-group="${group.key}">
-      ${year}<h3 class="date-heading">${escapeHtml(group.month)}</h3>
-      <div class="${view === 'grid' ? 'date-grid' : 'date-list'}">${cardsHtml(group.files)}</div>
-    </section>`;
+    return `<section class="date-group" data-date-group="${group.key}">${year}<h3 class="date-heading">${escapeHtml(group.month)}</h3><div class="${view === 'grid' ? 'date-grid' : 'date-list'}">${cardsHtml(group.files)}</div></section>`;
   }).join('');
 }
 
@@ -383,10 +269,7 @@ function renderFiles(preserve = false, force = false) {
   const anchor = preserve ? captureAnchor() : null;
   const key = renderKey();
   if (!force && key === lastRenderKey) {
-    syncSentinels();
-    renderRail();
-    scheduleLayout();
-    return;
+    syncSentinels(); renderRail(); scheduleLayout(); return;
   }
   lastRenderKey = key;
   filesElement.className = `files ${view}`;
@@ -414,8 +297,7 @@ function applyFilters(reset = true, preserve = false) {
   const sourceId = Number(importId) || 0;
   const folderHashes = folderImportId && folderPath && folderData ? new Set(folderData.files.map(file => file.hash)) : null;
   filtered = sortFiles(catalog.filter(file => {
-    if (!matchesType(file)) return false;
-    if (collectionHashes && !collectionHashes.has(file.hash)) return false;
+    if (!matchesType(file) || (collectionHashes && !collectionHashes.has(file.hash))) return false;
     if (sourceId && !file.importIds.includes(sourceId)) return false;
     if (folderHashes && !folderHashes.has(file.hash)) return false;
     return !terms.length || terms.every(term => (searchIndex.get(file.hash) || '').includes(term));
@@ -424,6 +306,7 @@ function applyFilters(reset = true, preserve = false) {
   if (reset) { renderOffset = 0; renderLimit = PAGE; }
   else if (renderOffset >= filtered.length) renderOffset = Math.max(0, filtered.length - PAGE);
   updateWindow();
+  renderFileCount();
   lastRenderKey = '';
   renderFiles(preserve);
   if (selected) {
@@ -482,7 +365,7 @@ function railEntries() {
 
 function railLabel(index) {
   const file = filtered[Math.max(0, Math.min(filtered.length - 1, index))];
-  return file ? (sort === 'size-desc' ? formatBytes(file.size) : monthRailLabel(file)) : '';
+  return file ? sort === 'size-desc' ? formatBytes(file.size) : monthRailLabel(file) : '';
 }
 
 function setRailThumb(index) {
@@ -519,17 +402,13 @@ function renderRail() {
   rail.hidden = !entries.length;
   document.documentElement.classList.toggle('library-scroll', Boolean(entries.length));
   if (!entries.length) return;
-  rail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `
-    <button data-index="${entry.index}" class="rail-tick ${entry.major ? 'major' : ''}" style="top:${(entry.position * 100).toFixed(3)}%" title="${escapeHtml(entry.label)}">
-      <span>${escapeHtml(entry.short || entry.label)}</span><i></i>
-    </button>`).join('')}<div id="railThumb" class="rail-thumb"><span></span><i></i></div>`;
+  rail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `<button data-index="${entry.index}" class="rail-tick ${entry.major ? 'major' : ''}" style="top:${(entry.position * 100).toFixed(3)}%" title="${escapeHtml(entry.label)}"><span>${escapeHtml(entry.short || entry.label)}</span><i></i></button>`).join('')}<div id="railThumb" class="rail-thumb"><span></span><i></i></div>`;
   updateRailActive();
 }
 
 function renderImports() {
-  const source = $('#source');
-  source.innerHTML = '<option value="">All sources</option>' + imports.map(item => `<option value="${item.id}">${escapeHtml(item.sourceName)}</option>`).join('');
-  source.value = importId;
+  $('#source').innerHTML = '<option value="">All sources</option>' + imports.map(item => `<option value="${item.id}">${escapeHtml(item.sourceName)}</option>`).join('');
+  $('#source').value = importId;
   if (view === 'folders' && !folderImportId) renderFolder();
 }
 
@@ -542,8 +421,7 @@ function jumpToIndex(index, smooth = true) {
 
 function scrubFromPointer(event, final = false) {
   if (!filtered.length) return;
-  const rail = $('#dateRail');
-  const rect = rail.getBoundingClientRect();
+  const rect = $('#dateRail').getBoundingClientRect();
   const index = Math.round(Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)) * (filtered.length - 1));
   setRailThumb(index);
   const now = performance.now();
@@ -551,9 +429,9 @@ function scrubFromPointer(event, final = false) {
 }
 
 async function loadStats() {
-  const s = await request('/api/stats');
-  const percent = s.capacityBytes ? Math.min(100, s.bytes / s.capacityBytes * 100) : 0;
-  $('#stats').innerHTML = `<span>${formatBytes(s.bytes)} <small>of ${formatBytes(s.capacityBytes)}</small></span><i><b style="width:${s.bytes ? `max(2px, ${percent}%)` : '0'}"></b></i>`;
+  const stats = await request('/api/stats');
+  const percent = stats.capacityBytes ? Math.min(100, stats.bytes / stats.capacityBytes * 100) : 0;
+  $('#stats').innerHTML = `<span>${formatBytes(stats.bytes)} <small>of ${formatBytes(stats.capacityBytes)}</small></span><i><b style="width:${stats.bytes ? `max(2px, ${percent}%)` : '0'}"></b></i>`;
 }
 
 async function correctFileDates(files) {
@@ -593,7 +471,7 @@ async function fetchCatalog() {
 
 async function syncCatalog(force = false) {
   const remote = await request('/api/catalog/version');
-  if (!force && cacheMeta?.version === remote.version) return;
+  if (!force && catalogVersion === remote.version) return;
   const localMedia = new Map(catalog.filter(file => file.width && file.height).map(file => [file.hash, [file.width, file.height]]));
   const fresh = await fetchCatalog();
   catalog = fresh.files.map(file => {
@@ -601,16 +479,13 @@ async function syncCatalog(force = false) {
     return dimensions ? { ...file, width: dimensions[0], height: dimensions[1] } : file;
   });
   imports = fresh.imports;
-  cacheMeta = { version: fresh.version, imports };
+  catalogVersion = fresh.version;
   rebuildIndexes();
   renderImports();
   applyFilters(true);
-  writeCache(catalog, cacheMeta).catch(console.warn);
 }
 
-function currentFolderSource() {
-  return imports.find(item => String(item.id) === String(folderImportId));
-}
+function currentFolderSource() { return imports.find(item => String(item.id) === String(folderImportId)); }
 
 function folderBreadcrumb() {
   const bar = $('#folderbar');
@@ -633,13 +508,12 @@ function renderFolder() {
   document.documentElement.classList.remove('library-scroll');
   folderBreadcrumb();
   if (!folderImportId) {
-    filesElement.innerHTML = imports.length ? `
-      <div class="folder-list-head"><span>Name</span><span>Files</span><span>Imported</span></div>
-      ${imports.map(item => `<button class="folder-row source-row" data-folder-source="${item.id}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(item.sourceName)}</strong></span><span>${item.files.toLocaleString()} · ${formatBytes(item.referencedBytes)}</span><span>${escapeHtml(new Date(item.createdAt).toLocaleDateString())}</span></button>`).join('')}`
-      : '<div class="empty">No sources.</div>';
+    renderFileCount(catalog.length);
+    filesElement.innerHTML = imports.length ? `<div class="folder-list-head"><span>Name</span><span>Files</span><span>Imported</span></div>${imports.map(item => `<button class="folder-row source-row" data-folder-source="${item.id}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(item.sourceName)}</strong></span><span>${item.files.toLocaleString()} · ${formatBytes(item.referencedBytes)}</span><span>${escapeHtml(new Date(item.createdAt).toLocaleDateString())}</span></button>`).join('')}` : '<div class="empty">No sources.</div>';
     return;
   }
-  if (!folderData) { filesElement.innerHTML = '<div class="empty">Loading…</div>'; return; }
+  if (!folderData) { renderFileCount(0); filesElement.innerHTML = '<div class="empty">Loading…</div>'; return; }
+  renderFileCount(folderData.files.length);
   const rows = [];
   for (const folder of folderData.folders) rows.push(`<button class="folder-row" data-folder-name="${escapeHtml(folder.name)}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(folder.name)}</strong></span><span>${folder.files.toLocaleString()}</span><span>Folder</span></button>`);
   for (const file of folderData.files) rows.push(`<button class="folder-row file-folder-row" data-hash="${file.hash}"><span class="folder-name"><i class="document-icon"></i><strong>${escapeHtml(file.filename)}</strong></span><span>${formatBytes(file.size)}</span><span>${escapeHtml(typeLabel(file))}</span></button>`);
@@ -659,8 +533,7 @@ async function loadFolder() {
   const data = await request(`/api/folders?import=${encodeURIComponent(wantedImport)}&path=${encodeURIComponent(wantedPath)}`);
   if (generation !== folderLoadGeneration || String(folderImportId) !== wantedImport || folderPath !== wantedPath) return;
   folderData = data;
-  if (view === 'folders') renderFolder();
-  else applyFilters(true);
+  if (view === 'folders') renderFolder(); else applyFilters(true);
 }
 
 function setView(next) {
@@ -760,9 +633,8 @@ function openViewer(hash, fallback = null) {
   selected = catalog.find(file => file.hash === hash) || folderData?.files?.find(file => file.hash === hash) || fallback;
   if (!selected) return false;
   selected = normalizeFile(selected);
-  const viewer = $('#viewer');
-  if (viewer.hidden) viewerScrollY = window.scrollY;
-  viewer.hidden = false;
+  if ($('#viewer').hidden) viewerScrollY = window.scrollY;
+  $('#viewer').hidden = false;
   renderViewerState();
   return true;
 }
@@ -793,8 +665,7 @@ function closeViewer() {
   selected = null;
   if (viewerDirty) {
     viewerDirty = false;
-    if (view === 'folders') loadFolder().catch(console.error);
-    else applyFilters(false, true);
+    if (view === 'folders') loadFolder().catch(console.error); else applyFilters(false, true);
   }
   revealViewerHash(returnHash);
 }
@@ -810,7 +681,6 @@ async function refreshImports() {
   imports = (await request('/api/imports')).imports;
   rebuildIndexes();
   renderImports();
-  cacheImports(imports).catch(console.warn);
 }
 
 async function removeSelected(ignore) {
@@ -820,12 +690,10 @@ async function removeSelected(ignore) {
   catalog = catalog.filter(file => file.hash !== hash);
   searchIndex.delete(hash);
   fileDates.delete(hash);
-  cacheDelete(hash).catch(console.warn);
   viewerDirty = false;
   closeViewer();
   await Promise.all([loadStats(), refreshImports()]);
-  if (view === 'folders') await loadFolder();
-  else applyFilters(true);
+  if (view === 'folders') await loadFolder(); else applyFilters(true);
 }
 
 async function loadDrives() {
@@ -863,10 +731,9 @@ window.mochimonoLibrary = {
     if (!removed.size) return;
     catalog = catalog.filter(file => !removed.has(file.hash));
     for (const hash of removed) { searchIndex.delete(hash); fileDates.delete(hash); }
-    cacheDeleteMany([...removed]).catch(console.warn);
     applyFilters(false, true);
   },
-  state: () => ({ filtered: filtered.length, offset: renderOffset, loaded: loaded.length, hasMore, hasPrevious, view, sort })
+  state: () => ({ total: catalog.length, filtered: filtered.length, offset: renderOffset, loaded: loaded.length, hasMore, hasPrevious, view, sort })
 };
 
 async function boot() {
@@ -879,18 +746,7 @@ async function boot() {
     const mediaSize = Math.max(96, Math.min(420, Number(localStorage.getItem('mochimono-media-size')) || 170));
     $('#mediaSize').value = mediaSize;
     document.documentElement.style.setProperty('--media-size', `${mediaSize}px`);
-    const cached = await readCache().catch(() => null);
-    if (cached) {
-      cacheMeta = cached.meta;
-      catalog = cached.files.map(normalizeFile);
-      imports = cached.meta.imports || [];
-      rebuildIndexes();
-      renderImports();
-      applyFilters(true);
-    }
-    await Promise.all([loadStats(), loadDrives()]);
-    if (cached) syncCatalog(false).catch(console.error);
-    else await syncCatalog(true);
+    await Promise.all([loadStats(), loadDrives(), syncCatalog(true)]);
   } catch (error) {
     if (error.unauthorized) { login.hidden = false; app.hidden = true; logout.hidden = true; }
     else throw error;
