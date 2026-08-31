@@ -5,9 +5,7 @@ const style = document.createElement('style');
 style.textContent = `
   .date-group{margin-top:30px}
   .date-heading{margin:0 0 10px 2px;font-size:14px;color:#ded5d1;letter-spacing:-.01em}
-  .day-break{flex:0 0 100%;width:100%;height:28px;display:flex;align-items:flex-end;padding:0 0 6px 2px;color:#928986;font-size:11px;font-weight:650;pointer-events:none}
-  .day-break:not(.first-day){height:36px;padding-top:8px}
-  .files.list .day-break{height:27px;padding-bottom:5px}
+  .files.grid .date-grid>.day-start:not(:first-child){margin-left:9px}
 `;
 document.head.append(style);
 
@@ -24,33 +22,31 @@ function dayKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-function dayLabel(date) {
-  return date.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-}
-
 function decorateGroup(group) {
   const container = group.querySelector(':scope > .date-grid,:scope > .date-list');
   if (!container) return;
   const cards = [...container.children].filter(node => node.matches?.('[data-hash]'));
   const entries = cards.map(card => {
     const date = dateFor(card);
-    return { card, date, key: date ? dayKey(date) : '' };
+    return { card, key: date ? dayKey(date) : '' };
   });
   const signature = `${sort?.value || ''}|${entries.map(item => `${item.card.dataset.hash}:${item.key}`).join('|')}`;
   if (group.dataset.daySignature === signature) return;
   group.dataset.daySignature = signature;
 
-  container.querySelectorAll(':scope > .day-break').forEach(node => node.remove());
+  for (const card of cards) {
+    card.classList.remove('day-start');
+    delete card.dataset.day;
+  }
+
   let previousDay = '';
-  let dayIndex = 0;
+  let first = true;
   for (const item of entries) {
-    if (!item.date || !item.key || item.key === previousDay) continue;
-    const marker = document.createElement('div');
-    marker.className = `day-break ${dayIndex++ === 0 ? 'first-day' : ''}`;
-    marker.dataset.day = item.key;
-    marker.textContent = dayLabel(item.date);
-    container.insertBefore(marker, item.card);
+    if (!item.key) continue;
+    if (!first && item.key !== previousDay) item.card.classList.add('day-start');
+    item.card.dataset.day = item.key;
     previousDay = item.key;
+    first = false;
   }
 }
 
@@ -60,17 +56,16 @@ function decorate() {
   for (const group of files.querySelectorAll('.date-group')) decorateGroup(group);
 }
 
+function invalidate() {
+  for (const group of files?.querySelectorAll('.date-group') || []) delete group.dataset.daySignature;
+  schedule();
+}
+
 function schedule() {
   if (!frame) frame = requestAnimationFrame(decorate);
 }
 
 if (files) new MutationObserver(schedule).observe(files, { childList: true, subtree: true });
-sort?.addEventListener('change', () => {
-  for (const group of files?.querySelectorAll('.date-group') || []) delete group.dataset.daySignature;
-  schedule();
-});
-window.addEventListener('mochimono-dates-updated', () => {
-  for (const group of files?.querySelectorAll('.date-group') || []) delete group.dataset.daySignature;
-  schedule();
-});
+sort?.addEventListener('change', invalidate);
+window.addEventListener('mochimono-dates-updated', invalidate);
 schedule();
