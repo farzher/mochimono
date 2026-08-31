@@ -5,7 +5,6 @@ const views = document.querySelector('#views');
 
 let restoring = false;
 let syncFrame = 0;
-let scopeCanceled = false;
 
 function currentView() {
   return views.querySelector('[data-view].active')?.dataset.view || 'grid';
@@ -17,7 +16,7 @@ function clearFolderUi() {
 }
 
 function folderState() {
-  if (folderbar.hidden) return null;
+  if (folderbar.hidden || currentView() !== 'folders') return null;
   const sourceCrumb = folderbar.querySelector('[data-folder-depth="0"]');
   if (!sourceCrumb) return null;
   const path = [...folderbar.querySelectorAll('[data-folder-depth]')]
@@ -43,11 +42,6 @@ function replaceFolderParams(state) {
 function syncUrl() {
   syncFrame = 0;
   if (restoring) return;
-  if (scopeCanceled && currentView() !== 'folders') {
-    clearFolderUi();
-    replaceFolderParams(null);
-    return;
-  }
   replaceFolderParams(folderState());
 }
 
@@ -75,11 +69,10 @@ async function restoreFolder() {
   const parts = String(url.searchParams.get('path') || '').split('/').filter(Boolean);
 
   restoring = true;
-  scopeCanceled = false;
   try {
     const option = await waitFor(() => [...source.options].find(item => item.textContent === wantedSource));
-    const desiredView = currentView();
-    if (desiredView !== 'folders') views.querySelector('[data-view="folders"]')?.click();
+    if (currentView() !== 'folders') views.querySelector('[data-view="folders"]')?.click();
+    await waitFor(() => currentView() === 'folders');
 
     source.value = option.value;
     source.dispatchEvent(new Event('change', { bubbles: true }));
@@ -91,8 +84,6 @@ async function restoreFolder() {
       row.click();
       await waitFor(() => folderbar.querySelector(`[data-folder-depth="${depth + 1}"]`)?.textContent.trim() === part);
     }
-
-    if (desiredView !== 'folders') views.querySelector(`[data-view="${desiredView}"]`)?.click();
   } catch (error) {
     console.warn(error.message);
   } finally {
@@ -101,28 +92,45 @@ async function restoreFolder() {
   }
 }
 
-new MutationObserver(scheduleSync).observe(folderbar, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
+new MutationObserver(scheduleSync).observe(folderbar, {
+  childList: true,
+  subtree: true,
+  attributes: true,
+  attributeFilter: ['hidden']
+});
+
 source.addEventListener('change', () => {
   if (!restoring && currentView() !== 'folders') {
-    scopeCanceled = true;
     clearFolderUi();
     replaceFolderParams(null);
   }
   setTimeout(scheduleSync);
 });
+
 views.addEventListener('click', event => {
-  if (event.target.closest('[data-view="folders"]')) scopeCanceled = false;
-  setTimeout(scheduleSync);
-});
-files.addEventListener('click', event => {
-  if (event.target.closest('[data-folder-source], [data-folder-name]')) {
-    scopeCanceled = false;
+  const button = event.target.closest('[data-view]');
+  if (!button) return;
+  if (button.dataset.view === 'folders') {
     setTimeout(scheduleSync);
+    return;
   }
+
+  // Folder navigation is a Folder-view concern. Once the user returns to
+  // Grid/List, keep the selected source as a normal source filter but discard
+  // the folder/path scope. Dispatching the current source through app.js is the
+  // single canonical way to clear that scope.
+  queueMicrotask(() => {
+    if (currentView() === 'folders') return;
+    if (!folderbar.hidden) source.dispatchEvent(new Event('change', { bubbles: true }));
+    clearFolderUi();
+    replaceFolderParams(null);
+  });
 });
-folderbar.addEventListener('click', () => {
-  scopeCanceled = false;
-  setTimeout(scheduleSync);
+
+files.addEventListener('click', event => {
+  if (event.target.closest('[data-folder-source], [data-folder-name]')) setTimeout(scheduleSync);
 });
+
+folderbar.addEventListener('click', () => setTimeout(scheduleSync));
 
 restoreFolder().catch(console.warn);
