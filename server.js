@@ -234,11 +234,13 @@ async function handleCoreApi(req, res, url) {
         INSERT INTO objects(hash, size, mime, state, created_at) VALUES(?, ?, ?, 'active', ?)
         ON CONFLICT(hash) DO UPDATE SET size = excluded.size, mime = excluded.mime, state = 'active'
       `).run(hash, stored.size, mime, now());
-      const timestamp = now();
-      db.prepare(`
-        INSERT INTO object_integrity(hash, status, checked_at, verified_at, error) VALUES(?, 'healthy', ?, ?, NULL)
-        ON CONFLICT(hash) DO UPDATE SET status='healthy', checked_at=excluded.checked_at, verified_at=excluded.verified_at, error=NULL
-      `).run(hash, timestamp, timestamp);
+      if (stored.written) {
+        const timestamp = now();
+        db.prepare(`
+          INSERT INTO object_integrity(hash, status, checked_at, verified_at, error) VALUES(?, 'healthy', ?, ?, NULL)
+          ON CONFLICT(hash) DO UPDATE SET status='healthy', checked_at=excluded.checked_at, verified_at=excluded.verified_at, error=NULL
+        `).run(hash, timestamp, timestamp);
+      }
       return json(res, 201, { hash, size: stored.size });
     } catch (error) {
       return json(res, 400, { error: error.message });
