@@ -64,6 +64,7 @@
       <input id="serverUrl" placeholder="Server">
       <input id="serverUsername" autocomplete="username" placeholder="Username" value="admin">
       <input id="serverPassword" type="password" autocomplete="current-password" placeholder="Password">
+      <input id="serverToken" type="hidden">
     </div>
     <div class="dialog-actions"><div class="spacer"></div><button id="saveSettings" class="primary">Connect</button></div>
   </dialog>
@@ -92,5 +93,6 @@
 
   <div id="toast" class="toast"></div>
   <script type="module" src="/app.js"></script>
+  <script type="module" src="/client-shell.js"></script>
 </body>
 </html>
