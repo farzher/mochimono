@@ -287,7 +287,6 @@ if (stage && viewer) {
       startY: desktopZoom.y,
       moved: false
     };
-    try { stage.setPointerCapture(event.pointerId); } catch {}
   });
 
   stage.addEventListener('pointermove', event => {
@@ -300,6 +299,7 @@ if (stage && viewer) {
       stage.classList.add('viewer-desktop-panning');
       clearTimeout(desktopClickTimer);
       desktopClickTimer = 0;
+      try { stage.setPointerCapture(event.pointerId); } catch {}
     }
     desktopZoom.x = desktopPan.startX + dx;
     desktopZoom.y = desktopPan.startY + dy;
