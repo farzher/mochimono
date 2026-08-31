@@ -15,6 +15,10 @@ const selectionDelete = document.querySelector('#selectionDelete');
 const selectionIgnore = document.querySelector('#selectionIgnore');
 const selectionClear = document.querySelector('#selectionClear');
 
+// Keep bulk actions completely outside the library flow. Selection must never
+// change command/gallery geometry, even if view-specific styles change.
+document.body.append(selectionBar);
+
 let selectionMode = false;
 let anchorHash = '';
 let selected = new Set();
@@ -67,8 +71,10 @@ function syncTimelineSelection() {
 
 function syncSelectionUi() {
   const count = selected.size;
+  const active = selectionMode || count > 0;
   const mutable = count > 0 && allServerStored(selected);
-  selectionBar.hidden = !selectionMode && !count;
+  selectionBar.hidden = !active;
+  document.documentElement.classList.toggle('selection-active', active);
   selectToggle.classList.toggle('active', selectionMode);
   selectionCount.textContent = count ? `${count.toLocaleString()} selected` : 'Select files';
   selectionCollection.disabled = selectionDelete.disabled = selectionIgnore.disabled = !mutable;
