@@ -53,7 +53,7 @@ async function handleLocalApi(req, res, url) {
     json(res, 200, {
       settings: {
         server: settings.server, hasToken: Boolean(settings.token), device: settings.device,
-        folders: visibleFolders()
+        uploadWorkers: settings.uploadWorkers, folders: visibleFolders()
       },
       server: await serverState(),
       previews: thumbnailAgentStatus(),
@@ -68,6 +68,11 @@ async function handleLocalApi(req, res, url) {
     if (body.server !== undefined) settings.server = String(body.server || 'http://127.0.0.1:8642').trim().replace(/\/$/, '');
     if (body.token !== undefined) settings.token = String(body.token || '');
     if (body.device !== undefined) settings.device = String(body.device || DEVICE).trim() || DEVICE;
+    if (body.uploadWorkers !== undefined) {
+      const workers = Number(body.uploadWorkers);
+      if (![1, 2, 4].includes(workers)) return json(res, 400, { error: 'Upload concurrency must be 1, 2, or 4' });
+      settings.uploadWorkers = workers;
+    }
     await persistSettings();
 
     if (settings.token && settings.device !== previousDevice) {
