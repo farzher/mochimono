@@ -125,6 +125,8 @@ function progressData(job) {
   if (p.already != null) meta.push(`${Number(p.already).toLocaleString()} already in Mochimono`);
   if (p.repaired) meta.push(`${Number(p.repaired).toLocaleString()} backup repaired`);
   if (p.primaryRepaired) meta.push(`${Number(p.primaryRepaired).toLocaleString()} Mochimono repaired`);
+  if (p.catalogRepaired) meta.push('backup catalog repaired');
+  if (p.catalogHealthy === false) meta.push('backup catalog damaged');
   if (p.bad) meta.push(`${Number(p.bad).toLocaleString()} still damaged`);
   if (p.ignored) meta.push(`${Number(p.ignored).toLocaleString()} ignored`);
   if (p.speedBps > 0) meta.push(`${bytes(p.speedBps)}/s`);
@@ -225,6 +227,8 @@ function finishedToast(job) {
     const parts = ['Verified'];
     if (result.repaired) parts.push(`${Number(result.repaired).toLocaleString()} backup repaired`);
     if (result.primaryRepaired) parts.push(`${Number(result.primaryRepaired).toLocaleString()} Mochimono repaired`);
+    if (result.catalogRepaired) parts.push('backup catalog repaired');
+    if (result.catalogHealthy === false) parts.push('backup catalog still damaged');
     if (result.bad) parts.push(`${Number(result.bad).toLocaleString()} still damaged`);
     return parts.join(' · ');
   }
@@ -264,17 +268,24 @@ function backupScope(location) {
 
 function backupVerification(location) {
   const count = Number(location.local?.count) || 0;
-  if (!count) return { label: 'No files to verify', stale: false, missing: true };
+  if (!count) return { label: 'No files to verify', stale: false, missing: true, catalogBad: false };
   const value = location.meta?.lastVerifiedAt || location.local?.oldestVerification || null;
   const time = value ? new Date(value).getTime() : NaN;
   const stale = !Number.isFinite(time) || Date.now() - time > VERIFY_STALE_MS;
   const bad = Number(location.meta?.lastVerifyBad) || 0;
   const repaired = Number(location.meta?.lastVerifyRepaired) || 0;
   const primaryRepaired = Number(location.meta?.lastVerifyPrimaryRepaired) || 0;
-  if (!value) return { label: 'Never fully verified', stale: true, bad, repaired, primaryRepaired, value: null };
-  const repair = [repaired ? `${repaired} backup repaired` : '', primaryRepaired ? `${primaryRepaired} Mochimono repaired` : ''].filter(Boolean).join(' · ');
+  const catalogBad = location.meta?.lastVerifyCatalogHealthy === false;
+  const catalogRepaired = Boolean(location.meta?.lastVerifyCatalogRepaired);
+  const extras = [
+    repaired ? `${repaired} backup repaired` : '',
+    primaryRepaired ? `${primaryRepaired} Mochimono repaired` : '',
+    catalogRepaired ? 'catalog repaired' : '',
+    catalogBad ? 'catalog damaged' : ''
+  ].filter(Boolean);
+  if (!value) return { label: `Never fully verified${extras.length ? ` · ${extras.join(' · ')}` : ''}`, stale: true, bad, repaired, primaryRepaired, catalogBad, catalogRepaired, value: null };
   const base = stale ? `Verify recommended · last checked ${ageLabel(value)}` : `Verified ${ageLabel(value)}`;
-  return { label: `${base}${repair ? ` · ${repair}` : ''}`, stale, bad, repaired, primaryRepaired, value };
+  return { label: `${base}${extras.length ? ` · ${extras.join(' · ')}` : ''}`, stale, bad, repaired, primaryRepaired, catalogBad, catalogRepaired, value };
 }
 
 function backupState(location) {
@@ -285,6 +296,7 @@ function backupState(location) {
   const missing = Math.max(0, Number(remote.desiredBytes) - Number(remote.protectedBytes));
   if (missing) return { label: `${bytes(missing)} left`, className: 'warning' };
   const verification = backupVerification(location);
+  if (verification.catalogBad) return { label: 'Backup catalog damaged', className: 'warning' };
   if (verification.bad) return { label: `${verification.bad.toLocaleString()} damaged`, className: 'warning' };
   if (verification.stale && count) return { label: 'Verify recommended', className: 'warning' };
   return { label: exactDate(location.meta?.lastBackupAt || location.local?.oldestVerification) || (count ? 'Stored' : 'Empty'), className: count ? 'good' : '' };
@@ -304,19 +316,22 @@ function backupCard(location, index) {
     ? `${bytes(localBytes)} stored in this backup`
     : remote ? `${bytes(protectedBytes)} of ${bytes(desiredBytes)} backed up` : `${bytes(localBytes)} stored in this backup`;
   const meterWidth = !scopeMissing && remote && protectedBytes ? `max(2px, ${ratio}%)` : localBytes ? '100%' : '0';
+  const verificationTitle = verification.catalogBad && location.meta?.lastVerifyCatalogError
+    ? `Backup catalog problem: ${location.meta.lastVerifyCatalogError}`
+    : verification.value ? `Last full SHA-256 verification: ${exactDate(verification.value)}` : 'This backup has not had a complete SHA-256 verification yet';
 
   return `<article class="storage-item backup-item" data-backup-index="${index}">
     <div class="storage-copy">
       <div class="storage-title"><strong>${esc(location.meta?.name || pathName(location.path))}</strong><time class="item-state ${state.className}">${esc(state.label)}</time></div>
       <div class="storage-path" title="${esc(location.path)}">${esc(location.path)}</div>
-      <div class="storage-meta"><span>${esc(backupScope(location))}</span><span>·</span><span>${localCount.toLocaleString()} files</span><span>·</span><span>${bytes(localBytes)}</span><span>·</span><span>${bytes(location.freeBytes)} free</span><span>·</span><span title="${esc(verification.value ? `Last full SHA-256 verification: ${exactDate(verification.value)}` : 'This backup has not had a complete SHA-256 verification yet')}">${esc(verification.label)}</span></div>
+      <div class="storage-meta"><span>${esc(backupScope(location))}</span><span>·</span><span>${localCount.toLocaleString()} files</span><span>·</span><span>${bytes(localBytes)}</span><span>·</span><span>${bytes(location.freeBytes)} free</span><span>·</span><span title="${esc(verificationTitle)}">${esc(verification.label)}</span></div>
       <div class="storage-meter backup-meter" title="${esc(meterTitle)}"><i style="width:${meterWidth}"></i></div>
       <div class="item-progress" data-item-progress hidden></div>
     </div>
     <div class="item-actions backup-actions">
       <button class="action-link primary-action" data-update="${index}" ${scopeMissing ? 'disabled title="Choose a current scope first"' : ''}>Update</button>
       <button class="action-link" data-restore="${index}" ${localCount ? '' : 'disabled'}>Restore</button>
-      <button class="action-link ${verification.stale && localCount ? 'primary-action' : ''}" data-verify="${index}" ${localCount ? `title="${verification.stale ? 'Full SHA-256 verification recommended' : 'Recheck every file with SHA-256'}"` : 'disabled'}>Verify</button>
+      <button class="action-link ${(verification.stale || verification.catalogBad) && localCount ? 'primary-action' : ''}" data-verify="${index}" ${localCount ? `title="${verification.catalogBad ? 'Recheck and repair backup metadata' : verification.stale ? 'Full SHA-256 verification recommended' : 'Recheck every file with SHA-256'}"` : 'disabled'}>Verify</button>
       <button class="action-link" data-configure="${index}">Edit</button>
     </div>
   </article>`;
@@ -348,7 +363,9 @@ async function backups(force = false) {
     const key = JSON.stringify(backupLocations.map(location => [
       location.path, location.meta?.name, location.meta?.policy, location.meta?.lastBackupAt,
       location.meta?.lastVerifiedAt, location.meta?.lastVerifyBad, location.meta?.lastVerifyRepaired,
-      location.meta?.lastVerifyPrimaryRepaired, location.local, location.freeBytes, location.remote
+      location.meta?.lastVerifyPrimaryRepaired, location.meta?.lastVerifyCatalogHealthy,
+      location.meta?.lastVerifyCatalogRepaired, location.meta?.lastVerifyCatalogError,
+      location.local, location.freeBytes, location.remote
     ]));
     if (key !== backupsRenderKey) {
       backupsRenderKey = key;
