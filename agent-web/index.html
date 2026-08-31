@@ -40,11 +40,20 @@
         <h2>Folders</h2>
         <button id="showFolderAdd" class="round-action" title="Add folder" aria-label="Add folder">＋</button>
       </div>
-      <div id="folderAdd" class="inline-add" hidden>
-        <input id="importPath" placeholder="Folder or drive">
-        <button id="chooseImport" class="secondary">Choose</button>
-        <button id="startBrowse" class="secondary" title="View and search without uploading">Browse</button>
-        <button id="startImport" class="primary" title="Back up this folder to Mochimono">Protect</button>
+      <div id="folderAdd" class="folder-add" hidden>
+        <div class="folder-path-row">
+          <input id="importPath" placeholder="Folder or drive">
+          <button id="chooseImport" class="secondary">Choose</button>
+        </div>
+        <div class="folder-mode-options">
+          <button id="startBrowse" class="folder-mode-option" title="View and search this folder without uploading it">
+            <strong>Browse only</strong><span>Local only · nothing uploaded</span>
+          </button>
+          <button id="startImport" class="folder-mode-option protect" title="Keep the local folder and a Mochimono copy">
+            <strong>Protect</strong><span>This device + Mochimono</span>
+          </button>
+        </div>
+        <div class="folder-mode-note">Protect keeps the local copy. Mochimono never deletes local files automatically.</div>
       </div>
       <div id="folders" class="item-list"><div class="muted">Loading…</div></div>
     </section>
