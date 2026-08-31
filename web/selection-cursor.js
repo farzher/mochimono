@@ -1,69 +1,77 @@
 const files = document.querySelector('#files');
-let cursorHash = '';
+let keyboardCursor = '';
+let keyboardMode = false;
 
 const style = document.createElement('style');
 style.textContent = `
-  #files [data-hash].selection-cursor{
-    position:relative;
-    z-index:7;
-    outline:3px solid #fff!important;
-    outline-offset:-3px;
-    box-shadow:0 0 0 2px rgba(0,0,0,.9),0 0 0 5px rgba(255,255,255,.88)!important;
-    animation:selection-cursor-in .16s cubic-bezier(.22,1,.36,1);
+  #files [data-hash]{position:relative}
+  .keyboard-cursor-marker{
+    position:absolute;
+    z-index:9;
+    right:7px;
+    top:7px;
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    background:rgba(232,224,220,.88);
+    box-shadow:0 0 0 2px rgba(10,9,11,.72);
+    pointer-events:none;
+    animation:keyboard-cursor-in .12s ease-out;
   }
-  #files .file-card.media-card.selection-cursor:after{
-    opacity:1!important;
-    box-shadow:inset 0 0 0 4px #fff!important;
-  }
-  #files .file-card.media-card.selection-cursor:before{
-    border-color:#fff!important;
-    background:#fff!important;
-    color:#171518!important;
-    box-shadow:0 0 0 2px rgba(0,0,0,.72),0 2px 8px rgba(0,0,0,.55)!important;
-  }
-  #files .file-row.selection-cursor,
-  #files .folder-row.selection-cursor{
-    outline-offset:-3px;
-  }
-  @keyframes selection-cursor-in{
-    0%{box-shadow:0 0 0 0 rgba(255,255,255,0)!important}
-    65%{box-shadow:0 0 0 2px rgba(0,0,0,.9),0 0 0 7px rgba(255,255,255,1)!important}
-    100%{box-shadow:0 0 0 2px rgba(0,0,0,.9),0 0 0 5px rgba(255,255,255,.88)!important}
-  }
-  @media(prefers-reduced-motion:reduce){
-    #files [data-hash].selection-cursor{animation:none}
-  }
+  .file-row .keyboard-cursor-marker,.folder-row .keyboard-cursor-marker{right:8px;top:50%;transform:translateY(-50%)}
+  @keyframes keyboard-cursor-in{from{opacity:.2;transform:scale(.7)}to{opacity:1;transform:scale(1)}}
+  @media(prefers-reduced-motion:reduce){.keyboard-cursor-marker{animation:none}}
 `;
 document.head.append(style);
 
-function applyCursor() {
-  for (const item of files?.querySelectorAll('[data-hash].selection-cursor') || []) {
-    item.classList.remove('selection-cursor');
-  }
-  if (!cursorHash || !document.documentElement.classList.contains('selection-active')) return;
-  const item = files?.querySelector(`[data-hash="${CSS.escape(cursorHash)}"]`);
-  if (item?.classList.contains('selected')) item.classList.add('selection-cursor');
+function clearMarkers() {
+  files?.querySelectorAll('.keyboard-cursor-marker').forEach(marker => marker.remove());
 }
 
-// Capture before library-ui stops the selection click from propagating.
-// The visual update runs on the next frame, after library-ui has applied the
-// selected/selection-active state.
-document.addEventListener('click', event => {
-  const item = event.target.closest('#files [data-hash]');
-  if (item) {
-    cursorHash = item.dataset.hash || '';
-    requestAnimationFrame(applyCursor);
-    return;
-  }
-  if (event.target.closest('[data-select-period],#selectAll,#selectionClear,#selectFiles')) {
-    cursorHash = '';
-    requestAnimationFrame(applyCursor);
-  }
+function applyCursor() {
+  clearMarkers();
+  if (!keyboardMode || !keyboardCursor) return;
+  const item = files?.querySelector(`[data-hash="${CSS.escape(keyboardCursor)}"]`);
+  if (!item) return;
+  const marker = document.createElement('span');
+  marker.className = 'keyboard-cursor-marker';
+  marker.setAttribute('aria-hidden', 'true');
+  item.append(marker);
+}
+
+function syncFromFocus() {
+  const item = document.activeElement?.closest?.('#files [data-hash]');
+  if (!item) return;
+  keyboardCursor = item.dataset.hash || '';
+  applyCursor();
+}
+
+document.addEventListener('keydown', event => {
+  if (!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)) return;
+  if (event.target?.closest?.('input,select,textarea,[contenteditable="true"]')) return;
+  keyboardMode = true;
+  requestAnimationFrame(syncFromFocus);
 }, true);
 
-new MutationObserver(() => {
-  if (!document.documentElement.classList.contains('selection-active')) cursorHash = '';
+files?.addEventListener('focusin', event => {
+  if (!keyboardMode) return;
+  const item = event.target.closest('[data-hash]');
+  if (!item) return;
+  keyboardCursor = item.dataset.hash || '';
   applyCursor();
-}).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+});
+
+files?.addEventListener('pointerdown', () => {
+  keyboardMode = false;
+  keyboardCursor = '';
+  clearMarkers();
+}, true);
+
+files?.addEventListener('focusout', () => requestAnimationFrame(() => {
+  if (files.contains(document.activeElement)) return;
+  keyboardMode = false;
+  keyboardCursor = '';
+  clearMarkers();
+}));
 
 new MutationObserver(applyCursor).observe(files, { childList: true, subtree: true });
