@@ -105,7 +105,7 @@ if (storagePane) {
   }
 
   async function refresh(force = false) {
-    if (refreshing || (!force && Date.now() - lastRefresh < 12_000)) return;
+    if (refreshing || (!force && Date.now() - lastRefresh < 45_000)) return;
     refreshing = true;
     try {
       const [files, local, driveData] = await Promise.all([
@@ -173,6 +173,6 @@ if (storagePane) {
     if (!storagePane.hidden && lastKey) refresh();
   }).observe(folders, { childList: true, subtree: true });
   window.addEventListener('focus', () => { if (!storagePane.hidden) refresh(); }, { passive: true });
-  setInterval(() => { if (!storagePane.hidden) refresh(); }, 15_000);
+  setInterval(() => { if (!storagePane.hidden) refresh(); }, 60_000);
   refresh(true);
 }
