@@ -12,6 +12,7 @@ let backupEditing = false;
 let restorePath = '';
 let lastFinished = '';
 let defaultDevice = '';
+let uploadWorkers = 2;
 let foldersRenderKey = '';
 let backupsRenderKey = '';
 let backupLocations = [];
@@ -204,6 +205,7 @@ async function state() {
     currentJob = current.job;
     if (!connectionDialog.open) $('#serverUrl').value = current.settings.server;
     defaultDevice = current.settings.device || defaultDevice;
+    uploadWorkers = [1, 2, 4].includes(Number(current.settings.uploadWorkers)) ? Number(current.settings.uploadWorkers) : 2;
     $('#deviceLabel').textContent = defaultDevice;
     renderFolders(current.settings.folders || [], current.job);
     renderBackupProgress(current.job);
@@ -356,7 +358,11 @@ async function runBackup(path, action) {
   catch (error) { toast(error.message); }
 }
 
-$('#deviceButton').onclick = () => { $('#deviceName').value = defaultDevice; deviceDialog.showModal(); };
+$('#deviceButton').onclick = () => {
+  $('#deviceName').value = defaultDevice;
+  $('#uploadWorkers').value = String(uploadWorkers);
+  deviceDialog.showModal();
+};
 $('#showFolderAdd').onclick = () => toggleInline($('#folderAdd'), $('#showFolderAdd'));
 $('#showBackupAdd').onclick = () => toggleInline($('#backupAdd'), $('#showBackupAdd'));
 $('#chooseImport').onclick = () => chooseFolder($('#importPath'));
@@ -396,9 +402,13 @@ $('#startImport').onclick = async () => {
 
 $('#saveDevice').onclick = async () => {
   const device = $('#deviceName').value.trim();
-  if (!device) return;
-  try { await req('/api/settings', { method: 'POST', body: JSON.stringify({ device }) }); deviceDialog.close(); state(); }
-  catch (error) { toast(error.message); }
+  const workers = Number($('#uploadWorkers').value);
+  if (!device || ![1, 2, 4].includes(workers)) return;
+  try {
+    await req('/api/settings', { method: 'POST', body: JSON.stringify({ device, uploadWorkers: workers }) });
+    deviceDialog.close();
+    state();
+  } catch (error) { toast(error.message); }
 };
 
 $('#addBackup').onclick = async () => {
