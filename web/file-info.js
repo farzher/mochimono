@@ -1,8 +1,12 @@
+import './related-viewer.js';
+
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
+const viewerCollections = document.querySelector('#viewerCollections');
 const button = document.querySelector('#viewer-info-button');
 const panel = document.querySelector('#viewerInfo');
 let generation = 0;
+let lastData = null;
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
@@ -19,14 +23,22 @@ function formatDate(value) {
   return date.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
+function bytes(number) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  let value = Number(number) || 0;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
+  return `${value < 10 && unit ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
 function dateLabel(source) {
   return ({
-    'exif.DateTimeOriginal': 'Taken · EXIF original',
-    'exif.DateTimeDigitized': 'Created · EXIF digitized',
-    'exif.DateTime': 'Image metadata date',
-    'video.creation_time': 'Created · video metadata',
-    'filesystem.mtime': 'Earliest preserved modified date',
-    imported: 'First imported'
+    'exif.DateTimeOriginal': 'Taken',
+    'exif.DateTimeDigitized': 'Created',
+    'exif.DateTime': 'Image date',
+    'video.creation_time': 'Created',
+    'filesystem.mtime': 'Modified',
+    imported: 'Added'
   })[source] || 'Date';
 }
 
@@ -36,27 +48,6 @@ function fullPath(source) {
   if (!root) return relative;
   const separator = root.includes('\\') ? '\\' : '/';
   return `${root}${separator}${relative.replace(/[\\/]+/g, separator)}`;
-}
-
-function sourceCard(source) {
-  const path = fullPath(source);
-  const title = source.deviceName || source.sourceName || 'Source';
-  return `<article class="viewer-info-source">
-    <strong>${escapeHtml(title)}</strong>
-    ${path ? `<div class="viewer-info-path" title="${escapeHtml(path)}">${escapeHtml(path)}</div>` : ''}
-    <dl>
-      <div><dt>Modified</dt><dd>${escapeHtml(formatDate(source.mtime))}</dd></div>
-      <div><dt>Imported</dt><dd>${escapeHtml(formatDate(source.importedAt))}</dd></div>
-    </dl>
-  </article>`;
-}
-
-function locationCard(title, kind, detail = '', path = '') {
-  return `<article class="viewer-info-source">
-    <strong>${escapeHtml(title)}</strong>
-    ${path ? `<div class="viewer-info-path" title="${escapeHtml(path)}">${escapeHtml(path)}</div>` : ''}
-    <dl><div><dt>${escapeHtml(kind)}</dt><dd>${escapeHtml(detail || 'Available')}</dd></div></dl>
-  </article>`;
 }
 
 function localCopies(local) {
@@ -71,44 +62,140 @@ function localCopies(local) {
   return [...grouped.values()];
 }
 
-function localPath(location, relative) {
-  return fullPath({ rootPath: location.rootPath, path: relative });
+function protectionState(data, local) {
+  const locals = localCopies(local);
+  const localPaths = locals.reduce((sum, item) => sum + item.paths.length, 0);
+  const backups = data.backups || [];
+  const verified = backups.filter(backup => backup.verifiedAt);
+  const server = data.serverStored !== false;
+  const copies = localPaths + backups.length + (server ? 1 : 0);
+  const safe = localPaths > 0 && server && verified.length > 0;
+
+  if (safe) return {
+    key: 'safe', label: `Safe to free · ${copies} copies`, title: 'Safe to free from this PC',
+    note: 'A Mochimono copy and a verified backup both exist. Removing the local copy would still leave two known copies.',
+    locals, backups, verified, server, copies, safe
+  };
+  if (localPaths > 0 && !server && !backups.length) return {
+    key: 'danger', label: 'Only on this PC', title: 'Only on this PC',
+    note: 'This is the only known copy. Keep it here until Mochimono has stored and backed it up.', locals, backups, verified, server, copies, safe
+  };
+  if (server && backups.length && localPaths > 0) return {
+    key: verified.length ? 'good' : 'warn', label: `Protected · ${copies} copies`, title: 'Protected',
+    note: verified.length ? 'Copies exist on this PC, in Mochimono, and on a verified backup.' : 'A backup copy exists, but it has not been verified yet.', locals, backups, verified, server, copies, safe
+  };
+  if (server && backups.length && !localPaths) return {
+    key: verified.length ? 'good' : 'warn', label: `Protected · ${copies} copies`, title: 'Not on this PC',
+    note: verified.length ? 'This file is not using local PC space. It remains in Mochimono and on a verified backup.' : 'This file is not on this PC. A backup exists but has not been verified yet.', locals, backups, verified, server, copies, safe
+  };
+  if (server && localPaths > 0) return {
+    key: 'warn', label: 'In Mochimono · backup needed', title: 'Needs another backup',
+    note: 'The file exists on this PC and in Mochimono, but no independent backup copy is recorded.', locals, backups, verified, server, copies, safe
+  };
+  if (server) return {
+    key: 'warn', label: 'Not on this PC · backup needed', title: 'Mochimono copy only',
+    note: 'Mochimono has the file, but there is no indexed local or backup copy.', locals, backups, verified, server, copies, safe
+  };
+  if (localPaths > 0 && backups.length) return {
+    key: 'warn', label: 'Not in Mochimono', title: 'Missing Mochimono copy',
+    note: 'A local and backup copy exist, but this file is not currently stored in Mochimono.', locals, backups, verified, server, copies, safe
+  };
+  return {
+    key: 'warn', label: `${Math.max(1, copies)} known copy`, title: 'Protection incomplete',
+    note: 'Mochimono does not currently see enough independent copies to consider this file protected.', locals, backups, verified, server, copies, safe
+  };
 }
 
-function render(data, local) {
-  const sources = data.sources || [];
-  const backups = data.backups || [];
-  const locals = localCopies(local);
-  const serverStored = data.serverStored !== false;
-  const locationCards = [
-    ...(serverStored ? [locationCard('Mochimono Server', 'Primary copy', 'Available')] : []),
-    ...locals.map(({ location, paths }) => locationCard(
-      location.name || location.deviceName || 'This device',
-      location.protected === false ? 'Local · Browse only' : 'Local copy',
-      location.available === false ? 'Offline' : paths.length > 1 ? `${paths.length} paths · available` : 'Available',
-      localPath(location, paths[0] || '')
-    )),
-    ...backups.map(backup => locationCard(
-      backup.name || 'Backup',
-      'Backup copy',
-      backup.verifiedAt ? `Verified ${formatDate(backup.verifiedAt)}` : backup.lastSeen ? `Seen ${formatDate(backup.lastSeen)}` : 'Stored'
-    ))
-  ];
-  const copyCount = locationCards.length;
+function copyCard(title, kind, detail = '', paths = []) {
+  return `<article class="viewer-copy">
+    <div class="viewer-copy-head"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(kind)}</span></div>
+    ${paths.map(path => `<div class="viewer-info-path" title="${escapeHtml(path)}">${escapeHtml(path)}</div>`).join('')}
+    ${detail ? `<small>${escapeHtml(detail)}</small>` : ''}
+  </article>`;
+}
 
-  panel.innerHTML = `<div class="viewer-info-head"><strong>Info</strong><button type="button" data-info-close aria-label="Close info">×</button></div>
-    <section class="viewer-info-date">
-      <span>${escapeHtml(dateLabel(data.date?.dateSource))}</span>
-      <strong>${escapeHtml(formatDate(data.date?.fileDate))}</strong>
+function renderCopies(state) {
+  const cards = [];
+  for (const { location, paths } of state.locals) {
+    const full = paths.map(path => fullPath({ rootPath: location.rootPath, path }));
+    cards.push(copyCard(
+      location.deviceName || 'This PC',
+      location.protected === false ? `${location.name} · Browse only` : location.name || 'Local',
+      location.available === false ? 'Folder is currently offline' : paths.length > 1 ? `${paths.length} paths` : 'Available now',
+      full
+    ));
+  }
+  if (state.server) cards.push(copyCard('Mochimono', 'Primary copy', 'Available'));
+  for (const backup of state.backups) cards.push(copyCard(
+    backup.name || 'Backup',
+    'Backup copy',
+    backup.verifiedAt ? `Verified ${formatDate(backup.verifiedAt)}` : backup.lastSeen ? `Seen ${formatDate(backup.lastSeen)} · not verified` : 'Stored · not verified'
+  ));
+  return cards.join('') || '<p class="viewer-info-empty">No accessible copy is recorded.</p>';
+}
+
+function renderOrigins(sources) {
+  if (!sources.length) return '<p class="viewer-info-empty">No origin history recorded.</p>';
+  return sources.map(source => {
+    const path = fullPath(source);
+    return `<article class="viewer-origin">
+      <strong>${escapeHtml(source.deviceName || source.sourceName || 'Origin')}</strong>
+      ${path ? `<div class="viewer-info-path" title="${escapeHtml(path)}">${escapeHtml(path)}</div>` : ''}
+      <small>${source.importedAt ? `Added ${escapeHtml(formatDate(source.importedAt))}` : ''}${source.mtime ? `${source.importedAt ? ' · ' : ''}Modified ${escapeHtml(formatDate(source.mtime))}` : ''}</small>
+    </article>`;
+  }).join('');
+}
+
+function renderGroups(groups, editable) {
+  const chips = groups.map(group => `<span class="viewer-tag"><span>${escapeHtml(group.name)}</span>${editable ? `<button type="button" data-remove-group="${group.id}" aria-label="Remove ${escapeHtml(group.name)}">×</button>` : ''}</span>`).join('');
+  return `<div class="viewer-tags">${chips}${editable ? '<button type="button" class="viewer-tag-add" data-add-group>+ Add</button>' : ''}</div>${!groups.length ? '<p class="viewer-info-empty">No tags or groups yet.</p>' : ''}`;
+}
+
+function renderPanel(data, local, groups) {
+  const state = protectionState(data, local);
+  const object = data.object || {};
+  const sources = data.sources || [];
+  const filename = object.filename || sources[0]?.filename || document.querySelector('#viewer-name')?.textContent || 'File';
+  const mime = object.mime || 'application/octet-stream';
+  const editableGroups = state.server;
+  lastData = { data, local, groups, state };
+
+  panel.innerHTML = `<div class="viewer-info-head"><div><strong>${escapeHtml(filename)}</strong><span>${escapeHtml(bytes(object.size))}</span></div><button type="button" data-info-close aria-label="Close details">×</button></div>
+    <section class="viewer-protection ${state.key}">
+      <span>Protection</span>
+      <strong>${escapeHtml(state.title)}</strong>
+      <p>${escapeHtml(state.note)}</p>
     </section>
-    <section class="viewer-info-sources">
-      <h3>${copyCount} ${copyCount === 1 ? 'location' : 'locations'}</h3>
-      ${locationCards.length ? locationCards.join('') : '<p>No accessible location recorded.</p>'}
+    <section class="viewer-info-section">
+      <h3>Copies</h3>
+      ${renderCopies(state)}
     </section>
-    <section class="viewer-info-sources">
-      <h3>${sources.length > 1 ? `${sources.length} sources` : 'Source'}</h3>
-      ${sources.length ? sources.map(sourceCard).join('') : '<p>No provenance recorded.</p>'}
+    <section class="viewer-info-section">
+      <div class="viewer-section-head"><h3>Tags / groups</h3></div>
+      ${renderGroups(groups, editableGroups)}
+    </section>
+    <section class="viewer-info-section viewer-origins">
+      <h3>Origin</h3>
+      ${renderOrigins(sources)}
+    </section>
+    <section class="viewer-info-section">
+      <h3>Details</h3>
+      <dl class="viewer-details">
+        <div><dt>${escapeHtml(dateLabel(data.date?.dateSource))}</dt><dd>${escapeHtml(formatDate(data.date?.fileDate))}</dd></div>
+        <div><dt>Type</dt><dd>${escapeHtml(mime)}</dd></div>
+        <div><dt>Size</dt><dd>${escapeHtml(bytes(object.size))}</dd></div>
+        <div><dt>SHA-256</dt><dd class="viewer-hash">${escapeHtml(object.hash || currentHash())}</dd></div>
+      </dl>
     </section>`;
+  syncButton(state);
+}
+
+function syncButton(state) {
+  if (!button || !state) return;
+  button.textContent = state.label;
+  button.classList.remove('protection-safe', 'protection-good', 'protection-warn', 'protection-danger');
+  button.classList.add(`protection-${state.key}`);
+  button.title = state.note;
 }
 
 async function clientLocations(hash) {
@@ -120,22 +207,34 @@ async function clientLocations(hash) {
   }
 }
 
-async function load() {
+async function groupsFor(hash) {
+  try {
+    const response = await fetch(`/api/collections/file/${hash}`, { cache: 'no-store' });
+    return response.ok ? (await response.json()).collections || [] : [];
+  } catch { return []; }
+}
+
+async function load(render = !panel.hidden) {
   const hash = currentHash();
   const mine = ++generation;
-  if (!hash || panel.hidden) return;
-  panel.innerHTML = '<div class="viewer-info-head"><strong>Info</strong><button type="button" data-info-close aria-label="Close info">×</button></div><p class="viewer-info-loading">Loading…</p>';
+  if (!hash) return;
+  if (render) panel.innerHTML = '<div class="viewer-info-head"><div><strong>Details</strong></div><button type="button" data-info-close aria-label="Close details">×</button></div><p class="viewer-info-loading">Loading…</p>';
   try {
-    const [response, local] = await Promise.all([
-      fetch(`/api/provenance/${hash}`),
-      clientLocations(hash)
+    const [response, local, groups] = await Promise.all([
+      fetch(`/api/provenance/${hash}`, { cache: 'no-store' }),
+      clientLocations(hash),
+      render ? groupsFor(hash) : Promise.resolve([])
     ]);
     if (!response.ok) throw new Error(`${response.status}`);
     const data = await response.json();
-    if (mine !== generation || panel.hidden || hash !== currentHash()) return;
-    render(data, local);
+    if (mine !== generation || hash !== currentHash()) return;
+    const state = protectionState(data, local);
+    syncButton(state);
+    if (render && !panel.hidden) renderPanel(data, local, groups);
   } catch {
-    if (mine === generation && !panel.hidden) panel.insertAdjacentHTML('beforeend', '<p class="viewer-info-loading">Could not load file info.</p>');
+    if (mine !== generation) return;
+    if (button) { button.textContent = 'Details'; button.title = 'File details'; }
+    if (render && !panel.hidden) panel.insertAdjacentHTML('beforeend', '<p class="viewer-info-loading">Could not load file details.</p>');
   }
 }
 
@@ -151,12 +250,25 @@ function open() {
   panel.hidden = false;
   viewer.classList.add('viewer-info-open');
   button?.classList.add('active');
-  load();
+  load(true);
 }
 
 button?.addEventListener('click', () => panel.hidden ? open() : close());
 panel?.addEventListener('click', event => {
-  if (event.target.closest('[data-info-close]')) close();
+  if (event.target.closest('[data-info-close]')) return close();
+  if (event.target.closest('[data-add-group]')) {
+    const hash = currentHash();
+    if (hash) window.dispatchEvent(new CustomEvent('mochimono:add-to-collection', { detail: { hashes: [hash] } }));
+    return;
+  }
+  const remove = event.target.closest('[data-remove-group]');
+  if (remove) {
+    const id = remove.dataset.removeGroup;
+    const existing = viewerCollections?.querySelector(`[data-remove-collection="${CSS.escape(id)}"]`);
+    if (existing) existing.click();
+    else fetch(`/api/collections/${encodeURIComponent(id)}/items/${currentHash()}`, { method: 'DELETE' }).then(() => load(true));
+    window.dispatchEvent(new CustomEvent('mochimono:groups-changed'));
+  }
 });
 
 document.addEventListener('keydown', event => {
@@ -167,9 +279,20 @@ document.addEventListener('keydown', event => {
 }, true);
 
 new MutationObserver(() => {
-  if (viewer.hidden) close();
+  if (viewer.hidden) {
+    close();
+    if (button) { button.textContent = 'Details'; button.title = 'File details'; }
+  }
 }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 
 new MutationObserver(() => {
-  if (!panel.hidden) load();
+  if (!currentHash()) return;
+  load(!panel.hidden);
 }).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
+
+new MutationObserver(() => {
+  if (!panel.hidden && currentHash()) {
+    window.dispatchEvent(new CustomEvent('mochimono:groups-changed'));
+    load(true);
+  }
+}).observe(viewerCollections, { childList: true, subtree: true });
