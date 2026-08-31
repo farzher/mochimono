@@ -57,7 +57,12 @@ async function serveLibrary(res, pathname) {
     let html = await readFile(join(WEB_DIR, 'index.html'), 'utf8');
     html = html
       .replace(/(href|src)="\/(?!api\/)/g, '$1="/files/')
-      .replace('</head>', '<script>document.documentElement.classList.add("client-library")</script></head>');
+      .replace('</head>', `<script>document.documentElement.classList.add('client-library')</script><style>
+        html.client-library .topbar,html.client-library .protection,html.client-library #login{display:none!important}
+        html.client-library .shell{padding-top:0!important;max-width:none!important}
+        html.client-library body{min-height:100vh}
+      </style></head>`)
+      .replace('</body>', '<script type="module" src="/files/client-drop.js"></script></body>');
     res.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'content-length': Buffer.byteLength(html),
