@@ -14,8 +14,8 @@ let state = {
 const style = document.createElement('style');
 style.textContent = `
   .protection-badge{pointer-events:none;white-space:nowrap;font-weight:750;letter-spacing:.01em}
+  .file-card{position:relative}
   .file-card .protection-badge{position:absolute;z-index:4;right:6px;bottom:6px;max-width:calc(100% - 12px);overflow:hidden;text-overflow:ellipsis;padding:3px 6px;border-radius:6px;background:rgba(17,15,17,.82);box-shadow:0 1px 5px rgba(0,0,0,.35);backdrop-filter:blur(6px);font-size:8px;color:#cfc6c2}
-  .file-card:not(.media-card){position:relative}
   .file-card .protection-badge.warn{color:#e2c397;background:rgba(45,34,24,.88)}
   .file-card .protection-badge.danger{color:#efaaa3;background:rgba(54,27,28,.9)}
   .file-row.protection-decorated{grid-template-columns:66px minmax(0,1fr) 120px 84px 116px}
