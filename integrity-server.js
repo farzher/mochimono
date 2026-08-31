@@ -4,6 +4,9 @@ import { stat } from 'node:fs/promises';
 import { DATA_DIR, db, json, now } from './lib/server-context.js';
 import { objectPath, validHash, writeVerifiedObject } from './lib/store.js';
 
+const AUTO_SCRUB_DAYS = Math.max(0, Number(process.env.MOCHIMONO_SCRUB_DAYS ?? 30) || 0);
+const AUTO_SCRUB_MS = AUTO_SCRUB_DAYS * 24 * 60 * 60 * 1000;
+const AUTO_CHECK_MS = 6 * 60 * 60 * 1000;
 let run = null;
 
 function meta(key, fallback = '') {
@@ -59,6 +62,7 @@ function catalogCheck() {
 }
 
 async function scrub() {
+  if (run?.running) return;
   const rows = db.prepare("SELECT hash, size FROM objects WHERE state = 'active' ORDER BY hash").all();
   const startedAt = now();
   run = { running: true, startedAt, checked: 0, total: rows.length, healthy: 0, bad: 0, current: '', error: '' };
@@ -74,11 +78,13 @@ async function scrub() {
       run.checked = index + 1;
       if (result.status === 'healthy') run.healthy++;
       else run.bad++;
+      await new Promise(resolve => setImmediate(resolve));
     }
 
     const catalog = catalogCheck();
     const finishedAt = now();
     setMeta('last_scrub_at', finishedAt);
+    setMeta('last_scrub_error', '');
     setMeta('catalog_integrity', catalog.healthy ? 'healthy' : 'corrupt');
     setMeta('catalog_checked_at', finishedAt);
     setMeta('catalog_error', catalog.healthy ? '' : catalog.messages.join('\n').slice(0, 4000));
@@ -114,6 +120,7 @@ function status() {
     lastScrubAt: meta('last_scrub_at') || null,
     lastScrubStartedAt: meta('last_scrub_started_at') || null,
     lastScrubError: meta('last_scrub_error') || null,
+    automaticEveryDays: AUTO_SCRUB_DAYS || null,
     catalog: {
       status: meta('catalog_integrity', 'unknown'),
       checkedAt: meta('catalog_checked_at') || null,
@@ -126,6 +133,21 @@ function status() {
     missing: checked.missing,
     bad
   };
+}
+
+function maybeAutoScrub() {
+  if (!AUTO_SCRUB_MS || run?.running) return;
+  const previous = meta('last_scrub_at');
+  const time = previous ? new Date(previous).getTime() : 0;
+  if (!time || Date.now() - time >= AUTO_SCRUB_MS) scrub().catch(error => console.error('Automatic integrity scrub failed', error));
+}
+
+if (AUTO_SCRUB_MS) {
+  const timer = setTimeout(() => {
+    maybeAutoScrub();
+    setInterval(maybeAutoScrub, AUTO_CHECK_MS).unref?.();
+  }, AUTO_CHECK_MS);
+  timer.unref?.();
 }
 
 export function integrityStatus() {
