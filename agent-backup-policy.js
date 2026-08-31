@@ -1,11 +1,12 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import http from 'node:http';
+import { inspectBackup } from './lib/restore.js';
 
 const CONFIG_PATH = join(homedir(), '.mochimono', 'agent.json');
 const AGENT_PORT = Number(process.env.MOCHIMONO_AGENT_PORT || 8643);
-const driveMetaPath = root => join(resolve(root), '.mochimono', 'drive.json');
+const driveMetaPath = root => join(root, '.mochimono', 'drive.json');
 const now = () => new Date().toISOString();
 const trackedJobs = new Set();
 
@@ -143,6 +144,12 @@ http.createServer = function (...args) {
       if (req.method === 'GET' && url.pathname === '/api/backup-collections') {
         const data = await remote('/api/smart-collections');
         return json(res, 200, { collections: data.collections || [] });
+      }
+
+      if (req.method === 'GET' && url.pathname === '/api/backup/contents') {
+        const path = url.searchParams.get('path');
+        if (!path) return json(res, 400, { error: 'Backup folder required' });
+        return json(res, 200, await inspectBackup(path));
       }
 
       if (req.method === 'POST' && url.pathname === '/api/backup/policy') {
