@@ -1,3 +1,5 @@
+import './context-ui.js';
+
 const files = document.querySelector('#files');
 let keyboardMode = false;
 
