@@ -13,6 +13,7 @@ let state = {
 
 const style = document.createElement('style');
 style.textContent = `
+  .client-library .protection{display:none}
   .protection-badge{pointer-events:none;white-space:nowrap;font-weight:750;letter-spacing:.01em}
   .file-card{position:relative}
   .file-card .protection-badge{position:absolute;z-index:4;right:6px;bottom:6px;max-width:calc(100% - 12px);overflow:hidden;text-overflow:ellipsis;padding:3px 6px;border-radius:6px;background:rgba(17,15,17,.82);box-shadow:0 1px 5px rgba(0,0,0,.35);backdrop-filter:blur(6px);font-size:8px;color:#cfc6c2}
