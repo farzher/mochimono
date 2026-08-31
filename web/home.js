@@ -8,6 +8,15 @@ const type = document.querySelector('#typeFilter');
 const sort = document.querySelector('#sort');
 const views = document.querySelector('#views');
 
+const style = document.createElement('style');
+style.textContent = `
+  .command-home{flex:0 0 32px;width:32px;height:34px;padding:0;display:grid;place-items:center;border-radius:10px;background:transparent;color:inherit}
+  .command-home:hover,.command-home:focus-visible{background:var(--surface2);outline:none}
+  .command-home .mini{transform:scale(.72);transform-origin:center;pointer-events:none}
+  .topbar .app-brand[role="button"]{cursor:pointer}
+`;
+document.head.append(style);
+
 const homeButton = document.createElement('button');
 homeButton.type = 'button';
 homeButton.className = 'command-home';
