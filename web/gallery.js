@@ -37,35 +37,9 @@ function setRow(cards, width, target, full, gap) {
   });
 }
 
-function syncDayBreaks(container, cards) {
-  const existing = [...container.querySelectorAll(':scope > .day-break')];
-  if (container.classList.contains('flat-grid')) {
-    existing.forEach(node => node.remove());
-    return;
-  }
-
-  let used = 0;
-  let previousDay = '';
-  for (const card of cards) {
-    const day = card.dataset.day || '';
-    if (previousDay && day && day !== previousDay) {
-      let breaker = existing[used++];
-      if (!breaker) {
-        breaker = document.createElement('span');
-        breaker.className = 'day-break';
-        breaker.setAttribute('aria-hidden', 'true');
-      }
-      if (breaker.nextElementSibling !== card) container.insertBefore(breaker, card);
-    }
-    if (day) previousDay = day;
-  }
-  existing.slice(used).forEach(node => node.remove());
-}
-
 function justify(container) {
   const cards = [...container.children].filter(child => child.classList.contains('file-card'));
   if (!cards.length) return;
-  syncDayBreaks(container, cards);
 
   if (!cards.every(card => card.classList.contains('media-card'))) {
     cards.forEach(card => {
@@ -80,19 +54,10 @@ function justify(container) {
   if (!width) return;
   const gap = parseFloat(getComputedStyle(container).columnGap) || 4;
   const target = mediaSize();
-  const splitDays = !container.classList.contains('flat-grid');
   let row = [];
   let ratioSum = 0;
-  let previousDay = '';
 
   for (const card of cards) {
-    const day = card.dataset.day || '';
-    if (splitDays && row.length && previousDay && day && day !== previousDay) {
-      setRow(row, width, target, false, gap);
-      row = [];
-      ratioSum = 0;
-    }
-
     const ratio = cardRatio(card);
     const nextWidth = (ratioSum + ratio) * target + gap * row.length;
 
@@ -102,7 +67,6 @@ function justify(container) {
         setRow(row, width, target, true, gap);
         row = [card];
         ratioSum = ratio;
-        previousDay = day;
         continue;
       }
 
@@ -111,13 +75,11 @@ function justify(container) {
       setRow(row, width, target, true, gap);
       row = [];
       ratioSum = 0;
-      previousDay = day;
       continue;
     }
 
     row.push(card);
     ratioSum += ratio;
-    previousDay = day;
   }
 
   setRow(row, width, target, false, gap);
