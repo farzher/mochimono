@@ -17,9 +17,9 @@ const clientMenu = document.querySelector('.client-menu');
 let libraryScrollY = 0;
 
 if (brand && manageButton) {
-  manageButton.textContent = 'Folders & backups';
-  manageButton.title = 'Folders and backups';
-  manageButton.setAttribute('aria-label', 'Folders and backups');
+  manageButton.textContent = 'Storage';
+  manageButton.title = 'Storage and protection';
+  manageButton.setAttribute('aria-label', 'Storage and protection');
   brand.tabIndex = 0;
   brand.setAttribute('role', 'button');
   brand.title = 'Library';
@@ -38,8 +38,8 @@ function showTab(name) {
   document.body.classList.toggle('client-library-active', files);
   if (manageButton) {
     manageButton.classList.toggle('active', !files);
-    manageButton.textContent = files ? 'Folders & backups' : 'Library';
-    manageButton.title = files ? 'Folders and backups' : 'Back to library';
+    manageButton.textContent = files ? 'Storage' : 'Library';
+    manageButton.title = files ? 'Storage and protection' : 'Back to library';
     manageButton.setAttribute('aria-label', manageButton.title);
   }
   clientMenu?.removeAttribute('open');
