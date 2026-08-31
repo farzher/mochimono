@@ -36,6 +36,7 @@ process.on('SIGTERM', () => stop());
 
 console.log('Mochimono local development');
 console.log(`Library: ${serverUrl}  (token: ${token})`);
+console.log('Agent:   http://127.0.0.1:8643');
 console.log(`Data:    ${join(root, 'dev-data')}`);
 console.log('');
 
@@ -45,3 +46,12 @@ run('server-entry.js', {
   HOST: '0.0.0.0',
   PORT: '8642'
 });
+
+setTimeout(() => {
+  if (!stopping) run('agent-entry.js', {
+    MOCHIMONO_TOKEN: token,
+    MOCHIMONO_URL: serverUrl,
+    MOCHIMONO_AGENT_PORT: '8643',
+    MOCHIMONO_NO_OPEN: '1'
+  });
+}, 250);
