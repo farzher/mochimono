@@ -37,6 +37,7 @@ if (storagePane) {
   let lastRefresh = 0;
   let lastKey = '';
   let integrityTimer = 0;
+  let integrityWasRunning = false;
 
   function bytes(number) {
     const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
@@ -76,6 +77,19 @@ if (storagePane) {
       after = page.nextAfter || '';
     } while (after);
     return files;
+  }
+
+  async function badPrimaryHashes() {
+    const hashes = new Set();
+    let after = '';
+    try {
+      do {
+        const page = await json(`/api/integrity/bad?limit=5000&after=${encodeURIComponent(after)}`);
+        for (const object of page.objects || []) hashes.add(object.hash);
+        after = page.nextAfter || '';
+      } while (after);
+    } catch {}
+    return hashes;
   }
 
   async function driveFiles(id) {
@@ -137,6 +151,12 @@ if (storagePane) {
     try {
       const info = await json('/api/integrity');
       renderIntegrity(info);
+      if (integrityWasRunning && !info.running) {
+        lastRefresh = 0;
+        refresh(true);
+        filesFrame?.contentWindow?.mochimonoLocations?.refresh?.().catch?.(() => {});
+      }
+      integrityWasRunning = Boolean(info.running);
       integrityTimer = setTimeout(refreshIntegrity, info.running ? 1500 : 15000);
     } catch {
       integrityTarget.innerHTML = '<div class="storage-integrity warn"><div class="storage-integrity-copy"><strong>Mochimono integrity</strong><span>Integrity status unavailable until the server is updated and connected.</span></div><div class="storage-integrity-state">Unavailable</div></div>';
@@ -187,10 +207,11 @@ if (storagePane) {
     if (refreshing || (!force && Date.now() - lastRefresh < 45_000)) return;
     refreshing = true;
     try {
-      const [files, local, driveData] = await Promise.all([
+      const [files, local, driveData, damaged] = await Promise.all([
         catalog(),
         json('/api/client/locations').catch(() => ({ locations: [], files: [] })),
-        json('/api/drives').catch(() => ({ drives: [] }))
+        json('/api/drives').catch(() => ({ drives: [] })),
+        badPrimaryHashes()
       ]);
       const drives = driveData.drives || [];
       const driveRows = await Promise.all(drives.map(async drive => ({
@@ -198,7 +219,7 @@ if (storagePane) {
         files: await driveFiles(String(drive.id)).catch(() => [])
       })));
       const byHash = new Map(files.map(file => [file.hash, file]));
-      const server = new Set(files.filter(file => file.serverStored !== false).map(file => file.hash));
+      const server = new Set(files.filter(file => file.serverStored !== false && !damaged.has(file.hash)).map(file => file.hash));
       const localHashes = new Set((local.files || []).map(row => row[0]));
       const verified = new Set();
       const backed = new Set();
@@ -223,13 +244,13 @@ if (storagePane) {
       const onlyLocal = [...localHashes].filter(hash => !server.has(hash) && !backed.has(hash));
       const needsProtection = files.filter(file => !server.has(file.hash) || !verified.has(file.hash));
       const notLocal = files.filter(file => !localHashes.has(file.hash));
-      const key = JSON.stringify([files.length, localBytes, safeBytes, serverBytes, verifiedBytes, backupPhysicalBytes, onlyLocal.length, needsProtection.length, drives.length]);
+      const key = JSON.stringify([files.length, localBytes, safeBytes, serverBytes, verifiedBytes, backupPhysicalBytes, onlyLocal.length, needsProtection.length, drives.length, damaged.size]);
 
       if (key !== lastKey) {
         lastKey = key;
         target.innerHTML = `<div class="storage-summary-grid">
           <button type="button" class="storage-summary-card" data-open-where="local"><span>This PC</span><strong>${esc(bytes(localBytes))}</strong><small>${localHashes.size.toLocaleString()} indexed files · ${esc(bytes(Math.max(0, safeBytes)))} safe to free</small><em>View files →</em></button>
-          <button type="button" class="storage-summary-card" data-open-where="server"><span>Mochimono</span><strong>${esc(bytes(serverBytes))}</strong><small>${server.size.toLocaleString()} healthy files stored${server.size ? '' : ' · server unavailable or empty'}</small><em>View files →</em></button>
+          <button type="button" class="storage-summary-card ${damaged.size ? 'warn' : ''}" data-open-where="server"><span>Mochimono</span><strong>${esc(bytes(serverBytes))}</strong><small>${server.size.toLocaleString()} healthy files stored${damaged.size ? ` · ${damaged.size.toLocaleString()} damaged` : server.size ? '' : ' · server unavailable or empty'}</small><em>View files →</em></button>
           <button type="button" class="storage-summary-card safe" data-open-where="verified-backup"><span>Verified backups</span><strong>${esc(bytes(verifiedBytes))}</strong><small>${verified.size.toLocaleString()} unique files · ${drives.length.toLocaleString()} backup ${drives.length === 1 ? 'drive' : 'drives'}</small><em>View files →</em></button>
           <button type="button" class="storage-summary-card warn" data-open-where="needs-protection"><span>Needs protection</span><strong>${needsProtection.length.toLocaleString()}</strong><small>${onlyLocal.length.toLocaleString()} only on this PC · ${notLocal.length.toLocaleString()} not on this PC</small><em>Review →</em></button>
         </div>
