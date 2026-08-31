@@ -6,6 +6,7 @@ import { objectPath, validHash, writeVerifiedObject } from './lib/store.js';
 
 const AUTO_SCRUB_DAYS = Math.max(0, Number(process.env.MOCHIMONO_SCRUB_DAYS ?? 30) || 0);
 const AUTO_SCRUB_MS = AUTO_SCRUB_DAYS * 24 * 60 * 60 * 1000;
+const AUTO_START_DELAY_MS = 10 * 60 * 1000;
 const AUTO_CHECK_MS = 6 * 60 * 60 * 1000;
 let run = null;
 
@@ -26,17 +27,23 @@ async function hashFile(path) {
   return digest.digest('hex');
 }
 
-function mark(hash, status, error = '') {
+function recordResult(hash, status, error = '') {
+  if (status === 'healthy') {
+    // Healthy is the normal state. Only remove a previous damage record; do not
+    // rewrite every healthy object during every scrub.
+    db.prepare("DELETE FROM object_integrity WHERE hash = ? AND status != 'healthy'").run(hash);
+    return;
+  }
   const timestamp = now();
   db.prepare(`
     INSERT INTO object_integrity(hash, status, checked_at, verified_at, error)
-    VALUES(?, ?, ?, ?, ?)
+    VALUES(?, ?, ?, NULL, ?)
     ON CONFLICT(hash) DO UPDATE SET
       status = excluded.status,
       checked_at = excluded.checked_at,
-      verified_at = excluded.verified_at,
+      verified_at = NULL,
       error = excluded.error
-  `).run(hash, status, timestamp, status === 'healthy' ? timestamp : null, error || null);
+  `).run(hash, status, timestamp, error || null);
 }
 
 async function checkObject(row) {
@@ -74,7 +81,7 @@ async function scrub() {
       const row = rows[index];
       run.current = row.hash;
       const result = await checkObject(row);
-      mark(row.hash, result.status, result.error);
+      recordResult(row.hash, result.status, result.error);
       run.checked = index + 1;
       if (result.status === 'healthy') run.healthy++;
       else run.bad++;
@@ -96,7 +103,7 @@ async function scrub() {
   }
 }
 
-function counts() {
+function integrityCounts() {
   const rows = db.prepare(`
     SELECT status, COUNT(*) AS count
     FROM object_integrity oi
@@ -111,13 +118,15 @@ function counts() {
 
 function status() {
   const total = Number(db.prepare("SELECT COUNT(*) AS count FROM objects WHERE state = 'active'").get().count) || 0;
-  const checked = counts();
-  const bad = checked.corrupt + checked.missing;
+  const counts = integrityCounts();
+  const bad = counts.corrupt + counts.missing;
+  const lastScrubAt = meta('last_scrub_at') || null;
+  const fullyChecked = Boolean(lastScrubAt);
   return {
     running: Boolean(run?.running),
     progress: run?.running ? run : null,
     lastRun: run && !run.running ? run : null,
-    lastScrubAt: meta('last_scrub_at') || null,
+    lastScrubAt,
     lastScrubStartedAt: meta('last_scrub_started_at') || null,
     lastScrubError: meta('last_scrub_error') || null,
     automaticEveryDays: AUTO_SCRUB_DAYS || null,
@@ -127,10 +136,10 @@ function status() {
       error: meta('catalog_error') || null
     },
     total,
-    checked: checked.healthy + bad,
-    healthy: checked.healthy,
-    corrupt: checked.corrupt,
-    missing: checked.missing,
+    checked: fullyChecked ? total : counts.healthy + bad,
+    healthy: fullyChecked ? Math.max(0, total - bad) : counts.healthy,
+    corrupt: counts.corrupt,
+    missing: counts.missing,
     bad
   };
 }
@@ -146,12 +155,8 @@ if (AUTO_SCRUB_MS) {
   const timer = setTimeout(() => {
     maybeAutoScrub();
     setInterval(maybeAutoScrub, AUTO_CHECK_MS).unref?.();
-  }, AUTO_CHECK_MS);
+  }, AUTO_START_DELAY_MS);
   timer.unref?.();
-}
-
-export function integrityStatus() {
-  return status();
 }
 
 export async function handleIntegrity(req, res, url) {
@@ -188,15 +193,15 @@ export async function handleIntegrity(req, res, url) {
     if (!validHash(hash)) return true;
     const row = db.prepare("SELECT size FROM objects WHERE hash = ? AND state = 'active'").get(hash);
     if (!row) { json(res, 404, { error: 'Object not found' }); return true; }
-    const integrity = db.prepare('SELECT status FROM object_integrity WHERE hash = ?').get(hash);
-    if (!integrity || integrity.status === 'healthy') {
+    const integrity = db.prepare("SELECT status FROM object_integrity WHERE hash = ? AND status != 'healthy'").get(hash);
+    if (!integrity) {
       json(res, 409, { error: 'Object is not marked damaged' });
       return true;
     }
     try {
       const stored = await writeVerifiedObject({ root: DATA_DIR, hash, input: req, replace: true });
       if (Number(stored.size) !== Number(row.size)) throw new Error(`Size mismatch: expected ${row.size}, got ${stored.size}`);
-      mark(hash, 'healthy');
+      recordResult(hash, 'healthy');
       json(res, 200, { ok: true, hash, size: stored.size, repairedAt: now() });
     } catch (error) {
       json(res, 400, { error: error.message });
