@@ -36,6 +36,7 @@ if (storagePane) {
   let refreshing = false;
   let lastRefresh = 0;
   let lastKey = '';
+  let lastVersion = '';
   let integrityTimer = 0;
   let integrityWasRunning = false;
 
@@ -207,6 +208,12 @@ if (storagePane) {
     if (refreshing || (!force && Date.now() - lastRefresh < 45_000)) return;
     refreshing = true;
     try {
+      const currentVersion = String((await json('/api/catalog/version').catch(() => ({ version: '' }))).version || '');
+      if (lastKey && currentVersion && currentVersion === lastVersion) {
+        lastRefresh = Date.now();
+        return;
+      }
+
       const [files, local, driveData, damaged] = await Promise.all([
         catalog(),
         json('/api/client/locations').catch(() => ({ locations: [], files: [] })),
@@ -257,6 +264,7 @@ if (storagePane) {
         <button type="button" class="storage-protection-line" data-open-where="safe-local"><div><strong>Safe to free from this PC</strong><span>These local files also exist in healthy Mochimono storage and on at least one verified backup.</span></div><b>${esc(bytes(safeBytes))}</b><em>Review →</em></button>
         ${needsLocalBytes || onlyLocal.length ? `<button type="button" class="storage-attention" data-open-where="local-needs"><span><b>${esc(bytes(needsLocalBytes))}</b> on this PC is not yet safe to free${onlyLocal.length ? ` · ${onlyLocal.length.toLocaleString()} ${onlyLocal.length === 1 ? 'file has' : 'files have'} no other known copy` : ''}.</span><em>Review →</em></button>` : ''}`;
       }
+      lastVersion = currentVersion || lastVersion;
       decorateFolders(local, byHash, server, verified);
       lastRefresh = Date.now();
     } catch {
