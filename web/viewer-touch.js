@@ -7,7 +7,7 @@ const next = document.querySelector('#viewer-next');
 if (viewer && stage && media) {
   const DOUBLE_TAP_MS = 300;
   const DOUBLE_TAP_DISTANCE = 44;
-  const TAP_TRAVEL = 12;
+  const TAP_TRAVEL = 16;
   const PAN_START = 16;
   const DOUBLE_TAP_PAN_CANCEL = 30;
   const SIDE_EDGE = .36;
@@ -148,9 +148,11 @@ if (viewer && stage && media) {
 
   function scheduleTap(point, clientX, clientY) {
     const now = performance.now();
-    const isDouble = Boolean(point.image && lastTap?.image &&
-      now - lastTap.time <= DOUBLE_TAP_MS &&
-      Math.hypot(clientX - lastTap.x, clientY - lastTap.y) <= DOUBLE_TAP_DISTANCE);
+    const isDouble = Boolean(point.image && lastTap?.image && (
+      point.doubleCandidate ||
+      (now - lastTap.time <= DOUBLE_TAP_MS &&
+        Math.hypot(clientX - lastTap.x, clientY - lastTap.y) <= DOUBLE_TAP_DISTANCE)
+    ));
 
     clearTimeout(tapTimer);
     tapTimer = 0;
@@ -278,7 +280,8 @@ if (viewer && stage && media) {
     }
 
     if (zoomed()) {
-      if (travel > TAP_TRAVEL) {
+      const tapLimit = point.doubleCandidate ? DOUBLE_TAP_PAN_CANCEL : TAP_TRAVEL;
+      if (travel > tapLimit) {
         clearTap();
         return;
       }
