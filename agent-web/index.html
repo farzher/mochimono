@@ -24,12 +24,14 @@
         <span id="serverStorageText"></span>
         <i><b id="serverStorageBar"></b></i>
       </div>
-      <div class="agent-meta">
+      <div class="agent-meta client-identity">
+        <button id="serverStatus" class="status" aria-label="Server status">Connecting…</button>
         <button id="deviceButton" class="device-button" title="Rename device"><span id="deviceLabel"></span></button>
-        <span class="meta-separator">·</span>
-        <button id="serverStatus" class="status">Connecting…</button>
       </div>
-      <button id="clientLogout" class="client-logout" hidden>Log out</button>
+      <details class="client-menu">
+        <summary aria-label="Mochimono menu" title="More">•••</summary>
+        <div class="client-menu-popover"><button id="clientLogout" class="client-logout" hidden>Log out</button></div>
+      </details>
     </div>
   </header>
 
