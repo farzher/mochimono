@@ -55,6 +55,39 @@ function authorized(req) {
   return (auth.startsWith('Bearer ') && sameToken(auth.slice(7))) || sameToken(cookie(req, 'mochimono_session'));
 }
 
+function catalogVersion() {
+  const dataVersion = db.prepare('PRAGMA data_version').get().data_version;
+  return `metadata:${dataVersion}:${localRevision}`;
+}
+
+function catalogPage(url) {
+  const after = String(url.searchParams.get('after') || '');
+  const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') || 5000)));
+  const rows = db.prepare(`
+    SELECT o.hash, o.size, o.mime, o.created_at AS createdAt,
+           COALESCE(MIN(s.filename), o.hash) AS filename,
+           COALESCE(MIN(s.original_path), '') AS originalPath,
+           COALESCE(MAX(s.mtime), o.created_at) AS fileDate,
+           GROUP_CONCAT(DISTINCT (SELECT MIN(i2.id) FROM imports i2 WHERE i2.source_name = i.source_name)) AS importIds,
+           COALESCE(GROUP_CONCAT(DISTINCT s.filename || ' ' || s.original_path || ' ' || COALESCE(ir.root_path, '')), '') AS searchText,
+           EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
+           (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount
+    FROM objects o
+    LEFT JOIN sources s ON s.object_hash = o.hash
+    LEFT JOIN imports i ON i.id = s.import_id
+    LEFT JOIN import_roots ir ON ir.import_id = s.import_id
+    WHERE o.state = 'active' AND o.hash > ?
+    GROUP BY o.hash
+    ORDER BY o.hash
+    LIMIT ?
+  `).all(after, limit);
+  return {
+    files: rows,
+    nextAfter: rows.length === limit ? rows.at(-1).hash : null,
+    version: catalogVersion()
+  };
+}
+
 function saneDate(value) {
   if (!value) return null;
   const date = new Date(value);
@@ -161,7 +194,8 @@ function details(hash) {
 
 async function handleMetadataRequest(req, res, url) {
   const detailsMatch = /^\/api\/files\/([a-f0-9]{64})\/details$/.exec(url.pathname);
-  const isMetadataRoute = url.pathname === '/api/catalog/version' ||
+  const isMetadataRoute = url.pathname === '/api/catalog' ||
+    url.pathname === '/api/catalog/version' ||
     url.pathname === '/api/file-dates' ||
     url.pathname === '/api/import-roots' ||
     url.pathname.startsWith('/api/media-metadata') ||
@@ -173,9 +207,13 @@ async function handleMetadataRequest(req, res, url) {
     return true;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/catalog') {
+    json(res, 200, catalogPage(url));
+    return true;
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/catalog/version') {
-    const dataVersion = db.prepare('PRAGMA data_version').get().data_version;
-    json(res, 200, { version: `metadata:${dataVersion}:${localRevision}` });
+    json(res, 200, { version: catalogVersion() });
     return true;
   }
 
