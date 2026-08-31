@@ -35,14 +35,18 @@ function decorate() {
       badge?.remove();
       continue;
     }
+    const filename = card.dataset.filename || card.getAttribute('title') || 'File';
+    card.dataset.filename = filename;
+    card.removeAttribute('title');
     if (!badge) {
       badge = document.createElement('span');
       badge.className = 'file-context-badge';
       card.append(badge);
     }
-    badge.textContent = card.dataset.filename || 'File';
+    badge.textContent = filename;
   }
   for (const card of files.querySelectorAll('[data-hash]')) {
+    card.removeAttribute('title');
     card.classList.toggle('context-keyboard-focus', card.dataset.hash === lastFocusedHash);
     card.classList.toggle('context-pointer-hover', card.dataset.hash === pointerHash);
   }
