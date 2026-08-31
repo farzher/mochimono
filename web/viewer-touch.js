@@ -9,8 +9,16 @@ if (touchViewer && touchStage && touchMedia) {
   const DOUBLE_TAP_DISTANCE = 44;
   const TAP_TRAVEL = 12;
   const PAN_START = 9;
+  const DOUBLE_TAP_PAN_CANCEL = 30;
   const SIDE_EDGE = .36;
   const VIDEO_EDGE = .22;
+
+  const touchActionStyle = document.createElement('style');
+  touchActionStyle.textContent = `
+    .viewer-stage{touch-action:pan-y!important}
+    .viewer-stage.viewer-zoomed,.viewer-stage.viewer-touch-zoomed{touch-action:none!important}
+  `;
+  document.head.append(touchActionStyle);
 
   const pointers = new Map();
   const videoPointerIds = new Set();
@@ -19,6 +27,7 @@ if (touchViewer && touchStage && touchMedia) {
   let pinch = null;
   let lastTap = null;
   let tapTimer = 0;
+  let suppressDoubleTapUntil = 0;
 
   const image = () => touchMedia.querySelector('img');
   const zoomed = () => zoom.scale > 1.01;
@@ -83,7 +92,14 @@ if (touchViewer && touchStage && touchMedia) {
   function zoomAt(clientX, clientY) {
     const current = image();
     if (!current) return;
-    if (zoomed()) return resetZoom(true);
+    if (zoomed()) {
+      resetZoom(true);
+      // A completed zoom-out ends the old tap sequence completely. Without a
+      // short guard, the next small swipe/tap can be mistaken for another
+      // double-tap and immediately zoom back in.
+      suppressDoubleTapUntil = performance.now() + DOUBLE_TAP_MS + 80;
+      return;
+    }
     const scale = naturalScale(current);
     zoom.scale = scale;
     zoom.x = (1 - scale) * (clientX - innerWidth / 2);
@@ -140,7 +156,7 @@ if (touchViewer && touchStage && touchMedia) {
 
   function scheduleChromeTap(clientX, clientY, canZoom) {
     const now = performance.now();
-    const isDouble = Boolean(canZoom && lastTap?.canZoom &&
+    const isDouble = Boolean(canZoom && now >= suppressDoubleTapUntil && lastTap?.canZoom &&
       now - lastTap.time <= DOUBLE_TAP_MS &&
       Math.hypot(clientX - lastTap.x, clientY - lastTap.y) <= DOUBLE_TAP_DISTANCE);
 
@@ -185,6 +201,13 @@ if (touchViewer && touchStage && touchMedia) {
       video: Boolean(video),
       videoControls: Boolean(rect && event.clientY >= rect.bottom - controlBand)
     };
+    point.doubleCandidate = Boolean(point.image && performance.now() >= suppressDoubleTapUntil && lastTap?.canZoom &&
+      performance.now() - lastTap.time <= DOUBLE_TAP_MS &&
+      Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) <= DOUBLE_TAP_DISTANCE);
+    if (point.doubleCandidate) {
+      clearTimeout(tapTimer);
+      tapTimer = 0;
+    }
     pointers.set(event.pointerId, point);
 
     if (pointers.size >= 2) {
@@ -200,7 +223,8 @@ if (touchViewer && touchStage && touchMedia) {
         y: event.clientY,
         startX: zoom.x,
         startY: zoom.y,
-        active: false
+        active: false,
+        doubleCandidate: point.doubleCandidate
       };
     }
   }, true);
@@ -211,6 +235,9 @@ if (touchViewer && touchStage && touchMedia) {
     if (!point.video) event.stopImmediatePropagation();
     point.x = event.clientX;
     point.y = event.clientY;
+    const dx = event.clientX - point.startX;
+    const dy = event.clientY - point.startY;
+    const travel = Math.hypot(dx, dy);
 
     if (pointers.size >= 2) {
       if (!pinch) beginPinch();
@@ -219,11 +246,19 @@ if (touchViewer && touchStage && touchMedia) {
       return;
     }
 
+    // Once a fit-mode touch clearly becomes a swipe, it cannot remain the
+    // second half of any pending double-tap sequence.
+    if (!zoomed() && point.doubleCandidate && travel >= TAP_TRAVEL) {
+      point.doubleCandidate = false;
+      clearTap();
+    }
+
     if (pan?.pointerId === event.pointerId && zoomed()) {
-      const dx = event.clientX - pan.x;
-      const dy = event.clientY - pan.y;
-      if (!pan.active && Math.hypot(dx, dy) >= PAN_START) {
+      const threshold = pan.doubleCandidate ? DOUBLE_TAP_PAN_CANCEL : PAN_START;
+      if (!pan.active && travel >= threshold) {
         pan.active = true;
+        pan.doubleCandidate = false;
+        point.doubleCandidate = false;
         clearTap();
       }
       if (!pan.active) return;
@@ -265,7 +300,8 @@ if (touchViewer && touchStage && touchMedia) {
     }
 
     if (zoomed()) {
-      if (travel > TAP_TRAVEL) {
+      const tapLimit = point.doubleCandidate ? DOUBLE_TAP_PAN_CANCEL : TAP_TRAVEL;
+      if (travel > tapLimit) {
         clearTap();
         return;
       }
