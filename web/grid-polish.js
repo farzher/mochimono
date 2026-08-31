@@ -9,7 +9,7 @@ style.textContent = `
     #source{width:136px}
     #collectionFilter{width:136px}
     #typeFilter{width:104px}
-    #sort{width:92px}
+    #sort{width:124px}
   }
 `;
 document.head.append(style);
