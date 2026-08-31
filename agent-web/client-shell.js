@@ -10,6 +10,17 @@ const serverStorage = $('#serverStorage');
 const serverStorageText = $('#serverStorageText');
 const serverStorageBar = $('#serverStorageBar');
 
+const header = document.querySelector('.client-header');
+const brand = document.querySelector('.app-brand');
+const tabNav = document.querySelector('.client-tabs');
+if (header && brand && tabNav) {
+  const primary = document.createElement('div');
+  primary.className = 'client-primary';
+  header.prepend(primary);
+  primary.append(brand, tabNav);
+  for (const button of tabs) button.replaceChildren(document.createTextNode(button.dataset.clientTab === 'storage' ? 'Storage' : 'Files'));
+}
+
 function showTab(name) {
   const files = name !== 'storage';
   filesPane.hidden = !files;
