@@ -55,12 +55,15 @@ function cleanFolderTitle(row) {
 }
 
 async function annotate() {
-  queued = false;
-  if (loading || !folders) return;
+  if (loading) { queued = true; return; }
   loading = true;
+  queued = false;
   try {
     const state = await request('/api/state');
     const configured = state.settings?.folders || [];
+    const empty = folders.querySelector(':scope > .empty-state');
+    if (empty) empty.textContent = 'No folders';
+
     for (const row of folders.querySelectorAll(':scope > [data-folder-path]')) {
       const item = configured.find(folder => samePath(folder.path, row.dataset.folderPath));
       if (!item) continue;
@@ -95,7 +98,10 @@ async function annotate() {
       } else if (protectedFolder) existingProtect?.remove();
     }
   } catch {}
-  finally { loading = false; }
+  finally {
+    loading = false;
+    if (queued) queueMicrotask(annotate);
+  }
 }
 
 function annotateSoon() {
