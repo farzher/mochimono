@@ -12,6 +12,8 @@ import { queueRemoteThumbnail } from './lib/thumbnail-agent.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'web');
+let thumbnailSnapshot = null;
+let thumbnailSnapshotToken = '';
 
 function staticType(path) {
   if (path.endsWith('.html')) return 'text/html; charset=utf-8';
@@ -63,12 +65,23 @@ async function login(req, res) {
     body: JSON.stringify({ username, password, device: String(body.device || 'Mochimono Client') })
   });
   const data = await response.json().catch(() => ({}));
+  thumbnailSnapshot = null;
+  thumbnailSnapshotToken = '';
   return json(res, response.status, response.ok ? { token: data.token, username: data.username } : { error: data.error || 'Login failed' });
 }
 
+async function thumbnailProviders(hashes) {
+  const token = String(settings.token || '');
+  if (thumbnailSnapshot && thumbnailSnapshotToken === token && hashes.every(hash => thumbnailSnapshot.byHash.has(hash))) return thumbnailSnapshot;
+  thumbnailSnapshot = await clientProviders();
+  thumbnailSnapshotToken = token;
+  return thumbnailSnapshot;
+}
+
 function queueLocalProvider(snapshot, file) {
-  if (!file || !snapshot.candidates.has(file.hash)) return false;
-  return queueProviderThumbnail({ hash: file.hash, filename: file.filename, mime: file.mime });
+  const candidate = snapshot.candidates.get(file?.hash)?.[0];
+  if (!file || !candidate) return false;
+  return queueProviderThumbnail({ hash: file.hash, filename: file.filename, mime: file.mime, candidate });
 }
 
 async function checkThumbnails(req, res) {
@@ -76,7 +89,7 @@ async function checkThumbnails(req, res) {
   if (!Array.isArray(body.hashes) || body.hashes.length > 500) return json(res, 400, { error: 'hashes must be an array of at most 500 items' });
   const hashes = [...new Set(body.hashes.map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
   const ready = new Map();
-  const snapshot = await clientProviders();
+  const snapshot = await thumbnailProviders(hashes);
   const serverHashes = [];
 
   await Promise.all(hashes.map(async hash => {
