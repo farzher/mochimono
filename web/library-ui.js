@@ -18,6 +18,8 @@ const selectionClear = document.querySelector('#selectionClear');
 let selectionMode = false;
 let anchorHash = '';
 let selected = new Set();
+let timelineFrame = 0;
+let timelineMembership = new Map();
 
 const currentView = () => document.querySelector('#views [data-view].active')?.dataset.view || 'grid';
 const allServerStored = hashes => window.mochimonoLocations?.allServerStored?.(hashes) ?? true;
@@ -44,6 +46,25 @@ function syncSelectedClasses() {
   files.querySelectorAll('[data-hash]').forEach(item => item.classList.toggle('selected', selected.has(item.dataset.hash)));
 }
 
+function groupState(hashes) {
+  if (!hashes?.length) return 'none';
+  let count = 0;
+  for (const hash of hashes) if (selected.has(hash)) count++;
+  return count === 0 ? 'none' : count === hashes.length ? 'all' : 'partial';
+}
+
+function syncTimelineSelection() {
+  for (const button of files.querySelectorAll('[data-select-period]')) {
+    const hashes = timelineMembership.get(`${button.dataset.selectPeriod}:${button.dataset.periodKey}`) || [];
+    const state = groupState(hashes);
+    button.classList.toggle('selected', state === 'all');
+    button.classList.toggle('partial', state === 'partial');
+    button.setAttribute('aria-pressed', state === 'all' ? 'true' : 'false');
+    const label = button.dataset.periodLabel || button.textContent.trim();
+    button.title = state === 'all' ? `Deselect ${label}` : `Select ${label}`;
+  }
+}
+
 function syncSelectionUi() {
   const count = selected.size;
   const mutable = count > 0 && allServerStored(selected);
@@ -54,6 +75,7 @@ function syncSelectionUi() {
   const title = count && !mutable ? 'This action requires every selected file to be stored on the Mochimono Server.' : '';
   selectionCollection.title = selectionDelete.title = selectionIgnore.title = title;
   syncSelectedClasses();
+  syncTimelineSelection();
 }
 
 function clearSelection(exit = true) {
@@ -80,6 +102,101 @@ function toggleHash(hash, extend) {
   }
   selected.has(hash) ? selected.delete(hash) : selected.add(hash);
   anchorHash = hash;
+}
+
+function toggleGroup(hashes) {
+  const unique = [...new Set(hashes || [])];
+  if (!unique.length) return;
+  const remove = unique.every(hash => selected.has(hash));
+  for (const hash of unique) remove ? selected.delete(hash) : selected.add(hash);
+  anchorHash = '';
+  selectionMode = selected.size > 0;
+  syncSelectionUi();
+}
+
+function periodKey(hash, period) {
+  const dates = window.mochimonoFileDates?.get(hash);
+  const value = sort.value === 'date-added' ? dates?.addedAt || dates?.fileDate : dates?.fileDate;
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return '';
+  const year = String(date.getFullYear());
+  if (period === 'year') return year;
+  const month = `${year}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  if (period === 'month') return month;
+  return `${month}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function rebuildTimelineMembership() {
+  timelineMembership = new Map();
+  const hashes = window.mochimonoLibrary?.filteredHashes?.() || renderedHashes();
+  for (const hash of hashes) {
+    for (const period of ['year', 'month', 'day']) {
+      const key = periodKey(hash, period);
+      if (!key) continue;
+      const id = `${period}:${key}`;
+      if (!timelineMembership.has(id)) timelineMembership.set(id, []);
+      timelineMembership.get(id).push(hash);
+    }
+  }
+}
+
+function groupButton(period, key, label, className = '') {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `timeline-group-select ${className}`.trim();
+  button.dataset.selectPeriod = period;
+  button.dataset.periodKey = key;
+  button.dataset.periodLabel = label;
+  button.setAttribute('aria-label', `Select ${label}`);
+  button.innerHTML = `<span class="timeline-check" aria-hidden="true"></span><span>${label}</span>`;
+  return button;
+}
+
+function decorateTimeline() {
+  timelineFrame = 0;
+  if (currentView() !== 'grid' || !sort.value.startsWith('date-')) return;
+  rebuildTimelineMembership();
+
+  for (const section of files.querySelectorAll('.date-group[data-date-group]')) {
+    const monthKey = section.dataset.dateGroup;
+    const year = monthKey.slice(0, 4);
+    const yearHeading = section.querySelector(':scope > .year-heading');
+    if (yearHeading && !yearHeading.querySelector('[data-select-period]')) {
+      const label = yearHeading.textContent.trim();
+      yearHeading.replaceChildren(groupButton('year', year, label));
+    }
+    const monthHeading = section.querySelector(':scope > .date-heading');
+    if (monthHeading && !monthHeading.querySelector('[data-select-period]')) {
+      const label = monthHeading.textContent.trim();
+      monthHeading.replaceChildren(groupButton('month', monthKey, label));
+    }
+  }
+
+  for (const grid of files.querySelectorAll('.date-grid')) {
+    const existing = new Map([...grid.querySelectorAll(':scope > .day-group-control')].map(button => [button.dataset.periodKey, button]));
+    const used = new Set();
+    for (const card of grid.querySelectorAll(':scope > .day-start[data-day]')) {
+      const key = card.dataset.day;
+      const label = card.dataset.dayLabel || key;
+      let button = existing.get(key);
+      if (!button) {
+        button = groupButton('day', key, label, 'day-group-control');
+        grid.append(button);
+      }
+      used.add(key);
+      button.dataset.periodLabel = label;
+      button.querySelector('span:last-child').textContent = label;
+      button.style.left = `${card.offsetLeft}px`;
+      button.style.top = `${card.offsetTop - 19}px`;
+    }
+    for (const [key, button] of existing) if (!used.has(key)) button.remove();
+  }
+  syncTimelineSelection();
+}
+
+function scheduleTimeline() {
+  if (timelineFrame) cancelAnimationFrame(timelineFrame);
+  timelineFrame = requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(decorateTimeline)));
 }
 
 function breadcrumbPath() {
@@ -149,6 +266,13 @@ selectionDelete.addEventListener('click', () => deleteSelected(false));
 selectionIgnore.addEventListener('click', () => deleteSelected(true));
 
 files.addEventListener('click', event => {
+  const group = event.target.closest('[data-select-period]');
+  if (group) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    toggleGroup(timelineMembership.get(`${group.dataset.selectPeriod}:${group.dataset.periodKey}`));
+    return;
+  }
   const item = event.target.closest('[data-hash]');
   if (!item || (!selectionMode && !event.ctrlKey && !event.metaKey && !event.shiftKey)) return;
   event.preventDefault();
@@ -161,16 +285,19 @@ files.addEventListener('click', event => {
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && document.querySelector('#viewer').hidden && (selectionMode || selected.size)) clearSelection(true);
 });
-for (const control of [sort, typeFilter]) control.addEventListener('change', saveUi);
+for (const control of [sort, typeFilter]) control.addEventListener('change', () => { saveUi(); scheduleTimeline(); });
 document.querySelector('#views').addEventListener('click', event => {
   if (!event.target.closest('[data-view]')) return;
   clearSelection(true);
-  setTimeout(saveUi);
+  setTimeout(() => { saveUi(); scheduleTimeline(); });
 });
 for (const control of [source, collectionFilter]) control.addEventListener('change', () => clearSelection(true));
 search.addEventListener('input', () => { if (selected.size) clearSelection(true); });
-window.addEventListener('mochimono:locations-updated', syncSelectionUi);
-new MutationObserver(syncSelectedClasses).observe(files, { childList: true });
+document.querySelector('#mediaSize')?.addEventListener('input', scheduleTimeline);
+window.addEventListener('resize', scheduleTimeline, { passive: true });
+window.addEventListener('mochimono:locations-updated', () => { syncSelectionUi(); scheduleTimeline(); });
+new MutationObserver(() => { syncSelectedClasses(); scheduleTimeline(); }).observe(files, { childList: true, subtree: true });
 
 restoreUi();
 syncSelectionUi();
+scheduleTimeline();
