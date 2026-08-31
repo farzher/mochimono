@@ -48,11 +48,15 @@ function bytes(number) {
   return `${value < 10 && unit ? value.toFixed(2) : value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
 }
 
+function unauthorized(state) {
+  return /(?:^|\b)(?:401|unauthorized)(?:\b|$)/i.test(String(state?.server?.error || ''));
+}
+
 function renderServerStorage(state) {
   const stats = state?.server?.online ? state.server.stats : null;
   if (!stats) {
     serverStorage.hidden = true;
-    logoutButton.hidden = !state?.settings?.hasToken;
+    logoutButton.hidden = !state?.settings?.hasToken || unauthorized(state);
     return;
   }
   const used = Number(stats.bytes) || 0;
@@ -68,9 +72,8 @@ async function refreshShellState(showLogin = false) {
   try {
     const state = await json('/api/state');
     renderServerStorage(state);
-    if ((!state.settings?.hasToken || !state.server?.online) && (showLogin || !connection.open)) {
-      if (!connection.open) connection.showModal();
-    }
+    const needsLogin = !state.settings?.hasToken || unauthorized(state);
+    if (needsLogin && (showLogin || !connection.open) && !connection.open) connection.showModal();
     return state;
   } catch {
     serverStorage.hidden = true;
