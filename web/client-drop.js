@@ -173,17 +173,17 @@ if (location.pathname.startsWith('/files')) {
     await window.mochimonoAddedBatch?.finish();
 
     const total = files.length;
+    const handled = added + existing + ignored;
     result.querySelector('[data-import-title]').textContent = 'Added to Mochimono';
-    const parts = [`${added.toLocaleString()} / ${total.toLocaleString()} new`];
+    const parts = [`${handled.toLocaleString()} / ${total.toLocaleString()}`, `${added.toLocaleString()} new`];
     if (existing) parts.push(`${existing.toLocaleString()} already here`);
     if (ignored) parts.push(`${ignored.toLocaleString()} ignored`);
     result.querySelector('[data-import-meta]').textContent = parts.join(' · ');
 
     const duplicateBox = result.querySelector('[data-import-dupes]');
-    const examples = duplicates.slice(0, 6);
-    duplicateBox.innerHTML = examples.length ? `
-      <div class="client-import-examples">Already here · showing ${examples.length.toLocaleString()} of ${existing.toLocaleString()}</div>
-      ${examples.map(item => {
+    duplicateBox.innerHTML = duplicates.length ? `
+      <div class="client-import-examples">${existing.toLocaleString()} already here</div>
+      ${duplicates.map(item => {
         const prior = item.previous?.[0];
         return `<div class="client-import-dupe"><b>${esc(item.name)}</b><span>${esc(prior ? priorText(prior) : 'Same file already stored')}</span></div>`;
       }).join('')}` : '';
