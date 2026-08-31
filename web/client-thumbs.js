@@ -139,6 +139,7 @@ async function checkVisible() {
 
   checking = true;
   try {
+    await requestRepairs(missingCards);
     const response = await fetch('/api/thumbs/check', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -156,7 +157,6 @@ async function checkVisible() {
         states.set(hash, state);
       }
     }
-    await requestRepairs(missingCards.filter(card => !ready.has(card.dataset.hash)));
   } catch {}
   finally {
     checking = false;
