@@ -14,7 +14,9 @@ function catalogPage(url) {
            GROUP_CONCAT(DISTINCT s.import_id) AS exactImportIds,
            COALESCE(GROUP_CONCAT(DISTINCT s.filename || ' ' || s.original_path || ' ' || COALESCE(ir.root_path, '')), '') AS searchText,
            EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
-           (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount
+           (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount,
+           NOT EXISTS (SELECT 1 FROM object_integrity oi WHERE oi.hash = o.hash AND oi.status != 'healthy') AS serverStored,
+           COALESCE((SELECT oi.status FROM object_integrity oi WHERE oi.hash = o.hash), 'unknown') AS integrityStatus
     FROM objects o
     LEFT JOIN sources s ON s.object_hash = o.hash
     LEFT JOIN imports i ON i.id = s.import_id
@@ -113,7 +115,9 @@ function missingMetadata(url) {
 function details(hash) {
   const object = db.prepare(`
     SELECT o.hash, o.size, o.mime, o.created_at AS createdAt,
-           EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed
+           EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
+           COALESCE((SELECT oi.status FROM object_integrity oi WHERE oi.hash = o.hash), 'unknown') AS integrityStatus,
+           (SELECT oi.verified_at FROM object_integrity oi WHERE oi.hash = o.hash) AS integrityVerifiedAt
     FROM objects o WHERE o.hash = ? AND o.state = 'active'
   `).get(hash);
   if (!object) return null;
@@ -132,7 +136,13 @@ function details(hash) {
     WHERE r.object_hash = ? ORDER BY d.name
   `).all(hash);
   const date = dateRows([hash])[0] || { hash, fileDate: object.createdAt, dateSource: 'imported', capturedAt: null };
-  return { object, sources, backups, date };
+  return {
+    object,
+    sources,
+    backups,
+    date,
+    serverStored: !['corrupt', 'missing'].includes(object.integrityStatus)
+  };
 }
 
 export async function handleMetadata(req, res, url) {
