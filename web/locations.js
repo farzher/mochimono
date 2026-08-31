@@ -39,10 +39,10 @@ function renderOptions() {
   select.innerHTML = `
     <option value="">All locations</option>
     <option value="server">Mochimono Server</option>
-    ${local.length ? '<option value="local">This device</option>' : ''}
+    ${local.length ? '<option value="local">All local folders</option>' : ''}
     <option value="backup">Backups</option>
     <option value="unbacked">Not backed up</option>
-    ${local.length ? `<optgroup label="Local folders">${local.map(location => `<option value="folder:${location.id}">${escapeHtml(location.name)}${location.protected === false ? ' · Browse' : ''}${location.available === false ? ' · Offline' : ''}</option>`).join('')}</optgroup>` : ''}
+    ${local.length ? `<optgroup label="On this device">${local.map(location => `<option value="folder:${location.id}">${escapeHtml(location.name)}${location.protected === false ? ' · Browse' : ''}${location.available === false ? ' · Offline' : ''}</option>`).join('')}</optgroup>` : ''}
     ${drives.length ? `<optgroup label="Backup drives">${drives.map(drive => `<option value="drive:${encodeURIComponent(drive.id)}">${escapeHtml(drive.name)}</option>`).join('')}</optgroup>` : ''}`;
   select.value = [...select.options].some(option => option.value === current) ? current : '';
 }
@@ -64,6 +64,9 @@ async function backupFiles(id) {
 
 async function applySelection() {
   const value = select.value;
+  select.title = value === 'local'
+    ? 'Files in local folders Mochimono is browsing or protecting on this device'
+    : 'Storage location';
   if (!value || value === 'backup' || value === 'unbacked') {
     library()?.setLocationFilter?.(value);
     return;
