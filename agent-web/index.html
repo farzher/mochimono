@@ -12,20 +12,20 @@
   <header class="client-header">
     <div class="app-brand"><span class="mini" aria-hidden="true"></span><h1>Mochimono</h1></div>
     <div class="client-head-actions">
-      <nav class="client-tabs" aria-label="Mochimono">
-        <button data-client-tab="storage" title="Manage folders and backups" aria-label="Manage folders and backups">Manage</button>
-      </nav>
-      <div id="serverStorage" class="client-storage" hidden>
+      <div id="serverStorage" class="client-storage" hidden title="Server storage">
         <span id="serverStorageText"></span>
         <i><b id="serverStorageBar"></b></i>
       </div>
-      <div class="agent-meta client-identity">
-        <button id="serverStatus" class="status" aria-label="Server status">Connecting…</button>
-        <button id="deviceButton" class="device-button" title="Rename device"><span id="deviceLabel"></span></button>
-      </div>
       <details class="client-menu">
         <summary aria-label="Mochimono menu" title="More">•••</summary>
-        <div class="client-menu-popover"><button id="clientLogout" class="client-logout" hidden>Log out</button></div>
+        <div class="client-menu-popover">
+          <nav class="client-tabs" aria-label="Mochimono">
+            <button data-client-tab="storage">Folders & backups</button>
+          </nav>
+          <div class="client-menu-info"><span>Server</span><button id="serverStatus" class="status">Connecting…</button></div>
+          <button id="deviceButton" class="device-button"><span class="menu-label">Device</span><span id="deviceLabel"></span></button>
+          <button id="clientLogout" class="client-logout" hidden>Log out</button>
+        </div>
       </details>
     </div>
   </header>
