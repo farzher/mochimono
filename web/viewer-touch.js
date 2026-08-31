@@ -8,8 +8,8 @@ if (viewer && stage && media) {
   const DOUBLE_TAP_MS = 300;
   const DOUBLE_TAP_DISTANCE = 44;
   const TAP_TRAVEL = 16;
-  const PAN_START = 16;
-  const ZOOMED_DOUBLE_TAP_CANCEL = 30;
+  const PAN_START = 18;
+  const DOUBLE_TAP_CANCEL = 32;
   const SIDE_EDGE = .36;
   const VIDEO_EDGE = .22;
   const MAX_SCALE = 4;
@@ -21,9 +21,8 @@ if (viewer && stage && media) {
   `;
   document.head.append(style);
 
-  const pointers = new Map();
   let zoom = { scale: 1, x: 0, y: 0 };
-  let pan = null;
+  let gesture = null;
   let pinch = null;
   let lastTap = null;
   let tapTimer = 0;
@@ -42,7 +41,7 @@ if (viewer && stage && media) {
     lastTap = null;
   }
 
-  function cancelPendingChrome() {
+  function cancelChromeTimer() {
     clearTimeout(tapTimer);
     tapTimer = 0;
   }
@@ -77,7 +76,7 @@ if (viewer && stage && media) {
 
   function resetZoom(animate = false) {
     zoom = { scale: 1, x: 0, y: 0 };
-    pan = null;
+    gesture = null;
     pinch = null;
     clearTap();
     stage.classList.remove('viewer-touch-zoomed');
@@ -92,9 +91,13 @@ if (viewer && stage && media) {
     return Math.max(2.25, Math.min(MAX_SCALE, scale || 2.25));
   }
 
-  function zoomIn(clientX, clientY) {
+  function toggleZoom(clientX, clientY) {
     const current = image();
     if (!current) return;
+    if (zoomed()) {
+      resetZoom(true);
+      return;
+    }
     const scale = naturalScale(current);
     zoom.scale = scale;
     zoom.x = (1 - scale) * (clientX - innerWidth / 2);
@@ -103,48 +106,12 @@ if (viewer && stage && media) {
     applyZoom(true);
   }
 
-  function toggleZoom(clientX, clientY) {
-    if (zoomed()) resetZoom(true);
-    else zoomIn(clientX, clientY);
-  }
-
   function distance(a, b) {
-    return Math.hypot(a.x - b.x, a.y - b.y);
+    return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
   }
 
-  function isDoubleCandidate(clientX, clientY, imageHit) {
-    if (!imageHit || !lastTap?.image) return false;
-    return performance.now() - lastTap.time <= DOUBLE_TAP_MS &&
-      Math.hypot(clientX - lastTap.x, clientY - lastTap.y) <= DOUBLE_TAP_DISTANCE;
-  }
-
-  function beginPinch() {
-    const values = [...pointers.values()].filter(point => point.image);
-    if (values.length < 2 || !image()) return;
-    const [a, b] = values;
-    const cx = (a.x + b.x) / 2;
-    const cy = (a.y + b.y) / 2;
-    const scale = zoom.scale;
-    pinch = {
-      distance: Math.max(1, distance(a, b)),
-      scale,
-      anchorX: (cx - innerWidth / 2 - zoom.x) / scale,
-      anchorY: (cy - innerHeight / 2 - zoom.y) / scale
-    };
-    pan = null;
-    clearTap();
-  }
-
-  function updatePinch() {
-    const values = [...pointers.values()].filter(point => point.image);
-    if (!pinch || values.length < 2) return;
-    const [a, b] = values;
-    const cx = (a.x + b.x) / 2;
-    const cy = (a.y + b.y) / 2;
-    zoom.scale = Math.max(1, Math.min(MAX_SCALE, pinch.scale * distance(a, b) / pinch.distance));
-    zoom.x = cx - innerWidth / 2 - pinch.anchorX * zoom.scale;
-    zoom.y = cy - innerHeight / 2 - pinch.anchorY * zoom.scale;
-    applyZoom();
+  function touchById(list, id) {
+    return [...list].find(item => item.identifier === id) || null;
   }
 
   function sideButton(clientX, video = false) {
@@ -163,9 +130,9 @@ if (viewer && stage && media) {
     return true;
   }
 
-  function rememberSingleTap(point, clientX, clientY) {
-    lastTap = { time: performance.now(), x: clientX, y: clientY, image: point.image };
-    cancelPendingChrome();
+  function rememberSingleTap(clientX, clientY, imageHit) {
+    lastTap = { time: performance.now(), x: clientX, y: clientY, image: imageHit };
+    cancelChromeTimer();
     tapTimer = setTimeout(() => {
       tapTimer = 0;
       lastTap = null;
@@ -173,158 +140,169 @@ if (viewer && stage && media) {
     }, DOUBLE_TAP_MS + 20);
   }
 
+  function isDoubleCandidate(clientX, clientY, imageHit) {
+    return Boolean(imageHit && lastTap?.image &&
+      performance.now() - lastTap.time <= DOUBLE_TAP_MS &&
+      Math.hypot(clientX - lastTap.x, clientY - lastTap.y) <= DOUBLE_TAP_DISTANCE);
+  }
+
   function ignoredTarget(target) {
     return target.closest?.('.viewer-bar,.viewer-collections,.viewer-info,dialog,.viewer-nav');
   }
 
-  stage.addEventListener('pointerdown', event => {
-    if (viewer.hidden || (event.pointerType !== 'touch' && event.pointerType !== 'pen')) return;
-    if (ignoredTarget(event.target)) return;
+  function startPinch(event) {
+    const touches = [...event.touches].filter(touch => touch.target.closest?.('#viewer-media img'));
+    if (touches.length < 2 || !image()) return false;
+    const [a, b] = touches;
+    const centerX = (a.clientX + b.clientX) / 2;
+    const centerY = (a.clientY + b.clientY) / 2;
+    const scale = zoom.scale;
+    pinch = {
+      distance: Math.max(1, distance(a, b)),
+      scale,
+      anchorX: (centerX - innerWidth / 2 - zoom.x) / scale,
+      anchorY: (centerY - innerHeight / 2 - zoom.y) / scale
+    };
+    gesture = null;
+    clearTap();
+    return true;
+  }
 
+  function updatePinch(event) {
+    if (!pinch) return false;
+    const touches = [...event.touches].filter(touch => touch.target.closest?.('#viewer-media img'));
+    if (touches.length < 2) return false;
+    const [a, b] = touches;
+    const centerX = (a.clientX + b.clientX) / 2;
+    const centerY = (a.clientY + b.clientY) / 2;
+    zoom.scale = Math.max(1, Math.min(MAX_SCALE, pinch.scale * distance(a, b) / pinch.distance));
+    zoom.x = centerX - innerWidth / 2 - pinch.anchorX * zoom.scale;
+    zoom.y = centerY - innerHeight / 2 - pinch.anchorY * zoom.scale;
+    applyZoom();
+    return true;
+  }
+
+  stage.addEventListener('touchstart', event => {
+    if (viewer.hidden || ignoredTarget(event.target)) return;
+
+    if (event.touches.length >= 2 && startPinch(event)) {
+      if (event.cancelable) event.preventDefault();
+      return;
+    }
+
+    if (event.touches.length !== 1) return;
+    const touch = event.touches[0];
     const video = event.target.closest?.('#viewer-media video');
     const rect = video?.getBoundingClientRect();
     const imageHit = Boolean(event.target.closest?.('#viewer-media img'));
     const startedZoomed = zoomed();
-    const point = {
-      x: event.clientX,
-      y: event.clientY,
-      startX: event.clientX,
-      startY: event.clientY,
+    const doubleCandidate = isDoubleCandidate(touch.clientX, touch.clientY, imageHit);
+
+    gesture = {
+      id: touch.identifier,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      x: touch.clientX,
+      y: touch.clientY,
       startedAt: performance.now(),
       image: imageHit,
       video: Boolean(video),
-      videoControls: Boolean(rect && event.clientY >= rect.bottom - Math.min(64, rect.height * .22)),
+      videoControls: Boolean(rect && touch.clientY >= rect.bottom - Math.min(64, rect.height * .22)),
       startedZoomed,
-      doubleCandidate: isDoubleCandidate(event.clientX, event.clientY, imageHit)
+      doubleCandidate,
+      panning: false,
+      startZoomX: zoom.x,
+      startZoomY: zoom.y
     };
 
-    // Side taps at fit are navigation, never the second half of a zoom gesture.
-    if (!startedZoomed && sideButton(event.clientX, Boolean(video))) point.doubleCandidate = false;
-    if (point.doubleCandidate) cancelPendingChrome();
-    pointers.set(event.pointerId, point);
+    if (!startedZoomed && sideButton(touch.clientX, Boolean(video))) gesture.doubleCandidate = false;
+    if (gesture.doubleCandidate) cancelChromeTimer();
 
-    // Image/background touches belong to Mochimono. Capture them immediately so
-    // Android cannot turn a tap/swipe into pointercancel midway through it.
-    // Video touches stay uncaptured so native play/seek controls keep working.
-    if (!video) {
-      try { stage.setPointerCapture(event.pointerId); } catch {}
-      event.preventDefault();
-    }
+    // Keep native video controls native. Image/background gestures are fully
+    // owned by the viewer while the image is displayed.
+    if (!video && event.cancelable) event.preventDefault();
+  }, { passive: false });
 
-    if ([...pointers.values()].filter(item => item.image).length >= 2) {
-      beginPinch();
-      event.preventDefault();
+  stage.addEventListener('touchmove', event => {
+    if (pinch) {
+      if (updatePinch(event) && event.cancelable) event.preventDefault();
       return;
     }
+    if (!gesture) return;
+    const touch = touchById(event.touches, gesture.id);
+    if (!touch) return;
 
-    if (startedZoomed && imageHit) {
-      pan = {
-        pointerId: event.pointerId,
-        x: event.clientX,
-        y: event.clientY,
-        startX: zoom.x,
-        startY: zoom.y,
-        active: false,
-        doubleCandidate: point.doubleCandidate
-      };
-    }
-  });
-
-  stage.addEventListener('pointermove', event => {
-    const point = pointers.get(event.pointerId);
-    if (!point) return;
-    point.x = event.clientX;
-    point.y = event.clientY;
-
-    const imagePointers = [...pointers.values()].filter(item => item.image);
-    if (imagePointers.length >= 2) {
-      if (!pinch) beginPinch();
-      updatePinch();
-      event.preventDefault();
-      return;
-    }
-
-    const travel = Math.hypot(event.clientX - point.startX, event.clientY - point.startY);
-
-    // At fit, moving past tap tolerance cancels a possible second tap so a
-    // quick swipe after a tap can never become a zoom.
-    if (!point.startedZoomed && point.doubleCandidate && travel >= TAP_TRAVEL) {
-      point.doubleCandidate = false;
-      clearTap();
-    }
-
-    if (!pan || pan.pointerId !== event.pointerId || !zoomed()) return;
-    const dx = event.clientX - pan.x;
-    const dy = event.clientY - pan.y;
-    const threshold = pan.doubleCandidate ? ZOOMED_DOUBLE_TAP_CANCEL : PAN_START;
-    if (!pan.active && Math.hypot(dx, dy) < threshold) return;
-
-    if (!pan.active) {
-      pan.active = true;
-      pan.doubleCandidate = false;
-      point.doubleCandidate = false;
-      clearTap();
-    }
-
-    zoom.x = pan.startX + dx;
-    zoom.y = pan.startY + dy;
-    applyZoom();
-    event.preventDefault();
-  });
-
-  stage.addEventListener('pointerup', event => {
-    const point = pointers.get(event.pointerId);
-    if (!point) return;
-
-    point.x = event.clientX;
-    point.y = event.clientY;
-    const dx = point.x - point.startX;
-    const dy = point.y - point.startY;
+    gesture.x = touch.clientX;
+    gesture.y = touch.clientY;
+    const dx = gesture.x - gesture.startX;
+    const dy = gesture.y - gesture.startY;
     const travel = Math.hypot(dx, dy);
-    const duration = Math.max(1, performance.now() - point.startedAt);
-    const wasPinching = Boolean(pinch) || [...pointers.values()].filter(item => item.image).length > 1;
-    const wasPanning = pan?.pointerId === event.pointerId && pan.active;
 
-    pointers.delete(event.pointerId);
-    if (pan?.pointerId === event.pointerId) pan = null;
-    if ([...pointers.values()].filter(item => item.image).length < 2) pinch = null;
-    if (!point.video) {
-      try { stage.releasePointerCapture(event.pointerId); } catch {}
+    if (!gesture.startedZoomed && gesture.doubleCandidate && travel >= TAP_TRAVEL) {
+      gesture.doubleCandidate = false;
+      clearTap();
     }
 
-    if (wasPinching) {
+    if (gesture.startedZoomed && gesture.image) {
+      const threshold = gesture.doubleCandidate ? DOUBLE_TAP_CANCEL : PAN_START;
+      if (!gesture.panning && travel >= threshold) {
+        gesture.panning = true;
+        gesture.doubleCandidate = false;
+        clearTap();
+      }
+      if (gesture.panning) {
+        zoom.x = gesture.startZoomX + dx;
+        zoom.y = gesture.startZoomY + dy;
+        applyZoom();
+      }
+    }
+
+    if (!gesture.video && event.cancelable) event.preventDefault();
+  }, { passive: false });
+
+  stage.addEventListener('touchend', event => {
+    if (pinch) {
+      if (event.touches.length < 2) {
+        pinch = null;
+        gesture = null;
+        clearTap();
+        if (zoom.scale <= 1.03) resetZoom(true);
+      }
+      if (event.cancelable) event.preventDefault();
+      return;
+    }
+    if (!gesture) return;
+    const touch = touchById(event.changedTouches, gesture.id);
+    if (!touch) return;
+
+    const current = gesture;
+    gesture = null;
+    const dx = touch.clientX - current.startX;
+    const dy = touch.clientY - current.startY;
+    const travel = Math.hypot(dx, dy);
+    const duration = Math.max(1, performance.now() - current.startedAt);
+
+    if (current.panning) {
       clearTap();
-      if (zoom.scale <= 1.03) resetZoom(true);
-      event.preventDefault();
+      if (!current.video && event.cancelable) event.preventDefault();
       return;
     }
 
-    if (wasPanning) {
-      clearTap();
-      event.preventDefault();
-      return;
-    }
-
-    // A recognized second tap wins over pan jitter. Finishing either zoom-in or
-    // zoom-out clears tap history, so the very next swipe starts fresh.
-    if (point.doubleCandidate) {
-      const limit = point.startedZoomed ? ZOOMED_DOUBLE_TAP_CANCEL : TAP_TRAVEL;
+    if (current.doubleCandidate) {
+      const limit = current.startedZoomed ? DOUBLE_TAP_CANCEL : TAP_TRAVEL;
       if (travel < limit) {
-        toggleZoom(event.clientX, event.clientY);
+        toggleZoom(touch.clientX, touch.clientY);
         clearTap();
-        event.preventDefault();
+        if (event.cancelable) event.preventDefault();
         return;
       }
       clearTap();
     }
 
-    if (point.startedZoomed || zoomed()) {
-      if (travel > TAP_TRAVEL) {
-        clearTap();
-        return;
-      }
-      rememberSingleTap(point, event.clientX, event.clientY);
-      event.preventDefault();
+    if (current.startedZoomed || zoomed()) {
+      if (travel <= TAP_TRAVEL) rememberSingleTap(touch.clientX, touch.clientY, current.image);
+      else clearTap();
+      if (event.cancelable) event.preventDefault();
       return;
     }
 
@@ -332,11 +310,11 @@ if (viewer && stage && media) {
     const velocity = Math.abs(dx) / duration;
     const swipe = horizontal && (Math.abs(dx) >= 26 || (Math.abs(dx) >= 16 && velocity >= .18));
 
-    if (swipe && !point.videoControls) {
+    if (swipe && !current.videoControls) {
       clearTap();
       const button = dx < 0 ? next : prev;
       if (!button?.disabled) button.click();
-      event.preventDefault();
+      if (event.cancelable) event.preventDefault();
       return;
     }
 
@@ -345,43 +323,37 @@ if (viewer && stage && media) {
       return;
     }
 
-    if (point.video) {
+    if (current.video) {
       clearTap();
-      if (!point.videoControls && navigateAt(event.clientX, true)) event.preventDefault();
+      if (!current.videoControls && navigateAt(touch.clientX, true) && event.cancelable) event.preventDefault();
       return;
     }
 
-    if (navigateAt(event.clientX)) {
-      event.preventDefault();
+    if (navigateAt(touch.clientX)) {
+      if (event.cancelable) event.preventDefault();
       return;
     }
 
-    rememberSingleTap(point, event.clientX, event.clientY);
-    event.preventDefault();
-  });
+    rememberSingleTap(touch.clientX, touch.clientY, current.image);
+    if (event.cancelable) event.preventDefault();
+  }, { passive: false });
 
-  stage.addEventListener('pointercancel', event => {
-    const point = pointers.get(event.pointerId);
-    if (!point) return;
-    pointers.delete(event.pointerId);
-    if (pan?.pointerId === event.pointerId) pan = null;
-    if ([...pointers.values()].filter(item => item.image).length < 2) pinch = null;
+  stage.addEventListener('touchcancel', () => {
+    gesture = null;
+    pinch = null;
     clearTap();
-    if (!pointers.size && zoom.scale <= 1.03) resetZoom();
-  });
+  }, { passive: true });
 
   syncMediaMode();
   new MutationObserver(() => {
-    pointers.clear();
+    gesture = null;
+    pinch = null;
     resetZoom();
     syncMediaMode();
   }).observe(media, { childList: true });
 
   new MutationObserver(() => {
-    if (viewer.hidden) {
-      pointers.clear();
-      resetZoom();
-    }
+    if (viewer.hidden) resetZoom();
   }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 
   window.addEventListener('resize', () => {
