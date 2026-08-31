@@ -68,7 +68,9 @@ function catalogPage(url) {
            COALESCE(MIN(s.filename), o.hash) AS filename,
            COALESCE(MIN(s.original_path), '') AS originalPath,
            COALESCE(MAX(s.mtime), o.created_at) AS fileDate,
+           COALESCE(MAX(s.created_at), o.created_at) AS addedAt,
            GROUP_CONCAT(DISTINCT (SELECT MIN(i2.id) FROM imports i2 WHERE i2.source_name = i.source_name)) AS importIds,
+           GROUP_CONCAT(DISTINCT s.import_id) AS exactImportIds,
            COALESCE(GROUP_CONCAT(DISTINCT s.filename || ' ' || s.original_path || ' ' || COALESCE(ir.root_path, '')), '') AS searchText,
            EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
            (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount
