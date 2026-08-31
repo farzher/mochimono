@@ -10,6 +10,10 @@
 <body>
   <header>
     <div class="app-brand"><span class="mini" aria-hidden="true"></span><h1>Mochimono <span class="agent-label">Client</span></h1></div>
+    <nav class="client-tabs" aria-label="Client">
+      <button class="active" data-client-tab="files">Files</button>
+      <button data-client-tab="storage">Storage</button>
+    </nav>
     <div class="agent-meta">
       <button id="deviceButton" class="device-button" title="Rename device"><span id="deviceLabel"></span></button>
       <span class="meta-separator">·</span>
@@ -17,7 +21,11 @@
     </div>
   </header>
 
-  <main class="dashboard">
+  <main id="filesPane" class="files-pane">
+    <iframe id="filesFrame" src="/files/" title="Mochimono Files"></iframe>
+  </main>
+
+  <main id="storagePane" class="dashboard" hidden>
     <section class="dashboard-section">
       <div class="section-head">
         <h2>Folders</h2>
@@ -50,9 +58,13 @@
     </section>
   </main>
 
-  <dialog id="connectionDialog">
+  <dialog id="connectionDialog" class="small-dialog">
     <div class="dialog-head"><h3>Server</h3><button class="icon" data-close>×</button></div>
-    <div class="connect-fields"><input id="serverUrl" placeholder="Server"><input id="serverToken" type="password" placeholder="Token"></div>
+    <div class="connect-fields">
+      <input id="serverUrl" placeholder="Server">
+      <input id="serverUsername" autocomplete="username" placeholder="Username" value="admin">
+      <input id="serverPassword" type="password" autocomplete="current-password" placeholder="Password">
+    </div>
     <div class="dialog-actions"><div class="spacer"></div><button id="saveSettings" class="primary">Connect</button></div>
   </dialog>
 
