@@ -127,5 +127,14 @@
   <script type="module" src="/folder-modes.js"></script>
   <script type="module" src="/client-shell.js"></script>
   <script type="module" src="/relative-time.js"></script>
+  <script>
+    const homeBrand = document.querySelector('.client-header .app-brand');
+    const homeFrame = document.querySelector('#filesFrame');
+    const openAllFiles = () => homeFrame?.contentWindow?.mochimonoHome?.();
+    homeBrand?.addEventListener('click', openAllFiles);
+    homeBrand?.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.code === 'Space') openAllFiles();
+    });
+  </script>
 </body>
 </html>
