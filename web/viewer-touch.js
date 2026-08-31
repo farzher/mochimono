@@ -175,7 +175,13 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
 
     const imageHit = Boolean(event.target.closest?.('#viewer-media img'));
     const startedZoomed = zoomed();
-    const doubleCandidate = isDoubleTap(event.clientX, event.clientY, imageHit);
+    const navigationButton = startedZoomed ? null : sideButton(event.clientX, Boolean(video));
+
+    // Side navigation is its own gesture. Reserve it before double-tap
+    // detection and clear any pending image-tap history so rapid left/right
+    // taps can only navigate, never zoom.
+    if (navigationButton) clearTap();
+    const doubleCandidate = navigationButton ? false : isDoubleTap(event.clientX, event.clientY, imageHit);
 
     // Zoom-out is atomic. Once the second tap is recognized while zoomed, do
     // the reset immediately and consume the rest of this pointer sequence so
@@ -199,14 +205,11 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
       image: imageHit,
       video: Boolean(video),
       videoControls: Boolean(rect && event.clientY >= rect.bottom - Math.min(64, rect.height * .22)),
-      doubleCandidate: false,
+      navigationButton,
+      doubleCandidate,
       captured: false
     };
 
-    // Side taps at fit are always navigation and never participate in zoom.
-    if (!(!point.startedZoomed && sideButton(event.clientX, Boolean(video)))) {
-      point.doubleCandidate = doubleCandidate;
-    }
     if (point.doubleCandidate) {
       clearTimeout(tapTimer);
       tapTimer = 0;
@@ -320,6 +323,13 @@ if (touchViewer && touchStage && touchMedia && touchPrev && touchNext) {
 
     if (wasPanning) {
       clearTap();
+      event.preventDefault();
+      return;
+    }
+
+    if (point.navigationButton && travel < TAP_TRAVEL) {
+      clearTap();
+      navigate(point.navigationButton);
       event.preventDefault();
       return;
     }
