@@ -132,7 +132,8 @@ function enqueue(card) {
 function watch(image) {
   if (!(image instanceof HTMLImageElement) || !image.classList.contains('server-thumb') || image.dataset.clientRepair === '1') return;
   image.dataset.clientRepair = '1';
-  image.addEventListener('error', () => enqueue(image.closest('.file-card[data-hash]')), { once: true });
+  const card = image.closest('.file-card[data-hash]');
+  image.addEventListener('error', () => enqueue(card), { once: true });
 }
 
 if (files) {
