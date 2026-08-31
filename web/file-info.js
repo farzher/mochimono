@@ -79,35 +79,35 @@ function protectionState(data, local) {
   };
   if (safe) return {
     key: 'safe', label: `Safe to free · ${copies} copies`, title: 'Safe to free from this PC',
-    note: 'A healthy Mochimono copy and a verified backup both exist. Removing the local copy would still leave two known copies.',
+    note: 'A healthy Mochimono copy and a verified backup both exist. Removing this indexed local copy would still leave two known copies.',
     locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
   };
   if (localPaths > 0 && !server && !backups.length) return {
-    key: 'danger', label: 'Only on this PC', title: 'Only on this PC',
-    note: 'This is the only known copy. Keep it here until Mochimono has stored and backed it up.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
+    key: 'danger', label: 'Only indexed here', title: 'Only indexed on this PC',
+    note: 'This is the only copy Mochimono currently knows about. Keep it here until Mochimono has stored and backed it up.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
   };
   if (server && backups.length && localPaths > 0) return {
     key: 'warn', label: `Backup not verified · ${copies} copies`, title: 'Needs backup verification',
-    note: 'Copies exist on this PC and in Mochimono, and a backup is present, but no backup copy has been verified yet.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
+    note: 'Copies exist in an indexed local folder and in Mochimono, and a backup is present, but no backup copy has been verified yet.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
   };
   if (server && backups.length && !localPaths) return verified.length ? {
-    key: 'good', label: `Protected · ${copies} copies`, title: 'Not on this PC',
-    note: 'This file is not using local PC space. It remains in Mochimono and on a verified backup.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
+    key: 'good', label: `Protected · ${copies} copies`, title: 'No indexed local copy',
+    note: 'Mochimono does not currently see this file in a folder it is Browse/Protect-indexing on this PC. It may still exist elsewhere on the computer. A healthy Mochimono copy and verified backup are recorded.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
   } : {
-    key: 'warn', label: `Backup not verified · ${copies} copies`, title: 'Not on this PC',
-    note: 'This file is not on this PC. A backup copy exists, but it has not been verified yet.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
+    key: 'warn', label: `Backup not verified · ${copies} copies`, title: 'No indexed local copy',
+    note: 'Mochimono does not currently see this file in a folder it is Browse/Protect-indexing on this PC. A backup copy exists, but it has not been verified yet.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
   };
   if (server && localPaths > 0) return {
     key: 'warn', label: 'In Mochimono · backup needed', title: 'Needs another backup',
-    note: 'The file exists on this PC and in Mochimono, but no independent backup copy is recorded.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
+    note: 'The file exists in an indexed local folder and in Mochimono, but no independent backup copy is recorded.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
   };
   if (server) return {
-    key: 'warn', label: 'Not on this PC · backup needed', title: 'Mochimono copy only',
-    note: 'Mochimono has the file, but there is no indexed local or backup copy.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
+    key: 'warn', label: 'No indexed local copy · backup needed', title: 'Mochimono copy only',
+    note: 'Mochimono has the file, but no copy is indexed in a local folder and no backup copy is recorded. The file may still exist elsewhere on this PC outside Mochimono-indexed folders.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
   };
   if (localPaths > 0 && backups.length) return {
     key: 'warn', label: 'Not in Mochimono', title: 'Missing Mochimono copy',
-    note: 'A local and backup copy exist, but this file is not currently stored in Mochimono.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
+    note: 'An indexed local copy and backup copy exist, but this file is not currently stored in Mochimono.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
   };
   return {
     key: 'warn', label: `${Math.max(1, copies)} known copy`, title: 'Protection incomplete',
