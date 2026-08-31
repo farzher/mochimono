@@ -5,6 +5,7 @@ const mediaSize = document.querySelector('#mediaSize');
 const style = document.createElement('style');
 style.textContent = `
   .date-group{margin-top:26px}
+  .date-group.timeline-continuation{margin-top:4px}
   .year-heading{margin:42px 0 15px 2px;color:#f1e9e5;font-size:19px;font-weight:760;letter-spacing:-.025em}
   .date-group:first-child>.year-heading{margin-top:20px}
   .date-heading{margin:0 0 10px 2px;font-size:13px;color:#cfc5c1;letter-spacing:-.01em}
