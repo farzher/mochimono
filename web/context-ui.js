@@ -8,6 +8,7 @@ const viewerOpen = document.querySelector('#viewer-open');
 let decorateFrame = 0;
 let lastFocusedHash = '';
 let pointerHash = '';
+let viewerPaging = false;
 
 const style = document.createElement('style');
 style.textContent = `
@@ -113,6 +114,31 @@ function viewerVerticalCard(direction) {
   return next !== current ? next : null;
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function extendViewerGrid(direction, startHash) {
+  if (viewerPaging) return null;
+  const sentinel = document.querySelector(direction > 0 ? '#scroll-sentinel' : '#top-scroll-sentinel');
+  if (!sentinel || sentinel.hidden) return null;
+  viewerPaging = true;
+  const scrollY = window.scrollY;
+  const before = renderedCards().length;
+  try {
+    sentinel.scrollIntoView({ block: direction > 0 ? 'end' : 'start', behavior: 'auto' });
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await sleep(20);
+      if (renderedCards().length > before) break;
+    }
+    if (viewer.hidden || currentViewerHash() !== startHash) return null;
+    return viewerVerticalCard(direction);
+  } finally {
+    window.scrollTo(0, scrollY);
+    viewerPaging = false;
+  }
+}
+
 function focusCard(card) {
   if (!card) return;
   lastFocusedHash = card.dataset.hash;
@@ -176,10 +202,18 @@ document.addEventListener('keydown', event => {
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       event.preventDefault();
       event.stopImmediatePropagation();
-      const target = viewerVerticalCard(event.key === 'ArrowUp' ? -1 : 1);
+      const direction = event.key === 'ArrowUp' ? -1 : 1;
+      const target = viewerVerticalCard(direction);
       if (target && window.mochimonoOpenViewer) {
         lastFocusedHash = target.dataset.hash;
         window.mochimonoOpenViewer(lastFocusedHash);
+      } else if (!viewerPaging && window.mochimonoOpenViewer) {
+        const startHash = currentViewerHash();
+        extendViewerGrid(direction, startHash).then(next => {
+          if (!next || viewer.hidden || currentViewerHash() !== startHash) return;
+          lastFocusedHash = next.dataset.hash;
+          window.mochimonoOpenViewer(lastFocusedHash);
+        });
       }
       return;
     }
