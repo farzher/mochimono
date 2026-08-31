@@ -49,6 +49,11 @@ function cookie(req, name) {
   return '';
 }
 
+function deviceToken(req) {
+  const auth = String(req.headers.authorization || '');
+  return auth.startsWith('Bearer ') ? auth.slice(7) : cookie(req, 'mochimono_device');
+}
+
 const tokenHash = token => createHash('sha256').update(String(token)).digest('hex');
 
 async function loadAuth() {
@@ -81,8 +86,7 @@ async function issueDevice(name) {
 }
 
 async function acceptDevice(req) {
-  const auth = String(req.headers.authorization || '');
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : cookie(req, 'mochimono_device');
+  const token = deviceToken(req);
   if (!token) return false;
   const hash = tokenHash(token);
   const data = await loadAuth();
@@ -90,6 +94,18 @@ async function acceptDevice(req) {
   if (!device) return false;
   device.lastSeenAt = now();
   saveAuth(data).catch(() => {});
+  return true;
+}
+
+async function revokeDevice(req) {
+  const token = deviceToken(req);
+  if (!token) return false;
+  const hash = tokenHash(token);
+  const data = await loadAuth();
+  const before = data.devices.length;
+  data.devices = data.devices.filter(item => !equal(item.hash, hash));
+  if (data.devices.length === before) return false;
+  await saveAuth(data);
   return true;
 }
 
@@ -154,7 +170,13 @@ http.createServer = function (...args) {
         });
       }
 
+      if (req.method === 'POST' && url.pathname === '/api/auth/revoke-self') {
+        if (!await revokeDevice(req)) return json(res, 401, { error: 'Unauthorized' });
+        return json(res, 200, { ok: true });
+      }
+
       if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
+        await revokeDevice(req).catch(() => false);
         return json(res, 200, { ok: true }, {
           'set-cookie': 'mochimono_device=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'
         });
