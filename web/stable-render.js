@@ -24,6 +24,13 @@ function mode(nodes) {
   return '';
 }
 
+function rootShape(nodes) {
+  return nodes.map(node => {
+    if (node.nodeType !== 1) return node.nodeName;
+    return `${node.tagName}:${node.className}:${node.dataset?.dateGroup || ''}`;
+  }).join('|');
+}
+
 function sameSequence(a, b) {
   if (a.length !== b.length) return false;
   for (let index = 0; index < a.length; index++) if (a[index] !== b[index]) return false;
@@ -63,7 +70,6 @@ function captureAnchor() {
   anchor = {
     hash: card.dataset.hash,
     top: card.getBoundingClientRect().top,
-    scrollY,
     time: performance.now()
   };
 }
@@ -97,7 +103,7 @@ if (files) {
 
     observer.disconnect();
     try {
-      if (oldMode === newMode && sameSequence(oldHashes, newHashes)) {
+      if (oldMode === newMode && rootShape(removed) === rootShape(added) && sameSequence(oldHashes, newHashes)) {
         files.replaceChildren(...removed);
       } else if (oldMode === 'grid' && newMode === 'grid') {
         const reusable = collectGridCards(removed);
@@ -119,13 +125,23 @@ if (files) {
   observer.observe(files, { childList: true, subtree: true });
 }
 
+function railEntries(nodes) {
+  const entries = [];
+  for (const node of nodes) {
+    if (node.nodeType !== 1) continue;
+    const items = [];
+    if (node.matches?.('[data-index]')) items.push(node);
+    node.querySelectorAll?.('[data-index]').forEach(item => items.push(item));
+    for (const item of items) entries.push(`${item.dataset.index}:${item.textContent}:${item.style.top}`);
+  }
+  return entries;
+}
+
 if (rail) {
   const railObserver = new MutationObserver(records => {
     const root = records.find(record => record.target === rail && record.removedNodes.length && record.addedNodes.length);
     if (!root) return;
-    const oldIndexes = [...root.removedNodes].flatMap(node => node.nodeType === 1 ? [...node.querySelectorAll?.('[data-index]') || []].map(item => item.dataset.index) : []);
-    const newIndexes = [...root.addedNodes].flatMap(node => node.nodeType === 1 ? [...node.querySelectorAll?.('[data-index]') || []].map(item => item.dataset.index) : []);
-    if (!sameSequence(oldIndexes, newIndexes)) return;
+    if (!sameSequence(railEntries([...root.removedNodes]), railEntries([...root.addedNodes]))) return;
     railObserver.disconnect();
     rail.replaceChildren(...root.removedNodes);
     railObserver.observe(rail, { childList: true, subtree: true });
