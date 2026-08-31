@@ -5,6 +5,12 @@ const style = document.createElement('style');
 style.textContent = `
   .file-context-name mark{padding:0;background:transparent;color:#ff6f67;font-weight:800}
   .files.grid>.empty{width:100vw;min-height:40vh;margin-left:calc(50% - 50vw);padding:0;display:grid;place-items:center;text-align:center}
+  @media(min-width:701px){
+    #source{width:136px}
+    #collectionFilter{width:136px}
+    #typeFilter{width:104px}
+    #sort{width:92px}
+  }
 `;
 document.head.append(style);
 
