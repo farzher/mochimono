@@ -199,15 +199,20 @@ function appendHighlighted(element, text, terms) {
 }
 
 function clearReason(badge) {
-  badge.classList.remove('has-match');
   const match = badge.querySelector('.file-context-match');
-  if (match) match.replaceChildren();
+  if (!badge.classList.contains('has-match') && !badge.dataset.reasonKey && !match?.childNodes.length) return;
+  badge.classList.remove('has-match');
+  badge.dataset.reasonKey = '';
+  if (match?.childNodes.length) match.replaceChildren();
 }
 
 function renderReason(badge, reason) {
   const match = badge.querySelector('.file-context-match');
   if (!match || !reason) return clearReason(badge);
+  const key = `${reason.text}\u0000${reason.terms.join('\u0001')}`;
+  if (badge.dataset.reasonKey === key) return;
   badge.classList.add('has-match');
+  badge.dataset.reasonKey = key;
   appendHighlighted(match, reason.text, reason.terms);
 }
 
@@ -267,7 +272,8 @@ function decorate() {
       badge.innerHTML = '<span class="file-context-name"></span><span class="file-context-match"></span>';
       card.append(badge);
     }
-    badge.querySelector('.file-context-name').textContent = filename;
+    const name = badge.querySelector('.file-context-name');
+    if (name.textContent !== filename) name.textContent = filename;
     if (card.dataset.hash !== (pointerHash || lastFocusedHash)) clearReason(badge);
   }
   for (const card of files.querySelectorAll('[data-hash]')) {
