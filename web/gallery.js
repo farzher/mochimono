@@ -85,10 +85,23 @@ function justify(container) {
   setRow(row, width, target, false, gap);
 }
 
+function syncDayLabels() {
+  for (const grid of document.querySelectorAll('#files .date-grid')) {
+    for (const card of grid.querySelectorAll(':scope > .day-start[data-day]')) {
+      const button = [...grid.querySelectorAll(':scope > .day-group-control')]
+        .find(item => item.dataset.periodKey === card.dataset.day);
+      if (!button) continue;
+      button.style.left = `${card.offsetLeft}px`;
+      button.style.top = `${card.offsetTop - 19}px`;
+    }
+  }
+}
+
 function layout() {
   frame = 0;
   if (!files.classList.contains('grid')) return;
   document.querySelectorAll('#files .date-grid').forEach(justify);
+  requestAnimationFrame(syncDayLabels);
 }
 
 function schedule() {
