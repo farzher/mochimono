@@ -11,7 +11,7 @@ let copies = new Map();
 let driveHashes = new Map();
 let serverHashes = new Set();
 let protection = {
-  backed: new Set(), safeLocal: new Set(), needs: new Set(), onlyLocal: new Set(), notLocal: new Set()
+  backed: new Set(), verifiedBacked: new Set(), safeLocal: new Set(), needs: new Set(), onlyLocal: new Set(), notLocal: new Set()
 };
 let lastRefresh = 0;
 
@@ -43,9 +43,9 @@ function locationCopies(data) {
 
 function syncOrganizationLabels() {
   source?.setAttribute('aria-label', 'Origin');
-  if (source?.options[0] && !source.value) source.options[0].textContent = 'Origin';
+  if (source?.options[0]) source.options[0].textContent = 'Origin';
   collection?.setAttribute('aria-label', 'Tags and groups');
-  if (collection?.options[0] && !collection.value) collection.options[0].textContent = 'Groups';
+  if (collection?.options[0]) collection.options[0].textContent = 'Groups';
   const home = folderbar?.querySelector('[data-folder-home]');
   if (home?.textContent === 'Sources') home.textContent = 'Origins';
 }
@@ -76,30 +76,40 @@ function renderOptions() {
 async function backupFiles(id) {
   if (driveHashes.has(id)) return driveHashes.get(id);
   const hashes = new Set();
+  const verified = new Set();
   let after = '';
   do {
     const response = await fetch(`/api/drives/${encodeURIComponent(id)}/files?limit=5000&after=${encodeURIComponent(after)}`, { cache: 'no-store' });
     if (!response.ok) throw new Error(`Could not read backup location (${response.status})`);
     const page = await response.json();
-    for (const file of page.files || []) hashes.add(file.hash);
+    for (const file of page.files || []) {
+      hashes.add(file.hash);
+      if (file.verifiedAt) verified.add(file.hash);
+    }
     after = page.nextAfter || '';
   } while (after);
-  driveHashes.set(id, hashes);
-  return hashes;
+  const result = { hashes, verified };
+  driveHashes.set(id, result);
+  return result;
 }
 
 async function rebuildProtection() {
   const backed = new Set();
+  const verifiedBacked = new Set();
   await Promise.all(drives.map(async drive => {
-    try { for (const hash of await backupFiles(String(drive.id))) backed.add(hash); }
-    catch {}
+    try {
+      const backup = await backupFiles(String(drive.id));
+      for (const hash of backup.hashes) backed.add(hash);
+      for (const hash of backup.verified) verifiedBacked.add(hash);
+    } catch {}
   }));
   const local = new Set(copies.keys());
   const known = union(local, serverHashes, backed);
   protection = {
     backed,
-    safeLocal: new Set([...local].filter(hash => serverHashes.has(hash) && backed.has(hash))),
-    needs: new Set([...known].filter(hash => !serverHashes.has(hash) || !backed.has(hash))),
+    verifiedBacked,
+    safeLocal: new Set([...local].filter(hash => serverHashes.has(hash) && verifiedBacked.has(hash))),
+    needs: new Set([...known].filter(hash => !serverHashes.has(hash) || !verifiedBacked.has(hash))),
     onlyLocal: new Set([...local].filter(hash => !serverHashes.has(hash) && !backed.has(hash))),
     notLocal: new Set([...known].filter(hash => !local.has(hash)))
   };
@@ -108,8 +118,8 @@ async function rebuildProtection() {
 async function applySelection() {
   const value = select.value;
   const titles = {
-    'safe-local': 'Files on this PC that also exist in Mochimono and on a backup',
-    'needs-protection': 'Files missing either the Mochimono copy or an independent backup copy',
+    'safe-local': 'Files on this PC that also exist in Mochimono and on a verified backup',
+    'needs-protection': 'Files missing either the Mochimono copy or a verified independent backup copy',
     'only-local': 'Files whose only known copy is on this PC',
     'not-local': 'Files with no indexed copy on this PC',
     local: 'Files in folders Mochimono is browsing or protecting on this PC',
@@ -145,7 +155,7 @@ async function applySelection() {
   }
   if (value.startsWith('drive:')) {
     const id = decodeURIComponent(value.slice(6));
-    library()?.setLocationFilter?.(value, await backupFiles(id));
+    library()?.setLocationFilter?.(value, (await backupFiles(id)).hashes);
   }
 }
 
@@ -183,6 +193,7 @@ window.mochimonoLocations = {
   forHash(hash) { return copies.get(String(hash)) || []; },
   isServerStored(hash) { return serverHashes.has(String(hash)); },
   isBackedUp(hash) { return protection.backed.has(String(hash)); },
+  isVerifiedBackup(hash) { return protection.verifiedBacked.has(String(hash)); },
   isSafeToFree(hash) { return protection.safeLocal.has(String(hash)); },
   allServerStored(hashes) { return [...hashes || []].every(hash => serverHashes.has(String(hash))); },
   definitions() { return [...definitions, ...drives.map(drive => ({ id: drive.id, kind: 'backup', name: drive.name, available: null, lastSeen: drive.lastSeen }))]; },
