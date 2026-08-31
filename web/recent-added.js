@@ -88,7 +88,14 @@ window.mochimonoAddedBatch = {
   add(hash, file = null) {
     if (!hash) return;
     batchHashes.add(String(hash));
-    if (file && window.mochimonoLibrary) window.mochimonoLibrary.upsert(file);
+    if (file) {
+      dates.set(String(hash), {
+        fileDate: file.fileDate || file.createdAt || file.addedAt,
+        addedAt: file.addedAt || file.createdAt || file.fileDate
+      });
+      window.dispatchEvent(new CustomEvent('mochimono-dates-updated'));
+      if (window.mochimonoLibrary) window.mochimonoLibrary.upsert(file);
+    }
     scheduleBatch();
   },
   async finish() {
