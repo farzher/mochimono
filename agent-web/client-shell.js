@@ -14,6 +14,7 @@ const brand = document.querySelector('.app-brand');
 const tabNav = document.querySelector('.client-tabs');
 const manageButton = tabs.find(button => button.dataset.clientTab === 'storage');
 const filesButton = tabs.find(button => button.dataset.clientTab === 'files');
+let libraryScrollY = 0;
 
 if (header && brand && tabNav && manageButton) {
   const primary = document.createElement('div');
@@ -29,16 +30,25 @@ if (header && brand && tabNav && manageButton) {
   brand.title = 'Library';
 }
 
+function syncHeaderScroll() {
+  const active = !filesPane.hidden;
+  const height = header?.offsetHeight || 72;
+  const offset = active ? Math.min(height, Math.max(0, libraryScrollY)) : 0;
+  document.documentElement.style.setProperty('--client-header-scroll', `${offset}px`);
+}
+
 function showTab(name) {
   const files = name !== 'storage';
   filesPane.hidden = !files;
   storagePane.hidden = files;
+  document.body.classList.toggle('client-library-active', files);
   if (manageButton) {
     manageButton.classList.toggle('active', !files);
     manageButton.textContent = files ? 'Manage' : 'Library';
     manageButton.title = files ? 'Manage folders and backups' : 'Back to library';
     manageButton.setAttribute('aria-label', manageButton.title);
   }
+  syncHeaderScroll();
 }
 
 manageButton?.addEventListener('click', () => showTab(storagePane.hidden ? 'storage' : 'files'));
@@ -49,6 +59,7 @@ brand?.addEventListener('keydown', event => {
   showTab('files');
 });
 showTab('files');
+addEventListener('resize', syncHeaderScroll, { passive: true });
 
 async function json(path, options = {}) {
   const response = await fetch(path, {
@@ -132,6 +143,7 @@ connectButton.addEventListener('click', async event => {
     $('#serverPassword').value = '';
     $('#serverToken').value = '';
     connection.close();
+    libraryScrollY = 0;
     frame.src = `/files/?connected=${Date.now()}`;
     showTab('files');
     await refreshShellState();
@@ -149,6 +161,8 @@ logoutButton.addEventListener('click', async () => {
     await json('/api/auth/revoke-self', { method: 'POST' });
   } catch {}
   frame.src = 'about:blank';
+  libraryScrollY = 0;
+  syncHeaderScroll();
   serverStorage.hidden = true;
   logoutButton.hidden = true;
   logoutButton.disabled = false;
@@ -164,6 +178,11 @@ window.addEventListener('message', event => {
   }
   if (event.data?.type === 'mochimono-viewer-state') {
     document.body.classList.toggle('library-viewer-open', Boolean(event.data.open));
+    return;
+  }
+  if (event.data?.type === 'mochimono-library-scroll') {
+    libraryScrollY = Number(event.data.y) || 0;
+    syncHeaderScroll();
   }
 });
 
