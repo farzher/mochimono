@@ -6,6 +6,7 @@ const collectionFilter = document.querySelector('#collectionFilter');
 const search = document.querySelector('#search');
 const typeFilter = document.querySelector('#typeFilter');
 const sort = document.querySelector('#sort');
+const fileCount = document.querySelector('#fileCount');
 const selectToggle = document.querySelector('#selectFiles');
 const selectionBar = document.querySelector('#selectionBar');
 const selectionCount = document.querySelector('#selectionCount');
@@ -18,6 +19,9 @@ const selectionClear = document.querySelector('#selectionClear');
 let selectionMode = false;
 let anchorHash = '';
 let selected = new Set();
+let totalFiles = 0;
+let countTimer = 0;
+let countFetchAt = 0;
 
 const currentView = () => document.querySelector('#views [data-view].active')?.dataset.view || 'grid';
 
@@ -41,6 +45,26 @@ function restoreUi() {
 
 function syncSelectedClasses() {
   files.querySelectorAll('[data-hash]').forEach(item => item.classList.toggle('selected', selected.has(item.dataset.hash)));
+}
+
+async function syncFileCount() {
+  countTimer = 0;
+  const filtered = window.mochimonoLibrary?.filteredHashes?.().length ?? files.querySelectorAll('[data-hash]').length;
+  if (!totalFiles || Date.now() - countFetchAt > 1500) {
+    countFetchAt = Date.now();
+    try { totalFiles = Number((await fetch('/api/stats').then(response => response.ok ? response.json() : null))?.objects) || totalFiles; }
+    catch {}
+  }
+  if (fileCount) {
+    const total = Math.max(totalFiles, filtered);
+    fileCount.textContent = `${filtered.toLocaleString()} / ${total.toLocaleString()} files`;
+    fileCount.title = `${filtered.toLocaleString()} in this view · ${total.toLocaleString()} total`;
+  }
+}
+
+function scheduleFileCount() {
+  clearTimeout(countTimer);
+  countTimer = setTimeout(syncFileCount, 40);
 }
 
 function syncSelectionUi() {
@@ -110,9 +134,7 @@ async function deleteSelected(ignore) {
       const hash = hashes[next++];
       try {
         const response = await fetch(`/api/objects/${hash}/delete`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ ignore })
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ignore })
         });
         if (!response.ok) throw new Error(String(response.status));
         succeeded.push(hash);
@@ -122,8 +144,10 @@ async function deleteSelected(ignore) {
   }));
 
   window.mochimonoLibrary?.remove?.(succeeded);
+  totalFiles = Math.max(0, totalFiles - succeeded.length);
   clearSelection(true);
   selectAll.disabled = false;
+  scheduleFileCount();
   if (failed.length) alert(`${failed.length.toLocaleString()} file${failed.length === 1 ? '' : 's'} could not be deleted.`);
 }
 
@@ -159,15 +183,16 @@ files.addEventListener('click', event => {
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && document.querySelector('#viewer').hidden && (selectionMode || selected.size)) clearSelection(true);
 });
-for (const control of [sort, typeFilter]) control.addEventListener('change', saveUi);
+for (const control of [sort, typeFilter]) control.addEventListener('change', () => { saveUi(); scheduleFileCount(); });
 document.querySelector('#views').addEventListener('click', event => {
   if (!event.target.closest('[data-view]')) return;
   clearSelection(true);
-  setTimeout(saveUi);
+  setTimeout(() => { saveUi(); scheduleFileCount(); });
 });
-for (const control of [source, collectionFilter]) control.addEventListener('change', () => clearSelection(true));
-search.addEventListener('input', () => { if (selected.size) clearSelection(true); });
-new MutationObserver(syncSelectedClasses).observe(files, { childList: true, subtree: true });
+for (const control of [source, collectionFilter]) control.addEventListener('change', () => { clearSelection(true); scheduleFileCount(); });
+search.addEventListener('input', () => { if (selected.size) clearSelection(true); scheduleFileCount(); });
+new MutationObserver(() => { syncSelectedClasses(); scheduleFileCount(); }).observe(files, { childList: true, subtree: true });
 
 restoreUi();
 syncSelectionUi();
+scheduleFileCount();
