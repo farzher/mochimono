@@ -15,6 +15,8 @@ let lastFocusedHash = '';
 let pointerHash = '';
 let reasonTimer = 0;
 let reasonGeneration = 0;
+let viewerVerticalPending = false;
+let queuedViewerVertical = 0;
 const detailsCache = new Map();
 
 const style = document.createElement('style');
@@ -258,15 +260,38 @@ function viewerVerticalCard(direction, hash = currentViewerHash()) {
   return next !== current ? next : null;
 }
 
-function bridgeViewerGrid(direction, startHash) {
+function openViewerCard(card) {
+  if (!card || !window.mochimonoOpenViewer) return false;
+  lastFocusedHash = card.dataset.hash;
+  window.mochimonoOpenViewer(lastFocusedHash);
+  return true;
+}
+
+function navigateViewerVertical(direction) {
+  if (viewerVerticalPending) {
+    queuedViewerVertical = direction;
+    return;
+  }
+
+  const startHash = currentViewerHash();
+  const direct = viewerVerticalCard(direction, startHash);
+  if (direct) return void openViewerCard(direct);
+
   const bridge = direction > 0 ? viewerNext : viewerPrev;
-  if (!bridge || bridge.disabled || !window.mochimonoOpenViewer) return null;
+  if (!startHash || !bridge || bridge.disabled || !window.mochimonoOpenViewer) return;
+
+  viewerVerticalPending = true;
   bridge.click();
-  if (viewer.hidden) return null;
-  const target = viewerVerticalCard(direction, startHash);
-  if (target) return target;
-  window.mochimonoOpenViewer(startHash);
-  return null;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const target = viewer.hidden ? null : viewerVerticalCard(direction, startHash);
+    if (target) openViewerCard(target);
+    else if (!viewer.hidden && currentViewerHash() !== startHash) window.mochimonoOpenViewer(startHash);
+
+    viewerVerticalPending = false;
+    const queued = queuedViewerVertical;
+    queuedViewerVertical = 0;
+    if (queued && !viewer.hidden) navigateViewerVertical(queued);
+  }));
 }
 
 function absoluteTopRow(card) {
@@ -348,13 +373,7 @@ document.addEventListener('keydown', event => {
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       event.preventDefault();
       event.stopImmediatePropagation();
-      const direction = event.key === 'ArrowUp' ? -1 : 1;
-      const startHash = currentViewerHash();
-      const target = viewerVerticalCard(direction) || bridgeViewerGrid(direction, startHash);
-      if (target && window.mochimonoOpenViewer) {
-        lastFocusedHash = target.dataset.hash;
-        window.mochimonoOpenViewer(lastFocusedHash);
-      }
+      navigateViewerVertical(event.key === 'ArrowUp' ? -1 : 1);
       return;
     }
     if ((event.code === 'Space' || event.key === 'Enter') && !viewerControlFocused()) {
