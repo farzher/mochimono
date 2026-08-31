@@ -1,22 +1,27 @@
 const storagePane = document.querySelector('#storagePane');
 const folders = document.querySelector('#folders');
+const filesFrame = document.querySelector('#filesFrame');
+const storageToggle = document.querySelector('[data-client-tab="storage"]');
 
 if (storagePane) {
   const style = document.createElement('style');
   style.textContent = `
     .storage-overview{margin-bottom:18px}.storage-overview .section-head{margin-bottom:9px}
     .storage-summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
-    .storage-summary-card{min-width:0;padding:12px;border:1px solid #2b272c;border-radius:12px;background:#171518}
+    .storage-summary-card{display:block;min-width:0;width:100%;padding:12px;border:1px solid #2b272c;border-radius:12px;background:#171518;color:inherit;text-align:left;box-shadow:none}
+    button.storage-summary-card{cursor:pointer}.storage-summary-card:hover{background:#1d1a1e;border-color:#3a343b}.storage-summary-card:focus-visible{outline:2px solid rgba(239,160,154,.32);outline-offset:1px}
     .storage-summary-card>span{display:block;color:#847b79;font-size:9px;font-weight:750;text-transform:uppercase;letter-spacing:.05em}
     .storage-summary-card>strong{display:block;margin-top:5px;color:#eee7e3;font-size:17px;line-height:1.15}
     .storage-summary-card>small{display:block;margin-top:5px;color:#918885;font-size:10px;line-height:1.4}
     .storage-summary-card.safe>strong{color:#c8dfcd}.storage-summary-card.warn>strong{color:#e1c398}
-    .storage-protection-line{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:7px;padding:10px 12px;border:1px solid rgba(126,184,137,.16);border-radius:11px;background:rgba(92,143,102,.06)}
-    .storage-protection-line>div{min-width:0}.storage-protection-line strong{display:block;color:#c8dfcd;font-size:12px}.storage-protection-line span{display:block;margin-top:2px;color:#8e8582;font-size:9px;line-height:1.35}.storage-protection-line b{flex:0 0 auto;color:#dce8df;font-size:14px}
-    .storage-attention{margin-top:7px;padding:9px 11px;border-radius:10px;background:rgba(255,255,255,.025);color:#918885;font-size:10px}.storage-attention b{color:#d8c09d;font-weight:700}
+    .storage-summary-card em{display:block;margin-top:7px;color:#706966;font-size:9px;font-style:normal;font-weight:700}
+    .storage-protection-line{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;margin-top:7px;padding:10px 12px;border:1px solid rgba(126,184,137,.16);border-radius:11px;background:rgba(92,143,102,.06);color:inherit;text-align:left;box-shadow:none}
+    button.storage-protection-line:hover{background:rgba(92,143,102,.1);border-color:rgba(126,184,137,.26)}
+    .storage-protection-line>div{min-width:0}.storage-protection-line strong{display:block;color:#c8dfcd;font-size:12px}.storage-protection-line span{display:block;margin-top:2px;color:#8e8582;font-size:9px;line-height:1.35}.storage-protection-line b{flex:0 0 auto;color:#dce8df;font-size:14px}.storage-protection-line em{flex:0 0 auto;color:#8fac96;font-size:9px;font-style:normal}
+    .storage-attention{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;margin-top:7px;padding:9px 11px;border:0;border-radius:10px;background:rgba(255,255,255,.025);color:#918885;font-size:10px;text-align:left;box-shadow:none}.storage-attention:hover{background:rgba(255,255,255,.045)}.storage-attention b{color:#d8c09d;font-weight:700}.storage-attention em{flex:0 0 auto;color:#a38e73;font-size:9px;font-style:normal}
     .folder-protection{margin-top:5px;color:#817977;font-size:9px}.folder-protection .safe{color:#9ebfa5}.folder-protection .warn{color:#c8a97e}
     @media(max-width:900px){.storage-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-    @media(max-width:520px){.storage-summary-grid{grid-template-columns:1fr 1fr}.storage-summary-card{padding:10px}.storage-summary-card>strong{font-size:15px}.storage-protection-line{align-items:flex-start;flex-direction:column;gap:4px}}
+    @media(max-width:520px){.storage-summary-grid{grid-template-columns:1fr 1fr}.storage-summary-card{padding:10px}.storage-summary-card>strong{font-size:15px}.storage-protection-line{align-items:flex-start;flex-wrap:wrap;gap:4px}.storage-protection-line em{margin-left:auto}}
   `;
   document.head.append(style);
 
@@ -66,6 +71,14 @@ if (storagePane) {
       after = page.nextAfter || '';
     } while (after);
     return files;
+  }
+
+  async function openLibraryWhere(value) {
+    const locations = filesFrame?.contentWindow?.mochimonoLocations;
+    if (!locations?.select) return;
+    await locations.select(value);
+    if (!storagePane.hidden) storageToggle?.click();
+    filesFrame?.focus();
   }
 
   function statsForLocation(id, rows, byHash, server, verified) {
@@ -149,13 +162,13 @@ if (storagePane) {
       if (key !== lastKey) {
         lastKey = key;
         target.innerHTML = `<div class="storage-summary-grid">
-          <article class="storage-summary-card"><span>This PC</span><strong>${esc(bytes(localBytes))}</strong><small>${localHashes.size.toLocaleString()} indexed files · ${esc(bytes(Math.max(0, safeBytes)))} safe to free</small></article>
-          <article class="storage-summary-card"><span>Mochimono</span><strong>${esc(bytes(serverBytes))}</strong><small>${server.size.toLocaleString()} files stored${server.size ? '' : ' · server unavailable or empty'}</small></article>
-          <article class="storage-summary-card safe"><span>Verified backups</span><strong>${esc(bytes(verifiedBytes))}</strong><small>${verified.size.toLocaleString()} unique files · ${drives.length.toLocaleString()} backup ${drives.length === 1 ? 'drive' : 'drives'}</small></article>
-          <article class="storage-summary-card warn"><span>Needs protection</span><strong>${needsProtection.length.toLocaleString()}</strong><small>${onlyLocal.length.toLocaleString()} only on this PC · ${notLocal.length.toLocaleString()} not on this PC</small></article>
+          <button type="button" class="storage-summary-card" data-open-where="local"><span>This PC</span><strong>${esc(bytes(localBytes))}</strong><small>${localHashes.size.toLocaleString()} indexed files · ${esc(bytes(Math.max(0, safeBytes)))} safe to free</small><em>View files →</em></button>
+          <button type="button" class="storage-summary-card" data-open-where="server"><span>Mochimono</span><strong>${esc(bytes(serverBytes))}</strong><small>${server.size.toLocaleString()} files stored${server.size ? '' : ' · server unavailable or empty'}</small><em>View files →</em></button>
+          <button type="button" class="storage-summary-card safe" data-open-where="verified-backup"><span>Verified backups</span><strong>${esc(bytes(verifiedBytes))}</strong><small>${verified.size.toLocaleString()} unique files · ${drives.length.toLocaleString()} backup ${drives.length === 1 ? 'drive' : 'drives'}</small><em>View files →</em></button>
+          <button type="button" class="storage-summary-card warn" data-open-where="needs-protection"><span>Needs protection</span><strong>${needsProtection.length.toLocaleString()}</strong><small>${onlyLocal.length.toLocaleString()} only on this PC · ${notLocal.length.toLocaleString()} not on this PC</small><em>Review →</em></button>
         </div>
-        <div class="storage-protection-line"><div><strong>Safe to free from this PC</strong><span>These local files also exist in Mochimono and on at least one verified backup.</span></div><b>${esc(bytes(safeBytes))}</b></div>
-        ${needsLocalBytes || onlyLocal.length ? `<div class="storage-attention"><b>${esc(bytes(needsLocalBytes))}</b> on this PC is not yet safe to free${onlyLocal.length ? ` · ${onlyLocal.length.toLocaleString()} ${onlyLocal.length === 1 ? 'file has' : 'files have'} no other known copy` : ''}.</div>` : ''}`;
+        <button type="button" class="storage-protection-line" data-open-where="safe-local"><div><strong>Safe to free from this PC</strong><span>These local files also exist in Mochimono and on at least one verified backup.</span></div><b>${esc(bytes(safeBytes))}</b><em>Review →</em></button>
+        ${needsLocalBytes || onlyLocal.length ? `<button type="button" class="storage-attention" data-open-where="local-needs"><span><b>${esc(bytes(needsLocalBytes))}</b> on this PC is not yet safe to free${onlyLocal.length ? ` · ${onlyLocal.length.toLocaleString()} ${onlyLocal.length === 1 ? 'file has' : 'files have'} no other known copy` : ''}.</span><em>Review →</em></button>` : ''}`;
       }
       decorateFolders(local, byHash, server, verified);
       lastRefresh = Date.now();
@@ -165,6 +178,11 @@ if (storagePane) {
       refreshing = false;
     }
   }
+
+  target.addEventListener('click', event => {
+    const open = event.target.closest('[data-open-where]');
+    if (open) openLibraryWhere(open.dataset.openWhere).catch(() => {});
+  });
 
   new MutationObserver(() => {
     if (!storagePane.hidden) refresh(true);
