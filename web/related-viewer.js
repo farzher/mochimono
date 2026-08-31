@@ -171,19 +171,8 @@ if (viewer && viewerOpen && prev && next && actions) {
     return [];
   }
 
-  function nativeButtons() {
-    const hashes = window.mochimonoLibrary?.filteredHashes?.() || [];
-    const index = hashes.indexOf(currentHash());
-    prev.disabled = index <= 0;
-    next.disabled = index < 0 || index >= hashes.length - 1;
-  }
-
   function updateButtons() {
-    if (mode === 'view') {
-      count.textContent = '';
-      nativeButtons();
-      return;
-    }
+    if (mode === 'view') return;
     const index = context.findIndex(file => file.hash === currentHash());
     prev.disabled = index <= 0;
     next.disabled = index < 0 || index >= context.length - 1;
@@ -191,24 +180,29 @@ if (viewer && viewerOpen && prev && next && actions) {
   }
 
   async function setMode(value) {
+    const previousMode = mode;
     mode = value;
     select.value = mode;
     generation++;
+
     if (mode === 'view') {
+      const returnHash = anchorHash;
       anchorHash = '';
       context = [];
       count.textContent = '';
-      nativeButtons();
+      if (previousMode !== 'view' && returnHash) window.mochimonoOpenViewer?.(returnHash);
       return;
     }
-    anchorHash = currentHash();
+
+    if (previousMode === 'view' || !anchorHash) anchorHash = currentHash();
     const mine = generation;
     count.textContent = '…';
     try {
       const built = await buildContext(mode, anchorHash);
       if (mine !== generation || mode === 'view') return;
       context = built;
-      updateButtons();
+      if (!context.some(file => file.hash === currentHash())) window.mochimonoOpenViewer?.(anchorHash);
+      requestAnimationFrame(updateButtons);
     } catch {
       if (mine !== generation) return;
       context = [];
@@ -249,7 +243,9 @@ if (viewer && viewerOpen && prev && next && actions) {
     navigate(event.key === 'ArrowLeft' ? -1 : 1);
   }, true);
 
-  new MutationObserver(() => requestAnimationFrame(updateButtons)).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
+  new MutationObserver(() => {
+    if (mode !== 'view') requestAnimationFrame(updateButtons);
+  }).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
 
   new MutationObserver(() => {
     if (!viewer.hidden) return;
