@@ -390,7 +390,7 @@ function applyFilters(reset = true) {
   const query = $('#search').value.trim().toLowerCase();
   const terms = query.split(/\s+/).filter(Boolean);
   const sourceId = Number(importId) || 0;
-  const folderHashes = folderImportId && folderData ? new Set(folderData.files.map(file => file.hash)) : null;
+  const folderHashes = folderImportId && folderPath && folderData ? new Set(folderData.files.map(file => file.hash)) : null;
   filtered = sortFiles(catalog.filter(file => {
     if (!matchesType(file)) return false;
     if (collectionHashes && !collectionHashes.has(file.hash)) return false;
