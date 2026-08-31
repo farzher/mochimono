@@ -79,25 +79,31 @@ function fileType(details, filename) {
 function searchReason(details, raw, filename) {
   const { field, terms } = queryHint(raw);
   if (!terms.length || field === 'name') return null;
+  if (!field && terms.every(term => normalizeText(filename).includes(term))) return null;
+
   const sources = Array.isArray(details?.sources) ? details.sources : [];
   const paths = sources.flatMap(source => [sourcePath(source), source.path, source.rootPath]);
   const sourceNames = sources.flatMap(source => [source.sourceName, source.deviceName]);
   const ext = String(filename || '').match(/\.([^.]+)$/)?.[1] || '';
   const date = new Date(details?.date?.fileDate || details?.object?.createdAt || 0);
   const year = Number.isNaN(date.getTime()) ? '' : String(date.getFullYear());
-  const byField = {
+  const groups = {
     path: paths,
     source: sourceNames,
     type: [fileType(details, filename)],
     ext: [ext ? `.${ext}` : ''],
     year: [year]
   };
-  const candidates = (byField[field] || [...paths, ...sourceNames, fileType(details, filename), ext ? `.${ext}` : '', year])
-    .map(value => String(value || '').trim()).filter(Boolean);
-  const match = candidates.find(value => terms.every(term => normalizeText(value).includes(term))) ||
-    candidates.find(value => terms.some(term => normalizeText(value).includes(term)));
+  const candidates = (field ? [[field, groups[field] || []]] : Object.entries(groups))
+    .flatMap(([label, values]) => values.map(value => ({ label, value: String(value || '').trim() })))
+    .filter(candidate => candidate.value);
+  const match = candidates.find(candidate => terms.every(term => normalizeText(candidate.value).includes(term))) ||
+    candidates.find(candidate => terms.some(term => normalizeText(candidate.value).includes(term)));
   if (!match) return null;
-  return { text: match, terms: terms.filter(term => normalizeText(match).includes(term)) };
+  return {
+    text: `${match.label}: ${match.value}`,
+    terms: terms.filter(term => normalizeText(match.value).includes(term))
+  };
 }
 
 function appendHighlighted(element, text, terms) {
