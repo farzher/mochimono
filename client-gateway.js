@@ -85,10 +85,18 @@ async function checkThumbnails(req, res) {
   if (!Array.isArray(body.hashes) || body.hashes.length > 500) return json(res, 400, { error: 'hashes must be an array of at most 500 items' });
   const hashes = [...new Set(body.hashes.map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
   const ready = new Map();
+  const snapshot = await clientProviders();
 
   await Promise.all(hashes.map(async hash => {
     const thumb = await providerThumbnail(hash);
-    if (thumb) ready.set(hash, thumb);
+    if (thumb) {
+      ready.set(hash, thumb);
+      return;
+    }
+    const file = snapshot.byHash.get(hash);
+    if (file && !file.serverStored && snapshot.candidates.has(hash)) {
+      queueProviderThumbnail({ hash, filename: file.filename, mime: file.mime });
+    }
   }));
 
   if (settings.token) {
