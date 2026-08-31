@@ -1,0 +1,172 @@
+import { createReadStream } from 'node:fs';
+import { readFile, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Readable } from 'node:stream';
+import http from 'node:http';
+
+const ROOT = fileURLToPath(new URL('.', import.meta.url));
+const WEB_DIR = join(ROOT, 'web');
+const CONFIG_PATH = join(homedir(), '.mochimono', 'agent.json');
+
+function json(res, status, data) {
+  const body = JSON.stringify(data);
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+    'cache-control': 'no-store'
+  });
+  res.end(body);
+}
+
+async function readJson(req, max = 128 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > max) throw Object.assign(new Error('Request too large'), { status: 413 });
+    chunks.push(chunk);
+  }
+  if (!size) return {};
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  catch { throw Object.assign(new Error('Invalid JSON'), { status: 400 }); }
+}
+
+async function config() {
+  let saved = {};
+  try { saved = JSON.parse(await readFile(CONFIG_PATH, 'utf8')); } catch {}
+  return {
+    server: String(process.env.MOCHIMONO_URL || saved.server || 'http://127.0.0.1:8642').replace(/\/$/, ''),
+    token: String(process.env.MOCHIMONO_TOKEN || saved.token || ''),
+    device: String(saved.device || '')
+  };
+}
+
+function staticType(path) {
+  if (path.endsWith('.html')) return 'text/html; charset=utf-8';
+  if (path.endsWith('.js')) return 'text/javascript; charset=utf-8';
+  if (path.endsWith('.css')) return 'text/css; charset=utf-8';
+  if (path.endsWith('.svg')) return 'image/svg+xml';
+  return 'application/octet-stream';
+}
+
+async function serveLibrary(res, pathname) {
+  let relative = pathname.slice('/files'.length);
+  if (!relative || relative === '/') {
+    let html = await readFile(join(WEB_DIR, 'index.html'), 'utf8');
+    html = html
+      .replace(/(href|src)="\/(?!api\/)/g, '$1="/files/')
+      .replace('</head>', '<script>document.documentElement.classList.add("client-library")</script></head>');
+    res.writeHead(200, {
+      'content-type': 'text/html; charset=utf-8',
+      'content-length': Buffer.byteLength(html),
+      'cache-control': 'no-cache'
+    });
+    res.end(html);
+    return true;
+  }
+
+  relative = decodeURIComponent(relative).replace(/^\/+/, '');
+  const path = resolve(WEB_DIR, relative);
+  if (path !== WEB_DIR && !path.startsWith(`${WEB_DIR}${sep}`)) return false;
+  try {
+    const info = await stat(path);
+    if (!info.isFile()) return false;
+    res.writeHead(200, {
+      'content-type': staticType(path),
+      'content-length': info.size,
+      'cache-control': 'no-cache'
+    });
+    createReadStream(path).pipe(res);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const LOCAL_API = [
+  /^\/api\/state$/,
+  /^\/api\/settings$/,
+  /^\/api\/job\/cancel$/,
+  /^\/api\/pick-folder$/,
+  /^\/api\/folders(?:\/.*)?$/,
+  /^\/api\/backups$/,
+  /^\/api\/backup(?:\/.*)?$/,
+  /^\/api\/folder-stats$/,
+  /^\/api\/backup-collections$/,
+  /^\/api\/client(?:\/.*)?$/
+];
+
+function isLocalApi(pathname) {
+  return LOCAL_API.some(pattern => pattern.test(pathname));
+}
+
+async function login(req, res) {
+  const body = await readJson(req);
+  const server = String(body.server || '').trim().replace(/\/$/, '');
+  const username = String(body.username || '');
+  const password = String(body.password || '');
+  if (!server || !username || !password) return json(res, 400, { error: 'Server, username, and password are required' });
+  const response = await fetch(`${server}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username, password, device: String(body.device || 'Mochimono Client') })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) return json(res, response.status, { error: data.error || 'Login failed' });
+  return json(res, 200, { token: data.token, username: data.username });
+}
+
+async function proxyApi(req, res, url) {
+  const current = await config();
+  if (!current.token) return json(res, 401, { error: 'Connect the Client first' });
+
+  const headers = {};
+  for (const name of ['content-type', 'content-length', 'range', 'if-none-match', 'if-modified-since', 'x-mochimono-mime']) {
+    if (req.headers[name] != null) headers[name] = req.headers[name];
+  }
+  headers.authorization = `Bearer ${current.token}`;
+  const body = ['GET', 'HEAD'].includes(req.method) ? undefined : req;
+  const response = await fetch(`${current.server}${url.pathname}${url.search}`, {
+    method: req.method,
+    headers,
+    body,
+    duplex: body ? 'half' : undefined,
+    redirect: 'manual'
+  });
+
+  const out = {};
+  for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control', 'content-disposition', 'etag', 'last-modified']) {
+    const value = response.headers.get(name);
+    if (value != null) out[name] = value;
+  }
+  res.writeHead(response.status, out);
+  if (req.method === 'HEAD' || !response.body) return res.end();
+  Readable.fromWeb(response.body).pipe(res);
+}
+
+const originalCreateServer = http.createServer;
+http.createServer = function (...args) {
+  const context = this;
+  http.createServer = originalCreateServer;
+  const index = args.findIndex(value => typeof value === 'function');
+  if (index < 0) return originalCreateServer.apply(context, args);
+  const listener = args[index];
+  args[index] = async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    try {
+      if (url.pathname === '/api/client/login' && req.method === 'POST') return await login(req, res);
+      if (url.pathname === '/files' || url.pathname.startsWith('/files/')) {
+        if (await serveLibrary(res, url.pathname)) return;
+        return json(res, 404, { error: 'Not found' });
+      }
+      if (url.pathname.startsWith('/api/') && !isLocalApi(url.pathname)) return await proxyApi(req, res, url);
+    } catch (error) {
+      if (!res.headersSent) return json(res, error.status || 502, { error: error.message || 'Client gateway error' });
+      return res.destroy();
+    }
+    return listener(req, res);
+  };
+  return originalCreateServer.apply(context, args);
+};
