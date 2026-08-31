@@ -17,36 +17,37 @@
     </div>
   </header>
 
-  <main>
-    <section class="folders-panel">
-      <div id="folders" class="sync-folders"><div class="muted">Loading…</div></div>
-      <details class="folder-add">
-        <summary><span class="folder-add-icon" aria-hidden="true"></span><strong>Add folder</strong></summary>
-        <div class="folder-add-form path-row">
-          <input id="importPath" placeholder="Folder or drive">
-          <button id="chooseImport" class="secondary">Browse</button>
-          <button id="startImport" class="primary">Add</button>
-        </div>
-      </details>
+  <main class="dashboard">
+    <section class="dashboard-section">
+      <div class="section-head">
+        <div><h2>Folders</h2><span id="folderSummary" class="section-summary"></span></div>
+        <button id="showFolderAdd" class="round-action" title="Add folder" aria-label="Add folder">＋</button>
+      </div>
+      <div id="folderAdd" class="inline-add" hidden>
+        <input id="importPath" placeholder="Folder or drive">
+        <button id="chooseImport" class="secondary">Browse</button>
+        <button id="startImport" class="primary">Add</button>
+      </div>
+      <div id="folders" class="item-list"><div class="muted">Loading…</div></div>
     </section>
 
-    <section id="activityCard" class="activity-strip" hidden><div id="activity"></div></section>
+    <section id="activityCard" class="activity-card" hidden><div id="activity"></div></section>
 
-    <details id="protection" class="drawer">
-      <summary>Protection</summary>
-      <div class="drawer-body">
-        <div class="drawer-actions"><button id="refreshBackups" class="text small">Refresh</button></div>
-        <div id="backups" class="drives"><div class="muted">Loading…</div></div>
-        <details class="add-control backup-add-control">
-          <summary><span aria-hidden="true">＋</span> Add backup</summary>
-          <div class="add-popover path-row add-backup">
-            <input id="backupLocation" placeholder="Backup folder">
-            <button id="chooseBackup" class="secondary">Browse</button>
-            <button id="addBackup" class="primary">Add</button>
-          </div>
-        </details>
+    <section class="dashboard-section backups-section">
+      <div class="section-head">
+        <div><h2>Backups</h2><span id="backupSummary" class="section-summary"></span></div>
+        <div class="section-actions">
+          <button id="refreshBackups" class="round-action subtle" title="Refresh backups" aria-label="Refresh backups">↻</button>
+          <button id="showBackupAdd" class="round-action" title="Add backup" aria-label="Add backup">＋</button>
+        </div>
       </div>
-    </details>
+      <div id="backupAdd" class="inline-add" hidden>
+        <input id="backupLocation" placeholder="Backup folder">
+        <button id="chooseBackup" class="secondary">Browse</button>
+        <button id="addBackup" class="primary">Add</button>
+      </div>
+      <div id="backups" class="item-list"><div class="muted">Loading…</div></div>
+    </section>
   </main>
 
   <dialog id="connectionDialog">
@@ -61,17 +62,12 @@
     <div class="dialog-actions"><div class="spacer"></div><button id="saveDevice" class="primary">Save</button></div>
   </dialog>
 
-  <dialog id="backupDialog">
+  <dialog id="backupDialog" class="small-dialog">
     <div class="dialog-head"><div><h3>Backup</h3><div id="backupPathLabel" class="picker-path"></div></div><button class="icon" data-close>×</button></div>
-    <input id="backupName" placeholder="Name">
-    <label class="check"><input id="backupEverything" type="checkbox" checked> Everything</label>
-    <div id="backupTypes" class="type-grid disabled">
-      <label class="check"><input type="checkbox" value="image"> Images</label>
-      <label class="check"><input type="checkbox" value="video"> Video</label>
-      <label class="check"><input type="checkbox" value="audio"> Audio</label>
-      <label class="check"><input type="checkbox" value="text"> Text</label>
-      <label class="check"><input type="checkbox" value="application"> Documents</label>
-      <label class="check"><input type="checkbox" value="other"> Other</label>
+    <div class="field-stack">
+      <input id="backupName" placeholder="Name">
+      <label class="field-label" for="backupScope">Back up</label>
+      <select id="backupScope"><option value="">Everything</option></select>
     </div>
     <div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="initializeBackup" class="primary">Save</button></div>
   </dialog>
@@ -84,6 +80,5 @@
 
   <div id="toast" class="toast"></div>
   <script type="module" src="/app.js"></script>
-  <script type="module" src="/folder-stats.js"></script>
 </body>
 </html>
