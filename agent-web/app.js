@@ -292,13 +292,13 @@ function backupState(location) {
   const count = Number(location.local?.count) || 0;
   const remote = location.remote;
   if (remote?.policy?.missing) return { label: 'Scope removed', className: 'warning' };
-  if (!remote) return { label: count ? 'Stored locally' : 'Server unavailable', className: count ? 'good' : '' };
-  const missing = Math.max(0, Number(remote.desiredBytes) - Number(remote.protectedBytes));
-  if (missing) return { label: `${bytes(missing)} left`, className: 'warning' };
   const verification = backupVerification(location);
   if (verification.catalogBad) return { label: 'Backup catalog damaged', className: 'warning' };
   if (verification.bad) return { label: `${verification.bad.toLocaleString()} damaged`, className: 'warning' };
   if (verification.stale && count) return { label: 'Verify recommended', className: 'warning' };
+  if (!remote) return { label: count ? 'Stored locally' : 'Server unavailable', className: count ? 'good' : '' };
+  const missing = Math.max(0, Number(remote.desiredBytes) - Number(remote.protectedBytes));
+  if (missing) return { label: `${bytes(missing)} left`, className: 'warning' };
   return { label: exactDate(location.meta?.lastBackupAt || location.local?.oldestVerification) || (count ? 'Stored' : 'Empty'), className: count ? 'good' : '' };
 }
 
