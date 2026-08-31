@@ -1,3 +1,5 @@
+import './client-bridge.js';
+
 if (location.pathname.startsWith('/files')) {
   const style = document.createElement('style');
   style.textContent = `
@@ -123,7 +125,6 @@ if (location.pathname.startsWith('/files')) {
     let added = 0;
     let existing = 0;
     let ignored = 0;
-    let bytes = 0;
     const duplicates = [];
 
     for (let index = 0; index < files.length; index++) {
@@ -139,7 +140,6 @@ if (location.pathname.startsWith('/files')) {
         headers: { 'x-mochimono-file-mime': item.file.type || 'application/octet-stream' },
         body: item.file
       });
-      bytes += Number(data.size) || 0;
       if (data.ignored) ignored++;
       else if (data.existing) {
         existing++;
@@ -164,13 +164,13 @@ if (location.pathname.startsWith('/files')) {
 
   let dragDepth = 0;
   document.addEventListener('dragenter', event => {
-    if (!event.dataTransfer?.types?.includes('Files')) return;
+    if (![...(event.dataTransfer?.types || [])].includes('Files')) return;
     dragDepth++;
     target.classList.add('show');
     event.preventDefault();
   });
   document.addEventListener('dragover', event => {
-    if (!event.dataTransfer?.types?.includes('Files')) return;
+    if (![...(event.dataTransfer?.types || [])].includes('Files')) return;
     event.dataTransfer.dropEffect = 'copy';
     target.classList.add('show');
     event.preventDefault();
