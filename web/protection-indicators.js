@@ -49,7 +49,7 @@ function protectionFor(hash) {
   if (state.onlyLocal.has(hash)) return { key: 'only-local', className: 'danger', label: 'Only indexed here', grid: 'Only here' };
   if (local && !server) return { key: 'not-server', className: 'danger', label: backed ? 'Not in Mochimono' : 'Local only', grid: backed ? 'Not in Mochimono' : 'Local only' };
   if (local && server && !verified) return { key: 'needs-backup', className: 'warn', label: backed ? 'Verify backup' : 'Needs backup', grid: backed ? 'Verify backup' : 'Needs backup' };
-  if (!local && server && !verified) return { key: 'server-only', className: 'warn', label: backed ? 'Backup unverified' : 'Mochimono only', grid: backed ? 'Verify backup' : 'Cloud only' };
+  if (!local && server && !verified) return { key: 'server-only', className: 'warn', label: backed ? 'Backup unverified' : 'No indexed local copy', grid: backed ? 'Verify backup' : 'Not indexed locally' };
   if (state.safeLocal.has(hash)) return { key: 'safe', className: 'safe', label: 'Safe to free', grid: '' };
   if (!local && server && verified) return { key: 'not-local', className: '', label: 'No indexed local copy', grid: '' };
   if (state.needs.has(hash)) return { key: 'needs', className: 'warn', label: 'Needs protection', grid: 'Needs protection' };
