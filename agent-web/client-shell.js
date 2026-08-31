@@ -178,10 +178,22 @@ logoutButton.addEventListener('click', async () => {
   notify('Logged out');
 });
 
+function chooseLocalFolder(mode) {
+  showTab('storage');
+  const normalized = mode === 'browse' ? 'browse' : 'protect';
+  window.dispatchEvent(new CustomEvent('mochimono-folder-intent-ui', { detail: { mode: normalized } }));
+  if ($('#folderAdd')?.hidden) $('#showFolderAdd')?.click();
+  setTimeout(() => $('#chooseImport')?.click(), 0);
+}
+
 window.addEventListener('message', event => {
   if (event.source !== frame.contentWindow) return;
   if (event.data?.type === 'mochimono-auth-required') {
     refreshShellState(true);
+    return;
+  }
+  if (event.data?.type === 'mochimono-folder-intent') {
+    chooseLocalFolder(event.data.mode);
     return;
   }
   if (event.data?.type === 'mochimono-viewer-state') {
