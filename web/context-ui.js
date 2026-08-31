@@ -20,7 +20,7 @@ const detailsCache = new Map();
 const style = document.createElement('style');
 style.textContent = `
   .files.grid .file-card{position:relative}
-  .files.grid .file-card:not(.media-card){flex:0 0 auto;width:clamp(calc(var(--media-size) * .65),calc(var(--media-size) * 1.333),calc(var(--media-size) * 2.1));height:var(--media-size);background:#100f11;border-radius:3px}
+  .files.grid .file-card:not(.media-card){flex:0 0 auto;width:calc(var(--media-size) * 1.333);height:var(--media-size);background:#100f11;border-radius:3px}
   .files.grid .file-card:not(.media-card) .thumb{width:100%;height:100%;display:grid;place-items:center}
   .files.grid .file-card:not(.media-card) .card-copy{display:none}
   .file-context-badge{position:absolute;z-index:3;left:0;right:0;bottom:0;min-width:0;padding:28px 8px 7px;display:flex;align-items:baseline;gap:7px;background:linear-gradient(to bottom,transparent 0,rgba(5,5,6,.3) 35%,rgba(5,5,6,.9) 100%);color:#fff;font-size:10px;font-weight:720;line-height:1.2;pointer-events:none;text-shadow:0 1px 3px #000;opacity:0;transform:translateY(3px);transition:opacity .1s ease,transform .1s ease}
@@ -28,7 +28,7 @@ style.textContent = `
   .file-context-name{flex:1 1 auto}
   .file-context-badge.has-match .file-context-name{flex:0 1 44%;max-width:44%}
   .file-context-match{flex:1 1 auto;color:#c9c0bd;font-weight:600}
-  .file-context-match mark{padding:0;background:transparent;color:#ff6f67;font-weight:800;text-shadow:0 1px 3px #000}
+  .file-context-match mark{padding:0;background:transparent;color:#ff6f67;font-weight:800}
   .file-card.context-pointer-hover .file-context-badge,
   .file-card.context-keyboard-focus .file-context-badge,
   .file-card:focus-visible .file-context-badge{opacity:1;transform:none}
@@ -43,29 +43,17 @@ function currentView() {
 }
 
 function normalizeText(text) {
-  return String(text || '')
-    .normalize('NFKD')
-    .replace(/\p{M}+/gu, '')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return String(text || '').normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function words(text) {
-  return normalizeText(text).split(' ').filter(Boolean);
-}
-
-function searchTokens(raw) {
-  const tokens = [];
-  const regex = /(?:^|\s)(?:(name|path|source|type|ext|year):(?:"([^"]*)"|'([^']*)'|([^\s]+))|"([^"]*)"|'([^']*)'|([^\s]+))/giu;
-  let match;
-  while ((match = regex.exec(String(raw || '')))) {
-    const field = match[1]?.toLowerCase() || '';
-    const text = match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[6] ?? match[7] ?? '';
-    if (text.trim()) tokens.push({ field, text: text.trim() });
+function queryHint(raw) {
+  const field = raw.match(/\b(name|path|source|type|ext|year):/i)?.[1]?.toLowerCase() || '';
+  let terms = normalizeText(raw.replace(/\b(?:name|path|source|type|ext|year):/gi, ' ').replace(/["']/g, ' ')).split(' ').filter(Boolean);
+  if (field === 'type' && terms.length === 1) {
+    const aliases = { photo: 'image', photos: 'image', picture: 'image', pictures: 'image', images: 'image', videos: 'video', movies: 'video', music: 'audio', document: 'application', documents: 'application', docs: 'application' };
+    terms = [aliases[terms[0]] || terms[0]];
   }
-  return tokens;
+  return { field, terms };
 }
 
 function sourcePath(source) {
@@ -77,115 +65,45 @@ function sourcePath(source) {
   return `${root}${separator}${relative.replace(/[\\/]+/g, separator)}`;
 }
 
-function extension(name) {
-  return String(name || '').match(/\.([^.]+)$/)?.[1] || '';
-}
-
-function detailType(details, filename) {
+function fileType(details, filename) {
   const mime = String(details?.object?.mime || '');
   const base = mime.split('/')[0];
   if (base && base !== 'application') return base;
-  const ext = extension(filename).toLowerCase();
+  const ext = String(filename || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
   if (['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff'].includes(ext)) return 'image';
   if (['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp'].includes(ext)) return 'video';
   if (['mp3','m4a','aac','wav','flac','ogg','opus'].includes(ext)) return 'audio';
-  if (base === 'text') return 'text';
   return base || 'file';
 }
 
-function typeAlias(text) {
-  const value = normalizeText(text);
-  const aliases = new Map([
-    ['photo','image'],['photos','image'],['picture','image'],['pictures','image'],['images','image'],
-    ['videos','video'],['movies','video'],['music','audio'],['documents','application'],['document','application'],['docs','application']
-  ]);
-  return aliases.get(value) || value;
-}
-
-function containsTerms(text, terms) {
-  const haystack = normalizeText(text);
-  return terms.length > 0 && terms.every(term => haystack.includes(term));
-}
-
-function unique(values) {
-  return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))];
-}
-
 function searchReason(details, raw, filename) {
-  const tokens = searchTokens(raw);
-  if (!tokens.length) return null;
+  const { field, terms } = queryHint(raw);
+  if (!terms.length || field === 'name') return null;
   const sources = Array.isArray(details?.sources) ? details.sources : [];
-  const paths = unique(sources.flatMap(source => [sourcePath(source), source.path, source.rootPath]));
-  const names = unique([filename, ...sources.map(source => source.filename)]);
-  const sourceNames = unique(sources.flatMap(source => [source.sourceName, source.deviceName]));
-  const type = detailType(details, filename);
-  const ext = extension(filename);
+  const paths = sources.flatMap(source => [sourcePath(source), source.path, source.rootPath]);
+  const sourceNames = sources.flatMap(source => [source.sourceName, source.deviceName]);
+  const ext = String(filename || '').match(/\.([^.]+)$/)?.[1] || '';
   const date = new Date(details?.date?.fileDate || details?.object?.createdAt || 0);
   const year = Number.isNaN(date.getTime()) ? '' : String(date.getFullYear());
-
-  const fieldReason = token => {
-    let terms = words(token.text);
-    if (!terms.length) return null;
-    if (token.field === 'path') {
-      const text = paths.find(value => containsTerms(value, terms));
-      return text ? { text, terms } : null;
-    }
-    if (token.field === 'source') {
-      const text = sourceNames.find(value => containsTerms(value, terms));
-      return text ? { text, terms } : null;
-    }
-    if (token.field === 'type') {
-      const wanted = typeAlias(token.text);
-      const matches = wanted === 'media' ? ['image','video'].includes(type) : wanted === 'application' ? ['application','text'].includes(type) : type === wanted;
-      return matches ? { text: type, terms: [wanted === 'media' || wanted === 'application' ? type : wanted] } : null;
-    }
-    if (token.field === 'ext') {
-      terms = words(String(token.text).replace(/^\./, ''));
-      return containsTerms(ext, terms) ? { text: `.${ext}`, terms } : null;
-    }
-    if (token.field === 'year') return containsTerms(year, terms) ? { text: year, terms } : null;
-    if (token.field === 'name') {
-      const text = names.find(value => containsTerms(value, terms));
-      return text && normalizeText(text) !== normalizeText(filename) ? { text, terms } : null;
-    }
-    return null;
+  const byField = {
+    path: paths,
+    source: sourceNames,
+    type: [fileType(details, filename)],
+    ext: [ext ? `.${ext}` : ''],
+    year: [year]
   };
-
-  for (const token of tokens) {
-    if (!token.field) continue;
-    const reason = fieldReason(token);
-    if (reason) return reason;
-  }
-
-  const genericTerms = tokens.filter(token => !token.field).flatMap(token => words(token.text));
-  if (genericTerms.length) {
-    const path = paths.find(value => containsTerms(value, genericTerms));
-    if (path) return { text: path, terms: genericTerms };
-    const sourceName = sourceNames.find(value => containsTerms(value, genericTerms));
-    if (sourceName) return { text: sourceName, terms: genericTerms };
-    if (containsTerms(type, genericTerms)) return { text: type, terms: genericTerms };
-    if (containsTerms(ext, genericTerms)) return { text: `.${ext}`, terms: genericTerms };
-    if (containsTerms(year, genericTerms)) return { text: year, terms: genericTerms };
-  }
-
-  for (const token of tokens.filter(token => !token.field)) {
-    const terms = words(token.text);
-    const path = paths.find(value => containsTerms(value, terms));
-    if (path) return { text: path, terms };
-    const sourceName = sourceNames.find(value => containsTerms(value, terms));
-    if (sourceName) return { text: sourceName, terms };
-  }
-  return null;
+  const candidates = (byField[field] || [...paths, ...sourceNames, fileType(details, filename), ext ? `.${ext}` : '', year])
+    .map(value => String(value || '').trim()).filter(Boolean);
+  const match = candidates.find(value => terms.every(term => normalizeText(value).includes(term))) ||
+    candidates.find(value => terms.some(term => normalizeText(value).includes(term)));
+  if (!match) return null;
+  return { text: match, terms: terms.filter(term => normalizeText(match).includes(term)) };
 }
 
 function appendHighlighted(element, text, terms) {
   element.replaceChildren();
-  const wanted = unique(terms).sort((a, b) => b.length - a.length);
-  if (!wanted.length) {
-    element.textContent = text;
-    return;
-  }
-  const escaped = wanted.map(term => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const escaped = [...new Set(terms)].filter(Boolean).sort((a, b) => b.length - a.length).map(term => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (!escaped.length) return void (element.textContent = text);
   const regex = new RegExp(`(${escaped.join('|')})`, 'ig');
   let offset = 0;
   for (const match of String(text).matchAll(regex)) {
@@ -198,22 +116,15 @@ function appendHighlighted(element, text, terms) {
   if (offset < text.length) element.append(document.createTextNode(text.slice(offset)));
 }
 
-function clearReason(badge) {
-  const match = badge.querySelector('.file-context-match');
-  if (!badge.classList.contains('has-match') && !badge.dataset.reasonKey && !match?.childNodes.length) return;
-  badge.classList.remove('has-match');
-  badge.dataset.reasonKey = '';
-  if (match?.childNodes.length) match.replaceChildren();
-}
-
 function renderReason(badge, reason) {
   const match = badge.querySelector('.file-context-match');
-  if (!match || !reason) return clearReason(badge);
-  const key = `${reason.text}\u0000${reason.terms.join('\u0001')}`;
+  const key = reason ? `${reason.text}\u0000${reason.terms.join('\u0001')}` : '';
   if (badge.dataset.reasonKey === key) return;
-  badge.classList.add('has-match');
   badge.dataset.reasonKey = key;
-  appendHighlighted(match, reason.text, reason.terms);
+  badge.classList.toggle('has-match', Boolean(reason));
+  if (!match) return;
+  if (reason) appendHighlighted(match, reason.text, reason.terms);
+  else match.replaceChildren();
 }
 
 function currentSearch() {
@@ -223,21 +134,15 @@ function currentSearch() {
 function loadReason(card, badge) {
   clearTimeout(reasonTimer);
   const raw = currentSearch();
-  if (!raw || !card) {
+  if (!raw) {
     reasonGeneration++;
-    clearReason(badge);
+    renderReason(badge, null);
     return;
   }
-
   const hash = card.dataset.hash;
   const filename = card.dataset.filename || 'File';
-  const cached = detailsCache.get(hash);
-  if (cached) {
-    renderReason(badge, searchReason(cached, raw, filename));
-    return;
-  }
-
-  clearReason(badge);
+  if (detailsCache.has(hash)) return renderReason(badge, searchReason(detailsCache.get(hash), raw, filename));
+  renderReason(badge, null);
   const generation = ++reasonGeneration;
   reasonTimer = setTimeout(async () => {
     try {
@@ -245,9 +150,7 @@ function loadReason(card, badge) {
       if (!response.ok) return;
       const details = await response.json();
       detailsCache.set(hash, details);
-      if (generation !== reasonGeneration || currentSearch() !== raw) return;
-      const activeHash = pointerHash || lastFocusedHash;
-      if (activeHash !== hash) return;
+      if (generation !== reasonGeneration || currentSearch() !== raw || (pointerHash || lastFocusedHash) !== hash) return;
       const current = files.querySelector(`.file-card[data-hash="${CSS.escape(hash)}"] .file-context-badge`);
       if (current) renderReason(current, searchReason(details, raw, filename));
     } catch {}
@@ -257,6 +160,7 @@ function loadReason(card, badge) {
 function decorate() {
   decorateFrame = 0;
   const grid = currentView() === 'grid';
+  const activeHash = pointerHash || lastFocusedHash;
   for (const card of files.querySelectorAll('.file-card[data-hash]')) {
     let badge = card.querySelector('.file-context-badge');
     if (!grid) {
@@ -274,7 +178,7 @@ function decorate() {
     }
     const name = badge.querySelector('.file-context-name');
     if (name.textContent !== filename) name.textContent = filename;
-    if (card.dataset.hash !== (pointerHash || lastFocusedHash)) clearReason(badge);
+    if (card.dataset.hash !== activeHash) renderReason(badge, null);
   }
   for (const card of files.querySelectorAll('[data-hash]')) {
     card.removeAttribute('title');
@@ -282,10 +186,8 @@ function decorate() {
     card.classList.toggle('context-pointer-hover', card.dataset.hash === pointerHash);
   }
   files.classList.toggle('has-context-hover', Boolean(pointerHash));
-
-  if (grid) {
-    const activeHash = pointerHash || lastFocusedHash;
-    const active = activeHash ? files.querySelector(`.file-card[data-hash="${CSS.escape(activeHash)}"]`) : null;
+  if (grid && activeHash) {
+    const active = files.querySelector(`.file-card[data-hash="${CSS.escape(activeHash)}"]`);
     const badge = active?.querySelector('.file-context-badge');
     if (active && badge) loadReason(active, badge);
   }
@@ -353,26 +255,17 @@ function viewerVerticalCard(direction, hash = currentViewerHash()) {
 function bridgeViewerGrid(direction, startHash) {
   const bridge = direction > 0 ? viewerNext : viewerPrev;
   if (!bridge || bridge.disabled || !window.mochimonoOpenViewer) return null;
-
-  // A linear step past the rendered window makes app.js recenter the Grid
-  // synchronously. We then navigate from the original card before paint.
   bridge.click();
   if (viewer.hidden) return null;
-
   const target = viewerVerticalCard(direction, startHash);
   if (target) return target;
-
-  // The bridge step is only an implementation detail. Never leave the viewer
-  // on it if there truly is no spatial row in this direction.
   window.mochimonoOpenViewer(startHash);
   return null;
 }
 
 function absoluteTopRow(card) {
   const topSentinel = document.querySelector('#top-scroll-sentinel');
-  if (!topSentinel?.hidden) return false;
-  const cards = renderedCards();
-  return verticalCard(cards, card, -1) === card;
+  return Boolean(topSentinel?.hidden && verticalCard(renderedCards(), card, -1) === card);
 }
 
 function focusCard(card) {
