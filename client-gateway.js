@@ -171,12 +171,14 @@ async function proxyApi(req, res, url) {
   }
   headers.authorization = `Bearer ${current.token}`;
   const body = ['GET', 'HEAD'].includes(req.method) ? undefined : req;
+  const controller = new AbortController();
   const response = await fetch(`${current.server}${url.pathname}${url.search}`, {
     method: req.method,
     headers,
     body,
     duplex: body ? 'half' : undefined,
-    redirect: 'manual'
+    redirect: 'manual',
+    signal: controller.signal
   });
 
   const out = {};
@@ -188,15 +190,24 @@ async function proxyApi(req, res, url) {
   if (req.method === 'HEAD' || !response.body) return res.end();
 
   const source = Readable.fromWeb(response.body);
-  const abort = () => source.destroy();
-  res.once('close', abort);
+  source.on('error', () => {});
+  const abort = () => {
+    if (!controller.signal.aborted) controller.abort();
+    if (!source.destroyed) source.destroy();
+  };
+  const onClose = () => {
+    if (!res.writableFinished) abort();
+  };
+  req.once('aborted', abort);
+  res.once('close', onClose);
   try {
     await pipeline(source, res);
   } catch (error) {
-    const expectedAbort = res.destroyed || req.destroyed || error?.code === 'ERR_STREAM_PREMATURE_CLOSE' || /terminated|aborted|premature close/i.test(String(error?.message || ''));
+    const expectedAbort = controller.signal.aborted || res.destroyed || req.destroyed || error?.code === 'ERR_STREAM_PREMATURE_CLOSE' || /terminated|aborted|premature close/i.test(String(error?.message || ''));
     if (!expectedAbort) throw error;
   } finally {
-    res.off('close', abort);
+    req.off('aborted', abort);
+    res.off('close', onClose);
   }
 }
 
