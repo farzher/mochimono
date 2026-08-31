@@ -11,10 +11,10 @@ const search = document.querySelector('#search');
 let decorateFrame = 0;
 let focusedHash = '';
 let pointerHash = '';
-let detailTimer = 0;
 let detailGeneration = 0;
 let paging = false;
 let queuedKey = '';
+const detailTimers = new Map();
 const detailsCache = new Map();
 
 const style = document.createElement('style');
@@ -28,7 +28,6 @@ style.textContent = `
   .file-context-name{flex:1 1 auto}.file-context-badge.has-match .file-context-name{flex:0 1 44%;max-width:44%}
   .file-context-match{flex:1 1 auto;color:#c9c0bd;font-weight:600}.file-context-match mark{padding:0;background:transparent;color:#ff6f67;font-weight:800}
   .file-card.context-pointer-hover .file-context-badge,.file-card.context-keyboard-focus .file-context-badge,.file-card:focus-visible .file-context-badge{opacity:1;transform:none}
-  .files.has-context-hover .file-card.context-keyboard-focus:not(.context-pointer-hover) .file-context-badge{opacity:0;transform:translateY(3px)}
   .file-card.context-keyboard-focus,.file-row.context-keyboard-focus{box-shadow:0 0 0 3px rgba(239,160,154,.9)!important;outline:none}
   @media(max-width:700px){.file-context-badge{padding:24px 7px 6px;font-size:9px}.file-context-badge.has-match .file-context-name{max-width:38%}}
 `;
@@ -71,22 +70,17 @@ function searchReason(details, raw, filename) {
   const groups = {
     path: sources.flatMap(item => [sourcePath(item), item.path, item.rootPath]),
     source: sources.flatMap(item => [item.sourceName, item.deviceName]),
-    type: [type],
-    ext: [ext ? `.${ext}` : ''],
-    year: [Number.isNaN(date.getTime()) ? '' : String(date.getFullYear())]
+    type: [type], ext: [ext ? `.${ext}` : ''], year: [Number.isNaN(date.getTime()) ? '' : String(date.getFullYear())]
   };
   const candidates = (field ? [[field, groups[field] || []]] : Object.entries(groups))
-    .flatMap(([label, values]) => values.map(value => ({ label, value: String(value || '').trim() })))
-    .filter(item => item.value);
-  const match = candidates.find(item => terms.every(term => normalize(item.value).includes(term))) ||
-    candidates.find(item => terms.some(term => normalize(item.value).includes(term)));
+    .flatMap(([label, values]) => values.map(value => ({ label, value: String(value || '').trim() }))).filter(item => item.value);
+  const match = candidates.find(item => terms.every(term => normalize(item.value).includes(term))) || candidates.find(item => terms.some(term => normalize(item.value).includes(term)));
   return match ? { text: `${match.label}: ${match.value}`, terms: terms.filter(term => normalize(match.value).includes(term)) } : null;
 }
 
 function highlighted(element, text, terms) {
   element.replaceChildren();
-  const escaped = [...new Set(terms)].filter(Boolean).sort((a, b) => b.length - a.length)
-    .map(term => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const escaped = [...new Set(terms)].filter(Boolean).sort((a, b) => b.length - a.length).map(term => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   if (!escaped.length) return void (element.textContent = text);
   const regex = new RegExp(`(${escaped.join('|')})`, 'ig');
   let offset = 0;
@@ -111,31 +105,33 @@ function renderReason(badge, reason) {
 }
 
 function loadReason(card, badge) {
-  clearTimeout(detailTimer);
   const raw = currentSearch();
   if (!raw) return renderReason(badge, null);
   const hash = card.dataset.hash;
   const filename = card.dataset.filename || 'File';
   if (detailsCache.has(hash)) return renderReason(badge, searchReason(detailsCache.get(hash), raw, filename));
   renderReason(badge, null);
-  const generation = ++detailGeneration;
-  detailTimer = setTimeout(async () => {
+  clearTimeout(detailTimers.get(hash));
+  const generation = detailGeneration;
+  detailTimers.set(hash, setTimeout(async () => {
+    detailTimers.delete(hash);
     try {
       const response = await fetch(`/api/files/${hash}/details`);
       if (!response.ok) return;
       const details = await response.json();
       detailsCache.set(hash, details);
-      if (generation !== detailGeneration || currentSearch() !== raw || (pointerHash || focusedHash) !== hash) return;
+      if (generation !== detailGeneration || currentSearch() !== raw || (hash !== pointerHash && hash !== focusedHash)) return;
       const current = files.querySelector(`.file-card[data-hash="${CSS.escape(hash)}"] .file-context-badge`);
       if (current) renderReason(current, searchReason(details, raw, filename));
     } catch {}
-  }, 90);
+  }, 90));
 }
 
 function decorate() {
   decorateFrame = 0;
   const grid = currentView() === 'grid';
-  const activeHash = pointerHash || focusedHash;
+  const activeHashes = new Set([pointerHash, focusedHash].filter(Boolean));
+  const raw = currentSearch();
   for (const card of files.querySelectorAll('.file-card[data-hash]')) {
     let badge = card.querySelector('.file-context-badge');
     if (!grid) { badge?.remove(); continue; }
@@ -149,22 +145,23 @@ function decorate() {
       card.append(badge);
     }
     const name = badge.querySelector('.file-context-name');
-    const raw = currentSearch();
     const terms = filenameTerms(raw, filename);
     const nameKey = `${filename}\0${terms.join('\1')}`;
     if (name.dataset.highlightKey !== nameKey) {
       name.dataset.highlightKey = nameKey;
       highlighted(name, filename, terms);
     }
-    if (card.dataset.hash !== activeHash) renderReason(badge, null);
+    if (!activeHashes.has(card.dataset.hash)) renderReason(badge, null);
   }
   for (const card of files.querySelectorAll('[data-hash]')) {
     card.classList.toggle('context-keyboard-focus', card.dataset.hash === focusedHash);
     card.classList.toggle('context-pointer-hover', card.dataset.hash === pointerHash);
   }
-  files.classList.toggle('has-context-hover', Boolean(pointerHash));
-  const active = grid && activeHash ? files.querySelector(`.file-card[data-hash="${CSS.escape(activeHash)}"]`) : null;
-  if (active) loadReason(active, active.querySelector('.file-context-badge'));
+  for (const hash of activeHashes) {
+    const card = grid ? files.querySelector(`.file-card[data-hash="${CSS.escape(hash)}"]`) : null;
+    const badge = card?.querySelector('.file-context-badge');
+    if (card && badge) loadReason(card, badge);
+  }
 }
 
 function scheduleDecorate() {
@@ -210,7 +207,6 @@ function verticalCard(items, current, direction) {
 function focusCard(card) {
   if (!card) return false;
   focusedHash = card.dataset.hash;
-  pointerHash = '';
   card.focus({ preventScroll: true });
   card.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
   scheduleDecorate();
@@ -220,14 +216,11 @@ function focusCard(card) {
 function openCard(card) {
   if (!card) return;
   focusedHash = card.dataset.hash;
-  pointerHash = '';
   scheduleDecorate();
   window.mochimonoOpenViewer?.(focusedHash) || card.click();
 }
 
-function afterLayout(callback) {
-  requestAnimationFrame(() => requestAnimationFrame(callback));
-}
+const afterLayout = callback => requestAnimationFrame(() => requestAnimationFrame(callback));
 
 function extend(direction, callback) {
   if (!window.mochimonoLibrary?.extend?.(direction)) return false;
@@ -249,7 +242,6 @@ function navigateGrid(key) {
   const current = currentCard(items);
   if (!current) return false;
   const hash = current.dataset.hash;
-
   if (key === 'ArrowLeft' || key === 'ArrowRight') {
     const direction = key === 'ArrowLeft' ? -1 : 1;
     const direct = items[items.indexOf(current) + direction];
@@ -260,7 +252,6 @@ function navigateGrid(key) {
       focusCard(next[next.indexOf(start) + direction]);
     });
   }
-
   if (key === 'ArrowUp' || key === 'ArrowDown') {
     const direction = key === 'ArrowUp' ? -1 : 1;
     const direct = verticalCard(items, current, direction);
@@ -320,7 +311,7 @@ files.addEventListener('pointerdown', event => {
   const hash = event.target.closest('[data-hash]')?.dataset.hash;
   if (hash) { focusedHash = hash; detailGeneration++; scheduleDecorate(); }
 });
-search?.addEventListener('input', () => { detailGeneration++; clearTimeout(detailTimer); scheduleDecorate(); });
+search?.addEventListener('input', () => { detailGeneration++; for (const timer of detailTimers.values()) clearTimeout(timer); detailTimers.clear(); scheduleDecorate(); });
 
 document.addEventListener('keydown', event => {
   if (typingTarget(event.target)) return;
@@ -330,48 +321,27 @@ document.addEventListener('keydown', event => {
     event.stopImmediatePropagation();
     return;
   }
-
   if (!viewer.hidden) {
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-      if (navigate(event.key)) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      }
+      if (navigate(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); }
       return;
     }
     if ((event.code === 'Space' || event.key === 'Enter') && !document.activeElement?.closest?.('#viewer video,#viewer input,#viewer select,#viewer textarea,#viewer summary,#viewer button,#viewer a')) {
       focusedHash = viewerHash() || focusedHash;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      viewerClose.click();
-      return;
+      event.preventDefault(); event.stopImmediatePropagation(); viewerClose.click(); return;
     }
     if (event.key.toLowerCase() === 'i' && !event.ctrlKey && !event.metaKey && !event.altKey) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      viewerInfo?.click();
+      event.preventDefault(); event.stopImmediatePropagation(); viewerInfo?.click();
     }
     return;
   }
-
   if (!['grid','list'].includes(currentView())) return;
-  if (event.key.startsWith('Arrow') && navigate(event.key)) {
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    return;
-  }
+  if (event.key.startsWith('Arrow') && navigate(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); return; }
   const current = currentCard(cards());
-  if (event.code === 'Space') {
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    openCard(current);
-  } else if (event.key === 'Enter') {
+  if (event.code === 'Space') { event.preventDefault(); event.stopImmediatePropagation(); openCard(current); }
+  else if (event.key === 'Enter') {
     const active = document.activeElement?.closest?.('[data-hash]');
-    if (active) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      openCard(active);
-    }
+    if (active) { event.preventDefault(); event.stopImmediatePropagation(); openCard(active); }
   }
 }, true);
 
