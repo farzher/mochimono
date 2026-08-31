@@ -287,17 +287,20 @@ if (stage && viewer) {
       startY: desktopZoom.y,
       moved: false
     };
-    stage.classList.add('viewer-desktop-panning');
     try { stage.setPointerCapture(event.pointerId); } catch {}
-    event.preventDefault();
-    event.stopImmediatePropagation();
   });
 
   stage.addEventListener('pointermove', event => {
     if (!desktopPan || event.pointerId !== desktopPan.pointerId) return;
     const dx = event.clientX - desktopPan.x;
     const dy = event.clientY - desktopPan.y;
-    if (Math.hypot(dx, dy) > 4) desktopPan.moved = true;
+    if (!desktopPan.moved) {
+      if (Math.hypot(dx, dy) <= 4) return;
+      desktopPan.moved = true;
+      stage.classList.add('viewer-desktop-panning');
+      clearTimeout(desktopClickTimer);
+      desktopClickTimer = 0;
+    }
     desktopZoom.x = desktopPan.startX + dx;
     desktopZoom.y = desktopPan.startY + dy;
     applyDesktopZoom();
@@ -307,12 +310,15 @@ if (stage && viewer) {
 
   stage.addEventListener('pointerup', event => {
     if (!desktopPan || event.pointerId !== desktopPan.pointerId) return;
-    suppressDesktopClick = desktopPan.moved;
+    const moved = desktopPan.moved;
+    suppressDesktopClick = moved;
     desktopPan = null;
     stage.classList.remove('viewer-desktop-panning');
     try { stage.releasePointerCapture(event.pointerId); } catch {}
-    event.preventDefault();
-    event.stopImmediatePropagation();
+    if (moved) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
   });
 
   stage.addEventListener('pointercancel', event => {
