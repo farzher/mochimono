@@ -20,7 +20,7 @@
   <main class="dashboard">
     <section class="dashboard-section">
       <div class="section-head">
-        <div><h2>Folders</h2><span id="folderSummary" class="section-summary" hidden></span></div>
+        <h2>Folders</h2>
         <button id="showFolderAdd" class="round-action" title="Add folder" aria-label="Add folder">＋</button>
       </div>
       <div id="folderAdd" class="inline-add" hidden>
@@ -31,11 +31,11 @@
       <div id="folders" class="item-list"><div class="muted">Loading…</div></div>
     </section>
 
-    <section id="activityCard" class="activity-card" hidden><div id="activity"></div></section>
+    <section id="activityCard" class="background-work" hidden><div id="activity"></div></section>
 
-    <section class="dashboard-section backups-section">
+    <section class="dashboard-section">
       <div class="section-head">
-        <div><h2>Backups</h2><span id="backupSummary" class="section-summary"></span></div>
+        <h2>Backups</h2>
         <div class="section-actions">
           <button id="refreshBackups" class="round-action subtle" title="Refresh backups" aria-label="Refresh backups">↻</button>
           <button id="showBackupAdd" class="round-action" title="Add backup" aria-label="Add backup">＋</button>
@@ -65,7 +65,7 @@
   <dialog id="backupDialog" class="small-dialog">
     <div class="dialog-head"><div><h3>Backup</h3><div id="backupPathLabel" class="picker-path"></div></div><button class="icon" data-close>×</button></div>
     <div class="field-stack">
-      <input id="backupName" placeholder="Name">
+      <input id="backupName" placeholder="Backup name">
       <label class="field-label" for="backupScope">Back up</label>
       <select id="backupScope"><option value="">Everything</option></select>
     </div>
