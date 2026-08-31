@@ -1,11 +1,15 @@
+import { buildSearchText, fileKind as kind, matchesDetails, matchesSmart, normalizeText, queryTerms } from './search-query.js';
+
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const login = $('#login');
 const app = $('#app');
 const logout = $('#logout');
+const filesElement = $('#files');
 const PAGE = 180;
-const CACHE_NAME = 'mochimono-catalog';
-const CACHE_VERSION = 2;
+const WINDOW = PAGE * 4;
+const CACHE_NAME = 'mochimono-catalog-v3';
+const CACHE_VERSION = 1;
 const THUMB_VERSION = 3;
 
 let searchTimer;
@@ -39,12 +43,16 @@ let viewerPreloads = [];
 let viewerImageLoad = null;
 let scrubbing = false;
 let lastScrubAt = 0;
+let lastRenderKey = '';
+
+const fileDates = new Map();
+window.mochimonoFileDates = fileDates;
 
 const topScrollSentinel = document.createElement('div');
 topScrollSentinel.id = 'top-scroll-sentinel';
 topScrollSentinel.style.height = '1px';
 topScrollSentinel.hidden = true;
-$('#files').before(topScrollSentinel);
+filesElement.before(topScrollSentinel);
 
 async function request(path, options = {}) {
   const response = await fetch(path, {
@@ -117,15 +125,18 @@ async function writeCache(files, meta) {
   await done;
 }
 
-async function cacheDelete(hash) {
+async function cacheDeleteMany(hashes) {
   const db = await openCache();
-  if (!db) return;
+  if (!db || !hashes?.length) return;
   const transaction = db.transaction(['files', 'thumbs'], 'readwrite');
   const done = idbDone(transaction);
-  transaction.objectStore('files').delete(hash);
-  transaction.objectStore('thumbs').delete(hash);
+  const files = transaction.objectStore('files');
+  const thumbs = transaction.objectStore('thumbs');
+  for (const hash of hashes) { files.delete(hash); thumbs.delete(hash); }
   await done;
 }
+
+const cacheDelete = hash => cacheDeleteMany([hash]);
 
 async function cacheImports(nextImports) {
   if (!cacheMeta) return;
@@ -150,18 +161,6 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 }
 
-const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff']);
-const VIDEO_EXTENSIONS = new Set(['m4v', 'mp4', 'mov', 'mkv', 'webm', 'avi', 'mpg', 'mpeg', 'm2v', 'mts', 'm2ts', '3gp']);
-function kind(file) {
-  const value = file.mime?.split('/')[0] || 'other';
-  if (value === 'application' && (!file.mime || file.mime === 'application/octet-stream')) {
-    const extension = String(file.filename || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
-    if (IMAGE_EXTENSIONS.has(extension)) return 'image';
-    if (VIDEO_EXTENSIONS.has(extension)) return 'video';
-  }
-  return value;
-}
-
 function typeLabel(file) {
   const value = kind(file);
   if (value === 'application' || value === 'text') return 'document';
@@ -176,6 +175,17 @@ function matchesType(file) {
   if (type === 'other') return !['image', 'video', 'audio', 'text', 'application'].includes(value);
   return value === type;
 }
+
+window.mochimonoSearch = {
+  raw: () => $('#search').value,
+  setRaw(text, notify = true) {
+    $('#search').value = String(text || '');
+    if (notify) $('#search').dispatchEvent(new Event('input', { bubbles: true }));
+  },
+  normalize: normalizeText,
+  matchesDetails,
+  matchesSmart
+};
 
 const objectUrl = file => `/api/objects/${file.hash}`;
 const thumbUrl = file => `/api/thumbs/${file.hash}?v=${THUMB_VERSION}`;
@@ -199,62 +209,72 @@ function normalizeFile(file) {
   const importIds = Array.isArray(file.importIds)
     ? file.importIds.map(Number).filter(Boolean)
     : String(file.importIds || '').split(',').map(Number).filter(Boolean);
-  const date = new Date(file.fileDate || file.createdAt || 0);
-  return {
+  const exactImportIds = Array.isArray(file.exactImportIds)
+    ? file.exactImportIds.map(Number).filter(Boolean)
+    : String(file.exactImportIds || '').split(',').map(Number).filter(Boolean);
+  const fileDate = new Date(file.fileDate || file.createdAt || 0);
+  const addedDate = new Date(file.addedAt || file.createdAt || 0);
+  const normalized = {
     ...file,
     size: Number(file.size) || 0,
     width: Number(file.width) || 0,
     height: Number(file.height) || 0,
     importIds,
+    exactImportIds,
     reviewed: Boolean(file.reviewed),
     backupCount: Number(file.backupCount) || 0,
-    dateMs: Number.isNaN(date.getTime()) ? 0 : date.getTime()
+    dateMs: Number.isNaN(fileDate.getTime()) ? 0 : fileDate.getTime(),
+    addedMs: Number.isNaN(addedDate.getTime()) ? 0 : addedDate.getTime()
   };
+  fileDates.set(normalized.hash, {
+    fileDate: normalized.fileDate || normalized.createdAt,
+    addedAt: normalized.addedAt || normalized.createdAt
+  });
+  return normalized;
 }
 
 function rebuildIndexes() {
   sourceNames = new Map(imports.map(item => [Number(item.id), String(item.sourceName || '')]));
-  searchIndex = new Map(catalog.map(file => {
-    const names = file.importIds.map(id => sourceNames.get(id) || '').join(' ');
-    return [file.hash, `${file.filename || ''} ${file.originalPath || ''} ${file.searchText || ''} ${names}`.toLowerCase()];
-  }));
+  searchIndex = new Map(catalog.map(file => [file.hash, buildSearchText(file, sourceNames)]));
 }
 
-function dateValue(file) {
-  return new Date(file.dateMs || 0);
+function timelineMs(file) {
+  return sort === 'date-added' ? (file.addedMs || file.dateMs || 0) : (file.dateMs || 0);
 }
 
-function shortDate(file) {
-  return dateValue(file).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
+const timelineDate = file => new Date(timelineMs(file));
+const fileDate = file => new Date(file.dateMs || 0);
+const shortDate = file => fileDate(file).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 
 function monthKey(file) {
-  const date = dateValue(file);
+  const date = timelineDate(file);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
-
-function monthLabel(key) {
-  const [year, month] = key.split('-').map(Number);
-  return new Date(year, month - 1, 1).toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
+const monthName = file => timelineDate(file).toLocaleDateString(undefined, { month: 'long' });
+const monthRailLabel = file => timelineDate(file).toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
+function dayKey(file) {
+  const date = timelineDate(file);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
+const dayLabel = file => timelineDate(file).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 
-function dateGroups(files) {
+function dateGroups(items) {
   const groups = [];
-  for (const file of files) {
+  for (const file of items) {
     const key = monthKey(file);
     const last = groups.at(-1);
     if (last?.key === key) last.files.push(file);
-    else groups.push({ key, label: monthLabel(key), files: [file] });
+    else groups.push({ key, year: timelineDate(file).getFullYear(), month: monthName(file), files: [file] });
   }
   return groups;
 }
 
 function timelineGroups() {
   const result = [];
-  let previous;
+  let previous = '';
   filtered.forEach((file, index) => {
     const key = monthKey(file);
-    if (key !== previous) result.push({ key, label: monthLabel(key), index, year: dateValue(file).getFullYear() });
+    if (key !== previous) result.push({ key, label: monthRailLabel(file), index, year: timelineDate(file).getFullYear() });
     previous = key;
   });
   return result;
@@ -267,9 +287,14 @@ function mediaRatio(file) {
 
 function gridCard(file) {
   const media = ['image', 'video'].includes(kind(file));
-  const ratio = mediaRatio(file);
   return `
-    <button class="file-card ${media ? 'media-card' : ''} ${kind(file) === 'video' ? 'video-card' : ''}" data-hash="${file.hash}" style="${media ? `--ratio:${ratio}` : ''}" title="${escapeHtml(file.filename)}">
+    <button class="file-card ${media ? 'media-card' : ''} ${kind(file) === 'video' ? 'video-card' : ''}"
+      data-hash="${file.hash}"
+      data-filename="${escapeHtml(file.filename)}"
+      data-day="${dayKey(file)}"
+      data-day-label="${escapeHtml(dayLabel(file))}"
+      style="${media ? `--ratio:${mediaRatio(file)}` : ''}"
+      title="${escapeHtml(file.filename)}">
       <div class="thumb ${media ? 'media-thumb' : ''}">${preview(file)}</div>
       ${media ? '' : `<div class="card-copy"><strong>${escapeHtml(file.filename)}</strong><span>${formatBytes(file.size)}</span></div>`}
     </button>`;
@@ -277,7 +302,7 @@ function gridCard(file) {
 
 function listRow(file) {
   return `
-    <button class="file-row" data-hash="${file.hash}">
+    <button class="file-row" data-hash="${file.hash}" data-day="${dayKey(file)}" data-day-label="${escapeHtml(dayLabel(file))}">
       <span class="type">${escapeHtml(typeLabel(file))}</span>
       <div class="file-main"><strong>${escapeHtml(file.filename)}</strong><span>${escapeHtml(file.originalPath || '')}</span></div>
       <span class="refs">${escapeHtml(shortDate(file))}</span>
@@ -285,17 +310,165 @@ function listRow(file) {
     </button>`;
 }
 
+const cardsHtml = items => items.map(file => view === 'grid' ? gridCard(file) : listRow(file)).join('');
+
+function groupsHtml(groups) {
+  let previousYear = null;
+  return groups.map(group => {
+    const year = group.year !== previousYear ? `<h2 class="year-heading">${group.year}</h2>` : '';
+    previousYear = group.year;
+    return `<section class="date-group" data-date-group="${group.key}">
+      ${year}<h3 class="date-heading">${escapeHtml(group.month)}</h3>
+      <div class="${view === 'grid' ? 'date-grid' : 'date-list'}">${cardsHtml(group.files)}</div>
+    </section>`;
+  }).join('');
+}
+
+function renderKey() {
+  return [view, sort, renderOffset, renderLimit, loaded.map(file => `${file.hash}:${timelineMs(file)}`).join(',')].join('|');
+}
+
+function captureAnchor() {
+  if (scrollY <= 4 || !$('#viewer').hidden) return null;
+  const bottom = document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0;
+  const card = [...filesElement.querySelectorAll('[data-hash]')].find(item => item.getBoundingClientRect().bottom > bottom + 1);
+  return card ? { hash: card.dataset.hash, top: card.getBoundingClientRect().top } : null;
+}
+
+function restoreAnchor(anchor) {
+  if (!anchor) return;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const card = filesElement.querySelector(`[data-hash="${CSS.escape(anchor.hash)}"]`);
+    if (!card) return;
+    const delta = card.getBoundingClientRect().top - anchor.top;
+    if (Math.abs(delta) > .5) scrollBy(0, delta);
+  }));
+}
+
+function layoutDayBreaks() {
+  if (view !== 'grid' || !sort.startsWith('date-')) return;
+  for (const container of filesElement.querySelectorAll('.date-grid')) {
+    const cards = [...container.children].filter(node => node.matches?.('.file-card[data-hash]'));
+    cards.forEach(card => card.classList.remove('day-start', 'day-row-start'));
+    if (!cards.length) continue;
+    const rowTop = new Map(cards.map(card => [card, card.offsetTop]));
+    let previousDay = '';
+    const starts = [];
+    for (const card of cards) {
+      const day = card.dataset.day || '';
+      if (day && day !== previousDay) { card.classList.add('day-start'); starts.push(card); }
+      previousDay = day;
+    }
+    for (const start of starts) {
+      const top = rowTop.get(start);
+      for (const card of cards) if (Math.abs((rowTop.get(card) ?? 0) - top) <= 1) card.classList.add('day-row-start');
+    }
+  }
+}
+const scheduleLayout = () => requestAnimationFrame(() => requestAnimationFrame(layoutDayBreaks));
+
+function updateWindow() {
+  loaded = filtered.slice(renderOffset, renderOffset + renderLimit);
+  hasPrevious = renderOffset > 0;
+  hasMore = renderOffset + loaded.length < filtered.length;
+}
+
+function syncSentinels() {
+  topScrollSentinel.hidden = !hasPrevious || view === 'folders';
+  $('#scroll-sentinel').hidden = !hasMore || view === 'folders';
+}
+
+function renderFiles(preserve = false, force = false) {
+  if (view === 'folders') return renderFolder();
+  const anchor = preserve ? captureAnchor() : null;
+  const key = renderKey();
+  if (!force && key === lastRenderKey) {
+    syncSentinels();
+    renderRail();
+    scheduleLayout();
+    return;
+  }
+  lastRenderKey = key;
+  filesElement.className = `files ${view}`;
+  if (folderImportId) folderBreadcrumb();
+  else { $('#folderbar').hidden = true; $('#folderbar').replaceChildren(); }
+  syncSentinels();
+  if (!loaded.length) filesElement.innerHTML = '<div class="empty">No files.</div>';
+  else if (sort.startsWith('date-')) filesElement.innerHTML = groupsHtml(dateGroups(loaded));
+  else filesElement.innerHTML = view === 'grid' ? `<div class="date-grid flat-grid">${cardsHtml(loaded)}</div>` : cardsHtml(loaded);
+  renderRail();
+  scheduleLayout();
+  restoreAnchor(anchor);
+}
+
+function sortFiles(items) {
+  if (sort === 'date-added') return items.sort((a, b) => timelineMs(b) - timelineMs(a) || a.hash.localeCompare(b.hash));
+  if (sort === 'date-asc') return items.sort((a, b) => a.dateMs - b.dateMs || a.hash.localeCompare(b.hash));
+  if (sort === 'size-desc') return items.sort((a, b) => b.size - a.size || a.filename.localeCompare(b.filename));
+  return items.sort((a, b) => b.dateMs - a.dateMs || a.hash.localeCompare(b.hash));
+}
+
+function applyFilters(reset = true, preserve = false) {
+  if (view === 'folders') return loadFolder();
+  const terms = queryTerms($('#search').value, $('#source').options);
+  const sourceId = Number(importId) || 0;
+  const folderHashes = folderImportId && folderPath && folderData ? new Set(folderData.files.map(file => file.hash)) : null;
+  filtered = sortFiles(catalog.filter(file => {
+    if (!matchesType(file)) return false;
+    if (collectionHashes && !collectionHashes.has(file.hash)) return false;
+    if (sourceId && !file.importIds.includes(sourceId)) return false;
+    if (folderHashes && !folderHashes.has(file.hash)) return false;
+    return !terms.length || terms.every(term => (searchIndex.get(file.hash) || '').includes(term));
+  }));
+  filteredIndex = new Map(filtered.map((file, index) => [file.hash, index]));
+  if (reset) { renderOffset = 0; renderLimit = PAGE; }
+  else if (renderOffset >= filtered.length) renderOffset = Math.max(0, filtered.length - PAGE);
+  updateWindow();
+  lastRenderKey = '';
+  renderFiles(preserve);
+  if (selected) {
+    const current = catalog.find(file => file.hash === selected.hash);
+    if (current) selected = normalizeFile(current);
+    updateViewerNav();
+  }
+}
+
+function extendWindow(direction = 1) {
+  if (view === 'folders') return false;
+  const anchor = captureAnchor();
+  if (direction < 0) {
+    if (!hasPrevious) return false;
+    const previousOffset = renderOffset;
+    renderOffset = Math.max(0, renderOffset - PAGE);
+    renderLimit = Math.min(WINDOW, renderLimit + previousOffset - renderOffset);
+  } else {
+    if (!hasMore) return false;
+    if (renderLimit < WINDOW) renderLimit = Math.min(WINDOW, renderLimit + PAGE);
+    else renderOffset = Math.min(Math.max(0, filtered.length - renderLimit), renderOffset + PAGE);
+  }
+  updateWindow();
+  lastRenderKey = '';
+  renderFiles(false);
+  restoreAnchor(anchor);
+  return true;
+}
+
+function ensureIndexRendered(index) {
+  if (!Number.isInteger(index) || !filtered[index] || (index >= renderOffset && index < renderOffset + renderLimit)) return false;
+  renderOffset = Math.max(0, Math.min(index - PAGE, Math.max(0, filtered.length - WINDOW)));
+  renderLimit = Math.min(WINDOW, Math.max(PAGE * 2, filtered.length - renderOffset));
+  updateWindow();
+  lastRenderKey = '';
+  renderFiles(false);
+  return true;
+}
+
 function railEntries() {
   if (view === 'folders' || !filtered.length) return [];
   if (sort === 'size-desc') {
     const count = Math.min(18, filtered.length);
     const indexes = [...new Set(Array.from({ length: count }, (_, i) => Math.round(i * (filtered.length - 1) / Math.max(1, count - 1))))];
-    return indexes.map((index, i) => ({
-      index,
-      label: formatBytes(filtered[index].size),
-      position: filtered.length === 1 ? 0 : index / (filtered.length - 1),
-      major: i % 3 === 0 || i === indexes.length - 1
-    }));
+    return indexes.map((index, i) => ({ index, label: formatBytes(filtered[index].size), position: filtered.length === 1 ? 0 : index / (filtered.length - 1), major: i % 3 === 0 || i === indexes.length - 1 }));
   }
   const groups = timelineGroups();
   const compact = groups.length > 18;
@@ -303,46 +476,25 @@ function railEntries() {
   return groups.map(group => {
     const major = !compact || group.year !== lastYear;
     lastYear = group.year;
-    return {
-      index: group.index,
-      label: group.label,
-      short: compact && major ? String(group.year) : group.label,
-      position: filtered.length === 1 ? 0 : group.index / (filtered.length - 1),
-      major
-    };
+    return { index: group.index, label: group.label, short: compact && major ? String(group.year) : group.label, position: filtered.length === 1 ? 0 : group.index / (filtered.length - 1), major };
   });
 }
 
 function railLabel(index) {
   const file = filtered[Math.max(0, Math.min(filtered.length - 1, index))];
-  if (!file) return '';
-  return sort === 'size-desc' ? formatBytes(file.size) : monthLabel(monthKey(file));
+  return file ? (sort === 'size-desc' ? formatBytes(file.size) : monthRailLabel(file)) : '';
 }
 
 function setRailThumb(index) {
   const thumb = $('#railThumb');
   if (!thumb || !filtered.length) return;
   const safe = Math.max(0, Math.min(filtered.length - 1, index));
-  const position = filtered.length === 1 ? 0 : safe / (filtered.length - 1);
-  thumb.style.top = `${position * 100}%`;
+  thumb.style.top = `${(filtered.length === 1 ? 0 : safe / (filtered.length - 1)) * 100}%`;
   thumb.querySelector('span').textContent = railLabel(safe);
 }
 
-function renderRail() {
-  const rail = $('#dateRail');
-  const entries = railEntries();
-  rail.hidden = !entries.length;
-  document.documentElement.classList.toggle('library-scroll', Boolean(entries.length));
-  if (!entries.length) return;
-  rail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `
-    <button data-index="${entry.index}" class="rail-tick ${entry.major ? 'major' : ''}" style="top:${(entry.position * 100).toFixed(3)}%" title="${escapeHtml(entry.label)}">
-      <span>${escapeHtml(entry.short || entry.label)}</span><i></i>
-    </button>`).join('')}<div id="railThumb" class="rail-thumb"><span></span><i></i></div>`;
-  updateRailActive();
-}
-
 function visibleIndex() {
-  const visible = [...$('#files').querySelectorAll('[data-hash]')].find(item => item.getBoundingClientRect().bottom > 90);
+  const visible = [...filesElement.querySelectorAll('[data-hash]')].find(item => item.getBoundingClientRect().bottom > 90);
   return visible ? filteredIndex.get(visible.dataset.hash) ?? renderOffset : renderOffset;
 }
 
@@ -361,6 +513,19 @@ function updateRailActive() {
   buttons.forEach(button => button.classList.toggle('active', button === active));
 }
 
+function renderRail() {
+  const rail = $('#dateRail');
+  const entries = railEntries();
+  rail.hidden = !entries.length;
+  document.documentElement.classList.toggle('library-scroll', Boolean(entries.length));
+  if (!entries.length) return;
+  rail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `
+    <button data-index="${entry.index}" class="rail-tick ${entry.major ? 'major' : ''}" style="top:${(entry.position * 100).toFixed(3)}%" title="${escapeHtml(entry.label)}">
+      <span>${escapeHtml(entry.short || entry.label)}</span><i></i>
+    </button>`).join('')}<div id="railThumb" class="rail-thumb"><span></span><i></i></div>`;
+  updateRailActive();
+}
+
 function renderImports() {
   const source = $('#source');
   source.innerHTML = '<option value="">All sources</option>' + imports.map(item => `<option value="${item.id}">${escapeHtml(item.sourceName)}</option>`).join('');
@@ -368,183 +533,42 @@ function renderImports() {
   if (view === 'folders' && !folderImportId) renderFolder();
 }
 
-function sortFiles(files) {
-  if (sort === 'date-asc') return files.sort((a, b) => a.dateMs - b.dateMs || a.hash.localeCompare(b.hash));
-  if (sort === 'size-desc') return files.sort((a, b) => b.size - a.size || a.filename.localeCompare(b.filename));
-  return files.sort((a, b) => b.dateMs - a.dateMs || a.hash.localeCompare(b.hash));
-}
-
-function updateWindow() {
-  loaded = filtered.slice(renderOffset, renderOffset + renderLimit);
-  hasPrevious = renderOffset > 0;
-  hasMore = renderOffset + renderLimit < filtered.length;
-}
-
-function syncSentinels() {
-  topScrollSentinel.hidden = !hasPrevious || view === 'folders';
-  $('#scroll-sentinel').hidden = !hasMore || view === 'folders';
-}
-
-function applyFilters(reset = true) {
-  if (view === 'folders') return loadFolder();
-  const query = $('#search').value.trim().toLowerCase();
-  const terms = query.split(/\s+/).filter(Boolean);
-  const sourceId = Number(importId) || 0;
-  const folderHashes = folderImportId && folderPath && folderData ? new Set(folderData.files.map(file => file.hash)) : null;
-  filtered = sortFiles(catalog.filter(file => {
-    if (!matchesType(file)) return false;
-    if (collectionHashes && !collectionHashes.has(file.hash)) return false;
-    if (sourceId && !file.importIds.includes(sourceId)) return false;
-    if (folderHashes && !folderHashes.has(file.hash)) return false;
-    if (terms.length && !terms.every(term => (searchIndex.get(file.hash) || '').includes(term))) return false;
-    return true;
-  }));
-  filteredIndex = new Map(filtered.map((file, index) => [file.hash, index]));
-  if (reset) { renderOffset = 0; renderLimit = PAGE; }
-  updateWindow();
-  renderFiles();
-  if (selected) {
-    const current = catalog.find(file => file.hash === selected.hash);
-    if (current) selected = normalizeFile(current);
-    updateViewerNav();
-  }
-}
-
-function cardsHtml(files) {
-  return files.map(file => view === 'grid' ? gridCard(file) : listRow(file)).join('');
-}
-
-function groupHtml(group) {
-  return `<section class="date-group" data-date-group="${group.key}"><h3 class="date-heading">${escapeHtml(group.label)}</h3><div class="${view === 'grid' ? 'date-grid' : 'date-list'}">${cardsHtml(group.files)}</div></section>`;
-}
-
-function renderFiles() {
-  if (view === 'folders') return renderFolder();
-  const element = $('#files');
-  element.className = `files ${view}`;
-  if (folderImportId) folderBreadcrumb();
-  else {
-    $('#folderbar').hidden = true;
-    $('#folderbar').replaceChildren();
-  }
-  syncSentinels();
-  if (!loaded.length) {
-    element.innerHTML = '<div class="empty">No files.</div>';
-    renderRail();
-    return;
-  }
-  if (sort.startsWith('date-')) {
-    element.innerHTML = dateGroups(loaded).map(groupHtml).join('');
-  } else {
-    element.innerHTML = view === 'grid'
-      ? `<div class="date-grid flat-grid">${cardsHtml(loaded)}</div>`
-      : cardsHtml(loaded);
-  }
-  renderRail();
-}
-
-function appendMore() {
-  if (!hasMore || view === 'folders') return;
-  const start = renderOffset + renderLimit;
-  const end = Math.min(filtered.length, start + PAGE);
-  const next = filtered.slice(start, end);
-  renderLimit += next.length;
-  loaded = filtered.slice(renderOffset, renderOffset + renderLimit);
-  hasPrevious = renderOffset > 0;
-  hasMore = renderOffset + renderLimit < filtered.length;
-  syncSentinels();
-  if (!next.length) return;
-
-  if (sort.startsWith('date-')) {
-    for (const group of dateGroups(next)) {
-      const last = $('#files .date-group:last-of-type');
-      if (last?.dataset.dateGroup === group.key) {
-        last.querySelector(view === 'grid' ? '.date-grid' : '.date-list').insertAdjacentHTML('beforeend', cardsHtml(group.files));
-      } else {
-        $('#files').insertAdjacentHTML('beforeend', groupHtml(group));
-      }
-    }
-  } else if (view === 'grid') {
-    $('#files .flat-grid').insertAdjacentHTML('beforeend', cardsHtml(next));
-  } else {
-    $('#files').insertAdjacentHTML('beforeend', cardsHtml(next));
-  }
-  updateRailActive();
-}
-
-function prependMore() {
-  if (!hasPrevious || view === 'folders') return;
-  const element = $('#files');
-  const anchor = element.querySelector('[data-hash]');
-  const anchorHash = anchor?.dataset.hash;
-  const anchorTop = anchor?.getBoundingClientRect().top ?? 0;
-  const oldOffset = renderOffset;
-  const start = Math.max(0, oldOffset - PAGE);
-  const previous = filtered.slice(start, oldOffset);
-  if (!previous.length) return;
-
-  renderOffset = start;
-  renderLimit += previous.length;
-  loaded = filtered.slice(renderOffset, renderOffset + renderLimit);
-  hasPrevious = renderOffset > 0;
-  hasMore = renderOffset + renderLimit < filtered.length;
-  syncSentinels();
-
-  if (sort.startsWith('date-')) {
-    const groups = dateGroups(previous);
-    const first = element.querySelector('.date-group:first-of-type');
-    const tail = groups.at(-1);
-    if (first && tail?.key === first.dataset.dateGroup) {
-      groups.pop();
-      first.querySelector(view === 'grid' ? '.date-grid' : '.date-list').insertAdjacentHTML('afterbegin', cardsHtml(tail.files));
-    }
-    if (groups.length) element.insertAdjacentHTML('afterbegin', groups.map(groupHtml).join(''));
-  } else if (view === 'grid') {
-    element.querySelector('.flat-grid')?.insertAdjacentHTML('afterbegin', cardsHtml(previous));
-  } else {
-    element.insertAdjacentHTML('afterbegin', cardsHtml(previous));
-  }
-
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    if (anchorHash) {
-      const restored = element.querySelector(`[data-hash="${CSS.escape(anchorHash)}"]`);
-      if (restored) window.scrollBy(0, restored.getBoundingClientRect().top - anchorTop);
-    }
-    updateRailActive();
-  }));
-}
-
 function jumpToIndex(index, smooth = true) {
   if (!Number.isInteger(index) || !filtered[index]) return;
-  if (index < renderOffset || index >= renderOffset + renderLimit) {
-    renderOffset = Math.max(0, index - Math.floor(PAGE / 2));
-    renderLimit = PAGE * 2;
-    updateWindow();
-    renderFiles();
-  }
+  ensureIndexRendered(index);
   const hash = filtered[index].hash;
-  requestAnimationFrame(() => document.querySelector(`#files [data-hash="${CSS.escape(hash)}"]`)?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'center' }));
+  requestAnimationFrame(() => filesElement.querySelector(`[data-hash="${CSS.escape(hash)}"]`)?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'center' }));
 }
 
 function scrubFromPointer(event, final = false) {
   if (!filtered.length) return;
   const rail = $('#dateRail');
   const rect = rail.getBoundingClientRect();
-  const ratio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
-  const index = Math.round(ratio * (filtered.length - 1));
+  const index = Math.round(Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)) * (filtered.length - 1));
   setRailThumb(index);
   const now = performance.now();
-  if (final || now - lastScrubAt > 80) {
-    lastScrubAt = now;
-    jumpToIndex(index, false);
-  }
+  if (final || now - lastScrubAt > 80) { lastScrubAt = now; jumpToIndex(index, false); }
 }
 
 async function loadStats() {
   const s = await request('/api/stats');
   const percent = s.capacityBytes ? Math.min(100, s.bytes / s.capacityBytes * 100) : 0;
-  const width = s.bytes ? `max(2px, ${percent}%)` : '0';
-  $('#stats').innerHTML = `<span>${formatBytes(s.bytes)} <small>of ${formatBytes(s.capacityBytes)}</small></span><i><b style="width:${width}"></b></i>`;
+  $('#stats').innerHTML = `<span>${formatBytes(s.bytes)} <small>of ${formatBytes(s.capacityBytes)}</small></span><i><b style="width:${s.bytes ? `max(2px, ${percent}%)` : '0'}"></b></i>`;
+}
+
+async function correctFileDates(files) {
+  for (let offset = 0; offset < files.length; offset += 5000) {
+    const batch = files.slice(offset, offset + 5000);
+    try {
+      const data = await request('/api/file-dates', { method: 'POST', body: { hashes: batch.map(file => file.hash) } });
+      const byHash = new Map((data.dates || []).map(item => [item.hash, item]));
+      for (const file of batch) {
+        const date = byHash.get(file.hash);
+        if (date) Object.assign(file, { fileDate: date.fileDate, dateSource: date.dateSource, capturedAt: date.capturedAt });
+      }
+    } catch (error) { console.warn('Could not load file dates', error); }
+  }
+  return files;
 }
 
 async function fetchCatalog() {
@@ -552,15 +576,16 @@ async function fetchCatalog() {
   for (let attempt = 0; attempt < 2; attempt++) {
     const start = await request('/api/catalog/version');
     const importsPromise = request('/api/imports');
-    const files = [];
+    const raw = [];
     let after = '';
     do {
       const page = await request(`/api/catalog?limit=5000&after=${encodeURIComponent(after)}`);
-      files.push(...page.files.map(normalizeFile));
+      raw.push(...page.files);
       after = page.nextAfter || '';
     } while (after);
+    await correctFileDates(raw);
     const [importsData, end] = await Promise.all([importsPromise, request('/api/catalog/version')]);
-    latest = { version: end.version, imports: importsData.imports, files };
+    latest = { version: end.version, imports: importsData.imports, files: raw.map(normalizeFile) };
     if (start.version === end.version) break;
   }
   return latest;
@@ -592,7 +617,7 @@ function folderBreadcrumb() {
   bar.hidden = false;
   const source = currentFolderSource();
   const parts = folderPath ? folderPath.split('/') : [];
-  const crumbs = [`<button data-folder-home>Sources</button>`];
+  const crumbs = ['<button data-folder-home>Sources</button>'];
   if (source) {
     crumbs.push(`<span>›</span><button data-folder-depth="0">${escapeHtml(source.sourceName)}</button>`);
     parts.forEach((part, index) => crumbs.push(`<span>›</span><button data-folder-depth="${index + 1}">${escapeHtml(part)}</button>`));
@@ -601,24 +626,24 @@ function folderBreadcrumb() {
 }
 
 function renderFolder() {
-  const element = $('#files');
-  element.className = 'files folders';
+  filesElement.className = 'files folders';
   topScrollSentinel.hidden = true;
   $('#scroll-sentinel').hidden = true;
   $('#dateRail').hidden = true;
   document.documentElement.classList.remove('library-scroll');
   folderBreadcrumb();
   if (!folderImportId) {
-    element.innerHTML = imports.length ? `
+    filesElement.innerHTML = imports.length ? `
       <div class="folder-list-head"><span>Name</span><span>Files</span><span>Imported</span></div>
-      ${imports.map(item => `<button class="folder-row source-row" data-folder-source="${item.id}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(item.sourceName)}</strong></span><span>${item.files.toLocaleString()} · ${formatBytes(item.referencedBytes)}</span><span>${escapeHtml(new Date(item.createdAt).toLocaleDateString())}</span></button>`).join('')}` : '<div class="empty">No sources.</div>';
+      ${imports.map(item => `<button class="folder-row source-row" data-folder-source="${item.id}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(item.sourceName)}</strong></span><span>${item.files.toLocaleString()} · ${formatBytes(item.referencedBytes)}</span><span>${escapeHtml(new Date(item.createdAt).toLocaleDateString())}</span></button>`).join('')}`
+      : '<div class="empty">No sources.</div>';
     return;
   }
-  if (!folderData) { element.innerHTML = '<div class="empty">Loading…</div>'; return; }
+  if (!folderData) { filesElement.innerHTML = '<div class="empty">Loading…</div>'; return; }
   const rows = [];
   for (const folder of folderData.folders) rows.push(`<button class="folder-row" data-folder-name="${escapeHtml(folder.name)}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(folder.name)}</strong></span><span>${folder.files.toLocaleString()}</span><span>Folder</span></button>`);
   for (const file of folderData.files) rows.push(`<button class="folder-row file-folder-row" data-hash="${file.hash}"><span class="folder-name"><i class="document-icon"></i><strong>${escapeHtml(file.filename)}</strong></span><span>${formatBytes(file.size)}</span><span>${escapeHtml(typeLabel(file))}</span></button>`);
-  element.innerHTML = rows.length ? `<div class="folder-list-head"><span>Name</span><span>Size</span><span>Type</span></div>${rows.join('')}` : '<div class="empty">Empty.</div>';
+  filesElement.innerHTML = rows.length ? `<div class="folder-list-head"><span>Name</span><span>Size</span><span>Type</span></div>${rows.join('')}` : '<div class="empty">Empty.</div>';
 }
 
 async function loadFolder() {
@@ -626,11 +651,7 @@ async function loadFolder() {
   folderData = null;
   if (view === 'folders') renderFolder();
   if (!folderImportId) {
-    if (view !== 'folders') {
-      $('#folderbar').hidden = true;
-      $('#folderbar').replaceChildren();
-      applyFilters(true);
-    }
+    if (view !== 'folders') { $('#folderbar').hidden = true; $('#folderbar').replaceChildren(); applyFilters(true); }
     return;
   }
   const wantedImport = String(folderImportId);
@@ -644,6 +665,7 @@ async function loadFolder() {
 
 function setView(next) {
   view = next;
+  lastRenderKey = '';
   const folderMode = view === 'folders';
   $('#sort').hidden = folderMode;
   $('#typeFilter').hidden = folderMode;
@@ -651,14 +673,9 @@ function setView(next) {
   $('#mediaSizeControl').hidden = view !== 'grid';
   $$('#views button').forEach(item => item.classList.toggle('active', item.dataset.view === view));
   if (folderMode) {
-    if (!folderImportId) {
-      folderImportId = importId;
-      folderPath = '';
-    }
+    if (!folderImportId) { folderImportId = importId; folderPath = ''; }
     loadFolder().catch(console.error);
-  } else {
-    applyFilters(true);
-  }
+  } else applyFilters(true);
 }
 
 function setCollectionHashes(hashes) {
@@ -672,35 +689,23 @@ function setCollectionHashes(hashes) {
     $('#source').value = '';
     $('#folderbar').hidden = true;
     $('#folderbar').replaceChildren();
-    if (view === 'folders') {
-      $('#views [data-view="grid"]')?.click();
-      return;
-    }
+    if (view === 'folders') { $('#views [data-view="grid"]')?.click(); return; }
   }
   applyFilters(true);
 }
-
 window.mochimonoSetCollectionHashes = setCollectionHashes;
 
-function viewerItems() {
-  return view === 'folders' ? (folderData?.files || []).map(normalizeFile) : filtered;
-}
-
+const viewerItems = () => view === 'folders' ? (folderData?.files || []).map(normalizeFile) : filtered;
 function updateViewerNav() {
   const items = viewerItems();
   const index = items.findIndex(file => file.hash === selected?.hash);
   $('#viewer-prev').disabled = index <= 0;
   $('#viewer-next').disabled = index < 0 || index >= items.length - 1;
 }
-
 function ensureViewerGridWindow() {
   if (!selected || view === 'folders') return;
   const index = filteredIndex.get(selected.hash);
-  if (!Number.isInteger(index) || (index >= renderOffset && index < renderOffset + renderLimit)) return;
-  renderOffset = Math.max(0, index - PAGE);
-  renderLimit = PAGE * 2;
-  updateWindow();
-  renderFiles();
+  if (Number.isInteger(index)) ensureIndexRendered(index);
 }
 
 function loadFullViewerImage(file) {
@@ -718,9 +723,7 @@ function loadFullViewerImage(file) {
     viewerImageLoad = null;
   };
   image.onload = swap;
-  image.onerror = () => {
-    if (viewerImageLoad === image) viewerImageLoad = null;
-  };
+  image.onerror = () => { if (viewerImageLoad === image) viewerImageLoad = null; };
   shown.onerror = () => {
     if (selected?.hash !== hash || !shown.dataset.fullSrc) return;
     shown.removeAttribute('data-full-src');
@@ -763,22 +766,16 @@ function openViewer(hash, fallback = null) {
   renderViewerState();
   return true;
 }
-
 window.mochimonoOpenViewer = openViewer;
 
 function revealViewerHash(hash) {
   if (!hash) return requestAnimationFrame(() => window.scrollTo(0, viewerScrollY));
   if (view !== 'folders') {
     const index = filteredIndex.get(hash);
-    if (Number.isInteger(index) && (index < renderOffset || index >= renderOffset + renderLimit)) {
-      renderOffset = Math.max(0, index - PAGE);
-      renderLimit = PAGE * 2;
-      updateWindow();
-      renderFiles();
-    }
+    if (Number.isInteger(index)) ensureIndexRendered(index);
   }
   requestAnimationFrame(() => requestAnimationFrame(() => {
-    const card = $('#files').querySelector(`[data-hash="${CSS.escape(hash)}"]`);
+    const card = filesElement.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
     if (card) card.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' });
     else window.scrollTo(0, viewerScrollY);
     window.dispatchEvent(new CustomEvent('mochimono-viewer-return', { detail: { hash } }));
@@ -797,7 +794,7 @@ function closeViewer() {
   if (viewerDirty) {
     viewerDirty = false;
     if (view === 'folders') loadFolder().catch(console.error);
-    else applyFilters(false);
+    else applyFilters(false, true);
   }
   revealViewerHash(returnHash);
 }
@@ -817,13 +814,12 @@ async function refreshImports() {
 }
 
 async function removeSelected(ignore) {
-  if (!selected) return;
-  const text = ignore ? 'Delete + ignore on future imports?' : 'Delete this file?';
-  if (!confirm(text)) return;
+  if (!selected || !confirm(ignore ? 'Delete + ignore on future imports?' : 'Delete this file?')) return;
   const hash = selected.hash;
   await request(`/api/objects/${hash}/delete`, { method: 'POST', body: { ignore } });
   catalog = catalog.filter(file => file.hash !== hash);
   searchIndex.delete(hash);
+  fileDates.delete(hash);
   cacheDelete(hash).catch(console.warn);
   viewerDirty = false;
   closeViewer();
@@ -841,17 +837,48 @@ async function loadDrives() {
   }).join('') || '<div class="empty">No backups.</div>';
 }
 
+window.mochimonoLibrary = {
+  setSort(value) { sort = String(value || 'date-desc'); $('#sort').value = sort; applyFilters(true); },
+  upsert(file) { this.upsertMany(file ? [file] : []); },
+  upsertMany(items) {
+    if (!items?.length) return;
+    let changed = false;
+    for (const raw of items) {
+      if (!raw?.hash) continue;
+      const index = catalog.findIndex(item => item.hash === raw.hash);
+      if (index >= 0) {
+        const current = catalog[index];
+        catalog[index] = normalizeFile({ ...current, ...raw, searchText: [current.searchText, raw.searchText].filter(Boolean).join(' ') });
+      } else catalog.push(normalizeFile(raw));
+      changed = true;
+    }
+    if (changed) { rebuildIndexes(); applyFilters(false, true); }
+  },
+  extend: extendWindow,
+  refresh: () => syncCatalog(true),
+  ensureIndex: ensureIndexRendered,
+  filteredHashes: () => filtered.map(file => file.hash),
+  remove(hashes) {
+    const removed = new Set(hashes || []);
+    if (!removed.size) return;
+    catalog = catalog.filter(file => !removed.has(file.hash));
+    for (const hash of removed) { searchIndex.delete(hash); fileDates.delete(hash); }
+    cacheDeleteMany([...removed]).catch(console.warn);
+    applyFilters(false, true);
+  },
+  state: () => ({ filtered: filtered.length, offset: renderOffset, loaded: loaded.length, hasMore, hasPrevious, view, sort })
+};
+
 async function boot() {
   try {
     await request('/api/health');
     login.hidden = true;
     app.hidden = false;
     logout.hidden = false;
-    $('#files').innerHTML = '<div class="empty">Loading…</div>';
+    filesElement.innerHTML = '<div class="empty">Loading…</div>';
     const mediaSize = Math.max(96, Math.min(420, Number(localStorage.getItem('mochimono-media-size')) || 170));
     $('#mediaSize').value = mediaSize;
     document.documentElement.style.setProperty('--media-size', `${mediaSize}px`);
-
     const cached = await readCache().catch(() => null);
     if (cached) {
       cacheMeta = cached.meta;
@@ -865,84 +892,43 @@ async function boot() {
     if (cached) syncCatalog(false).catch(console.error);
     else await syncCatalog(true);
   } catch (error) {
-    if (error.unauthorized) {
-      login.hidden = false;
-      app.hidden = true;
-      logout.hidden = true;
-    } else throw error;
+    if (error.unauthorized) { login.hidden = false; app.hidden = true; logout.hidden = true; }
+    else throw error;
   }
 }
 
 $('#login-form').addEventListener('submit', async event => {
   event.preventDefault();
   $('#login-error').textContent = '';
-  try {
-    await request('/api/login', { method: 'POST', body: { token: $('#token').value } });
-    $('#token').value = '';
-    await boot();
-  } catch (error) { $('#login-error').textContent = error.message; }
+  try { await request('/api/login', { method: 'POST', body: { token: $('#token').value } }); $('#token').value = ''; await boot(); }
+  catch (error) { $('#login-error').textContent = error.message; }
 });
-
-logout.addEventListener('click', async () => {
-  await request('/api/logout', { method: 'POST' }).catch(() => {});
-  await boot();
-});
-
-$('#search').addEventListener('input', () => {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => applyFilters(true), 70);
-});
-
+logout.addEventListener('click', async () => { await request('/api/logout', { method: 'POST' }).catch(() => {}); await boot(); });
+$('#search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => applyFilters(true), 70); });
 $('#source').addEventListener('change', event => {
   importId = event.target.value;
   folderLoadGeneration++;
   folderImportId = '';
   folderPath = '';
   folderData = null;
-  if (view === 'folders') {
-    folderImportId = importId;
-    loadFolder().catch(console.error);
-  } else {
-    $('#folderbar').hidden = true;
-    $('#folderbar').replaceChildren();
-    applyFilters(true);
-  }
+  if (view === 'folders') { folderImportId = importId; loadFolder().catch(console.error); }
+  else { $('#folderbar').hidden = true; $('#folderbar').replaceChildren(); applyFilters(true); }
 });
-
 $('#typeFilter').addEventListener('change', event => { type = event.target.value; applyFilters(true); });
 $('#sort').addEventListener('change', event => { sort = event.target.value; applyFilters(true); });
 $('#mediaSize').addEventListener('input', event => {
   const size = Number(event.target.value);
   document.documentElement.style.setProperty('--media-size', `${size}px`);
   localStorage.setItem('mochimono-media-size', String(size));
+  scheduleLayout();
 });
-
-$('#views').addEventListener('click', event => {
-  const button = event.target.closest('[data-view]');
-  if (button) setView(button.dataset.view);
-});
+addEventListener('resize', scheduleLayout, { passive: true });
+$('#views').addEventListener('click', event => { const button = event.target.closest('[data-view]'); if (button) setView(button.dataset.view); });
 
 const rail = $('#dateRail');
-rail.addEventListener('pointerdown', event => {
-  if (rail.hidden) return;
-  scrubbing = true;
-  rail.setPointerCapture?.(event.pointerId);
-  rail.classList.add('dragging');
-  scrubFromPointer(event, false);
-  event.preventDefault();
-});
-rail.addEventListener('pointermove', event => {
-  if (!scrubbing) return;
-  scrubFromPointer(event, false);
-  event.preventDefault();
-});
-rail.addEventListener('pointerup', event => {
-  if (!scrubbing) return;
-  scrubbing = false;
-  rail.classList.remove('dragging');
-  scrubFromPointer(event, true);
-  rail.releasePointerCapture?.(event.pointerId);
-});
+rail.addEventListener('pointerdown', event => { if (!rail.hidden) { scrubbing = true; rail.setPointerCapture?.(event.pointerId); rail.classList.add('dragging'); scrubFromPointer(event); event.preventDefault(); } });
+rail.addEventListener('pointermove', event => { if (scrubbing) { scrubFromPointer(event); event.preventDefault(); } });
+rail.addEventListener('pointerup', event => { if (scrubbing) { scrubbing = false; rail.classList.remove('dragging'); scrubFromPointer(event, true); rail.releasePointerCapture?.(event.pointerId); } });
 rail.addEventListener('pointercancel', () => { scrubbing = false; rail.classList.remove('dragging'); });
 
 $('#folderbar').addEventListener('click', event => {
@@ -953,8 +939,7 @@ $('#folderbar').addEventListener('click', event => {
     folderData = null;
     importId = '';
     $('#source').value = '';
-    if (view === 'folders') loadFolder().catch(console.error);
-    else applyFilters(true);
+    if (view === 'folders') loadFolder().catch(console.error); else applyFilters(true);
     return;
   }
   const crumb = event.target.closest('[data-folder-depth]');
@@ -964,7 +949,7 @@ $('#folderbar').addEventListener('click', event => {
   loadFolder().catch(console.error);
 });
 
-$('#files').addEventListener('click', event => {
+filesElement.addEventListener('click', event => {
   const sourceRow = event.target.closest('[data-folder-source]');
   if (sourceRow) {
     folderImportId = sourceRow.dataset.folderSource;
@@ -975,23 +960,13 @@ $('#files').addEventListener('click', event => {
     return;
   }
   const folderRow = event.target.closest('[data-folder-name]');
-  if (folderRow) {
-    folderPath = folderPath ? `${folderPath}/${folderRow.dataset.folderName}` : folderRow.dataset.folderName;
-    loadFolder().catch(console.error);
-    return;
-  }
+  if (folderRow) { folderPath = folderPath ? `${folderPath}/${folderRow.dataset.folderName}` : folderRow.dataset.folderName; loadFolder().catch(console.error); return; }
   const item = event.target.closest('[data-hash]');
   if (item) openViewer(item.dataset.hash);
 });
 
-new IntersectionObserver(entries => {
-  if (entries.some(entry => entry.isIntersecting)) prependMore();
-}, { rootMargin: '700px 0px' }).observe(topScrollSentinel);
-
-new IntersectionObserver(entries => {
-  if (entries.some(entry => entry.isIntersecting)) appendMore();
-}, { rootMargin: '700px 0px' }).observe($('#scroll-sentinel'));
-
+new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) extendWindow(-1); }, { rootMargin: '700px 0px' }).observe(topScrollSentinel);
+new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) extendWindow(1); }, { rootMargin: '700px 0px' }).observe($('#scroll-sentinel'));
 window.addEventListener('scroll', () => {
   if (scrollFrame || scrubbing) return;
   scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; updateRailActive(); });
@@ -1003,7 +978,6 @@ document.addEventListener('keydown', event => {
   if (event.key === 'ArrowLeft') { event.preventDefault(); navigateViewer(-1); }
   if (event.key === 'ArrowRight') { event.preventDefault(); navigateViewer(1); }
 });
-
 $('#viewer-close').onclick = closeViewer;
 $('#viewer-prev').onclick = () => navigateViewer(-1);
 $('#viewer-next').onclick = () => navigateViewer(1);

@@ -1,5 +1,3 @@
-const CACHE_NAME = 'mochimono-catalog';
-const CACHE_VERSION = 2;
 const UI_KEY = 'mochimono-library-ui';
 const files = document.querySelector('#files');
 const folderbar = document.querySelector('#folderbar');
@@ -20,69 +18,25 @@ const selectionClear = document.querySelector('#selectionClear');
 let selectionMode = false;
 let anchorHash = '';
 let selected = new Set();
-let cachePromise;
 
-const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff']);
-const VIDEO_EXTENSIONS = new Set(['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'mpg', 'mpeg', 'm2v', 'mts', 'm2ts', '3gp']);
-
-function extension(name) {
-  return String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
-}
-
-function cache() {
-  if (!cachePromise) {
-    cachePromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(CACHE_NAME, CACHE_VERSION);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'hash' });
-        if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
-        if (!db.objectStoreNames.contains('thumbs')) db.createObjectStore('thumbs', { keyPath: 'hash' });
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-  }
-  return cachePromise;
-}
-
-const idb = request => new Promise((resolve, reject) => {
-  request.onsuccess = () => resolve(request.result);
-  request.onerror = () => reject(request.error);
-});
-
-const txDone = transaction => new Promise((resolve, reject) => {
-  transaction.oncomplete = resolve;
-  transaction.onerror = () => reject(transaction.error);
-  transaction.onabort = () => reject(transaction.error || new Error('IndexedDB transaction aborted'));
-});
-
-function currentView() {
-  return document.querySelector('#views [data-view].active')?.dataset.view || 'grid';
-}
+const currentView = () => document.querySelector('#views [data-view].active')?.dataset.view || 'grid';
 
 function saveUi() {
-  localStorage.setItem(UI_KEY, JSON.stringify({
-    view: currentView(),
-    sort: sort.value,
-    type: typeFilter.value
-  }));
+  localStorage.setItem(UI_KEY, JSON.stringify({ view: currentView(), sort: sort.value, type: typeFilter.value }));
 }
 
 function restoreUi() {
-  let saved;
-  try { saved = JSON.parse(localStorage.getItem(UI_KEY) || '{}'); } catch { return; }
-  if (['date-desc', 'date-asc', 'size-desc'].includes(saved.sort)) {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(UI_KEY) || '{}'); } catch {}
+  if (['date-desc','date-added','date-asc','size-desc'].includes(saved.sort)) {
     sort.value = saved.sort;
     sort.dispatchEvent(new Event('change', { bubbles: true }));
   }
-  if (['', 'media', 'image', 'video', 'audio', 'application', 'other'].includes(saved.type)) {
+  if (['','media','image','video','audio','application','other'].includes(saved.type)) {
     typeFilter.value = saved.type;
     typeFilter.dispatchEvent(new Event('change', { bubbles: true }));
   }
-  if (['grid', 'list', 'folders'].includes(saved.view)) {
-    document.querySelector(`#views [data-view="${saved.view}"]`)?.click();
-  }
+  if (['grid','list','folders'].includes(saved.view)) document.querySelector(`#views [data-view="${saved.view}"]`)?.click();
 }
 
 function syncSelectedClasses() {
@@ -94,9 +48,7 @@ function syncSelectionUi() {
   selectionBar.hidden = !selectionMode && !count;
   selectToggle.classList.toggle('active', selectionMode);
   selectionCount.textContent = count ? `${count.toLocaleString()} selected` : 'Select files';
-  selectionCollection.disabled = !count;
-  selectionDelete.disabled = !count;
-  selectionIgnore.disabled = !count;
+  selectionCollection.disabled = selectionDelete.disabled = selectionIgnore.disabled = !count;
   syncSelectedClasses();
 }
 
@@ -122,97 +74,24 @@ function toggleHash(hash, extend) {
       return;
     }
   }
-  if (selected.has(hash)) selected.delete(hash);
-  else selected.add(hash);
+  selected.has(hash) ? selected.delete(hash) : selected.add(hash);
   anchorHash = hash;
-}
-
-function fileKind(file) {
-  const base = String(file.mime || '').split('/')[0];
-  if (base && base !== 'application') return base;
-  if (file.mime && file.mime !== 'application/octet-stream') return base;
-  const ext = extension(file.filename);
-  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
-  if (VIDEO_EXTENSIONS.has(ext)) return 'video';
-  return base || 'other';
-}
-
-function mediaTypeMatches(file, filter) {
-  const base = fileKind(file);
-  if (!filter) return true;
-  if (filter === 'media') return base === 'image' || base === 'video';
-  if (filter === 'application') return base === 'application' || base === 'text';
-  if (filter === 'other') return !['image', 'video', 'audio', 'application', 'text'].includes(base);
-  return base === filter;
 }
 
 function breadcrumbPath() {
   return [...folderbar.querySelectorAll('[data-folder-depth]')]
     .filter(button => Number(button.dataset.folderDepth) > 0)
-    .map(button => button.textContent.trim())
-    .join('/');
-}
-
-async function cachedCatalog() {
-  const db = await cache();
-  const transaction = db.transaction(['files', 'meta']);
-  const done = txDone(transaction);
-  const fileRequest = transaction.objectStore('files').getAll();
-  const metaRequest = transaction.objectStore('meta').get('catalog');
-  const [records, meta] = await Promise.all([idb(fileRequest), idb(metaRequest)]);
-  await done;
-  return { records, meta };
-}
-
-async function selectedCollectionHashes(id) {
-  const response = await fetch(`/api/collections/${encodeURIComponent(id)}/hashes`);
-  if (!response.ok) throw new Error('Could not read this collection.');
-  return new Set((await response.json()).hashes || []);
+    .map(button => button.textContent.trim()).join('/');
 }
 
 async function selectionUniverse() {
   const sourceId = Number(source.value) || 0;
-  if (!folderbar.hidden && sourceId) {
+  if (currentView() === 'folders' && sourceId) {
     const response = await fetch(`/api/folders?import=${encodeURIComponent(sourceId)}&path=${encodeURIComponent(breadcrumbPath())}`);
     if (!response.ok) throw new Error('Could not read this folder.');
-    const data = await response.json();
-    return data.files.map(file => file.hash);
+    return (await response.json()).files.map(file => file.hash);
   }
-
-  const { records, meta } = await cachedCatalog();
-  const sourceNames = new Map((meta?.imports || []).map(item => [Number(item.id), String(item.sourceName || '')]));
-  const terms = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const fileType = typeFilter.value;
-  const collectionId = Number(collectionFilter.value) || 0;
-  const collectionHashes = collectionId ? await selectedCollectionHashes(collectionId) : null;
-
-  return records.filter(file => {
-    const importIds = Array.isArray(file.importIds)
-      ? file.importIds.map(Number)
-      : String(file.importIds || '').split(',').map(Number).filter(Boolean);
-    if (!mediaTypeMatches(file, fileType)) return false;
-    if (collectionHashes && !collectionHashes.has(file.hash)) return false;
-    if (sourceId && !importIds.includes(sourceId)) return false;
-    if (terms.length) {
-      const names = importIds.map(id => sourceNames.get(id) || '').join(' ');
-      const haystack = `${file.filename || ''} ${file.originalPath || ''} ${file.searchText || ''} ${names}`.toLowerCase();
-      if (!terms.every(term => haystack.includes(term))) return false;
-    }
-    return true;
-  }).map(file => file.hash);
-}
-
-async function removeCached(hashes) {
-  const db = await cache();
-  const transaction = db.transaction(['files', 'thumbs'], 'readwrite');
-  const done = txDone(transaction);
-  const fileStore = transaction.objectStore('files');
-  const thumbStore = transaction.objectStore('thumbs');
-  for (const hash of hashes) {
-    fileStore.delete(hash);
-    thumbStore.delete(hash);
-  }
-  await done;
+  return window.mochimonoLibrary?.filteredHashes?.() || renderedHashes();
 }
 
 async function deleteSelected(ignore) {
@@ -221,14 +100,12 @@ async function deleteSelected(ignore) {
   const label = ignore ? 'Delete + Ignore' : 'Delete';
   if (!confirm(`${label} ${hashes.length.toLocaleString()} file${hashes.length === 1 ? '' : 's'}?`)) return;
 
-  selectionDelete.disabled = true;
-  selectionIgnore.disabled = true;
-  selectAll.disabled = true;
+  selectionDelete.disabled = selectionIgnore.disabled = selectAll.disabled = true;
   let next = 0;
   let done = 0;
   const failed = [];
   const succeeded = [];
-  const workers = Array.from({ length: Math.min(10, hashes.length) }, async () => {
+  await Promise.all(Array.from({ length: Math.min(8, hashes.length) }, async () => {
     while (next < hashes.length) {
       const hash = hashes[next++];
       try {
@@ -237,55 +114,41 @@ async function deleteSelected(ignore) {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ ignore })
         });
-        if (!response.ok) throw new Error(`${response.status}`);
+        if (!response.ok) throw new Error(String(response.status));
         succeeded.push(hash);
-      } catch {
-        failed.push(hash);
-      }
-      done++;
-      selectionCount.textContent = `Deleting ${done.toLocaleString()} / ${hashes.length.toLocaleString()}`;
+      } catch { failed.push(hash); }
+      selectionCount.textContent = `Deleting ${++done} / ${hashes.length}`;
     }
-  });
-  await Promise.all(workers);
-  await removeCached(succeeded).catch(console.warn);
+  }));
+
+  window.mochimonoLibrary?.remove?.(succeeded);
+  clearSelection(true);
+  selectAll.disabled = false;
   if (failed.length) alert(`${failed.length.toLocaleString()} file${failed.length === 1 ? '' : 's'} could not be deleted.`);
-  location.reload();
 }
 
 selectToggle.addEventListener('click', () => {
   if (selectionMode || selected.size) clearSelection(true);
-  else {
-    selectionMode = true;
-    syncSelectionUi();
-  }
+  else { selectionMode = true; syncSelectionUi(); }
 });
-
 selectionClear.addEventListener('click', () => clearSelection(true));
 selectAll.addEventListener('click', async () => {
   selectionMode = true;
   selectAll.disabled = true;
   selectionCount.textContent = 'Selecting…';
-  try {
-    selected = new Set(await selectionUniverse());
-    anchorHash = '';
-  } catch (error) {
-    alert(error.message);
-  } finally {
-    selectAll.disabled = false;
-    syncSelectionUi();
-  }
+  try { selected = new Set(await selectionUniverse()); }
+  catch (error) { alert(error.message); }
+  finally { anchorHash = ''; selectAll.disabled = false; syncSelectionUi(); }
 });
 selectionCollection.addEventListener('click', () => {
-  if (!selected.size) return;
-  window.dispatchEvent(new CustomEvent('mochimono:add-to-collection', { detail: { hashes: [...selected] } }));
+  if (selected.size) window.dispatchEvent(new CustomEvent('mochimono:add-to-collection', { detail: { hashes: [...selected] } }));
 });
 selectionDelete.addEventListener('click', () => deleteSelected(false));
 selectionIgnore.addEventListener('click', () => deleteSelected(true));
 
 files.addEventListener('click', event => {
   const item = event.target.closest('[data-hash]');
-  if (!item) return;
-  if (!selectionMode && !event.ctrlKey && !event.metaKey && !event.shiftKey) return;
+  if (!item || (!selectionMode && !event.ctrlKey && !event.metaKey && !event.shiftKey)) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   selectionMode = true;
@@ -296,17 +159,14 @@ files.addEventListener('click', event => {
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && document.querySelector('#viewer').hidden && (selectionMode || selected.size)) clearSelection(true);
 });
-
 for (const control of [sort, typeFilter]) control.addEventListener('change', saveUi);
 document.querySelector('#views').addEventListener('click', event => {
   if (!event.target.closest('[data-view]')) return;
   clearSelection(true);
   setTimeout(saveUi);
 });
-source.addEventListener('change', () => clearSelection(true));
-collectionFilter.addEventListener('change', () => clearSelection(true));
+for (const control of [source, collectionFilter]) control.addEventListener('change', () => clearSelection(true));
 search.addEventListener('input', () => { if (selected.size) clearSelection(true); });
-
 new MutationObserver(syncSelectedClasses).observe(files, { childList: true, subtree: true });
 
 restoreUi();

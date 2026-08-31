@@ -6,10 +6,16 @@ import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import http from 'node:http';
+import { queueRemoteThumbnail } from './lib/thumbnail-agent.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'web');
 const CONFIG_PATH = join(homedir(), '.mochimono', 'agent.json');
+const LOCAL_API = [
+  /^\/api\/state$/, /^\/api\/settings$/, /^\/api\/job\/cancel$/, /^\/api\/pick-folder$/,
+  /^\/api\/folders(?:\/.*)?$/, /^\/api\/backups$/, /^\/api\/backup(?:\/.*)?$/,
+  /^\/api\/folder-stats$/, /^\/api\/backup-collections$/, /^\/api\/client(?:\/.*)?$/
+];
 
 function json(res, status, data) {
   const body = JSON.stringify(data);
@@ -39,8 +45,7 @@ async function config() {
   try { saved = JSON.parse(await readFile(CONFIG_PATH, 'utf8')); } catch {}
   return {
     server: String(process.env.MOCHIMONO_URL || saved.server || 'http://127.0.0.1:8642').replace(/\/$/, ''),
-    token: String(process.env.MOCHIMONO_TOKEN || saved.token || ''),
-    device: String(saved.device || '')
+    token: String(process.env.MOCHIMONO_TOKEN || saved.token || '')
   };
 }
 
@@ -50,41 +55,6 @@ function staticType(path) {
   if (path.endsWith('.css')) return 'text/css; charset=utf-8';
   if (path.endsWith('.svg')) return 'image/svg+xml';
   return 'application/octet-stream';
-}
-
-// The Client reuses the normal library. These optional replacements only expose
-// Client-only live import behavior and added-date state. A library change must
-// never make the Client fail to serve app.js, so unmatched replacements are
-// simply skipped.
-function patchClientApp(source) {
-  const replacements = [
-    [
-      "    backupCount: Number(file.backupCount) || 0,\n    dateMs: Number.isNaN(date.getTime()) ? 0 : date.getTime()",
-      "    backupCount: Number(file.backupCount) || 0,\n    fileDateMs: Number.isNaN(date.getTime()) ? 0 : date.getTime(),\n    addedMs: Number.isNaN(new Date(file.addedAt || file.createdAt || 0).getTime()) ? 0 : new Date(file.addedAt || file.createdAt || 0).getTime(),\n    dateMs: Number.isNaN(date.getTime()) ? 0 : date.getTime()"
-    ],
-    [
-      "function dateValue(file) {\n  return new Date(file.dateMs || 0);\n}",
-      "function dateValue(file) {\n  const value = sort === 'date-added' ? (file.addedMs || file.fileDateMs || file.dateMs || 0) : (file.fileDateMs || file.dateMs || 0);\n  return new Date(value);\n}"
-    ],
-    [
-      "function sortFiles(files) {\n  if (sort === 'date-asc')",
-      "function sortFiles(files) {\n  if (sort === 'date-added') return files.sort((a, b) => (b.addedMs || b.fileDateMs || 0) - (a.addedMs || a.fileDateMs || 0) || a.hash.localeCompare(b.hash));\n  if (sort === 'date-asc')"
-    ],
-    [
-      "data-hash=\"${file.hash}\" style=\"${media ? `--ratio:${ratio}` : ''}\"",
-      "data-hash=\"${file.hash}\" data-file-date=\"${escapeHtml(file.fileDate || file.createdAt || '')}\" data-added-at=\"${escapeHtml(file.addedAt || file.createdAt || '')}\" style=\"${media ? `--ratio:${ratio}` : ''}\""
-    ],
-    [
-      "<button class=\"file-row\" data-hash=\"${file.hash}\">",
-      "<button class=\"file-row\" data-hash=\"${file.hash}\" data-file-date=\"${escapeHtml(file.fileDate || file.createdAt || '')}\" data-added-at=\"${escapeHtml(file.addedAt || file.createdAt || '')}\">"
-    ]
-  ];
-  for (const [from, to] of replacements) if (source.includes(from)) source = source.replace(from, to);
-
-  const marker = 'boot().catch(error => {';
-  if (!source.includes(marker)) return source;
-  const hook = `window.mochimonoLibrary = {\n  setSort(value) {\n    sort = String(value || 'date-desc');\n    $('#sort').value = sort;\n    applyFilters(true);\n  },\n  setBatch(hashes) {\n    setCollectionHashes(hashes instanceof Set ? hashes : null);\n  },\n  upsert(file) {\n    this.upsertMany(file ? [file] : []);\n  },\n  upsertMany(files) {\n    let changed = false;\n    for (const file of files || []) {\n      if (!file?.hash) continue;\n      const index = catalog.findIndex(item => item.hash === file.hash);\n      if (index >= 0) {\n        const current = catalog[index];\n        catalog[index] = normalizeFile({\n          ...current,\n          ...file,\n          searchText: [current.searchText, file.searchText].filter(Boolean).join(' ')\n        });\n      } else {\n        catalog.push(normalizeFile(file));\n      }\n      changed = true;\n    }\n    if (!changed) return;\n    rebuildIndexes();\n    applyFilters(false);\n  },\n  extend(direction = 1) {\n    const before = loaded.length;\n    if (Number(direction) < 0) prependMore();\n    else appendMore();\n    return loaded.length > before;\n  },\n  refresh() { return syncCatalog(true); }\n};\n\n`;
-  return source.replace(marker, `${hook}${marker}`);
 }
 
 async function serveLibrary(res, pathname) {
@@ -116,16 +86,6 @@ async function serveLibrary(res, pathname) {
   try {
     const info = await stat(path);
     if (!info.isFile()) return false;
-    if (relative === 'app.js') {
-      const source = patchClientApp(await readFile(path, 'utf8'));
-      res.writeHead(200, {
-        'content-type': 'text/javascript; charset=utf-8',
-        'content-length': Buffer.byteLength(source),
-        'cache-control': 'no-cache'
-      });
-      res.end(source);
-      return true;
-    }
     res.writeHead(200, {
       'content-type': staticType(path),
       'content-length': info.size,
@@ -136,23 +96,6 @@ async function serveLibrary(res, pathname) {
   } catch {
     return false;
   }
-}
-
-const LOCAL_API = [
-  /^\/api\/state$/,
-  /^\/api\/settings$/,
-  /^\/api\/job\/cancel$/,
-  /^\/api\/pick-folder$/,
-  /^\/api\/folders(?:\/.*)?$/,
-  /^\/api\/backups$/,
-  /^\/api\/backup(?:\/.*)?$/,
-  /^\/api\/folder-stats$/,
-  /^\/api\/backup-collections$/,
-  /^\/api\/client(?:\/.*)?$/
-];
-
-function isLocalApi(pathname) {
-  return LOCAL_API.some(pattern => pattern.test(pathname));
 }
 
 async function login(req, res) {
@@ -167,20 +110,26 @@ async function login(req, res) {
     body: JSON.stringify({ username, password, device: String(body.device || 'Mochimono Client') })
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) return json(res, response.status, { error: data.error || 'Login failed' });
-  return json(res, 200, { token: data.token, username: data.username });
+  return json(res, response.status, response.ok ? { token: data.token, username: data.username } : { error: data.error || 'Login failed' });
+}
+
+async function requestPreviews(req, res) {
+  const { files = [] } = await readJson(req);
+  if (!Array.isArray(files) || files.length > 200) return json(res, 400, { error: 'files must be an array of at most 200 items' });
+  let queued = 0;
+  for (const file of files) if (queueRemoteThumbnail(file)) queued++;
+  return json(res, 202, { queued });
 }
 
 async function proxyApi(req, res, url) {
   const current = await config();
   if (!current.token) return json(res, 401, { error: 'Connect the Client first' });
 
-  const headers = {};
-  for (const name of ['content-type', 'content-length', 'range', 'if-none-match', 'if-modified-since', 'x-mochimono-mime', 'x-mochimono-thumb-version', 'x-mochimono-width', 'x-mochimono-height', 'x-mochimono-duration', 'x-mochimono-source-mime']) {
+  const headers = { authorization: `Bearer ${current.token}` };
+  for (const name of ['content-type','content-length','range','if-none-match','if-modified-since','x-mochimono-mime','x-mochimono-thumb-version','x-mochimono-width','x-mochimono-height','x-mochimono-duration','x-mochimono-source-mime']) {
     if (req.headers[name] != null) headers[name] = req.headers[name];
   }
-  headers.authorization = `Bearer ${current.token}`;
-  const body = ['GET', 'HEAD'].includes(req.method) ? undefined : req;
+  const body = ['GET','HEAD'].includes(req.method) ? undefined : req;
   const controller = new AbortController();
   const response = await fetch(`${current.server}${url.pathname}${url.search}`, {
     method: req.method,
@@ -192,7 +141,7 @@ async function proxyApi(req, res, url) {
   });
 
   const out = {};
-  for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control', 'content-disposition', 'etag', 'last-modified']) {
+  for (const name of ['content-type','content-length','content-range','accept-ranges','cache-control','content-disposition','etag','last-modified']) {
     const value = response.headers.get(name);
     if (value != null) out[name] = value;
   }
@@ -205,19 +154,18 @@ async function proxyApi(req, res, url) {
     if (!controller.signal.aborted) controller.abort();
     if (!source.destroyed) source.destroy();
   };
-  const onClose = () => {
-    if (!res.writableFinished) abort();
-  };
+  const close = () => { if (!res.writableFinished) abort(); };
   req.once('aborted', abort);
-  res.once('close', onClose);
+  res.once('close', close);
   try {
     await pipeline(source, res);
   } catch (error) {
-    const expectedAbort = controller.signal.aborted || res.destroyed || req.destroyed || error?.code === 'ERR_STREAM_PREMATURE_CLOSE' || /terminated|aborted|premature close/i.test(String(error?.message || ''));
-    if (!expectedAbort) throw error;
+    const expected = controller.signal.aborted || res.destroyed || req.destroyed ||
+      error?.code === 'ERR_STREAM_PREMATURE_CLOSE' || /terminated|aborted|premature close/i.test(String(error?.message || ''));
+    if (!expected) throw error;
   } finally {
     req.off('aborted', abort);
-    res.off('close', onClose);
+    res.off('close', close);
   }
 }
 
@@ -231,15 +179,17 @@ http.createServer = function (...args) {
   args[index] = async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     try {
-      if (url.pathname === '/api/client/login' && req.method === 'POST') return await login(req, res);
+      if (req.method === 'POST' && url.pathname === '/api/client/login') return login(req, res);
+      if (req.method === 'POST' && url.pathname === '/api/client/previews/request') return requestPreviews(req, res);
       if (url.pathname === '/files' || url.pathname.startsWith('/files/')) {
         if (await serveLibrary(res, url.pathname)) return;
         return json(res, 404, { error: 'Not found' });
       }
-      if (url.pathname.startsWith('/api/') && !isLocalApi(url.pathname)) return await proxyApi(req, res, url);
+      if (url.pathname.startsWith('/api/') && !LOCAL_API.some(pattern => pattern.test(url.pathname))) return proxyApi(req, res, url);
     } catch (error) {
       if (!res.headersSent) return json(res, error.status || 502, { error: error.message || 'Client gateway error' });
       if (!res.destroyed) res.destroy();
+      return;
     }
     return listener(req, res);
   };

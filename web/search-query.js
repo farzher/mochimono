@@ -1,10 +1,28 @@
-const search = document.querySelector('#search');
-const valueDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-const SEARCH_INDEX_VERSION = '8';
-const SEARCH_INDEX_KEY = 'mochimono-search-index-version';
-const nativeFetch = window.fetch.bind(window);
+const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
+const VIDEO_EXTENSIONS = new Set(['m4v','mp4','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
+const AUDIO_EXTENSIONS = new Set(['mp3','m4a','aac','wav','flac','ogg','opus']);
+const TYPE_ALIASES = new Map([
+  ['photo','image'],['photos','image'],['picture','image'],['pictures','image'],['images','image'],
+  ['videos','video'],['movies','video'],['music','audio'],
+  ['document','application'],['documents','application'],['docs','application']
+]);
 
-function normalizeText(text) {
+export function extension(name) {
+  return String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
+}
+
+export function fileKind(file) {
+  const base = String(file?.mime || '').split('/')[0];
+  if (base && base !== 'application') return base;
+  const ext = extension(file?.filename);
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video';
+  if (AUDIO_EXTENSIONS.has(ext)) return 'audio';
+  if (base === 'text') return 'text';
+  return base || 'other';
+}
+
+export function normalizeText(text) {
   return String(text || '')
     .normalize('NFKD')
     .replace(/\p{M}+/gu, '')
@@ -14,290 +32,124 @@ function normalizeText(text) {
     .trim();
 }
 
-function words(text) {
-  return normalizeText(text).split(' ').filter(Boolean);
-}
+const words = text => normalizeText(text).split(' ').filter(Boolean);
+const encoded = text => normalizeText(text).replaceAll(' ', '_');
+const fieldWords = (field, text) => words(text).map(word => `__${field}__${word}`);
+const typeAlias = value => TYPE_ALIASES.get(normalizeText(value)) || normalizeText(value);
 
-function encoded(text) {
-  return normalizeText(text).replaceAll(' ', '_');
-}
-
-function fieldWords(field, text) {
-  return words(text).map(word => `__${field}__${word}`);
-}
-
-function extension(name) {
-  return String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
-}
-
-function fileKind(file) {
-  const mime = String(file.mime || '');
-  const base = mime.split('/')[0];
-  if (base && base !== 'application') return base;
-  const ext = extension(file.filename);
-  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff'].includes(ext)) return 'image';
-  if (['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'mpg', 'mpeg', 'm2v', 'mts', 'm2ts', '3gp'].includes(ext)) return 'video';
-  if (['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus'].includes(ext)) return 'audio';
-  if (base === 'text') return 'text';
-  return base || 'other';
-}
-
-function typeFields(file) {
-  const kind = fileKind(file);
-  const values = [kind];
-  if (kind === 'image' || kind === 'video') values.push('media');
-  if (kind === 'application' || kind === 'text') values.push('application');
-  return [...new Set(values)].map(value => `__type__${encoded(value)}`);
-}
-
-function yearFor(file) {
-  const date = new Date(file.fileDate || file.createdAt || 0);
-  return Number.isNaN(date.getTime()) ? '' : String(date.getFullYear());
-}
-
-function augmentCatalogFile(file) {
-  const all = normalizeText(`${file.filename || ''} ${file.originalPath || ''} ${file.searchText || ''}`);
-  const fields = [
-    all,
-    ...fieldWords('name', file.filename),
-    ...fieldWords('path', `${file.originalPath || ''} ${file.searchText || ''}`),
-    ...typeFields(file),
-    `__ext__${encoded(extension(file.filename))}`,
-    `__year__${encoded(yearFor(file))}`
-  ];
-  const importIds = Array.isArray(file.importIds)
-    ? file.importIds
-    : String(file.importIds || '').split(',').filter(Boolean);
-  for (const id of importIds) fields.push(`__sourceid__${String(id).trim()}`);
-  file.searchText = `${file.searchText || ''} ${fields.filter(Boolean).join(' ')}`.trim();
-  return file;
-}
-
-async function correctedDates(files) {
-  if (!files.length) return files;
-  try {
-    const response = await nativeFetch('/api/file-dates', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ hashes: files.map(file => file.hash) })
-    });
-    if (!response.ok) return files;
-    const dates = new Map((await response.json()).dates.map(item => [item.hash, item]));
-    return files.map(file => {
-      const date = dates.get(file.hash);
-      return date ? { ...file, fileDate: date.fileDate, dateSource: date.dateSource, capturedAt: date.capturedAt } : file;
-    });
-  } catch {
-    return files;
-  }
-}
-
-window.fetch = async (...args) => {
-  const response = await nativeFetch(...args);
-  if (!response.ok) return response;
-  let pathname = '';
-  try {
-    const input = args[0] instanceof Request ? args[0].url : String(args[0]);
-    pathname = new URL(input, location.href).pathname;
-  } catch {}
-  if (pathname !== '/api/catalog') return response;
-
-  try {
-    const data = await response.clone().json();
-    if (!Array.isArray(data.files)) return response;
-    data.files = (await correctedDates(data.files)).map(augmentCatalogFile);
-    const headers = new Headers(response.headers);
-    headers.delete('content-length');
-    return new Response(JSON.stringify(data), {
-      status: response.status,
-      statusText: response.statusText,
-      headers
-    });
-  } catch {
-    return response;
-  }
-};
-
-function pathTail(text, count = 1) {
-  const parts = String(text || '').split(/[\\/]+/).map(part => part.trim()).filter(Boolean);
-  return parts.length > 1 ? parts.slice(-count).join(' ') : String(text || '');
-}
-
-function pathQueryText(text) {
+function pathQuery(text) {
   const raw = String(text || '').trim();
-  const absolute = /^[a-z]:[\\/]/i.test(raw) || /^[\\/]{1,2}/.test(raw);
-  return absolute ? pathTail(raw, 1) : raw;
+  if (!/^[a-z]:[\\/]/i.test(raw) && !/^[\\/]{1,2}/.test(raw)) return raw;
+  return raw.split(/[\\/]+/).map(part => part.trim()).filter(Boolean).at(-1) || raw;
 }
 
-function tokenize(raw) {
-  const tokens = [];
+function tokens(raw) {
+  const result = [];
   const regex = /(?:^|\s)(?:(name|path|source|type|ext|year):(?:"([^"]*)"|'([^']*)'|([^\s]+))|"([^"]*)"|'([^']*)'|([^\s]+))/giu;
   let match;
   while ((match = regex.exec(String(raw || '')))) {
-    const field = match[1]?.toLowerCase() || '';
     const text = match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[6] ?? match[7] ?? '';
-    if (text.trim()) tokens.push({ field, text: text.trim() });
+    if (text.trim()) result.push({ field: match[1]?.toLowerCase() || '', text: text.trim() });
   }
-  return tokens;
+  return result;
 }
 
-function sourceToken(text) {
-  const wanted = normalizeText(text);
-  if (!wanted) return '';
-  const select = document.querySelector('#source');
-  const options = select ? [...select.options].filter(option => option.value) : [];
-  const exact = options.find(option => normalizeText(option.textContent) === wanted);
-  if (exact) return `__sourceid__${exact.value}`;
-  const matches = options.filter(option => normalizeText(option.textContent).includes(wanted));
-  if (matches.length === 1) return `__sourceid__${matches[0].value}`;
-  if (options.length) return `__sourceid__missing_${encoded(wanted)}`;
-  return wanted;
+export function buildSearchText(file, sourceNames = new Map()) {
+  const kind = fileKind(file);
+  const year = new Date(file.fileDate || file.createdAt || 0).getFullYear();
+  const values = [
+    normalizeText(`${file.filename || ''} ${file.originalPath || ''} ${file.searchText || ''}`),
+    ...fieldWords('name', file.filename),
+    ...fieldWords('path', `${file.originalPath || ''} ${file.searchText || ''}`),
+    `__type__${encoded(kind)}`,
+    ...(['image','video'].includes(kind) ? ['__type__media'] : []),
+    ...(['application','text'].includes(kind) ? ['__type__application'] : []),
+    `__ext__${encoded(extension(file.filename))}`,
+    ...(Number.isFinite(year) ? [`__year__${year}`] : [])
+  ];
+  for (const id of file.importIds || []) {
+    values.push(`__sourceid__${id}`);
+    values.push(normalizeText(sourceNames.get(Number(id)) || ''));
+  }
+  return values.filter(Boolean).join(' ');
 }
 
-function typeToken(text) {
-  const aliases = new Map([
-    ['photo', 'image'], ['photos', 'image'], ['picture', 'image'], ['pictures', 'image'], ['images', 'image'],
-    ['videos', 'video'], ['movies', 'video'], ['music', 'audio'], ['documents', 'application'], ['document', 'application'], ['docs', 'application']
-  ]);
-  const normalized = normalizeText(text);
-  return aliases.get(normalized) || normalized;
-}
+export function queryTerms(raw, sourceOptions = []) {
+  const sourceToken = text => {
+    const wanted = normalizeText(text);
+    const options = [...sourceOptions].filter(option => option.value);
+    const exact = options.find(option => normalizeText(option.textContent) === wanted);
+    if (exact) return `__sourceid__${exact.value}`;
+    const matches = options.filter(option => normalizeText(option.textContent).includes(wanted));
+    return matches.length === 1 ? `__sourceid__${matches[0].value}` : `__sourceid__missing_${encoded(wanted)}`;
+  };
 
-function queryTerms(raw) {
   const result = [];
-  for (const token of tokenize(raw)) {
-    if (token.field === 'name') {
-      result.push(...fieldWords('name', token.text));
-      continue;
-    }
-    if (token.field === 'path') {
-      result.push(...fieldWords('path', pathQueryText(token.text)));
-      continue;
-    }
-    if (token.field === 'source') {
-      result.push(sourceToken(token.text));
-      continue;
-    }
-    if (token.field === 'type') {
-      result.push(`__type__${encoded(typeToken(token.text))}`);
-      continue;
-    }
-    if (token.field === 'ext') {
-      result.push(`__ext__${encoded(String(token.text).replace(/^\./, ''))}`);
-      continue;
-    }
-    if (token.field === 'year') {
-      result.push(`__year__${encoded(token.text)}`);
-      continue;
-    }
-
-    const searchable = /[\\/]/.test(token.text) ? pathQueryText(token.text) : token.text;
-    result.push(...words(searchable));
+  for (const token of tokens(raw)) {
+    if (token.field === 'name') result.push(...fieldWords('name', token.text));
+    else if (token.field === 'path') result.push(...fieldWords('path', pathQuery(token.text)));
+    else if (token.field === 'source') result.push(sourceToken(token.text));
+    else if (token.field === 'type') result.push(`__type__${encoded(typeAlias(token.text))}`);
+    else if (token.field === 'ext') result.push(`__ext__${encoded(token.text.replace(/^\./, ''))}`);
+    else if (token.field === 'year') result.push(`__year__${encoded(token.text)}`);
+    else result.push(...words(/[\\/]/.test(token.text) ? pathQuery(token.text) : token.text));
   }
   return result.filter(Boolean);
 }
 
-function transformedQuery(raw) {
-  return queryTerms(raw).join(' ');
+function sourcePath(source) {
+  const root = String(source.rootPath || '').replace(/[\\/]+$/, '');
+  const relative = String(source.path || '').replace(/^[\\/]+/, '');
+  if (!root) return relative;
+  if (!relative) return root;
+  const separator = root.includes('\\') && !root.includes('/') ? '\\' : '/';
+  return `${root}${separator}${relative.replace(/[\\/]+/g, separator)}`;
 }
 
-function rawSearch() {
-  return search && valueDescriptor?.get ? valueDescriptor.get.call(search) : '';
-}
-
-function setRawSearch(text, notify = true) {
-  if (!search || !valueDescriptor?.set) return;
-  valueDescriptor.set.call(search, String(text || ''));
-  if (notify) search.dispatchEvent(new Event('input', { bubbles: true }));
-}
-
-function detailsHaystacks(details) {
+function detailsFields(details) {
   const object = details?.object || {};
   const sources = Array.isArray(details?.sources) ? details.sources : [];
   const names = sources.map(item => item.filename || '');
-  const paths = sources.map(item => item.path || '');
+  const paths = sources.flatMap(item => [sourcePath(item), item.path || '', item.rootPath || '']);
   const sourceNames = sources.map(item => normalizeText(item.sourceName || item.deviceName || '')).filter(Boolean);
-  const representative = names[0] || object.filename || '';
-  const kind = fileKind({ filename: representative, mime: object.mime });
-  const ext = extension(representative);
-  const embeddedDate = details?.date?.fileDate;
-  const mtimes = sources.map(item => new Date(item.mtime || 0)).filter(date => {
-    const year = date.getFullYear();
-    return !Number.isNaN(date.getTime()) && year >= 1980 && year <= new Date().getFullYear() + 1;
-  });
-  const date = embeddedDate ? new Date(embeddedDate) : mtimes.length ? new Date(Math.min(...mtimes.map(item => item.getTime()))) : new Date(object.createdAt || 0);
-  const year = Number.isNaN(date.getTime()) ? '' : String(date.getFullYear());
+  const filename = names[0] || object.filename || '';
+  const date = new Date(details?.date?.fileDate || object.createdAt || 0);
   return {
     all: normalizeText(`${names.join(' ')} ${paths.join(' ')} ${sourceNames.join(' ')}`),
     name: normalizeText(names.join(' ')),
     path: normalizeText(paths.join(' ')),
     source: sourceNames.join(' '),
     sourceNames,
-    type: normalizeText(kind),
-    ext: normalizeText(ext),
-    year
+    type: normalizeText(fileKind({ filename, mime: object.mime })),
+    ext: normalizeText(extension(filename)),
+    year: Number.isNaN(date.getTime()) ? '' : String(date.getFullYear())
   };
 }
 
-function queryMatchesDetails(raw, details) {
-  const hay = detailsHaystacks(details);
-  return tokenize(raw).every(token => {
-    let wanted = token.text;
+export function matchesDetails(raw, details) {
+  const fields = detailsFields(details);
+  return tokens(raw).every(token => {
     if (token.field === 'type') {
-      const type = typeToken(wanted);
-      if (type === 'media') return ['image', 'video'].includes(hay.type);
-      if (type === 'application') return ['application', 'text'].includes(hay.type);
-      return hay.type === type;
+      const wanted = typeAlias(token.text);
+      if (wanted === 'media') return ['image','video'].includes(fields.type);
+      if (wanted === 'application') return ['application','text'].includes(fields.type);
+      return fields.type === wanted;
     }
-    if (token.field === 'path') wanted = pathQueryText(wanted);
-    if (!token.field && /[\\/]/.test(wanted)) wanted = pathQueryText(wanted);
-    const terms = words(wanted);
-    const field = token.field && hay[token.field] !== undefined ? token.field : 'all';
-    return terms.every(term => String(hay[field] || '').includes(term));
+    const text = token.field === 'path' || (!token.field && /[\\/]/.test(token.text)) ? pathQuery(token.text) : token.text;
+    const field = token.field && fields[token.field] !== undefined ? token.field : 'all';
+    return words(text).every(term => String(fields[field] || '').includes(term));
   });
 }
 
-function matchesSmart(details, spec = {}) {
-  const hay = detailsHaystacks(details);
+export function matchesSmart(details, spec = {}) {
+  const fields = detailsFields(details);
   if (spec.type) {
-    const wanted = typeToken(spec.type);
-    if (wanted === 'media') {
-      if (!['image', 'video'].includes(hay.type)) return false;
-    } else if (wanted === 'application') {
-      if (!['application', 'text'].includes(hay.type)) return false;
-    } else if (hay.type !== wanted) return false;
+    const wanted = typeAlias(spec.type);
+    const matches = wanted === 'media' ? ['image','video'].includes(fields.type)
+      : wanted === 'application' ? ['application','text'].includes(fields.type)
+      : fields.type === wanted;
+    if (!matches) return false;
   }
-  if (spec.sourceName && !hay.sourceNames.includes(normalizeText(spec.sourceName))) return false;
-  return queryMatchesDetails(spec.query || '', details);
+  if (spec.sourceName && !fields.sourceNames.includes(normalizeText(spec.sourceName))) return false;
+  return matchesDetails(spec.query || '', details);
 }
-
-async function refreshIndexOnce() {
-  if (!('indexedDB' in window) || localStorage.getItem(SEARCH_INDEX_KEY) === SEARCH_INDEX_VERSION) return;
-  await new Promise(resolve => {
-    const request = indexedDB.deleteDatabase('mochimono-catalog');
-    request.onsuccess = request.onerror = request.onblocked = () => resolve();
-  });
-  localStorage.setItem(SEARCH_INDEX_KEY, SEARCH_INDEX_VERSION);
-}
-
-await refreshIndexOnce();
-
-if (search && valueDescriptor?.get && valueDescriptor?.set) {
-  Object.defineProperty(search, 'value', {
-    configurable: true,
-    get() {
-      return transformedQuery(rawSearch());
-    },
-    set(next) {
-      valueDescriptor.set.call(this, next);
-    }
-  });
-}
-
-window.mochimonoSearch = {
-  raw: rawSearch,
-  setRaw: setRawSearch,
-  normalize: normalizeText,
-  matchesDetails: queryMatchesDetails,
-  matchesSmart
-};
