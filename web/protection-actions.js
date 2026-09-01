@@ -17,6 +17,22 @@ let decorating = false;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char]));
 const currentHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 
+function age(value) {
+  const time = new Date(value || 0).getTime();
+  if (!time) return '';
+  const seconds = Math.max(0, Math.round((Date.now() - time) / 1000));
+  if (seconds < 60) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 60) return `${days}d ago`;
+  const months = Math.round(days / 30.44);
+  if (months < 24) return `${months}mo ago`;
+  return `${Math.round(months / 12)}y ago`;
+}
+
 async function jsonRequest(path, options = {}) {
   const response = await fetch(path, { headers: { 'content-type':'application/json', ...(options.headers || {}) }, ...options });
   const data = await response.json().catch(() => ({}));
@@ -57,8 +73,10 @@ function copyDescription(copy) {
   ];
   if (copy.site && copy.site !== copy.name) parts.push(copy.site);
   if (!copy.verified) parts.push('not verified');
+  else if (copy.verifiedAt) parts.push(`verified ${age(copy.verifiedAt)}`);
+  else parts.push('verified');
   if (copy.reliability === 'low') parts.push('less reliable');
-  else if (copy.verified) parts.push('verified');
+  if (copy.lastSeen) parts.push(`server last heard ${age(copy.lastSeen)}`);
   return parts.join(' · ');
 }
 
