@@ -65,9 +65,13 @@ function decorateItem(item) {
   const status = protectionFor(hash);
   if (!status) return;
 
-  const isRow = item.classList.contains('file-row');
-  const text = isRow ? status.label : status.grid;
   item.title = [item.dataset.protectionBaseTitle, status.label].filter(Boolean).join(' · ');
+  const isRow = item.classList.contains('file-row');
+
+  // Routine backup reminders belong in Details/Storage, not on every photo.
+  if (!isRow && status.className === 'warn') return;
+
+  const text = isRow ? status.label : status.grid;
   if (!text) return;
 
   const badge = document.createElement('span');
