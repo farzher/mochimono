@@ -192,8 +192,7 @@ export async function handleBackupPolicy(req, res, url) {
 
   const desired = /^\/api\/drives\/([^/]+)\/desired$/.exec(url.pathname);
   const files = /^\/api\/drives\/([^/]+)\/files$/.exec(url.pathname);
-  const file = /^\/api\/drives\/([^/]+)\/files\/([a-f0-9]{64})$/.exec(url.pathname);
-  const driveRoute = url.pathname === '/api/drives/register' || url.pathname === '/api/drives' || Boolean(desired) || Boolean(files) || Boolean(file);
+  const driveRoute = url.pathname === '/api/drives/register' || url.pathname === '/api/drives' || Boolean(desired) || Boolean(files);
   if (!driveRoute) return false;
 
   if (req.method === 'POST' && url.pathname === '/api/drives/register') {
@@ -213,26 +212,6 @@ export async function handleBackupPolicy(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/api/drives') {
     json(res, 200, { drives: db.prepare('SELECT * FROM drives ORDER BY name').all().map(driveCoverage) });
-    return true;
-  }
-
-  if (file && req.method === 'GET') {
-    const id = decodeURIComponent(file[1]);
-    const drive = getDrive(id);
-    if (!drive) {
-      json(res, 404, { error: 'Backup not registered' });
-      return true;
-    }
-    const row = db.prepare(`
-      SELECT r.object_hash AS hash, r.verified_at AS verifiedAt, o.size
-      FROM replicas r JOIN objects o ON o.hash = r.object_hash
-      WHERE r.drive_id = ? AND r.object_hash = ? AND o.state = 'active'
-    `).get(id, file[2]);
-    if (!row) {
-      json(res, 404, { error: 'Replica not found' });
-      return true;
-    }
-    json(res, 200, { hash: row.hash, verifiedAt: row.verifiedAt || null, size: Number(row.size) || 0, lastSeen: drive.last_seen || null });
     return true;
   }
 
