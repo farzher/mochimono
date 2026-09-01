@@ -22,6 +22,7 @@ groupStyle.textContent = `
 document.head.append(groupStyle);
 
 const samePath = (a, b) => String(a || '').replace(/[\\/]+$/, '').toLowerCase() === String(b || '').replace(/[\\/]+$/, '').toLowerCase();
+const setText = (node, value) => { if (node && node.textContent !== value) node.textContent = value; };
 
 async function request(path, options = {}) {
   const response = await fetch(path, { headers: { 'content-type': 'application/json' }, ...options });
@@ -42,11 +43,14 @@ function modeBadge(row, protectedFolder) {
     badge.dataset.folderMode = '';
     row.querySelector('.storage-title strong')?.after(badge);
   }
-  badge.className = `storage-mode ${protectedFolder ? 'protected' : 'local'}`;
-  badge.textContent = protectedFolder ? 'Cloud synced' : 'Browse only';
-  badge.title = protectedFolder
+  const className = `storage-mode ${protectedFolder ? 'protected' : 'local'}`;
+  const text = protectedFolder ? 'Cloud synced' : 'Browse only';
+  const title = protectedFolder
     ? 'This folder is indexed locally and copied to Mochimono.'
     : 'This folder is indexed on this device only. Nothing is uploaded.';
+  if (badge.className !== className) badge.className = className;
+  setText(badge, text);
+  if (badge.title !== title) badge.title = title;
 }
 
 function ensureOpenButton(row, path) {
@@ -63,16 +67,17 @@ function ensureOpenButton(row, path) {
     button.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.8 5.7h5l1.5-1.8h2.5l1.3 1.8h4.1v9.4H2.8z"/></svg>';
     actions.prepend(button);
   }
-  button.dataset.path = path;
+  if (button.dataset.path !== path) button.dataset.path = path;
 }
 
 function cleanFolderTitle(row) {
   const path = row.dataset.folderPath || '';
   const strong = row.querySelector('.storage-title strong');
   if (strong) {
-    strong.textContent = path;
-    strong.title = `Open ${path}`;
-    strong.dataset.openNativeFolderPath = path;
+    setText(strong, path);
+    const title = `Open ${path}`;
+    if (strong.title !== title) strong.title = title;
+    if (strong.dataset.openNativeFolderPath !== path) strong.dataset.openNativeFolderPath = path;
   }
   row.querySelector('.storage-path')?.remove();
   ensureOpenButton(row, path);
@@ -130,7 +135,7 @@ async function annotate() {
     const state = await request('/api/state');
     const configured = state.settings?.folders || [];
     const empty = folders.querySelector(':scope > .empty-state');
-    if (empty) empty.textContent = 'No folders';
+    if (empty) setText(empty, 'No folders');
 
     for (const row of folders.querySelectorAll('[data-folder-path]')) {
       const item = configured.find(folder => samePath(folder.path, row.dataset.folderPath));
@@ -147,12 +152,13 @@ async function annotate() {
       const actions = row.querySelector('.item-actions');
       const remove = row.querySelector('[data-remove-folder]');
 
-      if (sync) sync.textContent = protectedFolder ? 'Sync' : 'Index';
-      if (!progressVisible && status && !protectedFolder) status.textContent = 'Indexed locally';
-      if (!progressVisible && status && protectedFolder && !item.lastSynced) status.textContent = 'Waiting to sync';
+      setText(sync, protectedFolder ? 'Sync' : 'Index');
+      if (!progressVisible && status && !protectedFolder) setText(status, 'Indexed locally');
+      if (!progressVisible && status && protectedFolder && !item.lastSynced) setText(status, 'Waiting to sync');
       if (remove) {
-        remove.title = protectedFolder ? 'Stop syncing this folder' : 'Stop browsing this folder';
-        remove.setAttribute('aria-label', remove.title);
+        const title = protectedFolder ? 'Stop syncing this folder' : 'Stop browsing this folder';
+        if (remove.title !== title) remove.title = title;
+        if (remove.getAttribute('aria-label') !== title) remove.setAttribute('aria-label', title);
       }
 
       const existingProtect = actions?.querySelector('[data-protect-folder]');
