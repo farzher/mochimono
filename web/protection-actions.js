@@ -38,19 +38,6 @@ async function jsonRequest(path, options = {}) {
   return data;
 }
 
-async function enrichManagedCopies(state, hash) {
-  const copies = await Promise.all((state?.copies || []).map(async copy => {
-    if (!copy.id || !['backup','peer'].includes(copy.kind)) return copy;
-    try {
-      const replica = await jsonRequest(`/api/drives/${encodeURIComponent(copy.id)}/files/${hash}`);
-      return { ...copy, verifiedAt: replica.verifiedAt || null, lastSeen: replica.lastSeen || null };
-    } catch {
-      return copy;
-    }
-  }));
-  return { ...state, copies };
-}
-
 function protectionLabel(state) {
   if (!state) return '';
   const known = Number(state.status?.copies) || 0;
@@ -112,7 +99,7 @@ async function decorateDetails() {
   const mine = ++generation;
   decorating = true;
   try {
-    const state = await enrichManagedCopies(await jsonRequest(`/api/protection/objects/${hash}`), hash);
+    const state = await jsonRequest(`/api/protection/objects/${hash}`);
     if (mine !== generation || hash !== currentHash() || panel.hidden) return;
     const details = [...panel.querySelectorAll(':scope > .viewer-info-section')].find(section => section.querySelector('h3')?.textContent.trim() === 'Details');
     details?.insertAdjacentHTML('beforebegin', sectionHtml(state, hash));
@@ -128,9 +115,9 @@ async function updateLevel(select) {
   select.disabled = true;
   const status = section.querySelector('[data-protection-status]');
   try {
-    const state = await enrichManagedCopies(await jsonRequest(`/api/protection/objects/${hash}/level`, {
+    const state = await jsonRequest(`/api/protection/objects/${hash}/level`, {
       method:'POST', body:JSON.stringify({ level:select.value })
-    }), hash);
+    });
     section.outerHTML = sectionHtml(state, hash);
     window.dispatchEvent(new CustomEvent('mochimono:protection-changed', { detail:{ hash,state } }));
   } catch (error) {
