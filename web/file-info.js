@@ -1,18 +1,41 @@
-import './related-viewer.js';
-
+const CLIENT = document.documentElement.classList.contains('client-library');
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
+const viewerClose = document.querySelector('#viewer-close');
 const viewerCollections = document.querySelector('#viewerCollections');
+const viewerContext = document.querySelector('#viewer-context');
 const button = document.querySelector('#viewer-info-button');
 const panel = document.querySelector('#viewerInfo');
+const summaryCache = new Map();
 let generation = 0;
+
+const style = document.createElement('style');
+style.textContent = `
+  .viewer-title{max-width:min(68vw,900px)}
+  .viewer-title-sub{display:flex;align-items:center;gap:7px;min-width:0;height:18px}
+  .viewer-context{display:flex;align-items:center;gap:4px;min-width:0;max-width:min(46vw,620px);overflow:hidden}
+  .viewer-context:empty{display:none}
+  .viewer-context-chip{display:block;min-width:0;max-width:220px;height:17px;padding:1px 6px;border:1px solid rgba(255,255,255,.11);border-radius:5px;background:rgba(16,16,16,.48);color:#d3ccca;font-size:9px;font-weight:650;line-height:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 3px #000;cursor:pointer}
+  .viewer-context-chip:hover{background:rgba(255,255,255,.12);color:#fff}
+  .viewer-context-chip.origin{color:#bcb3b1}
+  .viewer-context-more{flex:0 0 auto;color:#aaa19f;font-size:9px;font-weight:700;white-space:nowrap}
+  .viewer-title-sub>#viewer-meta{flex:0 0 auto;white-space:nowrap}
+  @media(max-width:700px){
+    .viewer-title{max-width:58vw}
+    .viewer-context{max-width:38vw}
+    .viewer-context-chip{max-width:130px}
+    .viewer-context .viewer-context-chip:nth-of-type(n+2){display:none}
+    .viewer-context-more{display:none}
+  }
+`;
+document.head.append(style);
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 }
 
 function currentHash() {
-  return viewerOpen.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
+  return viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 }
 
 function formatDate(value) {
@@ -42,11 +65,40 @@ function dateLabel(source) {
 }
 
 function fullPath(source) {
-  const relative = String(source.path || '');
-  const root = String(source.rootPath || '').replace(/[\\/]+$/, '');
+  const relative = String(source?.path || source?.originalPath || '');
+  const root = String(source?.rootPath || '').replace(/[\\/]+$/, '');
   if (!root) return relative;
-  const separator = root.includes('\\') ? '\\' : '/';
-  return `${root}${separator}${relative.replace(/[\\/]+/g, separator)}`;
+  if (!relative) return root;
+  const separator = root.includes('\\') && !root.includes('/') ? '\\' : '/';
+  const clean = relative.replace(/^[\\/]+/, '').replace(/[\\/]+/g, separator);
+  return `${root}${separator}${clean}`;
+}
+
+function parentPath(value) {
+  const raw = String(value || '').replace(/[\\/]+$/, '');
+  const index = Math.max(raw.lastIndexOf('\\'), raw.lastIndexOf('/'));
+  return index > 1 ? raw.slice(0, index) : raw;
+}
+
+function compactPath(value) {
+  const raw = String(value || '');
+  const separator = raw.includes('\\') && !raw.includes('/') ? '\\' : '/';
+  const parts = raw.split(/[\\/]+/).filter(Boolean);
+  if (parts.length <= 3) return raw;
+  const prefix = /^[a-z]:$/i.test(parts[0]) ? `${parts[0]}${separator}` : raw.startsWith(separator) ? separator : '';
+  return `${prefix}…${separator}${parts.slice(-2).join(separator)}`;
+}
+
+function unique(values) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values.map(item => String(item || '').trim()).filter(Boolean)) {
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
 }
 
 function localCopies(local) {
@@ -61,58 +113,42 @@ function localCopies(local) {
   return [...grouped.values()];
 }
 
-function protectionState(data, local) {
-  const locals = localCopies(local);
-  const localPaths = locals.reduce((sum, item) => sum + item.paths.length, 0);
-  const backups = data.backups || [];
-  const verified = backups.filter(backup => backup.verifiedAt);
-  const serverPresent = data.serverStored !== false;
-  const serverDamaged = Boolean(window.mochimonoLocations?.isServerDamaged?.(currentHash()));
-  const server = serverPresent && !serverDamaged;
-  const copies = localPaths + backups.length + (serverPresent ? 1 : 0);
-  const safe = localPaths > 0 && server && verified.length > 0;
+function addContextChip(kind, value, label) {
+  if (!viewerContext || !value) return;
+  const chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = `viewer-context-chip ${kind}`;
+  chip.textContent = label;
+  chip.title = kind === 'path' ? `${value}\nFilter to this folder` : `${value}\nFilter to this origin`;
+  chip.dataset.contextKind = kind;
+  chip.dataset.contextValue = value;
+  viewerContext.append(chip);
+}
 
-  if (serverDamaged) return {
-    key: 'danger', label: 'Repair needed', title: 'Mochimono copy damaged',
-    note: 'A storage scrub found that the Mochimono copy no longer matches its SHA-256 hash. Keep other copies. Verifying a healthy backup can repair the Mochimono copy automatically.',
-    locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
-  };
-  if (safe) return {
-    key: 'safe', label: `Safe to free · ${copies} copies`, title: 'Safe to free from this PC',
-    note: 'A healthy Mochimono copy and a verified backup both exist. Removing this indexed local copy would still leave two known copies.',
-    locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
-  };
-  if (localPaths > 0 && !server && !backups.length) return {
-    key: 'danger', label: 'Only indexed here', title: 'Only indexed on this PC',
-    note: 'This is the only copy Mochimono currently knows about. Keep it here until Mochimono has stored and backed it up.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
-  };
-  if (server && backups.length && localPaths > 0) return {
-    key: 'warn', label: `Backup not verified · ${copies} copies`, title: 'Needs backup verification',
-    note: 'Copies exist in an indexed local folder and in Mochimono, and a backup is present, but no backup copy has been verified yet.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
-  };
-  if (server && backups.length && !localPaths) return verified.length ? {
-    key: 'good', label: `Protected · ${copies} copies`, title: 'No indexed local copy',
-    note: 'Mochimono does not currently see this file in a folder it is Browse/Protect-indexing on this PC. It may still exist elsewhere on the computer. A healthy Mochimono copy and verified backup are recorded.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
-  } : {
-    key: 'warn', label: `Backup not verified · ${copies} copies`, title: 'No indexed local copy',
-    note: 'Mochimono does not currently see this file in a folder it is Browse/Protect-indexing on this PC. A backup copy exists, but it has not been verified yet.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
-  };
-  if (server && localPaths > 0) return {
-    key: 'warn', label: 'In Mochimono · backup needed', title: 'Needs another backup',
-    note: 'The file exists in an indexed local folder and in Mochimono, but no independent backup copy is recorded.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
-  };
-  if (server) return {
-    key: 'warn', label: 'No indexed local copy · backup needed', title: 'Mochimono copy only',
-    note: 'Mochimono has the file, but no copy is indexed in a local folder and no backup copy is recorded. The file may still exist elsewhere on this PC outside Mochimono-indexed folders.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
-  };
-  if (localPaths > 0 && backups.length) return {
-    key: 'warn', label: 'Not in Mochimono', title: 'Missing Mochimono copy',
-    note: 'An indexed local copy and backup copy exist, but this file is not currently stored in Mochimono.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
-  };
-  return {
-    key: 'warn', label: `${Math.max(1, copies)} known copy`, title: 'Protection incomplete',
-    note: 'Mochimono does not currently see enough independent copies to consider this file protected.', locals, backups, verified, server, serverPresent, serverDamaged, copies, safe
-  };
+function renderHeaderContext(data, local) {
+  if (!viewerContext) return;
+  viewerContext.replaceChildren();
+
+  const localPaths = localCopies(local).flatMap(({ location, paths }) => paths.map(path => fullPath({ rootPath: location.rootPath, path })));
+  const sourcePaths = (data.sources || []).map(fullPath);
+  const folders = unique([...localPaths, ...sourcePaths].map(parentPath).filter(Boolean));
+  const origins = unique((data.sources || []).map(source => source.sourceName || source.deviceName || ''));
+
+  const entries = [
+    ...folders.slice(0, 2).map(value => ({ kind: 'path', value, label: compactPath(value) })),
+    ...origins.slice(0, 2).map(value => ({ kind: 'origin', value, label: value }))
+  ];
+  const shown = entries.slice(0, 3);
+  for (const entry of shown) addContextChip(entry.kind, entry.value, entry.label);
+
+  const total = folders.length + origins.length;
+  if (total > shown.length) {
+    const more = document.createElement('span');
+    more.className = 'viewer-context-more';
+    more.textContent = `+${total - shown.length}`;
+    more.title = `${total - shown.length} more paths/origins`;
+    viewerContext.append(more);
+  }
 }
 
 function copyCard(title, kind, detail = '', paths = []) {
@@ -123,24 +159,24 @@ function copyCard(title, kind, detail = '', paths = []) {
   </article>`;
 }
 
-function renderCopies(state) {
+function renderCopies(data, local) {
   const cards = [];
-  for (const { location, paths } of state.locals) {
+  for (const { location, paths } of localCopies(local)) {
     const full = paths.map(path => fullPath({ rootPath: location.rootPath, path }));
     cards.push(copyCard(
       location.deviceName || 'This PC',
-      location.protected === false ? `${location.name} · Browse only` : location.name || 'Local',
-      location.available === false ? 'Folder is currently offline' : paths.length > 1 ? `${paths.length} paths` : 'Available now',
+      location.protected === false ? `${location.name} · Browse only` : location.name || 'Local folder',
+      location.available === false ? 'Offline' : paths.length > 1 ? `${paths.length} paths` : '',
       full
     ));
   }
-  if (state.serverPresent) cards.push(copyCard('Mochimono', 'Primary copy', state.serverDamaged ? 'Damaged · repair needed' : 'Available'));
-  for (const backup of state.backups) cards.push(copyCard(
-    backup.name || 'Backup',
-    'Backup copy',
-    backup.verifiedAt ? `Verified ${formatDate(backup.verifiedAt)}` : backup.lastSeen ? `Seen ${formatDate(backup.lastSeen)} · not verified` : 'Stored · not verified'
+  if (data.serverStored !== false) cards.push(copyCard('Cloud', 'Cloud copy'));
+  for (const backup of data.backups || []) cards.push(copyCard(
+    backup.name || 'Local backup',
+    'Local backup',
+    backup.verifiedAt ? `Verified ${formatDate(backup.verifiedAt)}` : backup.lastSeen ? `Seen ${formatDate(backup.lastSeen)}` : ''
   ));
-  return cards.join('') || '<p class="viewer-info-empty">No accessible copy is recorded.</p>';
+  return cards.join('') || '<p class="viewer-info-empty">No known copy location.</p>';
 }
 
 function renderOrigins(sources) {
@@ -157,34 +193,29 @@ function renderOrigins(sources) {
 
 function renderGroups(groups, editable) {
   const chips = groups.map(group => `<span class="viewer-tag"><span>${escapeHtml(group.name)}</span>${editable ? `<button type="button" data-remove-group="${group.id}" aria-label="Remove ${escapeHtml(group.name)}">×</button>` : ''}</span>`).join('');
-  return `<div class="viewer-tags">${chips}${editable ? '<button type="button" class="viewer-tag-add" data-add-group>+ Add</button>' : ''}</div>${!groups.length ? '<p class="viewer-info-empty">No tags or groups yet.</p>' : ''}`;
+  return `<div class="viewer-tags">${chips}${editable ? '<button type="button" class="viewer-tag-add" data-add-group>+ Add</button>' : ''}</div>${!groups.length ? '<p class="viewer-info-empty">No groups.</p>' : ''}`;
 }
 
 function renderPanel(data, local, groups) {
-  const state = protectionState(data, local);
+  if (!panel) return;
   const object = data.object || {};
   const sources = data.sources || [];
   const filename = object.filename || sources[0]?.filename || document.querySelector('#viewer-name')?.textContent || 'File';
   const mime = object.mime || 'application/octet-stream';
-  const editableGroups = state.serverPresent;
+  const editableGroups = data.serverStored !== false;
 
   panel.innerHTML = `<div class="viewer-info-head"><div><strong>${escapeHtml(filename)}</strong><span>${escapeHtml(bytes(object.size))}</span></div><button type="button" data-info-close aria-label="Close details">×</button></div>
-    <section class="viewer-protection ${state.key}">
-      <span>Protection</span>
-      <strong>${escapeHtml(state.title)}</strong>
-      <p>${escapeHtml(state.note)}</p>
-    </section>
     <section class="viewer-info-section">
-      <h3>Copies</h3>
-      ${renderCopies(state)}
-    </section>
-    <section class="viewer-info-section">
-      <div class="viewer-section-head"><h3>Tags / groups</h3></div>
-      ${renderGroups(groups, editableGroups)}
+      <h3>Where</h3>
+      ${renderCopies(data, local)}
     </section>
     <section class="viewer-info-section viewer-origins">
       <h3>Origin</h3>
       ${renderOrigins(sources)}
+    </section>
+    <section class="viewer-info-section">
+      <div class="viewer-section-head"><h3>Groups</h3></div>
+      ${renderGroups(groups, editableGroups)}
     </section>
     <section class="viewer-info-section">
       <h3>Details</h3>
@@ -195,24 +226,37 @@ function renderPanel(data, local, groups) {
         <div><dt>SHA-256</dt><dd class="viewer-hash">${escapeHtml(object.hash || currentHash())}</dd></div>
       </dl>
     </section>`;
-  syncButton(state);
 }
 
-function syncButton(state) {
-  if (!button || !state) return;
-  button.textContent = state.label;
-  button.classList.remove('protection-safe', 'protection-good', 'protection-warn', 'protection-danger');
-  button.classList.add(`protection-${state.key}`);
-  button.title = state.note;
+function trimCache() {
+  while (summaryCache.size > 200) summaryCache.delete(summaryCache.keys().next().value);
 }
 
 async function clientLocations(hash) {
+  if (!CLIENT) return { locations: [], files: [] };
   try {
     const response = await fetch(`/api/client/locations?hash=${encodeURIComponent(hash)}`, { cache: 'no-store' });
     return response.ok ? await response.json() : { locations: [], files: [] };
   } catch {
     return { locations: [], files: [] };
   }
+}
+
+async function summaryFor(hash, force = false) {
+  if (!force && summaryCache.has(hash)) return summaryCache.get(hash);
+  const promise = Promise.all([
+    fetch(`/api/provenance/${hash}`, { cache: 'no-store' }).then(async response => response.ok ? await response.json() : null).catch(() => null),
+    clientLocations(hash)
+  ]).then(([data, local]) => ({
+    data: data || {
+      object: { hash, filename: document.querySelector('#viewer-name')?.textContent || 'File' },
+      sources: [], backups: [], serverStored: false
+    },
+    local
+  }));
+  summaryCache.set(hash, promise);
+  trimCache();
+  return promise;
 }
 
 async function groupsFor(hash) {
@@ -222,46 +266,57 @@ async function groupsFor(hash) {
   } catch { return []; }
 }
 
-async function load(render = !panel.hidden) {
+async function load(render = Boolean(panel && !panel.hidden)) {
   const hash = currentHash();
   const mine = ++generation;
   if (!hash) return;
-  if (render) panel.innerHTML = '<div class="viewer-info-head"><div><strong>Details</strong></div><button type="button" data-info-close aria-label="Close details">×</button></div><p class="viewer-info-loading">Loading…</p>';
+  if (render && panel) panel.innerHTML = '<div class="viewer-info-head"><div><strong>Details</strong></div><button type="button" data-info-close aria-label="Close details">×</button></div><p class="viewer-info-loading">Loading…</p>';
   try {
-    const [response, local, groups] = await Promise.all([
-      fetch(`/api/provenance/${hash}`, { cache: 'no-store' }),
-      clientLocations(hash),
-      render ? groupsFor(hash) : Promise.resolve([])
-    ]);
-    if (!response.ok) throw new Error(`${response.status}`);
-    const data = await response.json();
+    const { data, local } = await summaryFor(hash);
     if (mine !== generation || hash !== currentHash()) return;
-    const state = protectionState(data, local);
-    syncButton(state);
-    if (render && !panel.hidden) renderPanel(data, local, groups);
+    renderHeaderContext(data, local);
+    if (!render || !panel || panel.hidden) return;
+    const groups = await groupsFor(hash);
+    if (mine !== generation || hash !== currentHash() || panel.hidden) return;
+    renderPanel(data, local, groups);
   } catch {
     if (mine !== generation) return;
-    if (button) { button.textContent = 'Details'; button.title = 'File details'; }
-    if (render && !panel.hidden) panel.insertAdjacentHTML('beforeend', '<p class="viewer-info-loading">Could not load file details.</p>');
+    viewerContext?.replaceChildren();
+    if (render && panel && !panel.hidden) panel.insertAdjacentHTML('beforeend', '<p class="viewer-info-loading">Could not load file details.</p>');
   }
 }
 
 function close() {
   generation++;
-  panel.hidden = true;
-  viewer.classList.remove('viewer-info-open');
+  if (panel) panel.hidden = true;
+  viewer?.classList.remove('viewer-info-open');
   button?.classList.remove('active');
 }
 
 function open() {
-  if (!currentHash()) return;
+  if (!currentHash() || !panel) return;
+  document.querySelector('#viewer-menu')?.removeAttribute('open');
   panel.hidden = false;
-  viewer.classList.add('viewer-info-open');
+  viewer?.classList.add('viewer-info-open');
   button?.classList.add('active');
   load(true);
 }
 
-button?.addEventListener('click', () => panel.hidden ? open() : close());
+button?.addEventListener('click', event => {
+  event.preventDefault();
+  panel?.hidden ? open() : close();
+});
+
+viewerContext?.addEventListener('click', event => {
+  const chip = event.target.closest('[data-context-kind]');
+  if (!chip) return;
+  const value = String(chip.dataset.contextValue || '').replaceAll('"', '');
+  if (!value || !window.mochimonoSearch?.setRaw) return;
+  viewerClose?.click();
+  const query = chip.dataset.contextKind === 'origin' ? `source:"${value}"` : `path:"${value}"`;
+  requestAnimationFrame(() => window.mochimonoSearch.setRaw(query));
+});
+
 panel?.addEventListener('click', event => {
   if (event.target.closest('[data-info-close]')) return close();
   if (event.target.closest('[data-add-group]')) {
@@ -282,27 +337,30 @@ panel?.addEventListener('click', event => {
 });
 
 document.addEventListener('keydown', event => {
-  if (event.key !== 'Escape' || panel.hidden) return;
+  if (event.key !== 'Escape' || !panel || panel.hidden) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   close();
 }, true);
 
-new MutationObserver(() => {
+if (viewer) new MutationObserver(() => {
   if (viewer.hidden) {
     close();
-    if (button) { button.textContent = 'Details'; button.title = 'File details'; }
+    viewerContext?.replaceChildren();
   }
 }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 
-new MutationObserver(() => {
+if (viewerOpen) new MutationObserver(() => {
+  viewerContext?.replaceChildren();
   if (!currentHash()) return;
-  load(!panel.hidden);
+  load(Boolean(panel && !panel.hidden));
 }).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
 
-new MutationObserver(() => {
-  if (!panel.hidden && currentHash()) {
-    window.dispatchEvent(new CustomEvent('mochimono:groups-changed'));
-    load(true);
-  }
+if (viewerCollections) new MutationObserver(() => {
+  if (panel && !panel.hidden && currentHash()) load(true);
 }).observe(viewerCollections, { childList: true, subtree: true });
+
+window.addEventListener('mochimono:locations-updated', () => {
+  summaryCache.clear();
+  if (!viewer?.hidden && currentHash()) load(Boolean(panel && !panel.hidden));
+});
