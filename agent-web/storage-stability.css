@@ -38,6 +38,15 @@
   width:9ch;
   white-space:nowrap;
 }
+/* A freshly rebuilt card briefly receives the legacy data-folder-size hook.
+   Keep that formatter hidden until the final dashboard owner claims the node,
+   otherwise 132 MB can flash before the canonical 131.9 MB value is mirrored. */
+#storagePane.storage-v2 .storage-folder-facts [data-folder-size]{
+  visibility:hidden!important;
+}
+#storagePane.storage-v2 .storage-folder-facts [data-dashboard-folder-size]{
+  visibility:visible!important;
+}
 #storagePane.storage-v2 .storage-folder-facts [data-folder-count]{
   min-width:12ch;
   white-space:nowrap;
