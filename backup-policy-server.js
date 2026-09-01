@@ -224,11 +224,11 @@ export async function handleBackupPolicy(req, res, url) {
     const after = String(url.searchParams.get('after') || '');
     const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') || 5000)));
     const rows = db.prepare(`
-      SELECT r.object_hash AS hash, r.verified_at AS verifiedAt
+      SELECT r.object_hash AS hash, r.verified_at AS verifiedAt, o.size
       FROM replicas r JOIN objects o ON o.hash = r.object_hash
       WHERE r.drive_id = ? AND o.state = 'active' AND r.object_hash > ?
       ORDER BY r.object_hash LIMIT ?
-    `).all(id, after, limit);
+    `).all(id, after, limit).map(row => ({ ...row, size: Number(row.size) || 0 }));
     json(res, 200, { files: rows, nextAfter: rows.length === limit ? rows.at(-1).hash : null });
     return true;
   }
