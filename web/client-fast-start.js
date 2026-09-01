@@ -1,7 +1,7 @@
 const CLIENT = document.documentElement.classList.contains('client-library');
 const SNAPSHOT_KEY = 'mochimono-fast-local-v1';
 const SNAPSHOT_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
-const READY_LIMIT = 16000;
+const READY_LIMIT = 24000;
 const cached = new Map();
 const readyThumbs = new Set();
 window.mochimonoReadyThumbs = readyThumbs;
@@ -38,11 +38,22 @@ function scheduleSave() {
   }, 120);
 }
 
-function publishReady() {
+function publishReady(hashes = readyThumbs) {
   window.mochimonoReadyThumbs = readyThumbs;
-  window.dispatchEvent(new CustomEvent('mochimono:ready-thumbs', { detail: { hashes: [...readyThumbs] } }));
+  window.dispatchEvent(new CustomEvent('mochimono:ready-thumbs', { detail: { hashes: [...hashes] } }));
   scheduleSave();
 }
+
+window.mochimonoRememberReadyThumbs = hashes => {
+  const added = [];
+  for (const value of hashes || []) {
+    const hash = String(value || '');
+    if (!/^[a-f0-9]{64}$/.test(hash) || readyThumbs.has(hash)) continue;
+    readyThumbs.add(hash);
+    added.push(hash);
+  }
+  if (added.length) publishReady(added);
+};
 
 function restoreSnapshot() {
   if (!CLIENT) return;
@@ -62,9 +73,9 @@ function applyFiles(files, persist = true) {
   for (const file of files) {
     const hash = String(file?.hash || '');
     if (!hash) continue;
-    if (!cached.has(hash)) fresh.push(file);
-    else cached.set(hash, { ...cached.get(hash), ...file });
-    if (!cached.has(hash)) cached.set(hash, file);
+    const previous = cached.get(hash);
+    if (!previous) fresh.push(file);
+    cached.set(hash, previous ? { ...previous, ...file } : file);
   }
   const painted = fresh.length ? paint(fresh) : needsRestore() ? paint([...cached.values()]) : false;
   if (persist && files.length) scheduleSave();
@@ -83,7 +94,7 @@ async function refreshReadyThumbs(items = [...cached.values()]) {
   if (!CLIENT || stopped || document.hidden) return;
   const media = mediaFiles(items);
   if (!media.length) return;
-  let changed = false;
+  const discovered = [];
   for (let offset = 0; offset < media.length; offset += 500) {
     try {
       const response = await fetch('/api/thumbs/check', {
@@ -99,11 +110,11 @@ async function refreshReadyThumbs(items = [...cached.values()]) {
         // dimensions. Positive dimensions mean a real cached preview exists.
         if (!hash || !(Number(item.width) > 0 && Number(item.height) > 0) || readyThumbs.has(hash)) continue;
         readyThumbs.add(hash);
-        changed = true;
+        discovered.push(hash);
       }
     } catch {}
   }
-  if (changed) publishReady();
+  if (discovered.length) publishReady(discovered);
 }
 
 function scheduleWarm(delay) {
