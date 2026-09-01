@@ -1,10 +1,12 @@
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { platform } from 'node:os';
+import { dirname, join, resolve, sep } from 'node:path';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { json, readJson, settings } from './lib/agent-context.js';
+import { json, pathKey, readJson, settings } from './lib/agent-context.js';
 import { clientProviders, handleClientProviderApi } from './lib/client-providers.js';
 import { localCandidate, localCandidates, localCatalog, localLocations } from './lib/local-locations.js';
 import { providerThumbnail, queueProviderThumbnail, serveProviderThumbnail } from './lib/provider-thumbs.js';
@@ -216,6 +218,32 @@ async function serveLocalObject(req, res, candidate) {
   return true;
 }
 
+function configuredFolder(path) {
+  const wanted = pathKey(String(path || ''));
+  if (!wanted) return '';
+  for (const item of settings.folders || []) {
+    const value = typeof item === 'string' ? item : item?.path;
+    if (value && pathKey(value) === wanted) return String(value);
+  }
+  for (const value of settings.browseFolders || []) {
+    if (value && pathKey(value) === wanted) return String(value);
+  }
+  return '';
+}
+
+function openNativePath(path, selectFile = false) {
+  let child;
+  if (platform() === 'win32') {
+    child = spawn('explorer.exe', selectFile ? [`/select,${path}`] : [path], { detached: true, stdio: 'ignore', windowsHide: true });
+  } else if (platform() === 'darwin') {
+    child = spawn('open', selectFile ? ['-R', path] : [path], { detached: true, stdio: 'ignore' });
+  } else {
+    child = spawn('xdg-open', [selectFile ? dirname(path) : path], { detached: true, stdio: 'ignore' });
+  }
+  child.on('error', () => {});
+  child.unref();
+}
+
 async function proxyApi(req, res, url) {
   if (!settings.token) return json(res, 503, { error: 'Mochimono Server is offline or not connected' });
   const headers = { authorization: `Bearer ${settings.token}` };
@@ -270,8 +298,6 @@ async function proxyApi(req, res, url) {
 
 export async function handleClientGateway(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/health') {
-    // This route only proves that the local Agent/gateway is responsive. Do not
-    // block first paint on building the entire merged server/backup/local catalog.
     json(res, 200, { ok: true });
     return true;
   }
@@ -289,6 +315,32 @@ export async function handleClientGateway(req, res, url) {
     json(res, 200, localCatalog(url.searchParams.get('limit')));
     return true;
   }
+  if (req.method === 'POST' && url.pathname === '/api/reveal-file') {
+    const body = await readJson(req, 32 * 1024);
+    const hash = String(body.hash || '');
+    if (!/^[a-f0-9]{64}$/.test(hash)) json(res, 400, { error: 'Invalid file' });
+    else {
+      const candidate = localCandidate(hash);
+      const info = candidate ? await stat(candidate.path).catch(() => null) : null;
+      if (!candidate || !info?.isFile()) json(res, 404, { error: 'No local copy is currently available' });
+      else {
+        openNativePath(candidate.path, true);
+        json(res, 200, { ok: true });
+      }
+    }
+    return true;
+  }
+  if (req.method === 'POST' && url.pathname === '/api/open-folder') {
+    const body = await readJson(req, 32 * 1024);
+    const path = configuredFolder(body.path);
+    const info = path ? await stat(path).catch(() => null) : null;
+    if (!path || !info?.isDirectory()) json(res, 404, { error: 'Folder is not available' });
+    else {
+      openNativePath(path, false);
+      json(res, 200, { ok: true });
+    }
+    return true;
+  }
   if (req.method === 'POST' && url.pathname === '/api/thumbs/check') {
     await checkThumbnails(req, res);
     return true;
@@ -302,7 +354,6 @@ export async function handleClientGateway(req, res, url) {
 
   const thumb = /^\/api\/thumbs\/([a-f0-9]{64})$/.exec(url.pathname);
   if (thumb && (req.method === 'GET' || req.method === 'HEAD')) {
-    if (await serveProviderThumbnail(req, res, thumb[1])) return true;
     const candidate = localCandidate(thumb[1]);
     if (candidate && String(candidate.mime || '').startsWith('image/')) {
       res.writeHead(302, {
@@ -312,6 +363,7 @@ export async function handleClientGateway(req, res, url) {
       res.end();
       return true;
     }
+    if (await serveProviderThumbnail(req, res, thumb[1])) return true;
   }
   if (url.pathname === '/files' || url.pathname.startsWith('/files/')) {
     if (!await serveLibrary(res, url.pathname)) json(res, 404, { error: 'Not found' });
