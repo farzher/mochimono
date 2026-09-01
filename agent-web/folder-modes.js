@@ -12,17 +12,16 @@ let queued = false;
 
 const groupStyle = document.createElement('style');
 groupStyle.textContent = `
-  #folders:has(.folder-mode-group){gap:22px!important}
-  .folder-mode-group{display:grid;gap:7px;min-width:0}
-  .folder-group-head{display:flex;align-items:center;gap:7px;padding:0 2px;color:#8d8582}
-  .folder-group-head span{font-size:11px;font-weight:680;letter-spacing:.01em}
-  .folder-group-head small{color:#67615f;font-size:9px;font-weight:650}
+  #folders:has(.folder-mode-group){gap:26px!important}
+  .folder-mode-group{display:grid;gap:10px;min-width:0}
+  .folder-group-head{display:flex;align-items:center;gap:8px;padding:0 2px;color:#a9a19e}
+  .folder-group-head span{font-size:12px;font-weight:700;letter-spacing:-.01em}
+  .folder-group-head small{color:#6f6866;font-size:10px;font-weight:650}
   .folder-mode-list{display:grid;gap:0;min-width:0}
 `;
 document.head.append(groupStyle);
 
 const samePath = (a, b) => String(a || '').replace(/[\\/]+$/, '').toLowerCase() === String(b || '').replace(/[\\/]+$/, '').toLowerCase();
-const pathName = path => String(path || '').replace(/[\\/]+$/, '').split(/[\\/]+/).filter(Boolean).at(-1) || String(path || 'Folder');
 
 async function request(path, options = {}) {
   const response = await fetch(path, { headers: { 'content-type': 'application/json' }, ...options });
@@ -44,27 +43,39 @@ function modeBadge(row, protectedFolder) {
     row.querySelector('.storage-title strong')?.after(badge);
   }
   badge.className = `storage-mode ${protectedFolder ? 'protected' : 'local'}`;
-  badge.textContent = protectedFolder ? 'Local + Mochimono' : 'Local only';
+  badge.textContent = protectedFolder ? 'Cloud synced' : 'Browse only';
   badge.title = protectedFolder
-    ? 'Files stay on this device and Mochimono keeps a Server copy. Local files are never deleted automatically.'
+    ? 'This folder is indexed locally and copied to Mochimono.'
     : 'This folder is indexed on this device only. Nothing is uploaded.';
+}
+
+function ensureOpenButton(row, path) {
+  const actions = row.querySelector('.item-actions');
+  if (!actions) return;
+  let button = actions.querySelector('[data-open-native-folder]');
+  if (!button) {
+    button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'icon tiny storage-open-folder';
+    button.dataset.openNativeFolder = '';
+    button.setAttribute('aria-label', 'Open folder');
+    button.title = 'Open folder';
+    button.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.8 5.7h5l1.5-1.8h2.5l1.3 1.8h4.1v9.4H2.8z"/></svg>';
+    actions.prepend(button);
+  }
+  button.dataset.path = path;
 }
 
 function cleanFolderTitle(row) {
   const path = row.dataset.folderPath || '';
   const strong = row.querySelector('.storage-title strong');
   if (strong) {
-    strong.textContent = pathName(path);
-    strong.title = path;
+    strong.textContent = path;
+    strong.title = `Open ${path}`;
+    strong.dataset.openNativeFolderPath = path;
   }
-  let pathLine = row.querySelector('.storage-path');
-  if (!pathLine) {
-    pathLine = document.createElement('div');
-    pathLine.className = 'storage-path';
-    row.querySelector('.storage-title')?.after(pathLine);
-  }
-  pathLine.textContent = path;
-  pathLine.title = path;
+  row.querySelector('.storage-path')?.remove();
+  ensureOpenButton(row, path);
 }
 
 function groupingMatches(groups) {
@@ -140,7 +151,7 @@ async function annotate() {
       if (!progressVisible && status && !protectedFolder) status.textContent = 'Indexed locally';
       if (!progressVisible && status && protectedFolder && !item.lastSynced) status.textContent = 'Waiting to sync';
       if (remove) {
-        remove.title = protectedFolder ? 'Stop protecting this folder' : 'Stop browsing this folder';
+        remove.title = protectedFolder ? 'Stop syncing this folder' : 'Stop browsing this folder';
         remove.setAttribute('aria-label', remove.title);
       }
 
@@ -150,7 +161,7 @@ async function annotate() {
         button.className = 'action-link primary-action';
         button.dataset.protectFolder = item.path;
         button.textContent = 'Protect';
-        button.title = 'Keep this local folder and add a Mochimono copy';
+        button.title = 'Add this folder to Mochimono cloud storage';
         actions.prepend(button);
       } else if (protectedFolder) existingProtect?.remove();
     }
@@ -174,6 +185,11 @@ function suggest(mode = '') {
   startProtect?.classList.toggle('suggested', mode === 'protect');
 }
 
+async function openFolder(path) {
+  if (!path) return;
+  await request('/api/open-folder', { method: 'POST', body: JSON.stringify({ path }) });
+}
+
 startBrowse?.addEventListener('click', async () => {
   const path = importPath.value.trim();
   if (!path) return;
@@ -192,6 +208,16 @@ startBrowse?.addEventListener('click', async () => {
 startProtect?.addEventListener('click', () => suggest());
 
 folders?.addEventListener('click', async event => {
+  const openButton = event.target.closest('[data-open-native-folder]');
+  const pathTitle = event.target.closest('[data-open-native-folder-path]');
+  if (openButton || pathTitle) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const path = openButton?.dataset.path || pathTitle?.dataset.openNativeFolderPath;
+    try { await openFolder(path); } catch {}
+    return;
+  }
+
   const button = event.target.closest('[data-protect-folder]');
   if (!button) return;
   event.preventDefault();
