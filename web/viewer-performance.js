@@ -1,6 +1,7 @@
 const viewer = document.querySelector('#viewer');
 const viewerMedia = document.querySelector('#viewer-media');
 const viewerOpen = document.querySelector('#viewer-open');
+const files = document.querySelector('#files');
 
 const objectHash = value => String(value || '').match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 const currentHash = () => objectHash(viewerOpen?.getAttribute('href'));
@@ -15,8 +16,15 @@ const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, '
 const approved = new WeakSet();
 const pending = [];
 const kept = [];
+const hoverWarm = new Map();
 let warming = null;
 let queuedFor = '';
+let hoverTimer = 0;
+
+function keep(image) {
+  kept.push(image);
+  while (kept.length > 3) kept.shift();
+}
 
 function clearPendingFor(current) {
   if (queuedFor === current) return;
@@ -52,8 +60,7 @@ function warmNext() {
   const done = async () => {
     if (warming !== image) return;
     try { await image.decode(); } catch {}
-    kept.push(image);
-    while (kept.length > 2) kept.shift();
+    keep(image);
     warming = null;
     warmNext();
   };
@@ -63,6 +70,23 @@ function warmNext() {
     warmNext();
   };
   image.src = task.url;
+}
+
+function warmGridCard(card) {
+  if (!card?.matches?.('.file-card.media-card[data-hash]') || card.classList.contains('video-card')) return;
+  const hash = String(card.dataset.hash || '');
+  if (!hash || !hasLocalCopy(hash) || hoverWarm.has(hash)) return;
+  const image = new Image();
+  approved.add(image);
+  image.decoding = 'async';
+  hoverWarm.set(hash, image);
+  while (hoverWarm.size > 2) hoverWarm.delete(hoverWarm.keys().next().value);
+  image.onload = async () => {
+    try { await image.decode(); } catch {}
+    keep(image);
+  };
+  image.onerror = () => hoverWarm.delete(hash);
+  image.src = `/api/objects/${hash}`;
 }
 
 if (descriptor?.get && descriptor?.set) {
@@ -87,6 +111,21 @@ if (viewerMedia) {
     // queued next/previous originals can use spare time without competing with it.
     warmNext();
   }, true);
+}
+
+if (files) {
+  files.addEventListener('pointerover', event => {
+    const card = event.target.closest?.('.file-card.media-card[data-hash]');
+    if (!card) return;
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => warmGridCard(card), 90);
+  }, { passive:true });
+  files.addEventListener('pointerout', () => clearTimeout(hoverTimer), { passive:true });
+  files.addEventListener('pointerdown', event => {
+    clearTimeout(hoverTimer);
+    warmGridCard(event.target.closest?.('.file-card.media-card[data-hash]'));
+  }, { passive:true });
+  files.addEventListener('focusin', event => warmGridCard(event.target.closest?.('.file-card.media-card[data-hash]')));
 }
 
 window.addEventListener('mochimono:locations-updated', warmNext);
