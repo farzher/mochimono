@@ -4,6 +4,9 @@ const THUMB_VERSION = 3;
 if (files) {
   const ready = window.mochimonoReadyThumbs instanceof Set ? window.mochimonoReadyThumbs : new Set();
   window.mochimonoReadyThumbs = ready;
+  const verifyQueue = new Set();
+  const verifyAttempts = new Map();
+  let verifyTimer = 0;
 
   const hashFor = card => String(card?.dataset?.hash || '');
 
@@ -56,9 +59,65 @@ if (files) {
     files.querySelectorAll('.file-card.media-card[data-hash]').forEach(paint);
   }
 
+  function scheduleVerify(hash, delay = 600) {
+    if (!/^[a-f0-9]{64}$/.test(hash) || ready.has(hash)) return;
+    verifyQueue.add(hash);
+    clearTimeout(verifyTimer);
+    verifyTimer = setTimeout(verifyLoaded, delay);
+  }
+
+  async function verifyLoaded() {
+    verifyTimer = 0;
+    if (!verifyQueue.size || document.hidden) return;
+    const hashes = [...verifyQueue];
+    verifyQueue.clear();
+    const discovered = [];
+    const confirmed = new Set();
+
+    for (let offset = 0; offset < hashes.length; offset += 500) {
+      try {
+        const response = await fetch('/api/thumbs/check', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ hashes: hashes.slice(offset, offset + 500) })
+        });
+        if (!response.ok) continue;
+        const data = await response.json();
+        for (const item of data.thumbnails || []) {
+          const hash = String(item.hash || '');
+          if (!(Number(item.width) > 0 && Number(item.height) > 0)) continue;
+          confirmed.add(hash);
+          if (!ready.has(hash)) {
+            ready.add(hash);
+            discovered.push(hash);
+          }
+        }
+      } catch {}
+    }
+
+    if (discovered.length) window.mochimonoRememberReadyThumbs?.(discovered);
+
+    for (const hash of hashes) {
+      if (confirmed.has(hash) || ready.has(hash)) {
+        verifyAttempts.delete(hash);
+        continue;
+      }
+      const attempts = (verifyAttempts.get(hash) || 0) + 1;
+      verifyAttempts.set(hash, attempts);
+      if (attempts < 3) setTimeout(() => scheduleVerify(hash, 0), attempts * 3500);
+    }
+  }
+
   new MutationObserver(records => {
     for (const record of records) for (const node of record.addedNodes) paintTree(node);
   }).observe(files, { childList: true, subtree: true });
+
+  files.addEventListener('load', event => {
+    const image = event.target;
+    if (!(image instanceof HTMLImageElement) || !image.classList.contains('cached-thumb')) return;
+    const hash = hashFor(image.closest('[data-hash]'));
+    if (hash && !ready.has(hash)) scheduleVerify(hash);
+  }, true);
 
   window.addEventListener('mochimono:ready-thumbs', event => {
     for (const hash of event.detail?.hashes || []) if (/^[a-f0-9]{64}$/.test(String(hash))) ready.add(String(hash));
