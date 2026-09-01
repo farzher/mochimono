@@ -23,7 +23,7 @@ let selectionMode = false;
 let anchorHash = '';
 let selected = new Set();
 let timelineFrame = 0;
-let timelineMembership = new Map();
+let timelineMembership = null;
 
 const currentView = () => document.querySelector('#views [data-view].active')?.dataset.view || 'grid';
 const allServerStored = hashes => window.mochimonoLocations?.allServerStored?.(hashes) ?? true;
@@ -57,9 +57,57 @@ function groupState(hashes) {
   return count === 0 ? 'none' : count === hashes.length ? 'all' : 'partial';
 }
 
+function periodKey(hash, period) {
+  const dates = window.mochimonoFileDates?.get(hash);
+  const value = sort.value === 'date-added' ? dates?.addedAt || dates?.fileDate : dates?.fileDate;
+  const date = new Date(value || 0);
+  if (Number.isNaN(date.getTime())) return '';
+  const year = String(date.getFullYear());
+  if (period === 'year') return year;
+  const month = `${year}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  if (period === 'month') return month;
+  return `${month}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function invalidateTimelineMembership() {
+  timelineMembership = null;
+}
+
+function ensureTimelineMembership() {
+  if (timelineMembership) return timelineMembership;
+  const membership = new Map();
+  const hashes = window.mochimonoLibrary?.filteredHashes?.() || renderedHashes();
+  for (const hash of hashes) {
+    for (const period of ['year','month','day']) {
+      const key = periodKey(hash, period);
+      if (!key) continue;
+      const id = `${period}:${key}`;
+      let group = membership.get(id);
+      if (!group) membership.set(id, group = []);
+      group.push(hash);
+    }
+  }
+  timelineMembership = membership;
+  return membership;
+}
+
 function syncTimelineSelection() {
-  for (const button of files.querySelectorAll('[data-select-period]')) {
-    const hashes = timelineMembership.get(`${button.dataset.selectPeriod}:${button.dataset.periodKey}`) || [];
+  const buttons = files.querySelectorAll('[data-select-period]');
+  // The common browsing path has no selection. Do not scan the full library just
+  // to prove every visible day/month/year checkbox is empty.
+  if (!selected.size) {
+    for (const button of buttons) {
+      button.classList.remove('selected','partial');
+      button.setAttribute('aria-pressed','false');
+      const label = button.dataset.periodLabel || button.textContent.trim();
+      button.title = `Select ${label}`;
+    }
+    return;
+  }
+
+  const membership = ensureTimelineMembership();
+  for (const button of buttons) {
+    const hashes = membership.get(`${button.dataset.selectPeriod}:${button.dataset.periodKey}`) || [];
     const state = groupState(hashes);
     button.classList.toggle('selected', state === 'all');
     button.classList.toggle('partial', state === 'partial');
@@ -120,32 +168,6 @@ function toggleGroup(hashes) {
   syncSelectionUi();
 }
 
-function periodKey(hash, period) {
-  const dates = window.mochimonoFileDates?.get(hash);
-  const value = sort.value === 'date-added' ? dates?.addedAt || dates?.fileDate : dates?.fileDate;
-  const date = new Date(value || 0);
-  if (Number.isNaN(date.getTime())) return '';
-  const year = String(date.getFullYear());
-  if (period === 'year') return year;
-  const month = `${year}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-  if (period === 'month') return month;
-  return `${month}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
-function rebuildTimelineMembership() {
-  timelineMembership = new Map();
-  const hashes = window.mochimonoLibrary?.filteredHashes?.() || renderedHashes();
-  for (const hash of hashes) {
-    for (const period of ['year', 'month', 'day']) {
-      const key = periodKey(hash, period);
-      if (!key) continue;
-      const id = `${period}:${key}`;
-      if (!timelineMembership.has(id)) timelineMembership.set(id, []);
-      timelineMembership.get(id).push(hash);
-    }
-  }
-}
-
 function groupButton(period, key, label, className = '') {
   const button = document.createElement('button');
   button.type = 'button';
@@ -161,8 +183,10 @@ function groupButton(period, key, label, className = '') {
 function decorateTimeline() {
   timelineFrame = 0;
   if (currentView() !== 'grid' || !sort.value.startsWith('date-')) return;
-  rebuildTimelineMembership();
 
+  // Gallery.js owns day-row geometry and day controls. This layer only decorates
+  // the static year/month headings and selection state, avoiding a second layout
+  // pass that used to race day positioning.
   for (const section of files.querySelectorAll('.date-group[data-date-group]')) {
     const monthKey = section.dataset.dateGroup;
     const year = monthKey.slice(0, 4);
@@ -177,30 +201,13 @@ function decorateTimeline() {
       monthHeading.replaceChildren(groupButton('month', monthKey, label));
     }
   }
-
-  for (const grid of files.querySelectorAll('.date-grid')) {
-    const existing = new Map([...grid.querySelectorAll(':scope > .day-group-control')].map(button => [button.dataset.periodKey, button]));
-    const used = new Set();
-    for (const card of grid.querySelectorAll(':scope > .day-start[data-day]')) {
-      const key = card.dataset.day;
-      const label = card.dataset.dayLabel || key;
-      let button = existing.get(key);
-      if (!button) {
-        button = groupButton('day', key, label, 'day-group-control');
-        grid.append(button);
-      }
-      used.add(key);
-      button.style.left = `${card.offsetLeft}px`;
-      button.style.top = `${card.offsetTop - 19}px`;
-    }
-    for (const [key, button] of existing) if (!used.has(key)) button.remove();
-  }
   syncTimelineSelection();
 }
 
 function scheduleTimeline() {
-  if (timelineFrame) cancelAnimationFrame(timelineFrame);
-  timelineFrame = requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(decorateTimeline)));
+  invalidateTimelineMembership();
+  if (timelineFrame) return;
+  timelineFrame = requestAnimationFrame(decorateTimeline);
 }
 
 function breadcrumbPath() {
@@ -274,7 +281,8 @@ files.addEventListener('click', event => {
   if (group) {
     event.preventDefault();
     event.stopImmediatePropagation();
-    toggleGroup(timelineMembership.get(`${group.dataset.selectPeriod}:${group.dataset.periodKey}`));
+    const membership = ensureTimelineMembership();
+    toggleGroup(membership.get(`${group.dataset.selectPeriod}:${group.dataset.periodKey}`));
     return;
   }
   const item = event.target.closest('[data-hash]');
@@ -295,11 +303,11 @@ document.querySelector('#views').addEventListener('click', event => {
   clearSelection(true);
   setTimeout(() => { saveUi(); scheduleTimeline(); });
 });
-for (const control of [source, collectionFilter]) control.addEventListener('change', () => clearSelection(true));
-search.addEventListener('input', () => { if (selected.size) clearSelection(true); });
+for (const control of [source, collectionFilter]) control.addEventListener('change', () => { invalidateTimelineMembership(); clearSelection(true); });
+search.addEventListener('input', () => { invalidateTimelineMembership(); if (selected.size) clearSelection(true); });
 document.querySelector('#mediaSize')?.addEventListener('input', scheduleTimeline);
 window.addEventListener('resize', scheduleTimeline, { passive: true });
-window.addEventListener('mochimono:locations-updated', () => { syncSelectionUi(); scheduleTimeline(); });
+window.addEventListener('mochimono:locations-updated', () => { syncSelectionUi(); });
 new MutationObserver(() => { syncSelectedClasses(); scheduleTimeline(); }).observe(files, { childList: true });
 
 restoreUi();
