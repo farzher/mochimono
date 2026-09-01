@@ -14,23 +14,24 @@ const LEVELS = [
 let generation = 0;
 let decorating = false;
 
-const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char]));
 const currentHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 
 async function jsonRequest(path, options = {}) {
-  const response = await fetch(path, { headers: { 'content-type': 'application/json', ...(options.headers || {}) }, ...options });
+  const response = await fetch(path, { headers: { 'content-type':'application/json', ...(options.headers || {}) }, ...options });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(new Error(data.error || response.statusText), { data, status: response.status });
+  if (!response.ok) throw Object.assign(new Error(data.error || response.statusText), { data, status:response.status });
   return data;
 }
 
 function protectionLabel(state) {
   if (!state) return '';
-  const parts = [
-    `${state.status?.copies || 0} ${state.status?.copies === 1 ? 'copy' : 'copies'}`,
-    `${state.status?.devices || 0} ${state.status?.devices === 1 ? 'device' : 'devices'}`,
-    `${state.status?.sites || 0} ${state.status?.sites === 1 ? 'location' : 'locations'}`
-  ];
+  const known = Number(state.status?.copies) || 0;
+  const qualifying = Number(state.status?.qualifyingCopies ?? state.status?.verified) || 0;
+  const parts = [`${known} known ${known === 1 ? 'copy' : 'copies'}`];
+  if (qualifying !== known) parts.push(`${qualifying} count toward target`);
+  parts.push(`${state.status?.devices || 0} ${state.status?.devices === 1 ? 'device' : 'devices'}`);
+  parts.push(`${state.status?.sites || 0} ${state.status?.sites === 1 ? 'location' : 'locations'}`);
   if (state.status?.remote) parts.push(`${state.status.remote} remote`);
   return parts.join(' · ');
 }
@@ -38,7 +39,7 @@ function protectionLabel(state) {
 function missingLabel(state) {
   if (state?.meets) return 'Protection target met';
   const missing = [];
-  if (state?.missing?.copies) missing.push(`${state.missing.copies} more ${state.missing.copies === 1 ? 'copy' : 'copies'}`);
+  if (state?.missing?.copies) missing.push(`${state.missing.copies} more verified ${state.missing.copies === 1 ? 'copy' : 'copies'}`);
   if (state?.missing?.devices) missing.push(`${state.missing.devices} more ${state.missing.devices === 1 ? 'device' : 'devices'}`);
   if (state?.missing?.remote) missing.push('remote copy');
   if (state?.missing?.sites) missing.push(`${state.missing.sites} more ${state.missing.sites === 1 ? 'location' : 'locations'}`);
@@ -50,16 +51,23 @@ function localCopyCount(hash) {
   catch { return 0; }
 }
 
+function copyDescription(copy) {
+  const parts = [
+    copy.kind === 'peer' ? 'Encrypted remote' : copy.kind === 'primary' ? 'Mochimono' : copy.kind === 'source' ? 'Local source' : 'Backup'
+  ];
+  if (copy.site && copy.site !== copy.name) parts.push(copy.site);
+  if (!copy.verified) parts.push('not verified');
+  if (copy.reliability === 'low') parts.push('less reliable');
+  else if (copy.verified) parts.push('verified');
+  return parts.join(' · ');
+}
+
 function sectionHtml(state, hash) {
   const selected = state.overrideLevel || 'inherit';
-  const options = LEVELS.map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}${value === 'inherit' ? ` (${state.level})` : ''}</option>`).join('');
+  const options = LEVELS.map(([value,label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}${value === 'inherit' ? ` (${state.level})` : ''}</option>`).join('');
   const copyCards = (state.copies || []).map(copy => `<div class="protection-copy-row">
     <span>${esc(copy.name || copy.deviceName || copy.kind)}</span>
-    <small>${esc([
-      copy.kind === 'peer' ? 'Encrypted remote' : copy.kind === 'primary' ? 'Mochimono' : copy.kind === 'source' ? 'Source' : 'Backup',
-      copy.site && copy.site !== copy.name ? copy.site : '',
-      copy.verified ? 'verified' : ''
-    ].filter(Boolean).join(' · '))}</small>
+    <small>${esc(copyDescription(copy))}</small>
   </div>`).join('');
   const canFree = CLIENT && localCopyCount(hash) > 0;
   return `<section class="viewer-info-section protection-detail" data-protection-section data-hash="${hash}">
@@ -82,7 +90,7 @@ async function decorateDetails() {
     const state = await jsonRequest(`/api/protection/objects/${hash}`);
     if (mine !== generation || hash !== currentHash() || panel.hidden) return;
     const details = [...panel.querySelectorAll(':scope > .viewer-info-section')].find(section => section.querySelector('h3')?.textContent.trim() === 'Details');
-    (details || null)?.insertAdjacentHTML('beforebegin', sectionHtml(state, hash));
+    details?.insertAdjacentHTML('beforebegin', sectionHtml(state, hash));
     if (!details) panel.insertAdjacentHTML('beforeend', sectionHtml(state, hash));
   } catch {}
   finally { decorating = false; }
@@ -96,10 +104,10 @@ async function updateLevel(select) {
   const status = section.querySelector('[data-protection-status]');
   try {
     const state = await jsonRequest(`/api/protection/objects/${hash}/level`, {
-      method: 'POST', body: JSON.stringify({ level: select.value })
+      method:'POST', body:JSON.stringify({ level:select.value })
     });
     section.outerHTML = sectionHtml(state, hash);
-    window.dispatchEvent(new CustomEvent('mochimono:protection-changed', { detail: { hash, state } }));
+    window.dispatchEvent(new CustomEvent('mochimono:protection-changed', { detail:{ hash,state } }));
   } catch (error) {
     select.disabled = false;
     if (status) status.textContent = error.message;
@@ -115,7 +123,7 @@ async function freeLocal(button) {
   if (status) status.textContent = 'Checking other copies…';
   try {
     const result = await jsonRequest(`${CONTROL}/api/client/protection/free-local`, {
-      method: 'POST', body: JSON.stringify({ hash })
+      method:'POST', body:JSON.stringify({ hash })
     });
     if (status) status.textContent = `Moved local copy to Trash${result.path ? ` · ${result.path}` : ''}`;
     await window.mochimonoLocations?.refresh?.();
@@ -127,29 +135,22 @@ async function freeLocal(button) {
 }
 
 function selectedHashes() {
-  const visible = [...document.querySelectorAll('#files .selected[data-hash]')].map(item => item.dataset.hash);
-  const countText = document.querySelector('#selectionCount')?.textContent || '';
-  const expected = Number((countText.match(/[\d,]+/)?.[0] || '').replaceAll(',', '')) || 0;
-  if (!expected || expected === visible.length) return [...new Set(visible)];
-  const all = window.mochimonoLibrary?.filteredHashes?.() || [];
-  if (expected === all.length) return [...all];
-  return [];
+  const exact = window.mochimonoSelection?.hashes?.();
+  if (Array.isArray(exact)) return [...new Set(exact)];
+  return [...new Set([...document.querySelectorAll('#files .selected[data-hash]')].map(item => item.dataset.hash))];
 }
 
 async function trash(hashes, ignore, source) {
   hashes = [...new Set((hashes || []).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
-  if (!hashes.length) {
-    alert('Could not determine the complete selection. Clear the selection and try again.');
-    return;
-  }
+  if (!hashes.length) return;
   const noun = hashes.length === 1 ? 'file' : 'files';
-  if (!confirm(`Move ${hashes.length.toLocaleString()} ${noun} to Mochimono Trash?\n\nCopies are kept until you permanently delete them from Trash.`)) return;
+  if (!confirm(`Move ${hashes.length.toLocaleString()} ${noun} to Mochimono Trash?\n\nNo file data is destroyed until you permanently delete it from Trash.`)) return;
   try {
-    await jsonRequest('/api/protection/trash', { method: 'POST', body: JSON.stringify({ hashes, ignore }) });
+    await jsonRequest('/api/protection/trash', { method:'POST', body:JSON.stringify({ hashes,ignore }) });
     window.mochimonoLibrary?.remove?.(hashes);
     window.mochimonoLocations?.refresh?.();
     if (source === 'viewer') viewerClose?.click();
-    else document.querySelector('#selectionClear')?.click();
+    else window.mochimonoSelection?.clear?.();
   } catch (error) { alert(error.message); }
 }
 
@@ -165,10 +166,10 @@ function interceptDelete(event) {
 
 function relabelDeleteActions() {
   const names = new Map([
-    ['delete', 'Trash'], ['delete-ignore', 'Trash + Ignore'],
-    ['selectionDelete', 'Trash'], ['selectionIgnore', 'Trash + Ignore']
+    ['delete','Trash'], ['delete-ignore','Trash + Ignore'],
+    ['selectionDelete','Trash'], ['selectionIgnore','Trash + Ignore']
   ]);
-  for (const [id, text] of names) {
+  for (const [id,text] of names) {
     const element = document.getElementById(id);
     if (element && element.textContent !== text) element.textContent = text;
   }
@@ -193,7 +194,7 @@ panel?.addEventListener('click', event => {
   if (button) freeLocal(button);
 });
 document.addEventListener('click', interceptDelete, true);
-new MutationObserver(() => { relabelDeleteActions(); queueMicrotask(decorateDetails); }).observe(document.body, { childList: true, subtree: true });
+new MutationObserver(() => { relabelDeleteActions(); queueMicrotask(decorateDetails); }).observe(document.body, { childList:true, subtree:true });
 window.addEventListener('mochimono:viewer-opened', () => { generation++; queueMicrotask(decorateDetails); });
 viewerOpen?.addEventListener('click', () => setTimeout(decorateDetails));
 relabelDeleteActions();
