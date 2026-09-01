@@ -39,6 +39,10 @@ if (pane && folders) {
   const clean = value => String(value || '').replace(/[\\/]+$/, '').toLowerCase();
   const samePath = (a, b) => clean(a) === clean(b);
 
+  function rowFor(path) {
+    return [...folders.querySelectorAll('[data-folder-path]')].find(node => samePath(node.dataset.folderPath, path));
+  }
+
   function liveFor(row) {
     let live = row.querySelector('.storage-index-live');
     if (live) return live;
@@ -56,7 +60,6 @@ if (pane && folders) {
     const progress = job?.progress || {};
     const path = progress.path || '';
     const active = job?.status === 'running' && /^Indexing$/i.test(String(progress.phase || '')) && path;
-    let matched = false;
     for (const row of folders.querySelectorAll('[data-folder-path]')) {
       const isCurrent = Boolean(active && samePath(row.dataset.folderPath, path));
       const live = liveFor(row);
@@ -64,21 +67,19 @@ if (pane && folders) {
       row.classList.toggle('storage-indexing', isCurrent);
       live.hidden = !isCurrent;
       if (!isCurrent) continue;
-      matched = true;
-      const count = Number(progress.scanned) || 0;
+      const scanned = Number(progress.scanned) || 0;
       const hashed = Number(progress.hashed) || 0;
       const reused = Number(progress.reused) || 0;
-      const visible = Math.max(count, hashed + reused);
+      const visible = Math.max(scanned, hashed + reused);
       const counter = live.querySelector('[data-index-count]');
       const text = visible ? `${visible.toLocaleString()} files` : 'starting…';
       if (counter.textContent !== text) counter.textContent = text;
       live.title = progress.current || path;
     }
-    return matched;
   }
 
   function setStableStats(item) {
-    const row = [...folders.querySelectorAll('[data-folder-path]')].find(node => samePath(node.dataset.folderPath, item.path));
+    const row = rowFor(item.path);
     if (!row) return;
     const size = row.querySelector('.storage-folder-facts [data-folder-size]');
     const count = row.querySelector('.storage-folder-facts [data-folder-count]');
@@ -94,10 +95,6 @@ if (pane && folders) {
     }
   }
 
-  let timer = 0;
-  let runningPath = '';
-  let busy = false;
-
   async function settle(path) {
     try {
       const response = await fetch('/api/folder-stats', { cache:'no-store' });
@@ -105,11 +102,15 @@ if (pane && folders) {
       const item = (data.folders || []).find(folder => samePath(folder.path, path));
       if (item) setStableStats(item);
     } catch {}
-    const row = [...folders.querySelectorAll('[data-folder-path]')].find(node => samePath(node.dataset.folderPath, path));
+    const row = rowFor(path);
     row?.classList.remove('storage-indexing');
     const live = row?.querySelector('.storage-index-live');
     if (live) live.hidden = true;
   }
+
+  let timer = 0;
+  let runningPath = '';
+  let busy = false;
 
   async function poll(delay = 250) {
     clearTimeout(timer);
@@ -122,13 +123,18 @@ if (pane && folders) {
       const job = state.job;
       active = Boolean(job?.status === 'running' && /^Indexing$/i.test(String(job?.progress?.phase || '')) && job?.progress?.path);
       const path = active ? String(job.progress.path) : '';
-      show(job);
-      if (runningPath && !active) await settle(runningPath);
+
+      if (runningPath && !samePath(runningPath, path)) await settle(runningPath);
       runningPath = path;
+      show(job);
     } catch {}
     finally {
       busy = false;
-      if (!pane.hidden) timer = setTimeout(poll, active ? 550 : delay < 1200 ? 700 : 2200, 2200);
+      if (!pane.hidden) {
+        const wait = active ? 550 : delay < 1200 ? 700 : 2200;
+        const nextDelay = active ? 250 : 2200;
+        timer = setTimeout(() => poll(nextDelay), wait);
+      }
     }
   }
 
