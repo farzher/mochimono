@@ -10,6 +10,7 @@ const MAX_FALLBACK_URLS = 40;
 const states = new Map();
 const observed = new Set();
 const nearby = new Set();
+const cardIndex = new Map();
 const requestedAt = new Map();
 const fallbackQueue = [];
 const fallbackQueued = new Set();
@@ -49,8 +50,24 @@ function recordFor(card, mediaKind = kind(card)) {
   return { hash: card.dataset.hash, filename: filename(card), mime: mediaKind ? `${mediaKind}/unknown` : '' };
 }
 
+function indexCard(card) {
+  const hash = String(card?.dataset?.hash || '');
+  if (!hash) return;
+  let group = cardIndex.get(hash);
+  if (!group) cardIndex.set(hash, group = new Set());
+  group.add(card);
+}
+
+function unindexCard(card) {
+  const hash = String(card?.dataset?.hash || '');
+  const group = hash && cardIndex.get(hash);
+  if (!group) return;
+  group.delete(card);
+  if (!group.size) cardIndex.delete(hash);
+}
+
 function cardsFor(hash) {
-  return files.querySelectorAll(`[data-hash="${CSS.escape(hash)}"]`);
+  return cardIndex.get(String(hash || '')) || [];
 }
 
 function mediaBox(card, mediaKind = kind(card)) {
@@ -76,7 +93,11 @@ function ensurePending(card, mediaKind = kind(card)) {
 function applyDimensions(hash, width, height) {
   if (!width || !height) return;
   const ratio = Math.max(.65, Math.min(2.1, width / height));
-  for (const card of cardsFor(hash)) if (card.classList.contains('media-card')) card.style.setProperty('--ratio', ratio);
+  for (const card of cardsFor(hash)) {
+    if (!card.isConnected || !card.classList.contains('media-card')) continue;
+    const current = Number(card.style.getPropertyValue('--ratio')) || 0;
+    if (Math.abs(current - ratio) >= .001) card.style.setProperty('--ratio', ratio);
+  }
 }
 
 function applyReady(hash, width = 0, height = 0, localUrl = '') {
@@ -90,6 +111,7 @@ function applyReady(hash, width = 0, height = 0, localUrl = '') {
   applyDimensions(hash, state.width, state.height);
 
   for (const card of cardsFor(hash)) {
+    if (!card.isConnected) continue;
     const mediaKind = kind(card);
     if (!mediaKind) continue;
     const box = mediaBox(card, mediaKind);
@@ -164,7 +186,7 @@ async function checkNearby() {
   const cards = nearbyCards();
   if (!cards.length) return;
 
-  const hashes = [];
+  const hashSet = new Set();
   for (const card of cards) {
     const hash = card.dataset.hash;
     const mediaKind = kind(card);
@@ -174,8 +196,9 @@ async function checkNearby() {
       applyReady(hash, state.width, state.height);
       continue;
     }
-    if (hash && !hashes.includes(hash)) hashes.push(hash);
+    if (hash) hashSet.add(hash);
   }
+  const hashes = [...hashSet];
   if (!hashes.length) return;
 
   checking = true;
@@ -194,7 +217,7 @@ async function checkNearby() {
     }
 
     const now = performance.now();
-    const missing = [];
+    const missing = new Set();
     for (const hash of hashes) {
       const thumbnail = ready.get(hash);
       if (thumbnail) {
@@ -205,13 +228,13 @@ async function checkNearby() {
         state.ready = false;
         state.missingSince ||= now;
         states.set(hash, state);
-        missing.push(hash);
+        missing.add(hash);
       }
     }
 
-    if (!CLIENT && missing.length) {
-      await requestCanonical(missing);
-      for (const card of cards) if (missing.includes(card.dataset.hash)) queueFallback(card);
+    if (!CLIENT && missing.size) {
+      await requestCanonical([...missing]);
+      for (const card of cards) if (missing.has(card.dataset.hash)) queueFallback(card);
     }
   } catch {}
   finally {
@@ -440,7 +463,7 @@ const observer = files ? new IntersectionObserver(entries => {
     missRounds = 0;
     scheduleCheck();
   }
-}, { rootMargin: '800px 0px' }) : null;
+}, { rootMargin: '1200px 0px' }) : null;
 
 function cardsIn(node) {
   if (!(node instanceof Element)) return [];
@@ -453,6 +476,7 @@ function cardsIn(node) {
 function observeTree(node) {
   if (!observer) return;
   for (const card of cardsIn(node)) {
+    indexCard(card);
     if (observed.has(card) || !kind(card)) continue;
     observed.add(card);
     observer.observe(card);
@@ -462,6 +486,7 @@ function observeTree(node) {
 function forgetTree(node) {
   if (!observer) return;
   for (const card of cardsIn(node)) {
+    unindexCard(card);
     if (!observed.delete(card)) continue;
     nearby.delete(card);
     observer.unobserve(card);
