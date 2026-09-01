@@ -5,7 +5,10 @@ const files = document.querySelector('#files');
 
 const objectHash = value => String(value || '').match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 const currentHash = () => objectHash(viewerOpen?.getAttribute('href'));
-const hasLocalCopy = hash => Boolean(hash && window.mochimonoLocations?.forHash?.(hash)?.length);
+const hasLocalCopy = hash => Boolean(hash && (
+  window.mochimonoFastLocalHashes?.has?.(hash) ||
+  window.mochimonoLocations?.forHash?.(hash)?.length
+));
 
 // app.js already does the right thing for the current image: keep the small
 // thumbnail visible, load/decode the full object offscreen, then swap it in.
