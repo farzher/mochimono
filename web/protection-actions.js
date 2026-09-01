@@ -103,7 +103,7 @@ function copyDescription(copy) {
   } else if (!copy.verified) parts.push('not verified');
   else if (copy.verifiedAt) parts.push(`verified ${age(copy.verifiedAt)}`);
   else parts.push('verified');
-  if (copy.reliability === 'low') parts.push('less reliable');
+  if (copy.reliability === 'low') parts.push('does not count toward protection');
   if (copy.lastSeen) parts.push(`server last heard ${age(copy.lastSeen)}`);
   return parts.join(' · ');
 }
