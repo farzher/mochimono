@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { json, readJson, settings } from './lib/agent-context.js';
 import { clientProviders, handleClientProviderApi } from './lib/client-providers.js';
-import { localLocations } from './lib/local-locations.js';
+import { localCatalog, localLocations } from './lib/local-locations.js';
 import { providerThumbnail, queueProviderThumbnail, serveProviderThumbnail } from './lib/provider-thumbs.js';
 import { queueLocalThumbnail, queueRemoteThumbnail } from './lib/thumbnail-agent.js';
 
@@ -82,6 +82,11 @@ function firstCandidate(snapshot, hash) {
   return snapshot.candidates.get(String(hash))?.[0] || null;
 }
 
+function directLocalImage(snapshot, file) {
+  if (!file || !String(file.mime || '').startsWith('image/')) return false;
+  return firstCandidate(snapshot, file.hash)?.kind === 'local';
+}
+
 function queueLocalProvider(snapshot, file) {
   const candidate = firstCandidate(snapshot, file?.hash);
   if (!file || !candidate) return false;
@@ -118,6 +123,15 @@ async function checkThumbnails(req, res) {
       serverHashes.push(hash);
       return;
     }
+
+    // A local photo does not need a second generated image just to travel over
+    // localhost. Mark it ready immediately; /api/thumbs/:hash redirects to the
+    // original local object below. Videos still use generated frame previews.
+    if (directLocalImage(snapshot, file)) {
+      ready.set(hash, { hash, width: file.width || 0, height: file.height || 0, duration: null });
+      return;
+    }
+
     const thumb = await providerThumbnail(hash);
     if (thumb) ready.set(hash, thumb);
     else queueLocalProvider(snapshot, file);
@@ -210,12 +224,28 @@ export async function handleClientGateway(req, res, url) {
     else json(res, 200, localLocations(hash));
     return true;
   }
+  if (req.method === 'GET' && url.pathname === '/api/client/local-catalog') {
+    json(res, 200, localCatalog(url.searchParams.get('limit')));
+    return true;
+  }
   if (req.method === 'POST' && url.pathname === '/api/thumbs/check') {
     await checkThumbnails(req, res);
     return true;
   }
   const thumb = /^\/api\/thumbs\/([a-f0-9]{64})$/.exec(url.pathname);
-  if (thumb && (req.method === 'GET' || req.method === 'HEAD') && await serveProviderThumbnail(req, res, thumb[1])) return true;
+  if (thumb && (req.method === 'GET' || req.method === 'HEAD')) {
+    if (await serveProviderThumbnail(req, res, thumb[1])) return true;
+    const snapshot = await thumbnailProviders([thumb[1]]);
+    const file = snapshot.byHash.get(thumb[1]);
+    if (directLocalImage(snapshot, file)) {
+      res.writeHead(302, {
+        location: `/api/objects/${thumb[1]}`,
+        'cache-control': 'private, max-age=60'
+      });
+      res.end();
+      return true;
+    }
+  }
   if (url.pathname === '/files' || url.pathname.startsWith('/files/')) {
     if (!await serveLibrary(res, url.pathname)) json(res, 404, { error: 'Not found' });
     return true;
