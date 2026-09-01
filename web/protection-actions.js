@@ -1,5 +1,3 @@
-const CLIENT = document.documentElement.classList.contains('client-library');
-const CONTROL = 'http://127.0.0.1:8645';
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
 const viewerClose = document.querySelector('#viewer-close');
@@ -62,36 +60,6 @@ function missingLabel(state) {
   return missing.length ? `Needs ${missing.join(' · ')}` : 'Needs protection';
 }
 
-function localCopyCount(hash) {
-  try { return window.mochimonoLocations?.forHash?.(hash)?.length || 0; }
-  catch { return 0; }
-}
-
-function targetMet(target, copies) {
-  const qualified = (copies || []).filter(copy => copy.verified && copy.reliability !== 'low');
-  const devices = new Set(qualified.map(copy => String(copy.id || copy.deviceName || copy.name || '').toLowerCase()).filter(Boolean));
-  const sites = new Set(qualified.map(copy => String(copy.site || copy.deviceName || copy.id || '').toLowerCase()).filter(Boolean));
-  const remote = qualified.filter(copy => copy.remote).length;
-  return qualified.length >= Number(target?.copies || 0) && devices.size >= Number(target?.devices || 0) &&
-    sites.size >= Number(target?.sites || 0) && remote >= Number(target?.remote || 0);
-}
-
-async function reachableProtection(hash) {
-  const [protection, client] = await Promise.all([
-    jsonRequest(`/api/protection/objects/${hash}`),
-    jsonRequest(`${CONTROL}/api/client/protection/state`)
-  ]);
-  const attached = new Set((client.backups || []).map(item => item.id));
-  const onlinePeers = new Set((client.peers || []).filter(item => item.online).map(item => item.id));
-  const copies = (protection.copies || []).filter(copy => {
-    if (copy.kind === 'primary') return true;
-    if (copy.kind === 'backup') return attached.has(copy.id);
-    if (copy.kind === 'peer') return onlinePeers.has(copy.id);
-    return false;
-  });
-  return { protection, copies, meets:targetMet(protection.target, copies) };
-}
-
 function copyDescription(copy) {
   const parts = [
     copy.kind === 'peer' ? 'Encrypted remote' : copy.kind === 'primary' ? 'Mochimono' : copy.kind === 'source' ? 'Local source' : 'Backup'
@@ -115,13 +83,11 @@ function sectionHtml(state, hash) {
     <span>${esc(copy.name || copy.deviceName || copy.kind)}</span>
     <small>${esc(copyDescription(copy))}</small>
   </div>`).join('');
-  const canFree = CLIENT && localCopyCount(hash) > 0;
   return `<section class="viewer-info-section protection-detail" data-protection-section data-hash="${hash}">
     <div class="viewer-section-head"><h3>Protection</h3><span class="protection-state ${state.meets ? 'good' : 'warn'}">${state.meets ? 'Protected' : 'Needs protection'}</span></div>
     <div class="protection-detail-summary"><strong>${esc(protectionLabel(state))}</strong><span>${esc(missingLabel(state))}</span></div>
     <label class="protection-level-field"><span>Importance</span><select data-file-protection>${options}</select></label>
     <div class="protection-copy-list">${copyCards || '<div class="viewer-info-empty">No known copies.</div>'}</div>
-    ${canFree ? '<button type="button" class="protection-free-local" data-free-local>Free local copy</button>' : ''}
     <div class="protection-action-status" data-protection-status></div>
   </section>`;
 }
@@ -157,32 +123,6 @@ async function updateLevel(select) {
   } catch (error) {
     select.disabled = false;
     if (status) status.textContent = error.message;
-  }
-}
-
-async function freeLocal(button) {
-  const section = button.closest('[data-protection-section]');
-  const hash = section?.dataset.hash;
-  if (!hash || !CLIENT) return;
-  button.disabled = true;
-  const status = section.querySelector('[data-protection-status]');
-  if (status) status.textContent = 'Checking reachable copies…';
-  try {
-    const live = await reachableProtection(hash);
-    if (!live.meets) {
-      if (status) status.textContent = 'Your protection target currently depends on an offline or unreachable copy. Reconnect it or create another reachable verified copy before freeing this file.';
-      button.disabled = false;
-      return;
-    }
-    const result = await jsonRequest(`${CONTROL}/api/client/protection/free-local`, {
-      method:'POST', body:JSON.stringify({ hash })
-    });
-    if (status) status.textContent = `Moved local copy to Trash${result.path ? ` · ${result.path}` : ''}`;
-    await window.mochimonoLocations?.refresh?.();
-    setTimeout(() => { generation++; section.remove(); decorateDetails(); }, 150);
-  } catch (error) {
-    if (status) status.textContent = error.message;
-    button.disabled = false;
   }
 }
 
@@ -233,17 +173,13 @@ style.textContent = `
   .protection-detail-summary{display:grid;gap:3px;margin:2px 0 10px}.protection-detail-summary strong{font-size:12px}.protection-detail-summary span{font-size:10px;color:#99918e}
   .protection-level-field{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 10px;font-size:10px;color:#aaa19e}.protection-level-field select{max-width:150px}
   .protection-copy-list{display:grid;gap:5px;margin:7px 0}.protection-copy-row{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px}.protection-copy-row small{color:#8f8784;text-align:right}
-  .protection-free-local{margin-top:8px}.protection-action-status{min-height:14px;margin-top:5px;font-size:9px;color:#aaa19e}
+  .protection-action-status{min-height:14px;margin-top:5px;font-size:9px;color:#aaa19e}
 `;
 document.head.append(style);
 
 panel?.addEventListener('change', event => {
   const select = event.target.closest('[data-file-protection]');
   if (select) updateLevel(select);
-});
-panel?.addEventListener('click', event => {
-  const button = event.target.closest('[data-free-local]');
-  if (button) freeLocal(button);
 });
 document.addEventListener('click', interceptDelete, true);
 new MutationObserver(() => { relabelDeleteActions(); queueMicrotask(decorateDetails); }).observe(document.body, { childList:true, subtree:true });
