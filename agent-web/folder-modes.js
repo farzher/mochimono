@@ -99,7 +99,7 @@ function groupFolders() {
 
     const head = document.createElement('div');
     head.className = 'folder-group-head';
-    const label = mode === 'protected' ? 'Protected' : 'Browse only';
+    const label = mode === 'protected' ? 'Cloud synced' : 'Browse only';
     head.innerHTML = `<span>${label}</span><small>${items.length.toLocaleString()}</small>`;
 
     const list = document.createElement('div');
