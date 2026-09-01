@@ -1,4 +1,5 @@
 import { db, json, now, readJson } from './lib/server-context.js';
+import { handleProtectionServer, registerProtectionStorage } from './protection-server.js';
 
 function normalizeText(value) {
   return String(value || '')
@@ -180,6 +181,8 @@ export function driveCoverage(row) {
 }
 
 export async function handleBackupPolicy(req, res, url) {
+  if (await handleProtectionServer(req, res, url)) return true;
+
   const desired = /^\/api\/drives\/([^/]+)\/desired$/.exec(url.pathname);
   const files = /^\/api\/drives\/([^/]+)\/files$/.exec(url.pathname);
   const driveRoute = url.pathname === '/api/drives/register' || url.pathname === '/api/drives' || Boolean(desired) || Boolean(files);
@@ -195,6 +198,7 @@ export async function handleBackupPolicy(req, res, url) {
       INSERT INTO drives(id, name, policy_json, last_seen) VALUES(?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET name = excluded.name, policy_json = excluded.policy_json, last_seen = excluded.last_seen
     `).run(id, name, JSON.stringify(policy), now());
+    if (body.storage && typeof body.storage === 'object') registerProtectionStorage(id, { ...body.storage, name });
     json(res, 200, driveCoverage(getDrive(id)));
     return true;
   }
