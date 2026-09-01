@@ -25,7 +25,7 @@ if (pane) {
     #storagePane .storage-glance-card.backups>strong{color:#d4ded6!important}
     .material-card-meta{display:block!important;margin-top:10px!important;color:#817a78!important;font-size:10px!important;font-weight:550!important}
     .material-card-meter{display:block!important;height:5px;margin-top:12px;border-radius:999px;background:var(--storage-track);overflow:hidden}
-    .material-card-meter>i{display:block;height:100%;border-radius:inherit;background:var(--storage-accent)}
+    .material-card-meter>i{display:block;height:100%;border-radius:inherit;background:var(--storage-accent);transition:width .22s ease}
 
     #storagePane .storage-quick-row{display:flex!important;align-items:center;gap:8px!important}
     #storagePane .storage-quick-card{min-height:42px!important;width:auto!important;padding:0 13px!important;border:1px solid var(--storage-line)!important;border-radius:9px!important;background:transparent!important;box-shadow:none!important}
@@ -134,8 +134,7 @@ if (pane) {
   }
 
   // Header/shell clicks happen outside the iframe, so explicitly dismiss its popovers.
-  document.addEventListener('pointerdown', event => {
-    if (event.target === frame) return;
+  document.addEventListener('pointerdown', () => {
     frame?.contentWindow?.postMessage({ type: 'mochimono-close-popovers' }, '*');
   }, true);
 
@@ -163,43 +162,48 @@ if (pane) {
     block.querySelector('i').style.width = `${Math.max(ratio ? 2 : 0, ratio)}%`;
   }
 
+  function setCardInfo(card, text, ratio = null) {
+    if (!card) return;
+    let meta = card.querySelector(':scope > .material-card-meta');
+    if (!meta) {
+      meta = document.createElement('span');
+      meta.className = 'material-card-meta';
+      card.append(meta);
+    }
+    meta.textContent = text;
+
+    let meter = card.querySelector(':scope > .material-card-meter');
+    if (ratio == null) {
+      meter?.remove();
+      return;
+    }
+    if (!meter) {
+      meter = document.createElement('span');
+      meter.className = 'material-card-meter';
+      meter.innerHTML = '<i></i>';
+      card.append(meter);
+    }
+    meter.querySelector('i').style.width = `${ratio}%`;
+  }
+
   function annotateSummary(state) {
     const cards = [...pane.querySelectorAll('.storage-glance-card')];
-    for (const card of cards) card.querySelectorAll('.material-card-meta,.material-card-meter').forEach(node => node.remove());
     const server = cards.find(card => card.querySelector(':scope > span')?.textContent === 'Mochimono');
     const stats = state?.server?.online ? state.server.stats : null;
     if (server && stats) {
       const used = Number(stats.bytes) || 0;
       const capacity = Number(stats.capacityBytes) || 0;
       const ratio = percent(used, capacity);
-      const meta = document.createElement('span');
-      meta.className = 'material-card-meta';
-      meta.textContent = capacity ? `${Math.round(ratio)}% of ${bytes(capacity)}` : 'Stored on server';
-      const meter = document.createElement('span');
-      meter.className = 'material-card-meter';
-      meter.innerHTML = `<i style="width:${ratio}%"></i>`;
-      server.append(meta, meter);
+      setCardInfo(server, capacity ? `${Math.round(ratio)}% of ${bytes(capacity)}` : 'Stored on server', ratio);
     }
+
     const local = cards.find(card => card.querySelector(':scope > span')?.textContent === 'This PC');
-    if (local) {
-      const match = local.title.match(/^([\d,]+) indexed files/);
-      if (match) {
-        const meta = document.createElement('span');
-        meta.className = 'material-card-meta';
-        meta.textContent = `${match[1]} indexed files`;
-        local.append(meta);
-      }
-    }
+    const localMatch = local?.title.match(/^([\d,]+) indexed files/);
+    if (localMatch) setCardInfo(local, `${localMatch[1]} indexed files`);
+
     const backup = cards.find(card => card.querySelector(':scope > span')?.textContent === 'Backups');
-    if (backup) {
-      const parts = String(backup.title || '').split(' · ').slice(0, 2).join(' · ');
-      if (parts) {
-        const meta = document.createElement('span');
-        meta.className = 'material-card-meta';
-        meta.textContent = parts.replace('unique verified files', 'verified files');
-        backup.append(meta);
-      }
-    }
+    const backupText = String(backup?.title || '').split(' · ').slice(0, 2).join(' · ');
+    if (backup && backupText) setCardInfo(backup, backupText.replace('unique verified files', 'verified files'));
   }
 
   async function refreshMaterial() {
@@ -255,7 +259,13 @@ if (pane) {
     refreshTimer = setTimeout(refreshMaterial, 80);
   }
 
-  new MutationObserver(scheduleRefresh).observe(pane, { childList: true, subtree: true });
+  new MutationObserver(scheduleRefresh).observe(pane, { childList: true });
+  const foldersList = pane.querySelector('#folders');
+  const backupsList = pane.querySelector('#backups');
+  const overview = pane.querySelector('[data-storage-overview]');
+  if (foldersList) new MutationObserver(scheduleRefresh).observe(foldersList, { childList: true });
+  if (backupsList) new MutationObserver(scheduleRefresh).observe(backupsList, { childList: true });
+  if (overview) new MutationObserver(scheduleRefresh).observe(overview, { childList: true });
   new MutationObserver(scheduleRefresh).observe(pane, { attributes: true, attributeFilter: ['hidden'] });
   window.addEventListener('focus', scheduleRefresh, { passive: true });
   setInterval(() => { if (!pane.hidden) refreshMaterial(); }, 15000);
