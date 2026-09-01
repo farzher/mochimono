@@ -64,6 +64,7 @@ if (input && choose && browse && protect && addPanel) {
     if (picked.length === 1) {
       input.value = picked[0];
       picked = [];
+      input.placeholder = 'Folder or drive';
     } else if (picked.length > 1) {
       input.value = '';
       input.placeholder = 'Add another folder path';
@@ -131,10 +132,7 @@ if (input && choose && browse && protect && addPanel) {
       }
 
       if (failed.length) {
-        picked = failed.map(item => item.path);
-        input.value = '';
-        input.placeholder = picked.length === 1 ? picked[0] : 'Add another folder path';
-        render();
+        setPicked(failed.map(item => item.path));
         toast(`${added ? `${added} added · ` : ''}${failed.length} failed: ${failed[0].error}`);
       } else {
         clearPicked();
