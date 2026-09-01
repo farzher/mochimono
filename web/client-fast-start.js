@@ -3,6 +3,7 @@ const SNAPSHOT_KEY = 'mochimono-fast-local-v1';
 const SNAPSHOT_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 const READY_LIMIT = 24000;
 const FAST_LIMIT = 2000;
+const FULL_PAGE_LIMIT = 3000;
 const SNAPSHOT_LIMIT = 1200;
 const cached = new Map();
 const readyThumbs = new Set();
@@ -10,6 +11,7 @@ window.mochimonoReadyThumbs = readyThumbs;
 let stopped = false;
 let saveTimer = 0;
 let warmTimer = 0;
+let fullCatalogStarted = false;
 
 function needsRestore() {
   const files = document.querySelector('#files');
@@ -112,7 +114,7 @@ async function refreshReadyThumbs(items = [...cached.values()]) {
       const response = await fetch('/api/thumbs/check', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ hashes: media.slice(offset, offset + 500).map(file => file.hash) })
+        body: JSON.stringify({ background: true, hashes: media.slice(offset, offset + 500).map(file => file.hash) })
       });
       if (!response.ok) continue;
       const data = await response.json();
@@ -148,6 +150,26 @@ async function readFastCatalog() {
   } catch {}
 }
 
+async function readCompleteLocalCatalog() {
+  if (!CLIENT || stopped || document.hidden || fullCatalogStarted) return;
+  fullCatalogStarted = true;
+  let offset = 0;
+  try {
+    while (!stopped && !document.hidden) {
+      const response = await fetch(`/api/client/local-catalog?limit=${FULL_PAGE_LIMIT}&offset=${offset}`, { cache: 'no-store' });
+      if (!response.ok) break;
+      const data = await response.json();
+      const files = Array.isArray(data.files) ? data.files : [];
+      if (files.length) applyFiles(files);
+      if (data.nextOffset == null) break;
+      offset = Number(data.nextOffset) || 0;
+      // Yield between SQLite/JSON pages so first-paint interaction always wins.
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    window.dispatchEvent(new CustomEvent('mochimono:local-catalog-ready', { detail: { count: cached.size } }));
+  } catch {}
+}
+
 async function fastLocalStart() {
   if (!CLIENT) return;
   const files = document.querySelector('#files');
@@ -157,6 +179,9 @@ async function fastLocalStart() {
   if (readyThumbs.size) publishReady();
 
   readFastCatalog();
+  // Let the snapshot/first 2k paint first, then fill the complete indexed local
+  // timeline from SQLite instead of waiting for the cloud/provider merge.
+  setTimeout(() => readCompleteLocalCatalog().catch(() => {}), 120);
   scheduleWarm(3500);
   setTimeout(() => refreshReadyThumbs().catch(() => {}), 12_000);
   setTimeout(() => refreshReadyThumbs().catch(() => {}), 30_000);
