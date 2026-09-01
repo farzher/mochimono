@@ -399,6 +399,50 @@ export function registerProtectionStorage(id, input) {
 }
 
 export async function handleProtectionServer(req, res, url) {
+  if (req.method === 'POST' && url.pathname === '/api/objects/check') {
+    const body = await readJson(req);
+    if (!Array.isArray(body.hashes) || body.hashes.length > 1000) {
+      json(res, 400, { error: 'hashes must be an array of at most 1000 SHA-256 hashes' });
+      return true;
+    }
+    const hashes = body.hashes.map(String);
+    for (const hash of hashes) {
+      if (!validHash(hash)) {
+        json(res, 400, { error: `Invalid hash: ${hash}` });
+        return true;
+      }
+    }
+    const unique = [...new Set(hashes)];
+    const suppressed = new Set();
+    const active = new Set();
+    for (let offset = 0; offset < unique.length; offset += 400) {
+      const chunk = unique.slice(offset, offset + 400);
+      if (!chunk.length) continue;
+      const marks = chunk.map(() => '?').join(',');
+      for (const row of db.prepare(`
+        SELECT o.hash FROM objects o
+        WHERE o.hash IN (${marks}) AND (
+          EXISTS(SELECT 1 FROM ignored_hashes ih WHERE ih.hash=o.hash) OR
+          EXISTS(SELECT 1 FROM protection_trash pt WHERE pt.object_hash=o.hash) OR
+          EXISTS(SELECT 1 FROM source_deletions sd WHERE sd.object_hash=o.hash)
+        )
+      `).all(...chunk)) suppressed.add(row.hash);
+      for (const row of db.prepare(`
+        SELECT o.hash FROM objects o
+        WHERE o.state='active' AND o.hash IN (${marks})
+          AND NOT EXISTS(SELECT 1 FROM object_integrity oi WHERE oi.hash=o.hash AND oi.status!='healthy')
+      `).all(...chunk)) active.add(row.hash);
+    }
+    const result = { known: [], missing: [], ignored: [] };
+    for (const hash of hashes) {
+      if (suppressed.has(hash)) result.ignored.push(hash);
+      else if (active.has(hash)) result.known.push(hash);
+      else result.missing.push(hash);
+    }
+    json(res, 200, result);
+    return true;
+  }
+
   if (!url.pathname.startsWith('/api/protection/')) return false;
 
   if (req.method === 'GET' && url.pathname === '/api/protection/summary') {
@@ -486,9 +530,6 @@ export async function handleProtectionServer(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/api/protection/locations') {
     primaryLocation();
-    for (const drive of db.prepare('SELECT id,name FROM drives ORDER BY name').all()) {
-      if (!db.prepare('SELECT 1 FROM storage_locations WHERE id=?').get(drive.id)) saveLocation(drive.id, { name: drive.name, kind: 'backup' });
-    }
     json(res, 200, { locations: db.prepare('SELECT * FROM storage_locations ORDER BY kind,name').all().map(locationJson) });
     return true;
   }
