@@ -1,3 +1,5 @@
+import './storage-minimal-actions.js';
+
 const folders = document.querySelector('#folders');
 const startBrowse = document.querySelector('#startBrowse');
 const startProtect = document.querySelector('#startImport');
