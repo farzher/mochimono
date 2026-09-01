@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { json, readJson, settings } from './lib/agent-context.js';
 import { clientProviders, handleClientProviderApi } from './lib/client-providers.js';
-import { localCatalog, localLocations } from './lib/local-locations.js';
+import { localCandidate, localCandidates, localCatalog, localLocations } from './lib/local-locations.js';
 import { providerThumbnail, queueProviderThumbnail, serveProviderThumbnail } from './lib/provider-thumbs.js';
 import { queueLocalThumbnail, queueRemoteThumbnail } from './lib/thumbnail-agent.js';
 
@@ -82,12 +82,7 @@ function firstCandidate(snapshot, hash) {
   return snapshot.candidates.get(String(hash))?.[0] || null;
 }
 
-function directLocalImage(snapshot, file) {
-  if (!file || !String(file.mime || '').startsWith('image/')) return false;
-  return firstCandidate(snapshot, file.hash)?.kind === 'local';
-}
-
-function queueLocalProvider(snapshot, file) {
+function queueSnapshotProvider(snapshot, file) {
   const candidate = firstCandidate(snapshot, file?.hash);
   if (!file || !candidate) return false;
   return queueProviderThumbnail({ hash: file.hash, filename: file.filename, mime: file.mime, candidate });
@@ -113,31 +108,44 @@ async function checkThumbnails(req, res) {
   if (!Array.isArray(body.hashes) || body.hashes.length > 500) return json(res, 400, { error: 'hashes must be an array of at most 500 items' });
   const hashes = [...new Set(body.hashes.map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
   const ready = new Map();
-  const snapshot = await thumbnailProviders(hashes);
-  const serverHashes = [];
+  const locals = localCandidates(hashes);
+  const remaining = [];
 
   await Promise.all(hashes.map(async hash => {
-    const file = snapshot.byHash.get(hash);
-    if (!file) return;
-    if (file.serverStored) {
-      serverHashes.push(hash);
+    const candidate = locals.get(hash);
+    if (!candidate) {
+      remaining.push(hash);
       return;
     }
-
-    // A local photo does not need a second generated image just to travel over
-    // localhost. Mark it ready immediately; /api/thumbs/:hash redirects to the
-    // original local object below. Videos still use generated frame previews.
-    if (directLocalImage(snapshot, file)) {
-      ready.set(hash, { hash, width: file.width || 0, height: file.height || 0, duration: null });
+    if (String(candidate.mime || '').startsWith('image/')) {
+      // Local photos are already immediately addressable over localhost. Do not
+      // spend CPU decoding + WebP-encoding a duplicate provider thumbnail.
+      ready.set(hash, { hash, width: 0, height: 0, duration: null });
       return;
     }
-
     const thumb = await providerThumbnail(hash);
     if (thumb) ready.set(hash, thumb);
-    else queueLocalProvider(snapshot, file);
+    else queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate });
   }));
 
-  if (settings.token && serverHashes.length) {
+  let snapshot = null;
+  const serverHashes = [];
+  if (remaining.length) {
+    snapshot = await thumbnailProviders(remaining);
+    await Promise.all(remaining.map(async hash => {
+      const file = snapshot.byHash.get(hash);
+      if (!file) return;
+      if (file.serverStored) {
+        serverHashes.push(hash);
+        return;
+      }
+      const thumb = await providerThumbnail(hash);
+      if (thumb) ready.set(hash, thumb);
+      else queueSnapshotProvider(snapshot, file);
+    }));
+  }
+
+  if (snapshot && settings.token && serverHashes.length) {
     try {
       const response = await fetch(`${settings.server}/api/thumbs/check`, {
         method: 'POST',
@@ -159,6 +167,55 @@ async function checkThumbnails(req, res) {
     hash: item.hash, width: Number(item.width) || 0, height: Number(item.height) || 0,
     duration: item.duration == null ? null : Number(item.duration)
   })) });
+}
+
+async function serveLocalObject(req, res, candidate) {
+  let info;
+  try { info = await stat(candidate.path); }
+  catch { return false; }
+  if (!info.isFile() || (candidate.size && Number(info.size) !== Number(candidate.size))) return false;
+
+  const headers = {
+    'content-type': candidate.mime || 'application/octet-stream',
+    'accept-ranges': 'bytes',
+    'cache-control': 'private, max-age=60'
+  };
+  const range = String(req.headers.range || '');
+  if (!range) {
+    res.writeHead(200, { ...headers, 'content-length': info.size });
+    if (req.method === 'HEAD') return void res.end();
+    const source = createReadStream(candidate.path);
+    try { await pipeline(source, res); } catch {}
+    return true;
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (!match) {
+    res.writeHead(416, { 'content-range': `bytes */${info.size}` });
+    res.end();
+    return true;
+  }
+  let start = match[1] ? Number(match[1]) : 0;
+  let end = match[2] ? Number(match[2]) : info.size - 1;
+  if (!match[1] && match[2]) {
+    start = Math.max(0, info.size - Number(match[2]));
+    end = info.size - 1;
+  }
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= info.size) {
+    res.writeHead(416, { 'content-range': `bytes */${info.size}` });
+    res.end();
+    return true;
+  }
+  end = Math.min(end, info.size - 1);
+  res.writeHead(206, {
+    ...headers,
+    'content-range': `bytes ${start}-${end}/${info.size}`,
+    'content-length': end - start + 1
+  });
+  if (req.method === 'HEAD') return void res.end();
+  const source = createReadStream(candidate.path, { start, end });
+  try { await pipeline(source, res); } catch {}
+  return true;
 }
 
 async function proxyApi(req, res, url) {
@@ -232,12 +289,18 @@ export async function handleClientGateway(req, res, url) {
     await checkThumbnails(req, res);
     return true;
   }
+
+  const object = /^\/api\/objects\/([a-f0-9]{64})$/.exec(url.pathname);
+  if (object && (req.method === 'GET' || req.method === 'HEAD')) {
+    const candidate = localCandidate(object[1]);
+    if (candidate && await serveLocalObject(req, res, candidate)) return true;
+  }
+
   const thumb = /^\/api\/thumbs\/([a-f0-9]{64})$/.exec(url.pathname);
   if (thumb && (req.method === 'GET' || req.method === 'HEAD')) {
     if (await serveProviderThumbnail(req, res, thumb[1])) return true;
-    const snapshot = await thumbnailProviders([thumb[1]]);
-    const file = snapshot.byHash.get(thumb[1]);
-    if (directLocalImage(snapshot, file)) {
+    const candidate = localCandidate(thumb[1]);
+    if (candidate && String(candidate.mime || '').startsWith('image/')) {
       res.writeHead(302, {
         location: `/api/objects/${thumb[1]}`,
         'cache-control': 'private, max-age=60'
