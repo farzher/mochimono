@@ -1,4 +1,5 @@
 import { db, json, now, readJson } from './lib/server-context.js';
+import { handleProtectionServer, registerProtectionStorage } from './protection-server.js';
 
 function normalizeText(value) {
   return String(value || '')
@@ -162,7 +163,11 @@ export function driveCoverage(row) {
     FROM objects o WHERE o.state = 'active' AND ${filter.sql}
   `).get(...filter.params);
   const protectedRow = db.prepare(`
-    SELECT COUNT(*) AS count, COALESCE(SUM(o.size), 0) AS bytes
+    SELECT COUNT(*) AS count,
+           COALESCE(SUM(o.size), 0) AS bytes,
+           COALESCE(SUM(CASE WHEN r.verified_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS verifiedCount,
+           MIN(r.verified_at) AS oldestVerifiedAt,
+           MAX(r.verified_at) AS lastVerifiedAt
     FROM objects o
     JOIN replicas r ON r.object_hash = o.hash AND r.drive_id = ?
     WHERE o.state = 'active' AND ${filter.sql}
@@ -175,11 +180,16 @@ export function driveCoverage(row) {
     desiredCount: Number(desired.count) || 0,
     desiredBytes: Number(desired.bytes) || 0,
     protectedCount: Number(protectedRow.count) || 0,
-    protectedBytes: Number(protectedRow.bytes) || 0
+    protectedBytes: Number(protectedRow.bytes) || 0,
+    verifiedCount: Number(protectedRow.verifiedCount) || 0,
+    oldestVerifiedAt: protectedRow.oldestVerifiedAt || null,
+    lastVerifiedAt: protectedRow.lastVerifiedAt || null
   };
 }
 
 export async function handleBackupPolicy(req, res, url) {
+  if (await handleProtectionServer(req, res, url)) return true;
+
   const desired = /^\/api\/drives\/([^/]+)\/desired$/.exec(url.pathname);
   const files = /^\/api\/drives\/([^/]+)\/files$/.exec(url.pathname);
   const driveRoute = url.pathname === '/api/drives/register' || url.pathname === '/api/drives' || Boolean(desired) || Boolean(files);
@@ -195,6 +205,7 @@ export async function handleBackupPolicy(req, res, url) {
       INSERT INTO drives(id, name, policy_json, last_seen) VALUES(?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET name = excluded.name, policy_json = excluded.policy_json, last_seen = excluded.last_seen
     `).run(id, name, JSON.stringify(policy), now());
+    if (body.storage && typeof body.storage === 'object') registerProtectionStorage(id, { ...body.storage, name });
     json(res, 200, driveCoverage(getDrive(id)));
     return true;
   }
@@ -213,11 +224,11 @@ export async function handleBackupPolicy(req, res, url) {
     const after = String(url.searchParams.get('after') || '');
     const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') || 5000)));
     const rows = db.prepare(`
-      SELECT r.object_hash AS hash, r.verified_at AS verifiedAt
+      SELECT r.object_hash AS hash, r.verified_at AS verifiedAt, o.size
       FROM replicas r JOIN objects o ON o.hash = r.object_hash
       WHERE r.drive_id = ? AND o.state = 'active' AND r.object_hash > ?
       ORDER BY r.object_hash LIMIT ?
-    `).all(id, after, limit);
+    `).all(id, after, limit).map(row => ({ ...row, size: Number(row.size) || 0 }));
     json(res, 200, { files: rows, nextAfter: rows.length === limit ? rows.at(-1).hash : null });
     return true;
   }

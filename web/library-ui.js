@@ -15,8 +15,6 @@ const selectionDelete = document.querySelector('#selectionDelete');
 const selectionIgnore = document.querySelector('#selectionIgnore');
 const selectionClear = document.querySelector('#selectionClear');
 
-// Dock bulk actions to the sticky filter bar without putting them in document
-// flow. Selection stays visible with the filters and can never move the gallery.
 document.querySelector('.commandbar')?.append(selectionBar);
 
 let selectionMode = false;
@@ -93,8 +91,6 @@ function ensureTimelineMembership() {
 
 function syncTimelineSelection() {
   const buttons = files.querySelectorAll('[data-select-period]');
-  // The common browsing path has no selection. Do not scan the full library just
-  // to prove every visible day/month/year checkbox is empty.
   if (!selected.size) {
     for (const button of buttons) {
       button.classList.remove('selected','partial');
@@ -183,10 +179,6 @@ function groupButton(period, key, label, className = '') {
 function decorateTimeline() {
   timelineFrame = 0;
   if (currentView() !== 'grid' || !sort.value.startsWith('date-')) return;
-
-  // Gallery.js owns day-row geometry and day controls. This layer only decorates
-  // the static year/month headings and selection state, avoiding a second layout
-  // pass that used to race day positioning.
   for (const section of files.querySelectorAll('.date-group[data-date-group]')) {
     const monthKey = section.dataset.dateGroup;
     const year = monthKey.slice(0, 4);
@@ -309,6 +301,12 @@ document.querySelector('#mediaSize')?.addEventListener('input', scheduleTimeline
 window.addEventListener('resize', scheduleTimeline, { passive: true });
 window.addEventListener('mochimono:locations-updated', () => { syncSelectionUi(); });
 new MutationObserver(() => { syncSelectedClasses(); scheduleTimeline(); }).observe(files, { childList: true });
+
+window.mochimonoSelection = {
+  hashes: () => [...selected],
+  clear: () => clearSelection(true),
+  count: () => selected.size
+};
 
 restoreUi();
 syncSelectionUi();
