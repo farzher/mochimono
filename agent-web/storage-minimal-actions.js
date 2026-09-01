@@ -5,8 +5,15 @@ if (pane && backups) {
   const style = document.createElement('style');
   style.textContent = `
     #refreshBackups{display:none!important}
+    .storage-page-title{display:none!important}
+    .storage-overview{gap:7px!important}
     .storage-quick-row:has(.storage-quick-card.good){grid-template-columns:1fr}
     .storage-quick-card.good{display:none!important}
+    .storage-integrity:not(.warn):not(.bad){min-height:28px!important;justify-content:flex-end;padding:0!important}
+    .storage-integrity:not(.warn):not(.bad)>.storage-integrity-dot{margin-right:auto}
+    .storage-integrity:not(.warn):not(.bad)>strong,.storage-integrity:not(.warn):not(.bad)>span:not(.storage-integrity-dot){display:none!important}
+    .storage-integrity:not(.warn):not(.bad)>button{margin-left:0!important;width:27px!important;height:27px!important;opacity:.45}
+    .storage-integrity:not(.warn):not(.bad)>button:hover{opacity:1}
     .storage-secondary-menu{position:relative;flex:0 0 auto}
     .storage-secondary-menu>summary{width:30px;height:30px;display:grid;place-items:center;border-radius:8px;color:#8e8582;cursor:pointer;list-style:none;font-size:17px;font-weight:750;letter-spacing:1px}
     .storage-secondary-menu>summary::-webkit-details-marker{display:none}
@@ -18,7 +25,7 @@ if (pane && backups) {
     #storagePane .storage-secondary-popover .action-link::before{display:none!important;content:none!important}
     #storagePane .backup-actions{opacity:.5}
     #storagePane .backup-item:hover .backup-actions,#storagePane .backup-item:focus-within .backup-actions{opacity:1}
-    @media(max-width:700px){.storage-secondary-popover{width:150px}.storage-secondary-menu>summary{width:32px}}
+    @media(max-width:700px){.storage-secondary-popover{width:150px}.storage-secondary-menu>summary{width:32px}.storage-integrity:not(.warn):not(.bad){min-height:22px!important}}
   `;
   document.head.append(style);
 
