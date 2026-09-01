@@ -1,9 +1,9 @@
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
-import { platform } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
-import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { platform } from 'node:os';
+import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { json, pathKey, readJson, settings } from './lib/agent-context.js';
@@ -119,13 +119,23 @@ async function checkThumbnails(req, res) {
       remaining.push(hash);
       return;
     }
-    if (String(candidate.mime || '').startsWith('image/')) {
-      ready.set(hash, { hash, width: 0, height: 0, duration: null });
+
+    const thumb = await providerThumbnail(hash);
+    if (thumb) {
+      ready.set(hash, thumb);
       return;
     }
-    const thumb = await providerThumbnail(hash);
-    if (thumb) ready.set(hash, thumb);
-    else queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate });
+
+    // A local image can paint immediately from its original file, but still
+    // create a small persistent preview in the deliberately bounded background
+    // queue. Subsequent grid visits then use the WebP cache instead of decoding
+    // the full original again. Videos still need an actual generated frame.
+    if (String(candidate.mime || '').startsWith('image/')) {
+      ready.set(hash, { hash, width: 0, height: 0, duration: null });
+      queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate });
+      return;
+    }
+    queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate });
   }));
 
   let snapshot = null;
@@ -354,16 +364,18 @@ export async function handleClientGateway(req, res, url) {
 
   const thumb = /^\/api\/thumbs\/([a-f0-9]{64})$/.exec(url.pathname);
   if (thumb && (req.method === 'GET' || req.method === 'HEAD')) {
+    // Grid previews should use the small persistent local cache when available.
+    // Only fall back to the full local original while that preview is missing.
+    if (await serveProviderThumbnail(req, res, thumb[1])) return true;
     const candidate = localCandidate(thumb[1]);
     if (candidate && String(candidate.mime || '').startsWith('image/')) {
       res.writeHead(302, {
         location: `/api/objects/${thumb[1]}`,
-        'cache-control': 'private, max-age=60'
+        'cache-control': 'no-store'
       });
       res.end();
       return true;
     }
-    if (await serveProviderThumbnail(req, res, thumb[1])) return true;
   }
   if (url.pathname === '/files' || url.pathname.startsWith('/files/')) {
     if (!await serveLibrary(res, url.pathname)) json(res, 404, { error: 'Not found' });
