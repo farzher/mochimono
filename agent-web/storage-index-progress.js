@@ -60,6 +60,9 @@ if (pane && folders) {
     if (backupRoute && backupRoute.textContent !== 'Local backup') backupRoute.textContent = 'Local backup';
     if (backupMetric && backupMetric.textContent !== 'Local backup') backupMetric.textContent = 'Local backup';
     if (filesMetric && filesMetric.textContent !== 'Cloud files') filesMetric.textContent = 'Cloud files';
+    for (const label of pane.querySelectorAll('.storage-folder-node[data-cloud] b')) {
+      if (label.textContent !== 'Cloud') label.textContent = 'Cloud';
+    }
 
     const status = hero.querySelector('.storage-status-card');
     const main = status?.querySelector('.storage-status-main');
@@ -80,10 +83,28 @@ if (pane && folders) {
     }
   }
 
-  function runHeroVerify() {
+  function backupNeedsVerification(location) {
+    const desired = Number(location?.remote?.desiredBytes) || 0;
+    const backed = Number(location?.remote?.protectedBytes) || 0;
+    if (desired && backed / desired < .995) return false;
+    if (Number(location?.meta?.lastVerifyBad) > 0 || location?.meta?.lastVerifyCatalogHealthy === false) return true;
+    const verifiedAt = new Date(location?.meta?.lastVerifiedAt || location?.local?.oldestVerification || 0).getTime();
+    if (!Number.isFinite(verifiedAt) || !verifiedAt || Date.now() - verifiedAt > 180 * 86400000) return true;
+    const updatedAt = new Date(location?.meta?.lastBackupAt || 0).getTime();
+    return Number.isFinite(updatedAt) && updatedAt > verifiedAt;
+  }
+
+  async function runHeroVerify() {
     const status = pane.querySelector('.storage-status-card.storage-verify-action');
-    if (!status) return false;
-    const button = backups?.querySelector('[data-verify]:not(:disabled)');
+    if (!status || !backups) return false;
+    let index = -1;
+    try {
+      const response = await fetch('/api/backups', { cache:'no-store' });
+      const data = await response.json();
+      index = (data.backups || []).findIndex(backupNeedsVerification);
+    } catch {}
+    const selector = index >= 0 ? `[data-verify="${index}"]:not(:disabled)` : '[data-verify].primary-action:not(:disabled)';
+    const button = backups.querySelector(selector) || backups.querySelector('[data-verify]:not(:disabled)');
     if (!button) return false;
     button.click();
     return true;
