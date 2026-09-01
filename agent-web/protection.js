@@ -211,8 +211,12 @@ async function saveLocation(event) {
   const row = event.target.closest('[data-location-id]');
   const id = row.dataset.locationId;
   const current = state.locations.find(location => location.id === id);
+  const reliability = row.querySelector('[data-location-reliability]').value;
   try {
-    await control('/api/client/protection/location', { method:'POST', body:JSON.stringify({ id, name:current.name, kind:current.kind, deviceName:current.deviceName, remote:current.remote, encrypted:current.encrypted, reliability:row.querySelector('[data-location-reliability]').value, site:row.querySelector('[data-location-site]').value.trim() }) });
+    await control('/api/client/protection/location', { method:'POST', body:JSON.stringify({ id, name:current.name, kind:current.kind, deviceName:current.deviceName, remote:current.remote, encrypted:current.encrypted, reliability, site:row.querySelector('[data-location-site]').value.trim() }) });
+    if (current.kind === 'peer' && event.target.matches('[data-location-reliability]')) {
+      await control('/api/client/protection/peers/toggle', { method:'POST', body:JSON.stringify({ id, enabled:reliability !== 'low' }) });
+    }
     await refresh(true);
   } catch (error) { toast(error.message); }
 }
