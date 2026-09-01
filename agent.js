@@ -101,7 +101,10 @@ async function handleLocalApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/pick-folder') {
-    json(res, 200, { path: await pickFolder() });
+    const multiple = url.searchParams.get('multiple') === '1';
+    const picked = await pickFolder({ multiple, title: multiple ? 'Choose folders for Mochimono' : 'Choose a folder for Mochimono' });
+    const paths = multiple ? picked : picked ? [picked] : [];
+    json(res, 200, { path: paths[0] || null, paths });
     return true;
   }
 
