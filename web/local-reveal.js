@@ -29,12 +29,17 @@ if (CLIENT && viewer && viewerOpen && actions) {
     const mine = ++generation;
     button.hidden = true;
     if (!current || viewer.hidden) return;
+
+    // Newly hashed Browse-only files can already be visible from the staging
+    // catalog before the canonical location index is published.
+    if (window.mochimonoFastLocalHashes?.has?.(current)) button.hidden = false;
+
     try {
       const response = await fetch(`/api/client/locations?hash=${encodeURIComponent(current)}`, { cache: 'no-store' });
       if (!response.ok) return;
       const data = await response.json();
       if (mine !== generation || current !== hash()) return;
-      button.hidden = !(data.files || []).length;
+      if ((data.files || []).length) button.hidden = false;
     } catch {}
   }
 
@@ -59,5 +64,6 @@ if (CLIENT && viewer && viewerOpen && actions) {
   new MutationObserver(sync).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
   new MutationObserver(sync).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
   window.addEventListener('mochimono:locations-updated', sync);
+  window.addEventListener('mochimono:fast-local', sync);
   sync();
 }
