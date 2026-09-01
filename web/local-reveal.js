@@ -18,28 +18,45 @@ if (CLIENT && viewer && viewerOpen && actions) {
     .viewer-reveal-local{width:34px!important;padding:0!important;display:grid!important;place-items:center!important}
     .viewer-reveal-local[hidden]{display:none!important}
     .viewer-reveal-local svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.35;stroke-linecap:round;stroke-linejoin:round}
+    .viewer-reveal-local[data-state="ok"]{color:#9bd7aa!important}
+    .viewer-reveal-local[data-state="error"]{color:#ff9d96!important}
   `;
   document.head.append(style);
 
   let generation = 0;
+  let stateTimer = 0;
   const hash = () => viewerOpen.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
+
+  function resetState() {
+    clearTimeout(stateTimer);
+    delete button.dataset.state;
+    button.title = 'Show in Explorer';
+    button.setAttribute('aria-label', 'Show in Explorer');
+  }
+
+  function flash(state, message) {
+    clearTimeout(stateTimer);
+    button.dataset.state = state;
+    button.title = message;
+    button.setAttribute('aria-label', message);
+    stateTimer = setTimeout(resetState, state === 'ok' ? 1400 : 3200);
+  }
 
   async function sync() {
     const current = hash();
     const mine = ++generation;
+    resetState();
     button.hidden = true;
     if (!current || viewer.hidden) return;
 
-    // Newly hashed Browse-only files can already be visible from the staging
-    // catalog before the canonical location index is published.
-    if (window.mochimonoFastLocalHashes?.has?.(current)) button.hidden = false;
+    if (window.mochimonoLocations?.forHash?.(current)?.length) button.hidden = false;
 
     try {
       const response = await fetch(`/api/client/locations?hash=${encodeURIComponent(current)}`, { cache: 'no-store' });
       if (!response.ok) return;
       const data = await response.json();
       if (mine !== generation || current !== hash()) return;
-      if ((data.files || []).length) button.hidden = false;
+      button.hidden = !(data.files || []).length;
     } catch {}
   }
 
@@ -47,15 +64,20 @@ if (CLIENT && viewer && viewerOpen && actions) {
     event.preventDefault();
     event.stopPropagation();
     const current = hash();
-    if (!current) return;
+    if (!current || button.disabled) return;
     button.disabled = true;
+    resetState();
     try {
       const response = await fetch('/api/reveal-file', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ hash: current })
       });
-      if (!response.ok) button.hidden = true;
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `Could not open Explorer (${response.status})`);
+      flash('ok', 'Shown in Explorer');
+    } catch (error) {
+      flash('error', error?.message || 'Could not open Explorer');
     } finally {
       button.disabled = false;
     }
@@ -64,6 +86,6 @@ if (CLIENT && viewer && viewerOpen && actions) {
   new MutationObserver(sync).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
   new MutationObserver(sync).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
   window.addEventListener('mochimono:locations-updated', sync);
-  window.addEventListener('mochimono:fast-local', sync);
+  addEventListener('beforeunload', () => clearTimeout(stateTimer), { once: true });
   sync();
 }
