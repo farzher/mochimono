@@ -44,7 +44,7 @@ function protectionFor(hash) {
   const backed = state.backed.has(hash);
   const verified = state.verifiedBacked.has(hash);
 
-  if (state.damagedServer.has(hash)) return { className: 'danger', label: 'Mochimono copy damaged', grid: 'Repair needed' };
+  if (state.damagedServer.has(hash)) return { className: 'danger', label: 'Mochimono copy damaged', grid: 'Repair needed', critical: true };
   if (state.onlyLocal.has(hash)) return { className: 'danger', label: 'Only indexed here', grid: 'Only here' };
   if (local && !server) return { className: 'danger', label: backed ? 'Not in Mochimono' : 'Local only', grid: backed ? 'Not in Mochimono' : 'Local only' };
   if (local && server && !verified) return { className: 'warn', label: backed ? 'Verify backup' : 'Needs backup', grid: backed ? 'Verify backup' : 'Needs backup' };
@@ -68,8 +68,11 @@ function decorateItem(item) {
   item.title = [item.dataset.protectionBaseTitle, status.label].filter(Boolean).join(' · ');
   const isRow = item.classList.contains('file-row');
 
-  // Routine backup reminders belong in Details/Storage, not on every photo.
-  if (!isRow && status.className === 'warn') return;
+  // The photo grid is for browsing, not protection triage. Keep routine local/
+  // backup state out of the image itself; only an actual damaged Mochimono copy
+  // is urgent enough to interrupt the grid. Detailed state remains in Details,
+  // list view, filters and Storage.
+  if (!isRow && !status.critical) return;
 
   const text = isRow ? status.label : status.grid;
   if (!text) return;
