@@ -18,6 +18,7 @@ let cachePromise = null;
 let checkTimer = 0;
 let checking = false;
 let fallbackActive = false;
+let geometryTimer = 0;
 
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
@@ -109,13 +110,29 @@ function pending(card) {
   box.prepend(item);
 }
 
+function persistDimensions(hash, width, height) {
+  window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height).catch(() => {});
+}
+
 function rememberDimensions(hash, width, height) {
   if (!width || !height) return;
   const state = states.get(hash) || {};
   state.width = Number(width) || state.width || 0;
   state.height = Number(height) || state.height || 0;
   states.set(hash, state);
-  window.mochimonoLibrary?.rememberDimensions?.(hash, state.width, state.height);
+
+  // Thumbnail decoding is paint, not layout. Learn missing geometry for the next
+  // render, but never resize a card that is already on screen.
+  persistDimensions(hash, state.width, state.height);
+}
+
+function persistLearnedDimensions() {
+  clearTimeout(geometryTimer);
+  geometryTimer = setTimeout(() => {
+    for (const [hash, state] of states) {
+      if (state.width && state.height) persistDimensions(hash, state.width, state.height);
+    }
+  }, 800);
 }
 
 function paint(hash) {
@@ -490,9 +507,13 @@ if (files) {
     }
   });
 
-  window.addEventListener('mochimono:catalog-updated', () => scheduleCheck(100));
+  window.addEventListener('mochimono:catalog-updated', () => {
+    persistLearnedDimensions();
+    scheduleCheck(100);
+  });
   addEventListener('beforeunload', () => {
     clearTimeout(checkTimer);
+    clearTimeout(geometryTimer);
     for (const url of objectUrls.values()) URL.revokeObjectURL(url);
   }, { once: true });
 }
