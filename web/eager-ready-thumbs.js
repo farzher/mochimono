@@ -87,15 +87,15 @@ if (files) {
           const hash = String(item.hash || '');
           if (!(Number(item.width) > 0 && Number(item.height) > 0)) continue;
           confirmed.add(hash);
-          if (!ready.has(hash)) {
-            ready.add(hash);
-            discovered.push(hash);
-          }
+          if (!ready.has(hash)) discovered.push(hash);
         }
       } catch {}
     }
 
-    if (discovered.length) window.mochimonoRememberReadyThumbs?.(discovered);
+    if (discovered.length) {
+      if (window.mochimonoRememberReadyThumbs) window.mochimonoRememberReadyThumbs(discovered);
+      else discovered.forEach(hash => ready.add(hash));
+    }
 
     for (const hash of hashes) {
       if (confirmed.has(hash) || ready.has(hash)) {
