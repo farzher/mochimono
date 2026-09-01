@@ -6,44 +6,87 @@ const objectHash = value => String(value || '').match(/\/api\/objects\/([a-f0-9]
 const currentHash = () => objectHash(viewerOpen?.getAttribute('href'));
 const hasLocalCopy = hash => Boolean(hash && window.mochimonoLocations?.forHash?.(hash)?.length);
 
-// The normal viewer used to preload the full-resolution image on both sides of
-// the current file. Rapid arrow-key navigation through large local photos could
-// therefore keep several full image decodes running at once. Keep only the
-// current remote-image upgrade; local images are loaded directly below.
-const src = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
-if (src?.get && src?.set) {
+// app.js already does the right thing for the current image: keep the small
+// thumbnail visible, load/decode the full object offscreen, then swap it in.
+// Earlier local-first code bypassed that handoff and also blocked both neighbor
+// preloads. Keep the current loader intact and only serialize LOCAL neighbor
+// warming so huge photos do not all decode at once.
+const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+const approved = new WeakSet();
+const pending = [];
+const kept = [];
+let warming = null;
+let queuedFor = '';
+
+function clearPendingFor(current) {
+  if (queuedFor === current) return;
+  queuedFor = current;
+  pending.length = 0;
+}
+
+function queueNeighbor(value) {
+  const hash = objectHash(value);
+  if (!hash || !viewer || viewer.hidden || !hasLocalCopy(hash)) return false;
+  const current = currentHash();
+  if (!current || hash === current) return false;
+  clearPendingFor(current);
+  if (!pending.some(item => item.hash === hash)) pending.push({ hash, url: String(value) });
+  return true;
+}
+
+function warmNext() {
+  if (warming || !viewer || viewer.hidden) return;
+  const current = currentHash();
+  clearPendingFor(current);
+  let task;
+  while ((task = pending.shift())) {
+    if (task.hash && task.hash !== current) break;
+    task = null;
+  }
+  if (!task) return;
+
+  const image = new Image();
+  approved.add(image);
+  warming = image;
+  image.decoding = 'async';
+  const done = async () => {
+    if (warming !== image) return;
+    try { await image.decode(); } catch {}
+    kept.push(image);
+    while (kept.length > 2) kept.shift();
+    warming = null;
+    warmNext();
+  };
+  image.onload = done;
+  image.onerror = () => {
+    if (warming === image) warming = null;
+    warmNext();
+  };
+  image.src = task.url;
+}
+
+if (descriptor?.get && descriptor?.set) {
   Object.defineProperty(HTMLImageElement.prototype, 'src', {
     configurable: true,
-    enumerable: src.enumerable,
-    get: src.get,
+    enumerable: descriptor.enumerable,
+    get: descriptor.get,
     set(value) {
-      const hash = objectHash(value);
-      if (hash && !this.isConnected && viewer && !viewer.hidden) {
-        const current = currentHash();
-        if (hash !== current || hasLocalCopy(hash)) return;
-      }
-      src.set.call(this, value);
+      if (!approved.has(this) && !this.isConnected && queueNeighbor(value)) return;
+      descriptor.set.call(this, value);
     }
   });
 }
 
-function useLocalOriginal() {
-  if (!viewer || viewer.hidden || !viewerMedia) return;
-  const image = viewerMedia.querySelector('img[data-full-src]');
-  if (!image) return;
-  const full = image.dataset.fullSrc || '';
-  const hash = objectHash(full);
-  if (!hasLocalCopy(hash)) return;
-
-  const fallback = image.getAttribute('src') || '';
-  image.removeAttribute('data-full-src');
-  image.decoding = 'async';
-  image.onerror = () => {
-    image.onerror = null;
-    if (fallback && fallback !== full) image.src = fallback;
-  };
-  image.src = full;
+if (viewerMedia) {
+  viewerMedia.addEventListener('load', event => {
+    const image = event.target;
+    if (!(image instanceof HTMLImageElement) || !image.isConnected) return;
+    const hash = objectHash(image.currentSrc || image.src);
+    if (!hash || hash !== currentHash()) return;
+    // The visible current full-resolution image has completed its swap. Now the
+    // queued next/previous originals can use spare time without competing with it.
+    warmNext();
+  }, true);
 }
 
-if (viewerMedia) new MutationObserver(useLocalOriginal).observe(viewerMedia, { childList: true, subtree: true });
-window.addEventListener('mochimono:locations-updated', useLocalOriginal);
+window.addEventListener('mochimono:locations-updated', warmNext);
