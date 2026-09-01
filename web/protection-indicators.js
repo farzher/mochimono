@@ -22,7 +22,6 @@ style.textContent = `
   .file-card .protection-badge.danger{color:#efaaa3;background:rgba(54,27,28,.9)}
   .file-row.protection-decorated{grid-template-columns:66px minmax(0,1fr) 120px 84px 116px}
   .file-row .protection-badge{justify-self:end;max-width:116px;overflow:hidden;text-overflow:ellipsis;padding:4px 7px;border-radius:7px;background:rgba(255,255,255,.035);color:#8f8784;font-size:9px;text-align:right}
-  .file-row .protection-badge.safe{color:#9fbea6;background:rgba(104,150,112,.07)}
   .file-row .protection-badge.warn{color:#c9aa7d;background:rgba(154,118,71,.07)}
   .file-row .protection-badge.danger{color:#d99690;background:rgba(155,77,72,.08)}
   @media(max-width:760px){
@@ -45,15 +44,12 @@ function protectionFor(hash) {
   const backed = state.backed.has(hash);
   const verified = state.verifiedBacked.has(hash);
 
-  if (state.damagedServer.has(hash)) return { key: 'damaged-server', className: 'danger', label: 'Mochimono copy damaged', grid: 'Repair needed' };
-  if (state.onlyLocal.has(hash)) return { key: 'only-local', className: 'danger', label: 'Only indexed here', grid: 'Only here' };
-  if (local && !server) return { key: 'not-server', className: 'danger', label: backed ? 'Not in Mochimono' : 'Local only', grid: backed ? 'Not in Mochimono' : 'Local only' };
-  if (local && server && !verified) return { key: 'needs-backup', className: 'warn', label: backed ? 'Verify backup' : 'Needs backup', grid: backed ? 'Verify backup' : 'Needs backup' };
-  if (!local && server && !verified) return { key: 'server-only', className: 'warn', label: backed ? 'Backup unverified' : 'No indexed local copy', grid: backed ? 'Verify backup' : 'Not indexed locally' };
-  if (state.safeLocal.has(hash)) return { key: 'safe', className: 'safe', label: 'Safe to free', grid: '' };
-  if (!local && server && verified) return { key: 'not-local', className: '', label: 'No indexed local copy', grid: '' };
-  if (state.needs.has(hash)) return { key: 'needs', className: 'warn', label: 'Needs protection', grid: 'Needs protection' };
-  if (server && verified) return { key: 'protected', className: 'safe', label: 'Protected', grid: '' };
+  if (state.damagedServer.has(hash)) return { className: 'danger', label: 'Mochimono copy damaged', grid: 'Repair needed' };
+  if (state.onlyLocal.has(hash)) return { className: 'danger', label: 'Only indexed here', grid: 'Only here' };
+  if (local && !server) return { className: 'danger', label: backed ? 'Not in Mochimono' : 'Local only', grid: backed ? 'Not in Mochimono' : 'Local only' };
+  if (local && server && !verified) return { className: 'warn', label: backed ? 'Verify backup' : 'Needs backup', grid: backed ? 'Verify backup' : 'Needs backup' };
+  if (!local && server && !verified) return { className: 'warn', label: backed ? 'Verify backup' : 'Needs backup', grid: backed ? 'Verify backup' : 'Needs backup' };
+  if (state.needs.has(hash)) return { className: 'warn', label: 'Needs protection', grid: 'Needs protection' };
   return null;
 }
 
@@ -62,13 +58,15 @@ function decorateItem(item) {
   if (!hash) return;
   item.querySelector(':scope > .protection-badge')?.remove();
   item.classList.remove('protection-decorated');
+
+  if (!Object.hasOwn(item.dataset, 'protectionBaseTitle')) item.dataset.protectionBaseTitle = item.title || '';
+  item.title = item.dataset.protectionBaseTitle || '';
+
   const status = protectionFor(hash);
   if (!status) return;
 
   const isRow = item.classList.contains('file-row');
   const text = isRow ? status.label : status.grid;
-  item.title = item.dataset.protectionBaseTitle || item.title || '';
-  if (!item.dataset.protectionBaseTitle) item.dataset.protectionBaseTitle = item.title;
   item.title = [item.dataset.protectionBaseTitle, status.label].filter(Boolean).join(' · ');
   if (!text) return;
 
