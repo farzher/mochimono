@@ -3,33 +3,51 @@ const viewerOpen = document.querySelector('#viewer-open');
 const prev = document.querySelector('#viewer-prev');
 const next = document.querySelector('#viewer-next');
 const actions = document.querySelector('.viewer-actions');
+const infoButton = document.querySelector('#viewer-info-button');
 
 if (viewer && viewerOpen && prev && next && actions) {
+  const labels = {
+    view: 'Current view',
+    similar: 'Similar',
+    nearby: 'Nearby',
+    folder: 'Same folder',
+    origin: 'Same origin',
+    type: 'Same type',
+    tags: 'Same groups'
+  };
+
   const style = document.createElement('style');
   style.textContent = `
-    .viewer-related{display:flex;align-items:center;gap:5px;height:30px;padding:0 7px;border:1px solid rgba(255,255,255,.09);border-radius:8px;background:rgba(255,255,255,.045)}
-    .viewer-related span{color:#8f8583;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
-    .viewer-related select{max-width:145px;height:26px;padding:0 19px 0 2px;border:0;background:transparent;color:#ddd5d1;font:600 10px/1 Inter,system-ui,sans-serif;outline:none;cursor:pointer}
-    .viewer-related select option{background:#1b191c;color:#eee7e3}
-    .viewer-related small{min-width:16px;color:#766f6d;font-size:9px;text-align:right}
-    @media(max-width:700px){.viewer-related span{display:none}.viewer-related{padding:0 5px}.viewer-related select{max-width:108px}}
+    .viewer-related{position:relative}
+    .viewer-related>summary{height:34px;min-width:34px;display:flex;align-items:center;justify-content:center;gap:6px;padding:0 7px;border-radius:8px;color:#d2c9c6;cursor:pointer;list-style:none;text-shadow:0 1px 4px rgba(0,0,0,.9)}
+    .viewer-related>summary::-webkit-details-marker{display:none}
+    .viewer-related>summary:hover,.viewer-related[open]>summary,.viewer-related.active>summary{background:rgba(255,255,255,.09);color:#fff}
+    .viewer-related svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.55;stroke-linecap:round;stroke-linejoin:round}
+    .viewer-related-label{display:none;font-size:9px;font-weight:700;white-space:nowrap}
+    .viewer-related.active .viewer-related-label{display:inline}
+    .viewer-related-popover{position:absolute;z-index:130;right:0;top:40px;width:154px;padding:5px;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:#181619;box-shadow:0 16px 45px rgba(0,0,0,.5)}
+    .viewer-related-popover button{display:block;width:100%;height:32px;padding:0 9px;border-radius:7px;background:transparent;color:#bdb4b1;font-size:10px;font-weight:650;text-align:left}
+    .viewer-related-popover button:hover{background:#282428;color:#fff}
+    .viewer-related-popover button.active{color:#efb0aa;background:rgba(239,160,154,.07)}
+    @media(max-width:700px){.viewer-related.active .viewer-related-label{display:none}.viewer-related-popover{position:fixed;right:8px;top:50px;width:160px}}
   `;
   document.head.append(style);
 
-  const control = document.createElement('label');
+  const control = document.createElement('details');
   control.className = 'viewer-related';
-  control.innerHTML = `<span>Browse</span><select aria-label="Browse related files">
-    <option value="view">Current view</option>
-    <option value="similar">Similar</option>
-    <option value="nearby">Nearby in time</option>
-    <option value="folder">Same folder</option>
-    <option value="origin">Same origin</option>
-    <option value="type">Same type</option>
-    <option value="tags">Same tags / groups</option>
-  </select><small></small>`;
-  actions.insertBefore(control, document.querySelector('#viewer-info-button'));
-  const select = control.querySelector('select');
-  const count = control.querySelector('small');
+  control.innerHTML = `
+    <summary title="Browse related" aria-label="Browse related">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="6" cy="10" r="3"/><circle cx="14" cy="10" r="3"/><path d="M9 10h2"/></svg>
+      <span class="viewer-related-label"></span>
+    </summary>
+    <div class="viewer-related-popover">
+      ${Object.entries(labels).map(([value, label]) => `<button type="button" data-related-mode="${value}">${label}</button>`).join('')}
+    </div>`;
+  actions.insertBefore(control, infoButton || actions.firstChild);
+
+  const summary = control.querySelector('summary');
+  const modeLabel = control.querySelector('.viewer-related-label');
+  const modeButtons = [...control.querySelectorAll('[data-related-mode]')];
 
   let mode = 'view';
   let anchorHash = '';
@@ -95,17 +113,13 @@ if (viewer && viewerOpen && prev && next && actions) {
 
   async function collectionsFor(hash) {
     if (!hash) return [];
-    if (!collectionsCache.has(hash)) {
-      collectionsCache.set(hash, json(`/api/collections/file/${hash}`).then(data => data.collections || []).catch(() => []));
-    }
+    if (!collectionsCache.has(hash)) collectionsCache.set(hash, json(`/api/collections/file/${hash}`).then(data => data.collections || []).catch(() => []));
     return collectionsCache.get(hash);
   }
 
   async function hashesForCollection(id) {
     const key = String(id);
-    if (!collectionHashesCache.has(key)) {
-      collectionHashesCache.set(key, json(`/api/collections/${encodeURIComponent(key)}/hashes`).then(data => new Set(data.hashes || [])).catch(() => new Set()));
-    }
+    if (!collectionHashesCache.has(key)) collectionHashesCache.set(key, json(`/api/collections/${encodeURIComponent(key)}/hashes`).then(data => new Set(data.hashes || [])).catch(() => new Set()));
     return collectionHashesCache.get(key);
   }
 
@@ -117,9 +131,7 @@ if (viewer && viewerOpen && prev && next && actions) {
     return result;
   }
 
-  function byDateDesc(items) {
-    return items.sort((a, b) => fileDate(b) - fileDate(a) || String(a.hash).localeCompare(String(b.hash)));
-  }
+  const byDateDesc = items => items.sort((a, b) => fileDate(b) - fileDate(a) || String(a.hash).localeCompare(String(b.hash)));
 
   async function buildContext(nextMode, anchor) {
     const files = await catalog();
@@ -156,8 +168,7 @@ if (viewer && viewerOpen && prev && next && actions) {
         if (intersects(ids, importIds(file))) score += 4;
         if (type(file) === currentType) score += 3;
         if (currentExt && extension(file.filename) === currentExt) score += 2;
-        const sharedWords = words(file.filename).filter(word => currentWords.includes(word)).length;
-        score += Math.min(6, sharedWords * 2);
+        score += Math.min(6, words(file.filename).filter(word => currentWords.includes(word)).length * 2);
         const days = Math.abs(fileDate(file) - currentDate) / 86400000;
         if (days < 1) score += 4;
         else if (days < 7) score += 3;
@@ -171,32 +182,45 @@ if (viewer && viewerOpen && prev && next && actions) {
     return [];
   }
 
+  function syncUi(loading = false) {
+    control.classList.toggle('active', mode !== 'view');
+    for (const button of modeButtons) button.classList.toggle('active', button.dataset.relatedMode === mode);
+    if (mode === 'view') {
+      modeLabel.textContent = '';
+      summary.title = 'Browse related';
+      return;
+    }
+    const text = loading ? `${labels[mode]}…` : `${labels[mode]} · ${context.length.toLocaleString()}`;
+    modeLabel.textContent = text;
+    summary.title = `${text} · use left/right arrows`;
+  }
+
   function updateButtons() {
     if (mode === 'view') return;
     const index = context.findIndex(file => file.hash === currentHash());
     prev.disabled = index <= 0;
     next.disabled = index < 0 || index >= context.length - 1;
-    count.textContent = context.length ? context.length.toLocaleString() : '0';
+    syncUi(false);
   }
 
   async function setMode(value) {
     const previousMode = mode;
-    mode = value;
-    select.value = mode;
+    mode = value in labels ? value : 'view';
+    control.open = false;
     generation++;
 
     if (mode === 'view') {
       const returnHash = anchorHash;
       anchorHash = '';
       context = [];
-      count.textContent = '';
+      syncUi(false);
       if (previousMode !== 'view' && returnHash) window.mochimonoOpenViewer?.(returnHash);
       return;
     }
 
     if (previousMode === 'view' || !anchorHash) anchorHash = currentHash();
     const mine = generation;
-    count.textContent = '…';
+    syncUi(true);
     try {
       const built = await buildContext(mode, anchorHash);
       if (mine !== generation || mode === 'view') return;
@@ -206,7 +230,6 @@ if (viewer && viewerOpen && prev && next && actions) {
     } catch {
       if (mine !== generation) return;
       context = [];
-      count.textContent = '0';
       updateButtons();
     }
   }
@@ -221,7 +244,7 @@ if (viewer && viewerOpen && prev && next && actions) {
     return true;
   }
 
-  select.addEventListener('change', () => setMode(select.value));
+  for (const button of modeButtons) button.addEventListener('click', () => setMode(button.dataset.relatedMode));
   prev.addEventListener('click', event => {
     if (mode === 'view') return;
     event.preventDefault();
@@ -235,7 +258,15 @@ if (viewer && viewerOpen && prev && next && actions) {
     navigate(1);
   }, true);
 
+  document.addEventListener('pointerdown', event => {
+    if (control.open && !control.contains(event.target)) control.open = false;
+  }, true);
   document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && control.open) {
+      control.open = false;
+      summary.focus();
+      return;
+    }
     if (mode === 'view' || viewer.hidden || !['ArrowLeft','ArrowRight'].includes(event.key)) return;
     if (event.target?.closest?.('input,select,textarea,[contenteditable="true"]')) return;
     event.preventDefault();
@@ -253,8 +284,8 @@ if (viewer && viewerOpen && prev && next && actions) {
     mode = 'view';
     anchorHash = '';
     context = [];
-    select.value = 'view';
-    count.textContent = '';
+    control.open = false;
+    syncUi(false);
   }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 
   window.addEventListener('mochimono:groups-changed', () => {
@@ -263,4 +294,6 @@ if (viewer && viewerOpen && prev && next && actions) {
     catalogPromise = null;
     if (mode === 'tags' || mode === 'similar') setMode(mode);
   });
+
+  syncUi(false);
 }
