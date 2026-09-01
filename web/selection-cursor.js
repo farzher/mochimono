@@ -10,15 +10,22 @@ style.textContent = `
     outline:none!important;
   }
   html.keyboard-navigation-active #files [data-hash].context-keyboard-focus{
-    outline:2px solid rgba(242,233,229,.94)!important;
-    outline-offset:-3px;
+    outline:3px solid rgba(255,255,255,.98)!important;
+    outline-offset:-5px;
+    box-shadow:inset 0 0 0 7px rgba(10,9,11,.72)!important;
+  }
+  html.keyboard-navigation-active #files .file-card.context-keyboard-focus{
+    transform:translateZ(0);
   }
   html.keyboard-navigation-active #files .file-row.context-keyboard-focus,
   html.keyboard-navigation-active #files .folder-row.context-keyboard-focus{
-    outline-offset:-2px;
+    outline-width:2px!important;
+    outline-offset:-3px;
+    box-shadow:inset 0 0 0 4px rgba(10,9,11,.72)!important;
   }
   html.keyboard-navigation-active #files [data-hash].context-keyboard-focus.selected{
-    outline-color:rgba(255,247,244,.98)!important;
+    outline-color:#fff!important;
+    box-shadow:inset 0 0 0 7px rgba(49,25,28,.78)!important;
   }
 `;
 document.head.append(style);
