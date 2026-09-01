@@ -6,7 +6,7 @@ let state = null;
 let refreshTimer = null;
 let dialog = null;
 
-const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char]));
+const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;' }[char]));
 const LEVELS = [
   ['disposable','Disposable'],
   ['normal','Normal'],
@@ -20,6 +20,22 @@ function bytes(number) {
   let unit = 0;
   while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
   return `${value < 10 && unit ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+function age(value) {
+  const time = new Date(value || 0).getTime();
+  if (!time) return '';
+  const seconds = Math.max(0, Math.round((Date.now() - time) / 1000));
+  if (seconds < 60) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 60) return `${days}d ago`;
+  const months = Math.round(days / 30.44);
+  if (months < 24) return `${months}mo ago`;
+  return `${Math.round(months / 12)}y ago`;
 }
 
 async function control(path, options = {}) {
@@ -63,8 +79,9 @@ style.textContent = `
   .protection-levels span{white-space:nowrap}.protection-levels b{color:#cfc8c5}
   .storage-locations{display:grid;gap:6px;margin-top:2px}
   .protection-location{display:grid;grid-template-columns:minmax(120px,1fr) auto auto;align-items:center;gap:8px;padding:8px 0;border-top:1px solid rgba(255,255,255,.055)}
-  .protection-location:first-child{border-top:0}.protection-location strong{display:block;font-size:12px}.protection-location small{display:block;color:#77706e;margin-top:2px}
+  .protection-location:first-child{border-top:0}.protection-location strong{display:block;font-size:12px}.protection-location small{display:block;color:#77706e;margin-top:2px;line-height:1.45}
   .protection-location select{width:auto;min-width:82px;padding:5px 7px;font-size:10px}.protection-location input{width:120px;padding:5px 7px;font-size:10px}
+  .location-online{color:#a9c9ae}.location-offline{color:#c19a8f}.location-unknown{color:#9d9693}.location-stale{color:#d4b786}
   .folder-protection-level{width:auto!important;min-width:86px;padding:4px 6px!important;font-size:9px!important;margin-right:2px}
   .protection-actions{display:flex;gap:7px;flex-wrap:wrap}
   .protection-running{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:7px 9px;border-radius:7px;background:rgba(255,255,255,.035);font-size:10px;color:#9d9693}.protection-running strong{color:#d5cfcc}
@@ -127,16 +144,51 @@ function locationLabel(location) {
   return bits.join(' · ');
 }
 
+function driveFor(id) {
+  return state?.drives?.find(drive => drive.id === id) || null;
+}
+
+function availabilityFor(location) {
+  if (location.kind === 'primary') return { state:'online', text:'Online now' };
+  if (location.kind === 'backup') {
+    const online = (state?.backups || []).some(backup => backup.id === location.id);
+    return { state:online ? 'online' : 'offline', text:online ? 'Connected now' : 'Offline / not connected here' };
+  }
+  if (location.kind === 'peer') {
+    const peer = state?.peers?.find(item => item.id === location.id);
+    return { state:peer?.online ? 'online' : 'offline', text:peer?.online ? 'Reachable now' : 'Offline / unreachable now' };
+  }
+  const ownSource = location.deviceName && location.deviceName === state?.config?.deviceName;
+  return ownSource ? { state:'online', text:'Online now' } : { state:'unknown', text:'Availability not currently known' };
+}
+
+function verificationText(location) {
+  const drive = driveFor(location.id);
+  if (!drive || !drive.protectedCount) return '';
+  const bits = [];
+  if (drive.lastVerifiedAt) bits.push(`newest verification ${age(drive.lastVerifiedAt)}`);
+  if (drive.oldestVerifiedAt && drive.oldestVerifiedAt !== drive.lastVerifiedAt) bits.push(`oldest ${age(drive.oldestVerifiedAt)}`);
+  if (drive.verifiedCount < drive.protectedCount) bits.push(`${(drive.protectedCount - drive.verifiedCount).toLocaleString()} never verified`);
+  return bits.join(' · ');
+}
+
 function renderLocations() {
-  return (state?.locations || []).map(location => `<div class="protection-location" data-location-id="${esc(location.id)}">
-    <div><strong>${esc(location.name)}</strong><small>${esc(locationLabel(location))}${location.deviceName ? ` · ${esc(location.deviceName)}` : ''}</small></div>
-    <select data-location-reliability aria-label="Reliability">
-      <option value="low" ${location.reliability === 'low' ? 'selected' : ''}>Less reliable</option>
-      <option value="normal" ${location.reliability === 'normal' ? 'selected' : ''}>Normal</option>
-      <option value="high" ${location.reliability === 'high' ? 'selected' : ''}>Reliable</option>
-    </select>
-    <input data-location-site value="${esc(location.site || '')}" placeholder="Location" title="Physical location / failure domain">
-  </div>`).join('');
+  return (state?.locations || []).map(location => {
+    const availability = availabilityFor(location);
+    const drive = driveFor(location.id);
+    const verification = verificationText(location);
+    const contact = drive?.lastSeen ? `last server contact ${age(drive.lastSeen)}` : '';
+    const freshness = [availability.text, verification, contact].filter(Boolean).join(' · ');
+    return `<div class="protection-location" data-location-id="${esc(location.id)}">
+      <div><strong>${esc(location.name)}</strong><small>${esc(locationLabel(location))}${location.deviceName ? ` · ${esc(location.deviceName)}` : ''}<br><span class="location-${availability.state}">${esc(freshness)}</span></small></div>
+      <select data-location-reliability aria-label="Reliability">
+        <option value="low" ${location.reliability === 'low' ? 'selected' : ''}>Less reliable</option>
+        <option value="normal" ${location.reliability === 'normal' ? 'selected' : ''}>Normal</option>
+        <option value="high" ${location.reliability === 'high' ? 'selected' : ''}>Reliable</option>
+      </select>
+      <input data-location-site value="${esc(location.site || '')}" placeholder="Location" title="Physical location / failure domain">
+    </div>`;
+  }).join('');
 }
 
 function renderPeers() {
@@ -145,7 +197,9 @@ function renderPeers() {
   if (!peers.length) return '<div class="muted">No remote PCs</div>';
   return peers.map(peer => {
     const status = live.get(peer.id);
-    return `<div class="peer-row" data-peer-id="${esc(peer.id)}"><div><strong>${esc(peer.name)}</strong><small>${esc(peer.site || 'Remote')} · encrypted · ${peer.enabled === false ? 'paused · ' : ''}<span class="${status?.online ? 'peer-online' : 'peer-offline'}">${status?.online ? `${bytes(status.bytes)} stored` : 'offline'}</span></small></div><button class="action-link" data-peer-toggle>${peer.enabled === false ? 'Resume' : 'Pause'}</button></div>`;
+    const drive = driveFor(peer.id);
+    const verified = drive?.lastVerifiedAt ? ` · last verified ${age(drive.lastVerifiedAt)}` : '';
+    return `<div class="peer-row" data-peer-id="${esc(peer.id)}"><div><strong>${esc(peer.name)}</strong><small>${esc(peer.site || 'Remote')} · encrypted · ${peer.enabled === false ? 'paused · ' : ''}<span class="${status?.online ? 'peer-online' : 'peer-offline'}">${status?.online ? `${bytes(status.bytes)} stored · reachable now` : 'offline / unreachable now'}</span>${esc(verified)}</small></div><button class="action-link" data-peer-toggle>${peer.enabled === false ? 'Resume' : 'Pause'}</button></div>`;
   }).join('');
 }
 
@@ -350,7 +404,11 @@ async function openTrashDialog() {
 async function refresh(force = false) {
   if (!force && (document.hidden || storagePane.hidden)) return;
   try {
-    state = await control('/api/client/protection/state');
+    const [client, drives] = await Promise.all([
+      control('/api/client/protection/state'),
+      server('/api/drives').catch(() => ({ drives:[] }))
+    ]);
+    state = { ...client, drives:drives.drives || [] };
     render();
   } catch (error) {
     section();
