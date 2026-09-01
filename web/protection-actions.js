@@ -97,7 +97,10 @@ function copyDescription(copy) {
     copy.kind === 'peer' ? 'Encrypted remote' : copy.kind === 'primary' ? 'Mochimono' : copy.kind === 'source' ? 'Local source' : 'Backup'
   ];
   if (copy.site && copy.site !== copy.name) parts.push(copy.site);
-  if (!copy.verified) parts.push('not verified');
+  if (copy.kind === 'source') {
+    if (copy.verifiedAt) parts.push(`seen ${age(copy.verifiedAt)}`);
+    else parts.push('known source');
+  } else if (!copy.verified) parts.push('not verified');
   else if (copy.verifiedAt) parts.push(`verified ${age(copy.verifiedAt)}`);
   else parts.push('verified');
   if (copy.reliability === 'low') parts.push('less reliable');
