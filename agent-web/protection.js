@@ -145,7 +145,7 @@ function renderPeers() {
   if (!peers.length) return '<div class="muted">No remote PCs</div>';
   return peers.map(peer => {
     const status = live.get(peer.id);
-    return `<div class="peer-row" data-peer-id="${esc(peer.id)}"><div><strong>${esc(peer.name)}</strong><small>${esc(peer.site || 'Remote')} · encrypted · <span class="${status?.online ? 'peer-online' : 'peer-offline'}">${status?.online ? `${bytes(status.bytes)} stored` : 'offline'}</span></small></div><button class="action-link" data-peer-remove>Remove</button></div>`;
+    return `<div class="peer-row" data-peer-id="${esc(peer.id)}"><div><strong>${esc(peer.name)}</strong><small>${esc(peer.site || 'Remote')} · encrypted · ${peer.enabled === false ? 'paused · ' : ''}<span class="${status?.online ? 'peer-online' : 'peer-offline'}">${status?.online ? `${bytes(status.bytes)} stored` : 'offline'}</span></small></div><button class="action-link" data-peer-toggle>${peer.enabled === false ? 'Resume' : 'Pause'}</button></div>`;
   }).join('');
 }
 
@@ -189,10 +189,11 @@ function render() {
   body.querySelector('#openTrash')?.addEventListener('click', openTrashDialog);
   body.querySelectorAll('[data-location-reliability]').forEach(select => select.onchange = saveLocation);
   body.querySelectorAll('[data-location-site]').forEach(input => input.onchange = saveLocation);
-  body.querySelectorAll('[data-peer-remove]').forEach(button => button.onclick = async () => {
+  body.querySelectorAll('[data-peer-toggle]').forEach(button => button.onclick = async () => {
     const id = button.closest('[data-peer-id]').dataset.peerId;
-    if (!confirm('Stop using this remote PC for new backups? Existing encrypted data is left there until deleted from Trash/purge.')) return;
-    try { await control('/api/client/protection/peers/remove', { method:'POST', body: JSON.stringify({ id }) }); await refresh(true); }
+    const peer = state.config.peers.find(item => item.id === id);
+    const enabled = peer?.enabled === false;
+    try { await control('/api/client/protection/peers/toggle', { method:'POST', body: JSON.stringify({ id, enabled }) }); await refresh(true); }
     catch (error) { toast(error.message); }
   });
   decorateFolders();
@@ -252,16 +253,36 @@ function openPeerDialog() {
 async function openKeyDialog() {
   const box = ensureDialog();
   box.innerHTML = `<div class="dialog-head"><h3>Remote backup recovery key</h3><button class="icon" data-close>×</button></div>
-    <div class="field-stack"><div class="folder-mode-note">This key decrypts backups stored on remote PCs. Keep a copy somewhere separate and private.</div><textarea id="recoveryKey" readonly>Loading…</textarea></div>
-    <div class="dialog-actions"><div class="spacer"></div><button id="copyRecoveryKey" class="primary">Copy</button></div>`;
+    <div class="field-stack"><div class="folder-mode-note">This key decrypts backups stored on remote PCs. Keep a copy somewhere separate and private. To recover on a new PC, paste the same saved key here before restoring.</div><textarea id="recoveryKey">Loading…</textarea></div>
+    <div class="dialog-actions"><button id="useRecoveryKey" class="secondary">Use pasted key</button><div class="spacer"></div><button id="copyRecoveryKey" class="primary">Copy current key</button></div>`;
   box.querySelector('[data-close]').onclick = closeDialog;
   box.showModal();
   try {
     const result = await control('/api/client/protection/key');
-    box.querySelector('#recoveryKey').value = result.key;
+    const area = box.querySelector('#recoveryKey');
+    area.value = result.key;
     box.querySelector('#copyRecoveryKey').onclick = async () => {
-      try { await navigator.clipboard.writeText(result.key); toast('Recovery key copied'); }
-      catch { box.querySelector('#recoveryKey').select(); }
+      try { await navigator.clipboard.writeText(area.value.trim()); toast('Recovery key copied'); }
+      catch { area.select(); }
+    };
+    box.querySelector('#useRecoveryKey').onclick = async () => {
+      const key = area.value.trim();
+      if (!key) return;
+      try {
+        await control('/api/client/protection/key', { method:'POST', body: JSON.stringify({ key }) });
+        toast('Recovery key saved');
+        closeDialog();
+        await refresh(true);
+      } catch (error) {
+        if (!/Confirm REPLACE/i.test(error.message)) return toast(error.message);
+        if (!confirm(`${error.message}\n\nUse this pasted key anyway?`)) return;
+        try {
+          await control('/api/client/protection/key', { method:'POST', body: JSON.stringify({ key, confirm:'REPLACE' }) });
+          toast('Recovery key replaced');
+          closeDialog();
+          await refresh(true);
+        } catch (again) { toast(again.message); }
+      }
     };
   } catch (error) { box.querySelector('#recoveryKey').value = error.message; }
 }
@@ -327,7 +348,7 @@ async function openTrashDialog() {
 }
 
 async function refresh(force = false) {
-  if (!force && document.hidden) return;
+  if (!force && (document.hidden || storagePane.hidden)) return;
   try {
     state = await control('/api/client/protection/state');
     render();
@@ -337,6 +358,9 @@ async function refresh(force = false) {
   }
 }
 
+// Removing a protected folder is two separate decisions: stop future sync, and
+// optionally clean up managed copies that no other origin references. Originals
+// in the folder are never touched by this action.
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-remove-folder]');
   if (!button) return;
@@ -360,6 +384,7 @@ document.addEventListener('click', event => {
   })();
 }, true);
 
+// Warn before an accidental huge Protect operation. Browse-only remains immediate.
 document.addEventListener('click', event => {
   const button = event.target.closest('#startImport');
   if (!button || button.dataset.protectionApproved === '1') {
