@@ -80,7 +80,7 @@ if (pane) {
       align-items:flex-start!important;
       flex-wrap:wrap!important;
       gap:9px!important;
-      padding-right:86px!important;
+      padding-right:142px!important;
     }
     #storagePane .folder-item .storage-title strong{
       flex:1 0 100%!important;
@@ -190,7 +190,7 @@ if (pane) {
       #storagePane .storage-glance-card{min-height:105px!important;padding:17px 18px!important}
       #storagePane .storage-glance-card>strong{font-size:25px!important}
       #storagePane .folder-item{min-height:142px!important;padding:15px 14px 13px!important}
-      #storagePane .folder-item .storage-title{padding-right:72px!important}
+      #storagePane .folder-item .storage-title{padding-right:130px!important}
       #storagePane .folder-item .storage-title strong{font-size:11px!important}
       #storagePane .folder-item .item-actions{top:10px!important;right:9px!important}
     }
