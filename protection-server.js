@@ -78,10 +78,7 @@ db.exec(`
 
 let snapshot = null;
 let snapshotAt = 0;
-function invalidate() {
-  snapshot = null;
-  snapshotAt = 0;
-}
+const invalidate = () => { snapshot = null; snapshotAt = 0; };
 
 function locationJson(row) {
   if (!row) return null;
@@ -121,14 +118,14 @@ function normalizeLocation(id, input = {}) {
 function saveLocation(id, input = {}) {
   const value = normalizeLocation(id, input);
   db.prepare(`
-    INSERT INTO storage_locations(id, name, kind, device_name, site, reliability, remote, encrypted, last_seen)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO storage_locations(id,name,kind,device_name,site,reliability,remote,encrypted,last_seen)
+    VALUES(?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET
       name=excluded.name, kind=excluded.kind, device_name=excluded.device_name, site=excluded.site,
       reliability=excluded.reliability, remote=excluded.remote, encrypted=excluded.encrypted, last_seen=excluded.last_seen
   `).run(value.id, value.name, value.kind, value.deviceName, value.site, value.reliability, Number(value.remote), Number(value.encrypted), now());
   invalidate();
-  return locationJson(db.prepare('SELECT * FROM storage_locations WHERE id = ?').get(id));
+  return locationJson(db.prepare('SELECT * FROM storage_locations WHERE id=?').get(id));
 }
 
 function primaryLocation() {
@@ -143,23 +140,27 @@ function primaryLocation() {
   return locationJson(row);
 }
 
-function levelFor(hash) {
-  const override = db.prepare('SELECT level FROM object_protection WHERE object_hash=?').get(hash)?.level;
-  if (override) return override;
+function inheritedLevel(hash) {
   const rows = db.prepare(`
-    SELECT pr.level FROM sources s
-    JOIN protection_rules pr ON pr.scope_type='import' AND pr.scope_id=CAST(s.import_id AS TEXT)
+    SELECT DISTINCT COALESCE(pr.level, 'normal') AS level
+    FROM sources s
+    LEFT JOIN protection_rules pr ON pr.scope_type='import' AND pr.scope_id=CAST(s.import_id AS TEXT)
     WHERE s.object_hash=?
   `).all(hash);
-  let best = 'normal';
-  for (const row of rows) if (rank(row.level) > rank(best)) best = row.level;
+  if (!rows.length) return 'normal';
+  let best = rows[0].level;
+  for (const row of rows.slice(1)) if (rank(row.level) > rank(best)) best = row.level;
   return best;
+}
+
+function levelFor(hash) {
+  return db.prepare('SELECT level FROM object_protection WHERE object_hash=?').get(hash)?.level || inheritedLevel(hash);
 }
 
 function sourceCopies(hash) {
   return db.prepare(`
-    SELECT sr.device_name AS deviceName, sr.site, sr.reliability, sr.verified_at AS verifiedAt,
-           sl.name, sl.remote, sl.encrypted
+    SELECT sr.device_name AS deviceName,sr.site,sr.reliability,sr.verified_at AS verifiedAt,
+           sl.name,sl.remote,sl.encrypted
     FROM source_replicas sr
     LEFT JOIN storage_locations sl ON sl.id=('source:' || sr.device_name)
     WHERE sr.object_hash=? ORDER BY sr.device_name
@@ -179,8 +180,8 @@ function sourceCopies(hash) {
 
 function backupCopies(hash) {
   return db.prepare(`
-    SELECT r.drive_id AS id, r.verified_at AS verifiedAt, d.name, d.last_seen AS lastSeen,
-           sl.kind, sl.device_name AS deviceName, sl.site, sl.reliability, sl.remote, sl.encrypted
+    SELECT r.drive_id AS id,r.verified_at AS verifiedAt,d.name,d.last_seen AS lastSeen,
+           sl.kind,sl.device_name AS deviceName,sl.site,sl.reliability,sl.remote,sl.encrypted
     FROM replicas r JOIN drives d ON d.id=r.drive_id
     LEFT JOIN storage_locations sl ON sl.id=r.drive_id
     WHERE r.object_hash=? ORDER BY d.name
@@ -200,7 +201,7 @@ function backupCopies(hash) {
 }
 
 function primaryCopy(hash) {
-  const integrity = db.prepare('SELECT status, verified_at AS verifiedAt FROM object_integrity WHERE hash=?').get(hash);
+  const integrity = db.prepare('SELECT status,verified_at AS verifiedAt FROM object_integrity WHERE hash=?').get(hash);
   if (integrity && integrity.status !== 'healthy') return null;
   return { ...primaryLocation(), verified: true, verifiedAt: integrity?.verifiedAt || null };
 }
@@ -212,7 +213,7 @@ function evaluate(level, copies) {
   const sites = new Set();
   let remote = 0;
   for (const copy of qualified) {
-    const device = String(copy.deviceName || copy.id || copy.name || '').trim().toLowerCase();
+    const device = String(copy.id || copy.deviceName || copy.name || '').trim().toLowerCase();
     const site = String(copy.site || copy.deviceName || copy.id || '').trim().toLowerCase();
     if (device) devices.add(device);
     if (site) sites.add(site);
@@ -239,7 +240,7 @@ function protectionState(hash, { excludeSourceDevice = '' } = {}) {
   const object = db.prepare('SELECT hash,size,mime,state FROM objects WHERE hash=?').get(hash);
   if (!object) return null;
   const overrideLevel = db.prepare('SELECT level FROM object_protection WHERE object_hash=?').get(hash)?.level || null;
-  const level = overrideLevel || levelFor(hash);
+  const level = overrideLevel || inheritedLevel(hash);
   const copies = [];
   if (object.state === 'active') {
     const primary = primaryCopy(hash);
@@ -249,27 +250,29 @@ function protectionState(hash, { excludeSourceDevice = '' } = {}) {
   for (const source of sourceCopies(hash)) {
     if (!excludeSourceDevice || source.deviceName.toLowerCase() !== excludeSourceDevice.toLowerCase()) copies.push(source);
   }
-  const evaluated = evaluate(level, copies);
-  return {
-    object: { ...object, size: Number(object.size) || 0 }, level, overrideLevel,
-    ...evaluated, copies
-  };
+  return { object: { ...object, size: Number(object.size) || 0 }, level, overrideLevel, ...evaluate(level, copies), copies };
 }
 
 function protectionSummary(force = false) {
   if (!force && snapshot && Date.now() - snapshotAt < 10_000) return snapshot;
   const objects = db.prepare("SELECT hash,size FROM objects WHERE state='active' ORDER BY hash").all();
   const levelsByHash = new Map(objects.map(row => [row.hash, 'normal']));
-  for (const row of db.prepare('SELECT object_hash AS hash,level FROM object_protection').all()) levelsByHash.set(row.hash, row.level);
-  const overridden = new Set(db.prepare('SELECT object_hash AS hash FROM object_protection').all().map(row => row.hash));
-  for (const row of db.prepare(`
-    SELECT s.object_hash AS hash,pr.level FROM sources s
-    JOIN protection_rules pr ON pr.scope_type='import' AND pr.scope_id=CAST(s.import_id AS TEXT)
-  `).all()) {
-    if (overridden.has(row.hash)) continue;
-    const current = levelsByHash.get(row.hash) || 'normal';
-    if (rank(row.level) > rank(current)) levelsByHash.set(row.hash, row.level);
+  const overridden = new Set();
+  for (const row of db.prepare('SELECT object_hash AS hash,level FROM object_protection').all()) {
+    overridden.add(row.hash);
+    levelsByHash.set(row.hash, row.level);
   }
+
+  const inherited = new Map();
+  for (const row of db.prepare(`
+    SELECT DISTINCT s.object_hash AS hash,s.import_id,COALESCE(pr.level,'normal') AS level
+    FROM sources s
+    LEFT JOIN protection_rules pr ON pr.scope_type='import' AND pr.scope_id=CAST(s.import_id AS TEXT)
+  `).all()) {
+    const current = inherited.get(row.hash);
+    if (!current || rank(row.level) > rank(current)) inherited.set(row.hash, row.level);
+  }
+  for (const [hash, level] of inherited) if (!overridden.has(hash)) levelsByHash.set(hash, level);
 
   const copiesByHash = new Map();
   const addCopy = (hash, copy) => {
@@ -330,12 +333,7 @@ function protectionSummary(force = false) {
 
 function improvesWithTarget(state, target) {
   if (!state || !target || target.reliability === 'low' || state.copies.some(copy => copy.id === target.id)) return false;
-  const candidate = {
-    ...target,
-    verified: true,
-    deviceName: target.deviceName || target.id,
-    site: target.site || target.deviceName || target.id
-  };
+  const candidate = { ...target, verified: true, deviceName: target.deviceName || target.id, site: target.site || target.deviceName || target.id };
   const next = evaluate(state.level, [...state.copies, candidate]);
   return next.missing.copies < state.missing.copies || next.missing.devices < state.missing.devices ||
     next.missing.remote < state.missing.remote || next.missing.sites < state.missing.sites;
@@ -347,8 +345,9 @@ async function trashObjects(hashes, ignore) {
   const mark = db.prepare("UPDATE objects SET state='deleted' WHERE hash=?");
   const save = db.prepare(`
     INSERT INTO protection_trash(object_hash,trashed_at,ignored) VALUES(?,?,?)
-    ON CONFLICT(object_hash) DO UPDATE SET trashed_at=excluded.trashed_at, ignored=excluded.ignored
+    ON CONFLICT(object_hash) DO UPDATE SET trashed_at=excluded.trashed_at,ignored=excluded.ignored
   `);
+  let count = 0;
   try {
     db.exec('BEGIN IMMEDIATE');
     for (const hash of unique) {
@@ -357,6 +356,7 @@ async function trashObjects(hashes, ignore) {
       save.run(hash, stamp, Number(Boolean(ignore)));
       db.prepare('DELETE FROM reviewed_hashes WHERE hash=?').run(hash);
       if (ignore) db.prepare('INSERT OR REPLACE INTO ignored_hashes(hash,ignored_at) VALUES(?,?)').run(hash, stamp);
+      count++;
     }
     db.exec('COMMIT');
   } catch (error) {
@@ -364,7 +364,7 @@ async function trashObjects(hashes, ignore) {
     throw error;
   }
   invalidate();
-  return unique.length;
+  return count;
 }
 
 async function purgeObjects(hashes) {
@@ -374,19 +374,20 @@ async function purgeObjects(hashes) {
     if (!db.prepare('SELECT 1 FROM protection_trash WHERE object_hash=?').get(hash)) continue;
     const drives = db.prepare('SELECT drive_id FROM replicas WHERE object_hash=?').all(hash);
     const devices = db.prepare('SELECT device_name AS deviceName FROM source_replicas WHERE object_hash=?').all(hash);
+    await removeObject(DATA_DIR, hash);
+    await cleanupThumbnail(hash).catch(() => {});
     const stamp = now();
     try {
       db.exec('BEGIN IMMEDIATE');
       for (const drive of drives) db.prepare('INSERT OR REPLACE INTO replica_deletions(object_hash,drive_id,requested_at) VALUES(?,?,?)').run(hash, drive.drive_id, stamp);
       for (const device of devices) db.prepare('INSERT OR REPLACE INTO source_deletions(object_hash,device_name,requested_at) VALUES(?,?,?)').run(hash, device.deviceName, stamp);
       db.prepare('DELETE FROM protection_trash WHERE object_hash=?').run(hash);
+      db.prepare('DELETE FROM object_integrity WHERE hash=?').run(hash);
       db.exec('COMMIT');
     } catch (error) {
       try { db.exec('ROLLBACK'); } catch {}
       throw error;
     }
-    await Promise.allSettled([removeObject(DATA_DIR, hash), cleanupThumbnail(hash)]);
-    db.prepare('DELETE FROM object_integrity WHERE hash=?').run(hash);
     count++;
   }
   invalidate();
@@ -435,7 +436,12 @@ export async function handleProtectionServer(req, res, url) {
       WHERE s.import_id=? AND o.state='active'
         AND NOT EXISTS(SELECT 1 FROM sources sx WHERE sx.object_hash=s.object_hash AND sx.import_id<>?)
     `).all(importId, importId);
-    const total = db.prepare(`SELECT COUNT(*) AS count,COALESCE(SUM(size),0) AS bytes FROM (SELECT DISTINCT o.hash,o.size FROM sources s JOIN objects o ON o.hash=s.object_hash WHERE s.import_id=? AND o.state='active')`).get(importId);
+    const total = db.prepare(`
+      SELECT COUNT(*) AS count,COALESCE(SUM(size),0) AS bytes FROM (
+        SELECT DISTINCT o.hash,o.size FROM sources s JOIN objects o ON o.hash=s.object_hash
+        WHERE s.import_id=? AND o.state='active'
+      )
+    `).get(importId);
     const result = {
       importId,
       files: Number(total.count) || 0,
