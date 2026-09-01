@@ -66,7 +66,7 @@ style.textContent = `
   .protection-note{font-size:10px;color:#827b78;line-height:1.5}.storage-locations{display:grid;gap:6px;margin-top:2px}
   .protection-location{display:grid;grid-template-columns:minmax(120px,1fr) auto auto;align-items:center;gap:8px;padding:8px 0;border-top:1px solid rgba(255,255,255,.055)}
   .protection-location:first-child{border-top:0}.protection-location strong{display:block;font-size:12px}.protection-location small{display:block;color:#77706e;margin-top:2px;line-height:1.45}
-  .protection-location select{width:auto;min-width:82px;padding:5px 7px;font-size:10px}.protection-location input{width:120px;padding:5px 7px;font-size:10px}
+  .protection-location select{width:auto;min-width:115px;padding:5px 7px;font-size:10px}.protection-location input{width:120px;padding:5px 7px;font-size:10px}
   .location-online{color:#a9c9ae}.location-offline{color:#c19a8f}.location-unknown{color:#9d9693}
   .folder-protection-level{width:auto!important;min-width:86px;padding:4px 6px!important;font-size:9px!important;margin-right:2px}
   .protection-running{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:7px 9px;border-radius:7px;background:rgba(255,255,255,.035);font-size:10px;color:#9d9693}.protection-running strong{color:#d5cfcc}
@@ -154,7 +154,8 @@ function renderLocations() {
     const availability = availabilityFor(location);
     const drive = driveFor(location.id);
     const details = [availability.text, verificationText(location), drive?.lastSeen ? `last server contact ${age(drive.lastSeen)}`:''].filter(Boolean).join(' · ');
-    return `<div class="protection-location" data-location-id="${esc(location.id)}"><div><strong>${esc(location.name)}</strong><small>${esc(locationLabel(location))}${location.deviceName ? ` · ${esc(location.deviceName)}`:''}<br><span class="location-${availability.state}">${esc(details)}</span></small></div><select data-location-reliability aria-label="Reliability"><option value="low" ${location.reliability === 'low' ? 'selected':''}>Less reliable</option><option value="normal" ${location.reliability === 'normal' ? 'selected':''}>Normal</option><option value="high" ${location.reliability === 'high' ? 'selected':''}>Reliable</option></select><input data-location-site value="${esc(location.site || '')}" placeholder="Location" title="Physical location / failure domain"></div>`;
+    const relying = location.reliability !== 'low';
+    return `<div class="protection-location" data-location-id="${esc(location.id)}"><div><strong>${esc(location.name)}</strong><small>${esc(locationLabel(location))}${location.deviceName ? ` · ${esc(location.deviceName)}`:''}<br><span class="location-${availability.state}">${esc(details)}</span></small></div><select data-location-reliability aria-label="Protection trust"><option value="normal" ${relying ? 'selected':''}>Use for protection</option><option value="low" ${!relying ? 'selected':''}>Do not rely</option></select><input data-location-site value="${esc(location.site || '')}" placeholder="Location" title="Physical location / failure domain"></div>`;
   }).join('');
 }
 
@@ -227,12 +228,12 @@ function closeDialog() { if (dialog?.open) dialog.close(); }
 
 function openPeerDialog() {
   const box = ensureDialog();
-  box.innerHTML = `<div class="dialog-head"><h3>Add encrypted remote PC</h3><button class="icon" data-close>×</button></div><div class="field-stack"><div class="folder-mode-note">Pair while the actual backup drive is connected. Mochimono binds this target to that drive, not just the PC.</div><input id="peerName" placeholder="Name"><input id="peerUrl" placeholder="http://friend-pc:8644"><input id="peerToken" placeholder="Pairing token"><input id="peerSite" placeholder="Physical location (optional)"><label class="field-label">Reliability</label><select id="peerReliability"><option value="normal">Normal</option><option value="high">Reliable</option><option value="low">Less reliable</option></select></div><div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="savePeer" class="primary">Add</button></div>`;
+  box.innerHTML = `<div class="dialog-head"><h3>Add encrypted remote PC</h3><button class="icon" data-close>×</button></div><div class="field-stack"><div class="folder-mode-note">Pair while the actual backup drive is connected. Mochimono binds this target to that drive, not just the PC.</div><input id="peerName" placeholder="Name"><input id="peerUrl" placeholder="http://friend-pc:8644"><input id="peerToken" placeholder="Pairing token"><input id="peerSite" placeholder="Physical location (optional)"></div><div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="savePeer" class="primary">Add</button></div>`;
   box.querySelectorAll('[data-close]').forEach(button => button.onclick = closeDialog);
   box.querySelector('#savePeer').onclick = async () => {
     const name = box.querySelector('#peerName').value.trim() || 'Remote PC';
     try {
-      await control('/api/client/protection/peers', { method:'POST', body:JSON.stringify({ name, url:box.querySelector('#peerUrl').value.trim(), token:box.querySelector('#peerToken').value.trim(), site:box.querySelector('#peerSite').value.trim() || name, reliability:box.querySelector('#peerReliability').value }) });
+      await control('/api/client/protection/peers', { method:'POST', body:JSON.stringify({ name, url:box.querySelector('#peerUrl').value.trim(), token:box.querySelector('#peerToken').value.trim(), site:box.querySelector('#peerSite').value.trim() || name, reliability:'normal' }) });
       closeDialog(); await refresh(true); toast('Remote backup drive paired');
     } catch (error) { toast(error.message); }
   };
