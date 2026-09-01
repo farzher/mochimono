@@ -7,23 +7,16 @@ if (pane && folders) {
   style.textContent = `
     .storage-folder-samples{position:relative}
     .storage-index-live{
-      position:absolute;
-      z-index:6;
-      left:10px;right:10px;bottom:9px;
-      display:flex;align-items:center;gap:9px;
-      min-height:30px;padding:6px 9px;
-      border:1px solid rgba(255,255,255,.08);
-      border-radius:10px;
-      background:rgba(12,11,13,.86);
-      backdrop-filter:blur(8px);
-      box-shadow:0 5px 20px rgba(0,0,0,.24);
-      pointer-events:none;
+      position:absolute;z-index:6;left:10px;right:10px;bottom:9px;
+      display:flex;align-items:center;gap:9px;min-height:30px;padding:6px 9px;
+      border:1px solid rgba(255,255,255,.08);border-radius:10px;
+      background:rgba(12,11,13,.86);backdrop-filter:blur(8px);
+      box-shadow:0 5px 20px rgba(0,0,0,.24);pointer-events:none;
     }
     .storage-index-live[hidden]{display:none}
     .storage-index-spinner{
-      width:15px;height:15px;flex:0 0 auto;
-      border:2px solid #49434a;border-top-color:#d7b06d;border-radius:50%;
-      animation:storage-index-spin .8s linear infinite;
+      width:15px;height:15px;flex:0 0 auto;border:2px solid #49434a;
+      border-top-color:#d7b06d;border-radius:50%;animation:storage-index-spin .8s linear infinite;
     }
     .storage-index-copy{min-width:0;display:flex;align-items:baseline;gap:7px;font-variant-numeric:tabular-nums}
     .storage-index-copy strong{color:#ded6d2;font-size:10px;font-weight:720;white-space:nowrap}
@@ -33,9 +26,7 @@ if (pane && folders) {
     .folder-item.storage-indexing .storage-folder-facts{visibility:hidden}
     .folder-item.storage-indexing .storage-preview-warm{display:none}
     .storage-preview-warm{
-      --p:0;
-      position:absolute;z-index:7;right:9px;bottom:9px;
-      min-width:78px;height:27px;padding:0 9px;
+      --p:0;position:absolute;z-index:7;right:9px;bottom:9px;min-width:78px;height:27px;padding:0 9px;
       display:flex;align-items:center;justify-content:center;gap:6px;
       border:1px solid rgba(255,255,255,.1);border-radius:9px;
       background:linear-gradient(90deg,rgba(112,178,132,.20) calc(var(--p) * 1%),rgba(17,16,18,.88) 0);
@@ -60,7 +51,12 @@ if (pane && folders) {
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const warmers = new Map();
   let enabledWarmPaths = new Set();
-  try { enabledWarmPaths = new Set(JSON.parse(localStorage.getItem(PREVIEW_WARM_KEY) || '[]').map(String)); } catch {}
+  let uiFrame = 0;
+
+  try {
+    enabledWarmPaths = new Set(JSON.parse(localStorage.getItem(PREVIEW_WARM_KEY) || '[]').map(String));
+  } catch {}
+
   const saveWarmPaths = () => {
     try { localStorage.setItem(PREVIEW_WARM_KEY, JSON.stringify([...enabledWarmPaths])); } catch {}
   };
@@ -73,37 +69,34 @@ if (pane && folders) {
     return `${unit ? value.toFixed(1) : value.toFixed(0)} ${units[unit]}`;
   };
 
+  function setText(node, value) {
+    if (node && node.textContent !== value) node.textContent = value;
+  }
+
   function syncStorageLanguage() {
     const hero = pane.querySelector('.storage-dashboard-hero');
     if (!hero) return;
-    const cloudRoute = hero.querySelector('[data-route="cloud"] b');
-    const backupRoute = hero.querySelector('[data-route="backup"] b');
-    const backupMetric = hero.querySelector('[data-metric="backup"] > span');
-    const filesMetric = hero.querySelector('[data-metric="files"] > span');
-    if (cloudRoute && cloudRoute.textContent !== 'Cloud') cloudRoute.textContent = 'Cloud';
-    if (backupRoute && backupRoute.textContent !== 'Local backup') backupRoute.textContent = 'Local backup';
-    if (backupMetric && backupMetric.textContent !== 'Local backup') backupMetric.textContent = 'Local backup';
-    if (filesMetric && filesMetric.textContent !== 'Cloud files') filesMetric.textContent = 'Cloud files';
-    for (const label of pane.querySelectorAll('.storage-folder-node[data-cloud] b')) {
-      if (label.textContent !== 'Cloud') label.textContent = 'Cloud';
-    }
+    setText(hero.querySelector('[data-route="cloud"] b'), 'Cloud');
+    setText(hero.querySelector('[data-route="backup"] b'), 'Local backup');
+    setText(hero.querySelector('[data-metric="backup"] > span'), 'Local backup');
+    setText(hero.querySelector('[data-metric="files"] > span'), 'Cloud files');
+    for (const label of pane.querySelectorAll('.storage-folder-node[data-cloud] b')) setText(label, 'Cloud');
 
     const status = hero.querySelector('.storage-status-card');
     const main = status?.querySelector('.storage-status-main');
     const verify = status?.querySelector('.storage-status-word')?.textContent.trim() === 'Verify';
     status?.classList.toggle('storage-verify-action', verify);
-    if (main) {
-      if (verify) {
-        main.tabIndex = 0;
-        main.setAttribute('role', 'button');
-        main.setAttribute('aria-label', 'Verify local backup');
-        main.title = 'Verify local backup';
-      } else {
-        main.removeAttribute('tabindex');
-        main.removeAttribute('role');
-        main.removeAttribute('aria-label');
-        main.removeAttribute('title');
-      }
+    if (!main) return;
+    if (verify) {
+      if (main.tabIndex !== 0) main.tabIndex = 0;
+      if (main.getAttribute('role') !== 'button') main.setAttribute('role', 'button');
+      if (main.getAttribute('aria-label') !== 'Verify local backup') main.setAttribute('aria-label', 'Verify local backup');
+      if (main.title !== 'Verify local backup') main.title = 'Verify local backup';
+    } else {
+      if (main.hasAttribute('tabindex')) main.removeAttribute('tabindex');
+      if (main.hasAttribute('role')) main.removeAttribute('role');
+      if (main.hasAttribute('aria-label')) main.removeAttribute('aria-label');
+      if (main.hasAttribute('title')) main.removeAttribute('title');
     }
   }
 
@@ -139,6 +132,7 @@ if (pane && folders) {
     event.preventDefault();
     runHeroVerify();
   });
+
   pane.addEventListener('keydown', event => {
     if (!['Enter', ' '].includes(event.key) || !event.target.closest('.storage-status-card.storage-verify-action .storage-status-main')) return;
     event.preventDefault();
@@ -158,8 +152,13 @@ if (pane && folders) {
     button.type = 'button';
     button.className = 'storage-preview-warm';
     button.innerHTML = '<span>▦</span><b>Previews</b>';
+    button.dataset.renderKey = '';
     samples.append(button);
     return button;
+  }
+
+  function isEnabled(path) {
+    return [...enabledWarmPaths].some(saved => samePath(saved, path));
   }
 
   function renderWarmer(path) {
@@ -167,32 +166,89 @@ if (pane && folders) {
     const button = previewControl(row);
     if (!button) return;
     const state = warmers.get(clean(path)) || {};
-    const enabled = enabledWarmPaths.has(path) || enabledWarmPaths.has(clean(path));
+    const enabled = isEnabled(path);
     const total = Number(state.total) || 0;
     const ready = Number(state.ready) || 0;
     const failed = Number(state.failed) || 0;
     const percent = total ? Math.max(0, Math.min(100, ready / total * 100)) : 0;
-    button.style.setProperty('--p', percent.toFixed(2));
-    button.classList.toggle('running', Boolean(state.running && enabled));
-    button.classList.toggle('complete', Boolean(state.complete && !failed));
-    if (state.discovering) button.innerHTML = '<span>▦</span><b>…</b>';
-    else if (state.running && enabled) button.innerHTML = `<span>Ⅱ</span><b>${Math.round(percent)}%</b>`;
-    else if (state.complete && !failed) button.innerHTML = '<span>✓</span><b>Previews</b>';
-    else button.innerHTML = '<span>▦</span><b>Previews</b>';
+    const running = Boolean(state.running && enabled);
+    const complete = Boolean(state.complete && !failed);
+    const queued = Boolean(enabled && !state.running && !state.complete);
+
+    const percentText = percent.toFixed(2);
+    if (button.style.getPropertyValue('--p') !== percentText) button.style.setProperty('--p', percentText);
+    button.classList.toggle('running', running);
+    button.classList.toggle('complete', complete);
+
+    let html = '<span>▦</span><b>Previews</b>';
+    if (state.discovering) html = '<span>▦</span><b>…</b>';
+    else if (running) html = `<span>Ⅱ</span><b>${Math.round(percent)}%</b>`;
+    else if (queued) html = '<span>…</span><b>Previews</b>';
+    else if (complete) html = '<span>✓</span><b>Previews</b>';
+
+    const renderKey = `${html}|${percentText}|${running ? 1 : 0}|${complete ? 1 : 0}`;
+    if (button.dataset.renderKey !== renderKey) {
+      button.dataset.renderKey = renderKey;
+      if (button.innerHTML !== html) button.innerHTML = html;
+    }
+
     const detail = state.discovering ? 'Finding indexed media…'
       : total ? `${ready.toLocaleString()} / ${total.toLocaleString()} previews${failed ? ` · ${failed.toLocaleString()} unavailable` : ''}`
       : 'Generate local thumbnails in the background';
-    button.title = state.running && enabled ? `Pause · ${detail}` : `${state.complete ? 'Refresh' : 'Start'} · ${detail}`;
-    button.setAttribute('aria-label', button.title);
+    const title = running ? `Pause · ${detail}` : queued ? `Queued · ${detail}` : `${complete ? 'Refresh' : 'Start'} · ${detail}`;
+    if (button.title !== title) button.title = title;
+    if (button.getAttribute('aria-label') !== title) button.setAttribute('aria-label', title);
   }
 
-  function syncPreviewControls() {
+  function claimVisibleSize(row) {
+    const facts = row.querySelector('.storage-folder-facts');
+    if (!facts) return null;
+    let visible = facts.querySelector('[data-dashboard-folder-size]');
+    if (visible) return visible;
+    visible = facts.querySelector('[data-folder-size]');
+    if (!visible) return null;
+    visible.removeAttribute('data-folder-size');
+    visible.setAttribute('data-dashboard-folder-size', '');
+    return visible;
+  }
+
+  function mirrorCanonicalSize(row) {
+    const visible = claimVisibleSize(row);
+    const canonical = row.querySelector('.storage-meta [data-folder-size]');
+    const text = canonical?.textContent?.trim();
+    if (visible && text && text !== '—') setText(visible, text);
+  }
+
+  function liveFor(row) {
+    let live = row.querySelector('.storage-index-live');
+    if (live) return live;
+    const samples = row.querySelector('.storage-folder-samples');
+    if (!samples) return null;
+    live = document.createElement('div');
+    live.className = 'storage-index-live';
+    live.hidden = true;
+    live.innerHTML = '<span class="storage-index-spinner"></span><span class="storage-index-copy"><strong>Indexing</strong><span data-index-count></span></span><span class="storage-index-track"><i></i></span>';
+    samples.append(live);
+    return live;
+  }
+
+  function syncFolderUi() {
     for (const row of folders.querySelectorAll('[data-folder-path]')) {
-      const path = row.dataset.folderPath || '';
+      mirrorCanonicalSize(row);
+      liveFor(row);
       previewControl(row);
-      renderWarmer(path);
-      if ([...enabledWarmPaths].some(saved => samePath(saved, path)) && !warmers.get(clean(path))?.running) startWarmer(path);
+      renderWarmer(row.dataset.folderPath || '');
     }
+    syncStorageLanguage();
+  }
+
+  function scheduleUiSync() {
+    if (uiFrame) return;
+    uiFrame = requestAnimationFrame(() => {
+      uiFrame = 0;
+      syncFolderUi();
+      maybeStartQueuedWarmer();
+    });
   }
 
   async function indexedMedia(path, state) {
@@ -275,7 +331,12 @@ if (pane && folders) {
       state.running = false;
       state.discovering = false;
       renderWarmer(path);
+      setTimeout(maybeStartQueuedWarmer, 250);
     }
+  }
+
+  function anyWarmerRunning() {
+    return [...warmers.values()].some(state => state.running && state.enabled);
   }
 
   function startWarmer(path) {
@@ -283,17 +344,37 @@ if (pane && folders) {
     if (!key) return;
     let state = warmers.get(key);
     if (state?.running) return;
-    state = { ...(state || {}), path, enabled:true, running:true, complete:false, error:'' };
-    warmers.set(key, state);
+
     enabledWarmPaths.add(path);
     saveWarmPaths();
+
+    if (anyWarmerRunning()) {
+      state = { ...(state || {}), path, enabled:true, running:false, complete:false, error:'' };
+      warmers.set(key, state);
+      renderWarmer(path);
+      return;
+    }
+
+    state = { ...(state || {}), path, enabled:true, running:true, complete:false, error:'' };
+    warmers.set(key, state);
     renderWarmer(path);
     runWarmer(path, state);
   }
 
+  function maybeStartQueuedWarmer() {
+    if (pane.hidden || anyWarmerRunning()) return;
+    for (const row of folders.querySelectorAll('[data-folder-path]')) {
+      const path = row.dataset.folderPath || '';
+      if (!isEnabled(path)) continue;
+      const state = warmers.get(clean(path));
+      if (state?.running) return;
+      startWarmer(path);
+      return;
+    }
+  }
+
   function stopWarmer(path) {
-    const key = clean(path);
-    const state = warmers.get(key);
+    const state = warmers.get(clean(path));
     if (state) state.enabled = false;
     enabledWarmPaths = new Set([...enabledWarmPaths].filter(saved => !samePath(saved, path)));
     saveWarmPaths();
@@ -308,76 +389,30 @@ if (pane && folders) {
     const row = button.closest('[data-folder-path]');
     const path = row?.dataset.folderPath || '';
     const state = warmers.get(clean(path));
-    if (state?.running && state.enabled) stopWarmer(path);
+    if ((state?.running && state.enabled) || isEnabled(path)) stopWarmer(path);
     else startWarmer(path);
   });
 
-  // The base Storage renderer also owns a hidden [data-folder-size] node and
-  // refreshes it every five seconds. The visual dashboard originally reused
-  // that same hook, so two formatters alternated values such as 132 MB and
-  // 131.9 MB. Give the visible dashboard value its own hook and mirror the
-  // canonical base value instead. MutationObservers run before paint, so the
-  // hidden refresh cannot produce a visible one-frame flip.
-  function claimVisibleSize(row) {
-    const facts = row.querySelector('.storage-folder-facts');
-    if (!facts) return null;
-    let visible = facts.querySelector('[data-dashboard-folder-size]');
-    if (visible) return visible;
-    visible = facts.querySelector('[data-folder-size]');
-    if (!visible) return null;
-    visible.removeAttribute('data-folder-size');
-    visible.setAttribute('data-dashboard-folder-size', '');
-    return visible;
-  }
-
-  function mirrorCanonicalSize(row) {
-    const visible = claimVisibleSize(row);
-    const canonical = row.querySelector('.storage-meta [data-folder-size]');
-    const text = canonical?.textContent?.trim();
-    if (visible && text && text !== '—' && visible.textContent !== text) visible.textContent = text;
-  }
-
-  function syncVisibleSizes() {
-    for (const row of folders.querySelectorAll('[data-folder-path]')) mirrorCanonicalSize(row);
-  }
-
-  function liveFor(row) {
-    let live = row.querySelector('.storage-index-live');
-    if (live) return live;
-    const samples = row.querySelector('.storage-folder-samples');
-    if (!samples) return null;
-    live = document.createElement('div');
-    live.className = 'storage-index-live';
-    live.hidden = true;
-    live.innerHTML = '<span class="storage-index-spinner"></span><span class="storage-index-copy"><strong>Indexing</strong><span data-index-count></span></span><span class="storage-index-track"><i></i></span>';
-    samples.append(live);
-    return live;
-  }
-
-  function show(job) {
+  function showIndexJob(job) {
     const progress = job?.progress || {};
     const path = progress.path || '';
     const active = job?.status === 'running' && /^Indexing$/i.test(String(progress.phase || '')) && path;
-    let matched = false;
     for (const row of folders.querySelectorAll('[data-folder-path]')) {
       mirrorCanonicalSize(row);
-      const isCurrent = Boolean(active && samePath(row.dataset.folderPath, path));
+      const current = Boolean(active && samePath(row.dataset.folderPath, path));
       const live = liveFor(row);
+      row.classList.toggle('storage-indexing', current);
       if (!live) continue;
-      row.classList.toggle('storage-indexing', isCurrent);
-      live.hidden = !isCurrent;
-      if (!isCurrent) continue;
-      matched = true;
+      live.hidden = !current;
+      if (!current) continue;
       const count = Number(progress.scanned) || 0;
       const hashed = Number(progress.hashed) || 0;
       const reused = Number(progress.reused) || 0;
       const visible = Math.max(count, hashed + reused);
-      const counter = live.querySelector('[data-index-count]');
-      const text = visible ? `${visible.toLocaleString()} files` : 'starting…';
-      if (counter.textContent !== text) counter.textContent = text;
-      live.title = progress.current || path;
+      setText(live.querySelector('[data-index-count]'), visible ? `${visible.toLocaleString()} files` : 'starting…');
+      if (live.title !== (progress.current || path)) live.title = progress.current || path;
     }
-    return matched;
+    return Boolean(active);
   }
 
   function setStableStats(item) {
@@ -385,12 +420,8 @@ if (pane && folders) {
     if (!row) return;
     const size = claimVisibleSize(row);
     const count = row.querySelector('.storage-folder-facts [data-folder-count]');
-    const formatted = formatBytes(item.bytes);
-    if (size && size.textContent !== formatted) size.textContent = formatted;
-    if (count) {
-      const text = `${Number(item.files || 0).toLocaleString()} files`;
-      if (count.textContent !== text) count.textContent = text;
-    }
+    setText(size, formatBytes(item.bytes));
+    setText(count, `${Number(item.files || 0).toLocaleString()} files`);
   }
 
   let timer = 0;
@@ -419,40 +450,36 @@ if (pane && folders) {
       const response = await fetch('/api/state', { cache:'no-store' });
       const state = await response.json();
       const job = state.job;
-      active = Boolean(job?.status === 'running' && /^Indexing$/i.test(String(job?.progress?.phase || '')) && job?.progress?.path);
-      const path = active ? String(job.progress.path) : '';
-      show(job);
-      syncStorageLanguage();
-      syncPreviewControls();
+      active = showIndexJob(job);
+      syncFolderUi();
+      maybeStartQueuedWarmer();
       if (runningPath && !active) await settle(runningPath);
-      runningPath = path;
+      runningPath = active ? String(job.progress.path) : '';
     } catch {}
     finally {
       busy = false;
-      if (!pane.hidden) timer = setTimeout(poll, active ? 550 : delay < 1200 ? 700 : 2200, 2200);
+      if (!pane.hidden) timer = setTimeout(poll, active ? 550 : delay < 1200 ? 700 : 2200);
     }
   }
 
-  const wake = () => { clearTimeout(timer); timer = setTimeout(() => poll(250), 40); };
-  let sizeSyncQueued = false;
-  const syncBeforePaint = () => {
-    if (sizeSyncQueued) return;
-    sizeSyncQueued = true;
-    queueMicrotask(() => {
-      sizeSyncQueued = false;
-      syncVisibleSizes();
-      syncStorageLanguage();
-      syncPreviewControls();
-    });
+  const wake = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => poll(250), 40);
   };
 
-  new MutationObserver(wake).observe(pane, { attributes:true, attributeFilter:['hidden'] });
-  new MutationObserver(wake).observe(folders, { childList:true, subtree:false });
-  new MutationObserver(syncBeforePaint).observe(folders, { childList:true, subtree:true, characterData:true });
-  const hero = pane.querySelector('.storage-dashboard-hero');
-  if (hero) new MutationObserver(syncStorageLanguage).observe(hero, { childList:true, subtree:true, characterData:true });
-  syncVisibleSizes();
-  syncStorageLanguage();
-  syncPreviewControls();
+  new MutationObserver(() => {
+    if (pane.hidden) clearTimeout(timer);
+    else {
+      scheduleUiSync();
+      wake();
+    }
+  }).observe(pane, { attributes:true, attributeFilter:['hidden'] });
+
+  // Structure only. Never observe characterData/attributes here: this script
+  // updates its own button labels and status text, and observing those writes
+  // was the recursive loop that could freeze the browser.
+  new MutationObserver(scheduleUiSync).observe(folders, { childList:true, subtree:true });
+
+  syncFolderUi();
   if (!pane.hidden) wake();
 }
