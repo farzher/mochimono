@@ -48,6 +48,24 @@ if (commandbar && search) {
     });
   }
 
+  const selectionBar = document.querySelector('#selectionBar');
+  const selectAll = document.querySelector('#selectAll');
+  const selectionGroup = document.querySelector('#selectionCollection');
+  const selectionDelete = document.querySelector('#selectionDelete');
+  const selectionIgnore = document.querySelector('#selectionIgnore');
+  const selectionClear = document.querySelector('#selectionClear');
+  let selectionMore = null;
+
+  if (selectionBar && selectionIgnore) {
+    selectionMore = document.createElement('details');
+    selectionMore.className = 'selection-more';
+    selectionMore.innerHTML = '<summary title="More" aria-label="More selection actions">•••</summary><div class="selection-more-popover"></div>';
+    selectionMore.querySelector('.selection-more-popover').append(selectionIgnore);
+    selectionClear?.before(selectionMore);
+    selectionIgnore.textContent = 'Delete + Ignore';
+    selectionIgnore.title = 'Delete selected files and ignore them in future scans';
+  }
+
   const style = document.createElement('style');
   style.textContent = `
     .commandbar{gap:5px;padding:6px;border-radius:14px}
@@ -71,6 +89,22 @@ if (commandbar && search) {
     .commandbar>.file-count:not([hidden])~.library-size-menu{margin-left:0}
     .commandbar>.views{flex:0 0 auto}
     .collection-strip button:not(.active):not(.save-view){display:none}
+
+    .selection-bar{left:auto!important;right:0!important;width:max-content!important;max-width:min(100%,620px)!important;gap:2px!important;min-height:38px!important;padding:4px 5px!important;border-radius:10px!important}
+    .selection-bar strong{padding:0 7px;font-size:10px!important}
+    .selection-bar>button,.selection-more>summary{width:30px;height:30px;display:grid!important;place-items:center;padding:0!important;border-radius:7px!important;color:#aaa19e!important;font-size:0!important;list-style:none;cursor:pointer}
+    .selection-bar>button:hover,.selection-more>summary:hover,.selection-more[open]>summary{background:#2a262b!important;color:#fff!important}
+    .selection-more>summary::-webkit-details-marker{display:none}
+    #selectAll:before{content:'✓';font-size:13px;font-weight:800}
+    #selectionCollection:before{content:'+';font-size:19px;font-weight:400;line-height:1}
+    #selectionDelete:before{content:'⌫';font-size:17px;font-weight:500;line-height:1}
+    #selectionClear:before{content:'×';font-size:20px;font-weight:400;line-height:1}
+    .selection-more{position:relative;flex:0 0 auto}
+    .selection-more>summary{font-size:14px!important;font-weight:800;letter-spacing:1px}
+    .selection-more-popover{position:absolute;z-index:40;right:0;top:34px;width:145px;padding:5px;border:1px solid #302b30;border-radius:10px;background:#171518;box-shadow:0 14px 40px rgba(0,0,0,.48)}
+    .selection-more-popover #selectionIgnore{display:block!important;width:100%!important;height:32px!important;padding:0 9px!important;border-radius:7px!important;background:transparent!important;color:#d69a94!important;font-size:10px!important;text-align:left!important}
+    .selection-more-popover #selectionIgnore:hover{background:#2a262b!important;color:#f0aaa3!important}
+
     @media(max-width:840px){
       .commandbar{flex-wrap:nowrap;top:5px}
       .commandbar .search{flex:1 1 auto;min-width:0}
@@ -78,15 +112,26 @@ if (commandbar && search) {
       .library-filter-popover{position:fixed;left:10px;right:10px;top:58px;width:auto}
       .library-filter-popover label{grid-template-columns:54px minmax(0,1fr)}
       .views button{width:29px}
+      .selection-bar{max-width:calc(100vw - 20px)!important}
     }
     @media(max-width:520px){
       .commandbar{gap:3px;padding:5px}
       .library-filter-menu>summary,.library-size-menu>summary{width:32px;height:34px}
       .views{padding:2px}.views button{width:28px;height:30px}
       .library-size-popover{right:-66px}
+      .selection-bar strong{padding:0 4px}
+      .selection-bar>button,.selection-more>summary{width:28px}
     }
   `;
   document.head.append(style);
+
+  selectAll?.setAttribute('title', 'Select all');
+  selectAll?.setAttribute('aria-label', 'Select all');
+  selectionGroup?.setAttribute('title', 'Add to group');
+  selectionGroup?.setAttribute('aria-label', 'Add to group');
+  selectionDelete?.setAttribute('title', 'Delete');
+  selectionDelete?.setAttribute('aria-label', 'Delete selected files');
+  selectionClear?.setAttribute('title', 'Clear selection');
 
   function activeCount() {
     let count = 0;
@@ -117,7 +162,7 @@ if (commandbar && search) {
   if (mediaSizes) new MutationObserver(sync).observe(mediaSizes, { attributes: true, attributeFilter: ['hidden'] });
   sync();
 
-  const menus = [filterMenu, sizeMenu].filter(Boolean);
+  const menus = [filterMenu, sizeMenu, selectionMore].filter(Boolean);
   document.addEventListener('pointerdown', event => {
     for (const menu of menus) if (menu.open && !menu.contains(event.target)) menu.open = false;
   });
