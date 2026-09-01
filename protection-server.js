@@ -65,6 +65,18 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS source_deletions_device ON source_deletions(device_name, requested_at);
 `);
 
+function primaryLocation() {
+  let row = db.prepare("SELECT * FROM storage_locations WHERE id = 'primary'").get();
+  if (!row) {
+    db.prepare(`
+      INSERT INTO storage_locations(id, name, kind, device_name, site, reliability, remote, encrypted, last_seen)
+      VALUES('primary', 'Mochimono', 'primary', '', '', 'normal', 0, 0, ?)
+    `).run(now());
+    row = db.prepare("SELECT * FROM storage_locations WHERE id = 'primary'").get();
+  }
+  return locationJson(row);
+}
+
 function locationJson(row) {
   if (!row) return null;
   return {
@@ -78,18 +90,6 @@ function locationJson(row) {
     encrypted: Boolean(row.encrypted),
     lastSeen: row.last_seen
   };
-}
-
-function primaryLocation() {
-  let row = db.prepare("SELECT * FROM storage_locations WHERE id = 'primary'").get();
-  if (!row) {
-    db.prepare(`
-      INSERT INTO storage_locations(id, name, kind, device_name, site, reliability, remote, encrypted, last_seen)
-      VALUES('primary', 'Mochimono', 'primary', '', '', 'normal', 0, 0, ?)
-    `).run(now());
-    row = db.prepare("SELECT * FROM storage_locations WHERE id = 'primary'").get();
-  }
-  return locationJson(row);
 }
 
 function normalizeLocation(id, input = {}) {
@@ -188,7 +188,12 @@ function primaryCopy(hash) {
   const state = db.prepare('SELECT status, verified_at AS verifiedAt FROM object_integrity WHERE hash = ?').get(hash);
   if (state && state.status !== 'healthy') return null;
   const location = primaryLocation();
-  return { ...location, kind: 'primary', verified: !state || state.status === 'healthy', verifiedAt: state?.verifiedAt || null };
+  return {
+    ...location,
+    kind: 'primary',
+    verified: !state || state.status === 'healthy',
+    verifiedAt: state?.verifiedAt || null
+  };
 }
 
 function protectionState(hash, { excludeSourceDevice = '' } = {}) {
@@ -345,6 +350,7 @@ async function purgeObjects(hashes) {
     }
     await Promise.allSettled([removeObject(DATA_DIR, hash), cleanupThumbnail(hash)]);
     db.prepare('DELETE FROM object_integrity WHERE hash = ?').run(hash);
+    db.prepare('DELETE FROM protection_trash WHERE object_hash = ?').run(hash);
   }
   invalidateSummary();
   return unique.length;
