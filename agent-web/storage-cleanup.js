@@ -1,3 +1,5 @@
+import './storage-fast-previews.js';
+
 const pane = document.querySelector('#storagePane');
 
 if (pane) {
