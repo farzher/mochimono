@@ -37,9 +37,16 @@ if (CLIENT && rail && source) {
     }
   }
 
+  function baseRailHtml() {
+    const clone = rail.cloneNode(true);
+    clone.querySelector(':scope > .rail-semantic')?.remove();
+    return clone.innerHTML;
+  }
+
   function neutralRailHtml() {
     if (rail.hidden || !rail.querySelector('.rail-tick')) return '';
     const clone = rail.cloneNode(true);
+    clone.querySelector(':scope > .rail-semantic')?.remove();
     for (const tick of clone.querySelectorAll('.rail-tick.active')) tick.classList.remove('active');
     const thumb = clone.querySelector('#railThumb');
     if (thumb) {
@@ -64,7 +71,10 @@ if (CLIENT && rail && source) {
   function restoreCachedRail() {
     restoreQueued = false;
     if (!holdingCache || settled() || !defaultView() || !cachedHtml) return;
-    if (rail.innerHTML !== cachedHtml) rail.innerHTML = cachedHtml;
+    // rail-polish.js adds a derived visual layer on top of the cached coordinate
+    // ticks. Ignore that layer when deciding whether startup code replaced the
+    // underlying cached rail, otherwise the two observers would fight each other.
+    if (baseRailHtml() !== cachedHtml) rail.innerHTML = cachedHtml;
     if (rail.hidden) rail.hidden = false;
     document.documentElement.classList.add('library-scroll');
   }
