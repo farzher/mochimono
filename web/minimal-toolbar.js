@@ -71,16 +71,21 @@ if (commandbar && search) {
   const selectionDelete = document.querySelector('#selectionDelete');
   const selectionIgnore = document.querySelector('#selectionIgnore');
   const selectionClear = document.querySelector('#selectionClear');
-  let selectionMore = null;
 
-  if (selectionBar && selectionIgnore) {
-    selectionMore = document.createElement('details');
-    selectionMore.className = 'selection-more';
-    selectionMore.innerHTML = '<summary title="More" aria-label="More selection actions">•••</summary><div class="selection-more-popover"></div>';
-    selectionMore.querySelector('.selection-more-popover').append(selectionIgnore);
-    selectionClear?.before(selectionMore);
-    selectionIgnore.textContent = 'Delete + Ignore';
-    selectionIgnore.title = 'Delete selected files and ignore them in future scans';
+  const icon = (button, title, svg) => {
+    if (!button) return;
+    button.innerHTML = svg;
+    button.title = title;
+    button.setAttribute('aria-label', title);
+  };
+
+  icon(selectAll, 'Select all', '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.2l3.1 3.1L16 4.8"/></svg>');
+  icon(selectionGroup, 'Add to group', '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>');
+  icon(selectionDelete, 'Delete', '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 6.5h9l-.6 10H6.1zM4 4.5h12M8 4.5V3h4v1.5"/></svg>');
+  icon(selectionIgnore, 'Delete + Ignore', '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 6.5h8l-.55 9H6.55zM4.5 4.5h11M8 4.5V3h4v1.5M3.5 16.5l13-13"/></svg>');
+  if (selectionClear) {
+    selectionClear.textContent = '×';
+    selectionClear.title = 'Clear selection';
   }
 
   const style = document.createElement('style');
@@ -93,6 +98,7 @@ if (commandbar && search) {
     .library-filter-menu>summary:hover,.library-filter-menu[open]>summary,.library-size-menu>summary:hover,.library-size-menu[open]>summary,.library-view-menu>summary:hover,.library-view-menu[open]>summary{background:#2a262b;color:#fff}
     .library-filter-menu>summary svg,.library-size-menu>summary svg,.library-view-menu>summary svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
     .library-filter-count{position:absolute;right:2px;top:2px;min-width:14px;height:14px;display:grid;place-items:center;padding:0 3px;border-radius:999px;background:#efa09a;color:#251719;font-size:8px;font-weight:850;line-height:1}
+    .library-filter-count[hidden]{display:none!important}
     .library-filter-popover,.library-size-popover,.library-view-popover{position:absolute;z-index:30;top:42px;right:0;padding:8px;border:1px solid #302b30;border-radius:12px;background:#171518;box-shadow:0 18px 50px rgba(0,0,0,.5)}
     .library-filter-popover{width:250px;display:grid;gap:4px}
     .library-filter-popover label{display:grid;grid-template-columns:58px minmax(0,1fr);align-items:center;gap:8px;padding:3px 4px 3px 8px;color:#827a78;font-size:10px;font-weight:650}
@@ -110,18 +116,17 @@ if (commandbar && search) {
 
     .selection-bar{left:auto!important;right:0!important;width:max-content!important;max-width:min(100%,620px)!important;gap:2px!important;min-height:38px!important;padding:4px 5px!important;border-radius:10px!important}
     .selection-bar strong{padding:0 7px;font-size:10px!important}
-    .selection-bar>button,.selection-more>summary{width:30px;height:30px;display:grid!important;place-items:center;padding:0!important;border-radius:7px!important;color:#aaa19e!important;font-size:0!important;list-style:none;cursor:pointer}
-    .selection-bar>button:hover,.selection-more>summary:hover,.selection-more[open]>summary{background:#2a262b!important;color:#fff!important}
-    .selection-more>summary::-webkit-details-marker{display:none}
-    #selectAll:before{content:'✓';font-size:13px;font-weight:800}
-    #selectionCollection:before{content:'+';font-size:19px;font-weight:400;line-height:1}
-    #selectionDelete:before{content:'⌫';font-size:17px;font-weight:500;line-height:1}
-    #selectionClear:before{content:'×';font-size:20px;font-weight:400;line-height:1}
-    .selection-more{position:relative;flex:0 0 auto}
-    .selection-more>summary{font-size:14px!important;font-weight:800;letter-spacing:1px}
-    .selection-more-popover{position:absolute;z-index:40;right:0;top:34px;width:145px;padding:5px;border:1px solid #302b30;border-radius:10px;background:#171518;box-shadow:0 14px 40px rgba(0,0,0,.48)}
-    .selection-more-popover #selectionIgnore{display:block!important;width:100%!important;height:32px!important;padding:0 9px!important;border-radius:7px!important;background:transparent!important;color:#d69a94!important;font-size:10px!important;text-align:left!important}
-    .selection-more-popover #selectionIgnore:hover{background:#2a262b!important;color:#f0aaa3!important}
+    .selection-bar .selection-spacer{display:none!important}
+    .selection-bar>button{width:30px;height:30px;display:grid!important;place-items:center;padding:0!important;border-radius:7px!important;background:transparent!important;color:#aaa19e!important;font-size:0!important}
+    .selection-bar>button:hover{background:#2a262b!important;color:#fff!important}
+    .selection-bar>button svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
+    #selectionIgnore{color:#c99a95!important}
+    #selectionClear{font-size:20px!important;font-weight:400!important;line-height:1!important}
+
+    /* Day labels overlay their first photo instead of changing row geometry. */
+    .files.grid .date-grid>.day-row-start{margin-top:0!important}
+    .day-group-control{transform:translateY(24px);padding:2px 5px!important;border-radius:5px!important;background:rgba(12,11,13,.58)!important;color:#e3d9d5!important;text-shadow:0 1px 3px rgba(0,0,0,.7);backdrop-filter:blur(4px)}
+    .day-group-control:hover,.day-group-control:focus-visible{background:rgba(12,11,13,.78)!important}
 
     @media(max-width:840px){
       .commandbar{flex-wrap:nowrap;top:5px}
@@ -137,18 +142,10 @@ if (commandbar && search) {
       .library-size-popover{right:-38px}
       .library-view-popover{right:0}
       .selection-bar strong{padding:0 4px}
-      .selection-bar>button,.selection-more>summary{width:28px}
+      .selection-bar>button{width:28px}
     }
   `;
   document.head.append(style);
-
-  selectAll?.setAttribute('title', 'Select all');
-  selectAll?.setAttribute('aria-label', 'Select all');
-  selectionGroup?.setAttribute('title', 'Add to group');
-  selectionGroup?.setAttribute('aria-label', 'Add to group');
-  selectionDelete?.setAttribute('title', 'Delete');
-  selectionDelete?.setAttribute('aria-label', 'Delete selected files');
-  selectionClear?.setAttribute('title', 'Clear selection');
 
   function activeCount() {
     let count = 0;
@@ -163,8 +160,8 @@ if (commandbar && search) {
   function sync() {
     const count = activeCount();
     const badge = filterMenu.querySelector('.library-filter-count');
-    badge.hidden = !count;
-    badge.textContent = count || '';
+    badge.hidden = count === 0;
+    badge.textContent = count ? String(count) : '';
     filterMenu.querySelector('summary').title = count ? `Filters · ${count} active` : 'Filters';
     const searching = Boolean(search.value.trim());
     if (fileCount) fileCount.hidden = !searching && !count;
@@ -179,10 +176,16 @@ if (commandbar && search) {
   if (mediaSizes) new MutationObserver(sync).observe(mediaSizes, { attributes: true, attributeFilter: ['hidden'] });
   sync();
 
-  const menus = [filterMenu, sizeMenu, viewMenu, selectionMore].filter(Boolean);
+  const menus = [filterMenu, sizeMenu, viewMenu].filter(Boolean);
+  for (const menu of menus) {
+    menu.addEventListener('toggle', () => {
+      if (!menu.open) return;
+      for (const other of menus) if (other !== menu) other.open = false;
+    });
+  }
   document.addEventListener('pointerdown', event => {
     for (const menu of menus) if (menu.open && !menu.contains(event.target)) menu.open = false;
-  });
+  }, true);
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
     const open = menus.find(menu => menu.open);
