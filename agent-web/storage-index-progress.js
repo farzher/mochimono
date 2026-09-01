@@ -1,5 +1,6 @@
 const pane = document.querySelector('#storagePane');
 const folders = document.querySelector('#folders');
+const backups = document.querySelector('#backups');
 
 if (pane && folders) {
   const style = document.createElement('style');
@@ -30,6 +31,8 @@ if (pane && folders) {
     .storage-index-track{height:3px;flex:1;min-width:36px;overflow:hidden;border-radius:99px;background:#302c31}
     .storage-index-track i{display:block;width:38%;height:100%;border-radius:inherit;background:#d0a75f;animation:storage-index-slide 1.25s ease-in-out infinite}
     .folder-item.storage-indexing .storage-folder-facts{visibility:hidden}
+    .storage-status-card.storage-verify-action .storage-status-main{cursor:pointer}
+    .storage-status-card.storage-verify-action .storage-status-main:focus-visible{outline:2px solid #d9b776;outline-offset:5px;border-radius:14px}
     @keyframes storage-index-spin{to{transform:rotate(360deg)}}
     @keyframes storage-index-slide{0%{transform:translateX(-105%)}50%{transform:translateX(165%)}100%{transform:translateX(365%)}}
     @media(prefers-reduced-motion:reduce){.storage-index-spinner,.storage-index-track i{animation:none}.storage-index-track i{width:100%;opacity:.55}}
@@ -45,6 +48,57 @@ if (pane && folders) {
     while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
     return `${unit ? value.toFixed(1) : value.toFixed(0)} ${units[unit]}`;
   };
+
+  function syncStorageLanguage() {
+    const hero = pane.querySelector('.storage-dashboard-hero');
+    if (!hero) return;
+    const cloudRoute = hero.querySelector('[data-route="cloud"] b');
+    const backupRoute = hero.querySelector('[data-route="backup"] b');
+    const backupMetric = hero.querySelector('[data-metric="backup"] > span');
+    const filesMetric = hero.querySelector('[data-metric="files"] > span');
+    if (cloudRoute && cloudRoute.textContent !== 'Cloud') cloudRoute.textContent = 'Cloud';
+    if (backupRoute && backupRoute.textContent !== 'Local backup') backupRoute.textContent = 'Local backup';
+    if (backupMetric && backupMetric.textContent !== 'Local backup') backupMetric.textContent = 'Local backup';
+    if (filesMetric && filesMetric.textContent !== 'Cloud files') filesMetric.textContent = 'Cloud files';
+
+    const status = hero.querySelector('.storage-status-card');
+    const main = status?.querySelector('.storage-status-main');
+    const verify = status?.querySelector('.storage-status-word')?.textContent.trim() === 'Verify';
+    status?.classList.toggle('storage-verify-action', verify);
+    if (main) {
+      if (verify) {
+        main.tabIndex = 0;
+        main.setAttribute('role', 'button');
+        main.setAttribute('aria-label', 'Verify local backup');
+        main.title = 'Verify local backup';
+      } else {
+        main.removeAttribute('tabindex');
+        main.removeAttribute('role');
+        main.removeAttribute('aria-label');
+        main.removeAttribute('title');
+      }
+    }
+  }
+
+  function runHeroVerify() {
+    const status = pane.querySelector('.storage-status-card.storage-verify-action');
+    if (!status) return false;
+    const button = backups?.querySelector('[data-verify]:not(:disabled)');
+    if (!button) return false;
+    button.click();
+    return true;
+  }
+
+  pane.addEventListener('click', event => {
+    if (!event.target.closest('.storage-status-card.storage-verify-action .storage-status-main')) return;
+    event.preventDefault();
+    runHeroVerify();
+  });
+  pane.addEventListener('keydown', event => {
+    if (!['Enter', ' '].includes(event.key) || !event.target.closest('.storage-status-card.storage-verify-action .storage-status-main')) return;
+    event.preventDefault();
+    runHeroVerify();
+  });
 
   // The base Storage renderer also owns a hidden [data-folder-size] node and
   // refreshes it every five seconds. The visual dashboard originally reused
@@ -156,6 +210,7 @@ if (pane && folders) {
       active = Boolean(job?.status === 'running' && /^Indexing$/i.test(String(job?.progress?.phase || '')) && job?.progress?.path);
       const path = active ? String(job.progress.path) : '';
       show(job);
+      syncStorageLanguage();
       if (runningPath && !active) await settle(runningPath);
       runningPath = path;
     } catch {}
@@ -173,12 +228,16 @@ if (pane && folders) {
     queueMicrotask(() => {
       sizeSyncQueued = false;
       syncVisibleSizes();
+      syncStorageLanguage();
     });
   };
 
   new MutationObserver(wake).observe(pane, { attributes:true, attributeFilter:['hidden'] });
   new MutationObserver(wake).observe(folders, { childList:true, subtree:false });
   new MutationObserver(syncBeforePaint).observe(folders, { childList:true, subtree:true, characterData:true });
+  const hero = pane.querySelector('.storage-dashboard-hero');
+  if (hero) new MutationObserver(syncStorageLanguage).observe(hero, { childList:true, subtree:true, characterData:true });
   syncVisibleSizes();
+  syncStorageLanguage();
   if (!pane.hidden) wake();
 }
