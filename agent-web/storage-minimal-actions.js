@@ -5,7 +5,7 @@ if (pane && backups) {
   const style = document.createElement('style');
   style.textContent = `
     #refreshBackups{display:none!important}
-    #folders .empty-state{display:none!important}
+    #folders .empty-state,#backups .empty-state{display:none!important}
     .storage-page-title{display:none!important}
     .storage-overview{gap:7px!important}
     .storage-quick-row:has(.storage-quick-card.good){grid-template-columns:1fr}
