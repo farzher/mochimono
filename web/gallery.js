@@ -48,8 +48,6 @@ function shouldFillLastRow(cards, width, target, gap) {
   if (cards.length < 2) return false;
   const ratioSum = cards.reduce((sum, card) => sum + cardRatio(card), 0);
   const height = (width - gap * (cards.length - 1)) / ratioSum;
-  // Fill a nearly-complete final row, but never make leftovers dramatically
-  // larger than the chosen preview size just to touch the right edge.
   return height <= target * 1.42;
 }
 
@@ -83,11 +81,9 @@ function justifyRun(cards, width, target, gap, closedByNonMedia = false) {
     ratioSum += ratio;
   }
 
-  // A run interrupted by a document/non-media tile is a real row boundary,
-  // so fill it whenever that remains visually reasonable. The final month row
-  // uses the same rule to avoid the old series of ragged right edges.
-  setRow(row, width, target, shouldFillLastRow(row, width, target, gap) || closedByNonMedia, gap);
-  if (row.length && closedByNonMedia) {
+  const fill = shouldFillLastRow(row, width, target, gap) || closedByNonMedia;
+  setRow(row, width, target, fill, gap);
+  if (row.length && fill) {
     const ratios = row.reduce((sum, card) => sum + cardRatio(card), 0);
     const filledHeight = (width - gap * (row.length - 1)) / ratios;
     if (filledHeight > target * 1.42) setRow(row, width, target, false, gap);
@@ -95,15 +91,23 @@ function justifyRun(cards, width, target, gap, closedByNonMedia = false) {
 }
 
 function syncRunBreaks(container, cards) {
-  container.querySelectorAll(':scope > .gallery-row-break').forEach(item => item.remove());
+  const wanted = new Set();
   for (let index = 1; index < cards.length; index++) {
     const previousMedia = cards[index - 1].classList.contains('media-card');
     const currentMedia = cards[index].classList.contains('media-card');
-    if (previousMedia === currentMedia) continue;
+    if (previousMedia !== currentMedia) wanted.add(cards[index]);
+  }
+
+  for (const marker of container.querySelectorAll(':scope > .gallery-row-break')) {
+    if (!wanted.has(marker.nextElementSibling)) marker.remove();
+  }
+
+  for (const card of wanted) {
+    if (card.previousElementSibling?.classList.contains('gallery-row-break')) continue;
     const marker = document.createElement('span');
     marker.className = 'gallery-row-break';
     marker.setAttribute('aria-hidden', 'true');
-    cards[index].before(marker);
+    card.before(marker);
   }
 }
 
@@ -116,15 +120,13 @@ function justify(container) {
   const gap = parseFloat(getComputedStyle(container).columnGap) || 4;
   const target = mediaSize();
 
-  // Non-media cards used to disable justification for the entire month. Keep
-  // chronological order, but isolate transitions so documents cannot poison
-  // the image/video rows around them.
+  // A document used to disable the justified layout for every image/video in
+  // the same month. Keep chronological order, but isolate media/non-media runs.
   syncRunBreaks(container, cards);
   cards.filter(card => !card.classList.contains('media-card')).forEach(clearSize);
 
   let run = [];
-  for (let index = 0; index < cards.length; index++) {
-    const card = cards[index];
+  for (const card of cards) {
     if (card.classList.contains('media-card')) {
       run.push(card);
       continue;
