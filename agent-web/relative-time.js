@@ -99,7 +99,7 @@ function renderFolderTimes() {
     setEvents(row, [{
       key: 'folder-sync',
       label: protectedFolder ? 'Synced' : 'Indexed',
-      value: folder.lastSynced || null,
+      value: protectedFolder ? folder.lastSynced || null : folder.lastIndexed || null,
       text: protectedFolder ? 'Not synced yet' : 'Not indexed yet'
     }]);
   }
@@ -157,15 +157,22 @@ function renderTimes() {
 }
 
 async function refreshTimes() {
-  const [stateResult, backupResult, integrityResult] = await Promise.allSettled([
+  const [stateResult, folderStatsResult, backupResult, integrityResult] = await Promise.allSettled([
     fetch('/api/state', { cache: 'no-store' }).then(response => response.ok ? response.json() : null),
+    fetch('/api/folder-stats', { cache: 'no-store' }).then(response => response.ok ? response.json() : null),
     fetch('/api/backups', { cache: 'no-store' }).then(response => response.ok ? response.json() : null),
     fetch('/api/integrity', { cache: 'no-store' }).then(response => response.ok ? response.json() : null)
   ]);
 
+  folderByPath.clear();
   if (stateResult.status === 'fulfilled' && stateResult.value) {
-    folderByPath.clear();
-    for (const folder of stateResult.value.settings?.folders || []) folderByPath.set(cleanPath(folder.path), folder);
+    for (const folder of stateResult.value.settings?.folders || []) folderByPath.set(cleanPath(folder.path), { ...folder });
+  }
+  if (folderStatsResult.status === 'fulfilled' && folderStatsResult.value) {
+    for (const folder of folderStatsResult.value.folders || []) {
+      const key = cleanPath(folder.path);
+      folderByPath.set(key, { ...(folderByPath.get(key) || {}), ...folder });
+    }
   }
 
   if (backupResult.status === 'fulfilled' && backupResult.value) backups = backupResult.value.backups || [];
