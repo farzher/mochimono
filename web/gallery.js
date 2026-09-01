@@ -24,11 +24,18 @@ function cardRatio(card) {
   return Number(card.style.getPropertyValue('--ratio')) || 4 / 3;
 }
 
+function clearSize(card) {
+  card.style.removeProperty('width');
+  card.style.removeProperty('height');
+  card.style.removeProperty('flex-basis');
+}
+
 function setRow(cards, width, target, full, gap) {
   if (!cards.length) return;
   const ratios = cards.map(cardRatio);
   const sum = ratios.reduce((total, ratio) => total + ratio, 0);
-  const height = full ? (width - gap * (cards.length - 1)) / sum : target;
+  const fullHeight = (width - gap * (cards.length - 1)) / sum;
+  const height = full ? fullHeight : target;
   cards.forEach((card, index) => {
     const itemWidth = ratios[index] * height;
     card.style.width = `${itemWidth}px`;
@@ -37,23 +44,17 @@ function setRow(cards, width, target, full, gap) {
   });
 }
 
-function justify(container) {
-  const cards = [...container.children].filter(child => child.classList.contains('file-card'));
+function shouldFillLastRow(cards, width, target, gap) {
+  if (cards.length < 2) return false;
+  const ratioSum = cards.reduce((sum, card) => sum + cardRatio(card), 0);
+  const height = (width - gap * (cards.length - 1)) / ratioSum;
+  // Fill a nearly-complete final row, but never make leftovers dramatically
+  // larger than the chosen preview size just to touch the right edge.
+  return height <= target * 1.42;
+}
+
+function justifyRun(cards, width, target, gap, closedByNonMedia = false) {
   if (!cards.length) return;
-
-  if (!cards.every(card => card.classList.contains('media-card'))) {
-    cards.forEach(card => {
-      card.style.removeProperty('width');
-      card.style.removeProperty('height');
-      card.style.removeProperty('flex-basis');
-    });
-    return;
-  }
-
-  const width = container.clientWidth;
-  if (!width) return;
-  const gap = parseFloat(getComputedStyle(container).columnGap) || 4;
-  const target = mediaSize();
   let row = [];
   let ratioSum = 0;
 
@@ -82,7 +83,56 @@ function justify(container) {
     ratioSum += ratio;
   }
 
-  setRow(row, width, target, false, gap);
+  // A run interrupted by a document/non-media tile is a real row boundary,
+  // so fill it whenever that remains visually reasonable. The final month row
+  // uses the same rule to avoid the old series of ragged right edges.
+  setRow(row, width, target, shouldFillLastRow(row, width, target, gap) || closedByNonMedia, gap);
+  if (row.length && closedByNonMedia) {
+    const ratios = row.reduce((sum, card) => sum + cardRatio(card), 0);
+    const filledHeight = (width - gap * (row.length - 1)) / ratios;
+    if (filledHeight > target * 1.42) setRow(row, width, target, false, gap);
+  }
+}
+
+function syncRunBreaks(container, cards) {
+  container.querySelectorAll(':scope > .gallery-row-break').forEach(item => item.remove());
+  for (let index = 1; index < cards.length; index++) {
+    const previousMedia = cards[index - 1].classList.contains('media-card');
+    const currentMedia = cards[index].classList.contains('media-card');
+    if (previousMedia === currentMedia) continue;
+    const marker = document.createElement('span');
+    marker.className = 'gallery-row-break';
+    marker.setAttribute('aria-hidden', 'true');
+    cards[index].before(marker);
+  }
+}
+
+function justify(container) {
+  const cards = [...container.children].filter(child => child.classList.contains('file-card'));
+  if (!cards.length) return;
+
+  const width = container.clientWidth;
+  if (!width) return;
+  const gap = parseFloat(getComputedStyle(container).columnGap) || 4;
+  const target = mediaSize();
+
+  // Non-media cards used to disable justification for the entire month. Keep
+  // chronological order, but isolate transitions so documents cannot poison
+  // the image/video rows around them.
+  syncRunBreaks(container, cards);
+  cards.filter(card => !card.classList.contains('media-card')).forEach(clearSize);
+
+  let run = [];
+  for (let index = 0; index < cards.length; index++) {
+    const card = cards[index];
+    if (card.classList.contains('media-card')) {
+      run.push(card);
+      continue;
+    }
+    justifyRun(run, width, target, gap, true);
+    run = [];
+  }
+  justifyRun(run, width, target, gap, false);
 }
 
 function syncDayLabels() {
@@ -107,6 +157,19 @@ function layout() {
 function schedule() {
   if (!frame) frame = requestAnimationFrame(layout);
 }
+
+const style = document.createElement('style');
+style.textContent = `
+  .files.grid .date-grid>.gallery-row-break{
+    flex:0 0 100%;
+    width:100%;
+    height:0;
+    margin:0;
+    padding:0;
+    pointer-events:none;
+  }
+`;
+document.head.append(style);
 
 sizeButtons.forEach(button => button.addEventListener('click', () => setMediaSize(Number(button.dataset.mediaSize))));
 sizeInput.addEventListener('input', schedule);
