@@ -1,23 +1,22 @@
 const files = document.querySelector('#files');
 const CLIENT = document.documentElement.classList.contains('client-library');
 const THUMB_VERSION = 3;
+const CACHE_NAME = `mochimono-thumbnails-v${THUMB_VERSION}`;
 const THUMB_EDGE = 768;
 const IMAGE_FALLBACK_DELAY = 8_000;
 const VIDEO_FALLBACK_DELAY = 15_000;
-const REQUEST_COOLDOWN = 10_000;
-const MAX_FALLBACK_URLS = 40;
+const MAX_OBJECT_URLS = 240;
 
 const states = new Map();
+const cardIndex = new Map();
 const observed = new Set();
 const nearby = new Set();
-const cardIndex = new Map();
-const requestedAt = new Map();
+const objectUrls = new Map();
 const fallbackQueue = [];
 const fallbackQueued = new Set();
-const fallbackUrls = new Map();
+let cachePromise = null;
 let checkTimer = 0;
 let checking = false;
-let missRounds = 0;
 let fallbackActive = false;
 
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
@@ -32,6 +31,7 @@ const MIME = new Map([
 const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
 const filename = card => card.dataset.filename || card.title || card.querySelector('strong')?.textContent || '';
 const thumbUrl = hash => `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
+const sourceMime = record => MIME.get(extension(record.filename)) || 'application/octet-stream';
 
 function kind(card) {
   if (card.classList.contains('video-card')) return 'video';
@@ -42,12 +42,31 @@ function kind(card) {
   return '';
 }
 
-function sourceMime(record) {
-  return MIME.get(extension(record.filename)) || 'application/octet-stream';
+function recordFor(card) {
+  const mediaKind = kind(card);
+  return { hash: String(card.dataset.hash || ''), filename: filename(card), kind: mediaKind, mime: sourceMime({ filename: filename(card) }) };
 }
 
-function recordFor(card, mediaKind = kind(card)) {
-  return { hash: card.dataset.hash, filename: filename(card), mime: mediaKind ? `${mediaKind}/unknown` : '' };
+function cacheStorage() {
+  if (!('caches' in window)) return Promise.resolve(null);
+  if (!cachePromise) cachePromise = caches.open(CACHE_NAME).catch(() => null);
+  return cachePromise;
+}
+
+function rememberObjectUrl(hash, blob) {
+  const previous = objectUrls.get(hash);
+  if (previous) URL.revokeObjectURL(previous);
+  const url = URL.createObjectURL(blob);
+  objectUrls.delete(hash);
+  objectUrls.set(hash, url);
+  while (objectUrls.size > MAX_OBJECT_URLS) {
+    const [oldHash, oldUrl] = objectUrls.entries().next().value;
+    objectUrls.delete(oldHash);
+    URL.revokeObjectURL(oldUrl);
+    const state = states.get(oldHash);
+    if (state?.url === oldUrl) state.url = '';
+  }
+  return url;
 }
 
 function indexCard(card) {
@@ -81,68 +100,115 @@ function mediaBox(card, mediaKind = kind(card)) {
   return box;
 }
 
-function ensurePending(card, mediaKind = kind(card)) {
-  const box = mediaBox(card, mediaKind);
+function pending(card) {
+  const box = mediaBox(card);
   if (!box || box.querySelector('.cached-thumb,.video-thumb-pending')) return;
-  const pending = document.createElement('span');
-  pending.className = 'video-thumb-pending';
-  pending.dataset.videoThumb = card.dataset.hash || '';
-  box.prepend(pending);
+  const item = document.createElement('span');
+  item.className = 'video-thumb-pending';
+  item.dataset.videoThumb = card.dataset.hash || '';
+  box.prepend(item);
 }
 
-function applyDimensions(hash, width, height) {
+function rememberDimensions(hash, width, height) {
   if (!width || !height) return;
-  const ratio = Math.max(.65, Math.min(2.1, width / height));
-  for (const card of cardsFor(hash)) {
-    if (!card.isConnected || !card.classList.contains('media-card')) continue;
-    const current = Number(card.style.getPropertyValue('--ratio')) || 0;
-    if (Math.abs(current - ratio) >= .001) card.style.setProperty('--ratio', ratio);
-  }
+  const state = states.get(hash) || {};
+  state.width = Number(width) || state.width || 0;
+  state.height = Number(height) || state.height || 0;
+  states.set(hash, state);
+  window.mochimonoLibrary?.rememberDimensions?.(hash, state.width, state.height);
 }
 
-function applyReady(hash, width = 0, height = 0, localUrl = '') {
-  const state = states.get(hash) || {};
-  state.ready = true;
-  state.missingSince = 0;
-  state.width = width || state.width || 0;
-  state.height = height || state.height || 0;
-  states.set(hash, state);
-  requestedAt.delete(hash);
-  applyDimensions(hash, state.width, state.height);
-
+function paint(hash) {
+  const state = states.get(hash);
+  if (!state?.ready || !state.url) return;
   for (const card of cardsFor(hash)) {
-    if (!card.isConnected) continue;
-    const mediaKind = kind(card);
-    if (!mediaKind) continue;
-    const box = mediaBox(card, mediaKind);
-    if (!box || box.querySelector('img.cached-thumb')) continue;
-    box.classList.remove('thumb-failed');
-    box.removeAttribute('title');
+    if (!card.isConnected || !kind(card)) continue;
+    const box = mediaBox(card);
+    if (!box) continue;
+    const current = box.querySelector('img.cached-thumb');
+    if (current?.dataset.objectUrl === state.url) continue;
+
     const image = document.createElement('img');
-    image.className = 'cached-thumb server-thumb';
-    image.decoding = 'async';
-    image.loading = 'lazy';
+    image.className = 'cached-thumb';
     image.alt = filename(card);
+    image.decoding = 'async';
+    image.loading = 'eager';
+    image.dataset.objectUrl = state.url;
     image.onload = () => {
-      if (image.naturalWidth && image.naturalHeight) applyDimensions(hash, image.naturalWidth, image.naturalHeight);
+      box.classList.remove('thumb-failed');
+      box.removeAttribute('title');
+      rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
     };
     image.onerror = () => {
+      if (image.dataset.objectUrl !== state.url) return;
       image.remove();
-      const current = states.get(hash) || {};
-      current.ready = false;
-      current.missingSince ||= performance.now();
-      states.set(hash, current);
-      missRounds = 0;
-      scheduleCheck(250);
+      state.ready = false;
+      state.url = '';
+      state.nextCheck = performance.now();
+      states.set(hash, state);
+      pending(card);
+      scheduleCheck(50);
     };
     const old = box.querySelector('img,.video-thumb-pending');
     old ? old.replaceWith(image) : box.prepend(image);
-    image.src = localUrl || thumbUrl(hash);
+    image.src = state.url;
   }
 }
 
-function nearbyCards() {
-  return [...nearby].filter(card => card.isConnected && kind(card));
+async function responseFor(hash) {
+  const canonical = thumbUrl(hash);
+  const cache = await cacheStorage();
+  const cached = await cache?.match(canonical);
+  if (cached?.ok) return cached;
+
+  const response = await fetch(canonical, { cache: 'no-store' });
+  if (!response.ok) return response;
+  cache?.put(canonical, response.clone()).catch(() => {});
+  return response;
+}
+
+async function loadHash(hash) {
+  hash = String(hash || '');
+  if (!hash) return;
+  const state = states.get(hash) || {};
+  if (state.ready && state.url) return paint(hash);
+  if (state.loading) return;
+  state.loading = true;
+  states.set(hash, state);
+
+  try {
+    const response = await responseFor(hash);
+    if (!response.ok) {
+      state.ready = false;
+      state.missingSince ||= performance.now();
+      state.nextCheck = performance.now() + 300;
+      return;
+    }
+    const blob = await response.blob();
+    state.url = rememberObjectUrl(hash, blob);
+    state.ready = true;
+    state.missingSince = 0;
+    state.nextCheck = 0;
+    paint(hash);
+  } catch {
+    state.ready = false;
+    state.nextCheck = performance.now() + 1000;
+  } finally {
+    state.loading = false;
+    states.set(hash, state);
+    if (!state.ready) scheduleCheck(300);
+  }
+}
+
+async function requestCanonical(hashes) {
+  if (CLIENT || !hashes.length) return;
+  for (let offset = 0; offset < hashes.length; offset += 500) {
+    fetch('/api/thumbs/request', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hashes: hashes.slice(offset, offset + 500) })
+    }).catch(() => {});
+  }
 }
 
 function onScreen(card) {
@@ -150,61 +216,33 @@ function onScreen(card) {
   return rect.bottom >= 0 && rect.top <= innerHeight;
 }
 
-async function requestCanonical(hashes) {
-  if (CLIENT || !hashes.length) return;
-  const now = performance.now();
-  const fresh = hashes.filter(hash => now - (requestedAt.get(hash) || -Infinity) >= REQUEST_COOLDOWN);
-  if (!fresh.length) return;
-  fresh.forEach(hash => requestedAt.set(hash, now));
-  for (let offset = 0; offset < fresh.length; offset += 500) {
-    try {
-      await fetch('/api/thumbs/request', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ hashes: fresh.slice(offset, offset + 500) })
-      });
-    } catch {}
-  }
-}
-
 function queueFallback(card) {
   if (CLIENT || !onScreen(card)) return;
-  const mediaKind = kind(card);
-  const record = recordFor(card, mediaKind);
+  const record = recordFor(card);
   const state = states.get(record.hash) || {};
-  if (!record.hash || state.ready || fallbackQueued.has(record.hash) || (state.nextFallback || 0) > performance.now()) return;
-  const delay = mediaKind === 'video' ? VIDEO_FALLBACK_DELAY : IMAGE_FALLBACK_DELAY;
+  const delay = record.kind === 'video' ? VIDEO_FALLBACK_DELAY : IMAGE_FALLBACK_DELAY;
+  if (!record.hash || state.ready || fallbackQueued.has(record.hash)) return;
   if (performance.now() - (state.missingSince || performance.now()) < delay) return;
+  if ((state.nextFallback || 0) > performance.now()) return;
   fallbackQueued.add(record.hash);
-  fallbackQueue.push({ record, kind: mediaKind });
+  fallbackQueue.push(record);
   pumpFallback();
 }
 
 async function checkNearby() {
   checkTimer = 0;
   if (checking || document.hidden || !files) return;
-  const cards = nearbyCards();
-  if (!cards.length) return;
-
-  const hashSet = new Set();
-  for (const card of cards) {
-    const hash = card.dataset.hash;
-    const mediaKind = kind(card);
-    ensurePending(card, mediaKind);
+  const cards = [...nearby].filter(card => card.isConnected && kind(card));
+  const now = performance.now();
+  const hashes = [...new Set(cards.map(card => card.dataset.hash).filter(hash => {
     const state = states.get(hash) || {};
-    if (state.ready) {
-      applyReady(hash, state.width, state.height);
-      continue;
-    }
-    if (hash) hashSet.add(hash);
-  }
-  const hashes = [...hashSet];
+    return !state.ready && !state.loading && now >= (state.nextCheck || 0);
+  }))];
   if (!hashes.length) return;
 
   checking = true;
-  let becameReady = 0;
-  const ready = new Map();
   try {
+    const ready = new Map();
     for (let offset = 0; offset < hashes.length; offset += 500) {
       const response = await fetch('/api/thumbs/check', {
         method: 'POST',
@@ -216,39 +254,38 @@ async function checkNearby() {
       for (const item of data.thumbnails || []) ready.set(item.hash, item);
     }
 
-    const now = performance.now();
-    const missing = new Set();
+    const missing = [];
     for (const hash of hashes) {
-      const thumbnail = ready.get(hash);
-      if (thumbnail) {
-        if (!states.get(hash)?.ready) becameReady++;
-        applyReady(hash, Number(thumbnail.width), Number(thumbnail.height));
-      } else {
-        const state = states.get(hash) || {};
-        state.ready = false;
-        state.missingSince ||= now;
+      const state = states.get(hash) || {};
+      const item = ready.get(hash);
+      if (item) {
+        rememberDimensions(hash, Number(item.width), Number(item.height));
+        state.nextCheck = 0;
         states.set(hash, state);
-        missing.add(hash);
+        loadHash(hash);
+      } else {
+        state.missingSince ||= now;
+        state.nextCheck = now + 1200;
+        states.set(hash, state);
+        missing.push(hash);
       }
     }
-
-    if (!CLIENT && missing.size) {
-      await requestCanonical([...missing]);
-      for (const card of cards) if (missing.has(card.dataset.hash)) queueFallback(card);
+    await requestCanonical(missing);
+    for (const card of cards) if (missing.includes(card.dataset.hash)) queueFallback(card);
+  } catch {
+    for (const hash of hashes) {
+      const state = states.get(hash) || {};
+      state.nextCheck = performance.now() + 2000;
+      states.set(hash, state);
     }
-  } catch {}
-  finally {
+  } finally {
     checking = false;
-    if (becameReady) missRounds = 0;
-    else missRounds = Math.min(5, missRounds + 1);
-    if (nearbyCards().some(card => !states.get(card.dataset.hash)?.ready)) {
-      scheduleCheck(Math.min(5000, 500 * 2 ** Math.max(0, missRounds - 1)));
-    }
+    if ([...nearby].some(card => !states.get(card.dataset.hash)?.ready)) scheduleCheck(1400);
   }
 }
 
-function scheduleCheck(delay = 30) {
-  clearTimeout(checkTimer);
+function scheduleCheck(delay = 80) {
+  if (checkTimer) return;
   checkTimer = setTimeout(checkNearby, delay);
 }
 
@@ -267,15 +304,15 @@ function waitFor(target, event, timeout = 8000) {
   });
 }
 
-function canvasBlob(canvas) {
-  if ('convertToBlob' in canvas) return canvas.convertToBlob({ type: 'image/webp', quality: .82 });
-  return new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .82));
-}
-
 function makeCanvas(width, height) {
   return typeof OffscreenCanvas !== 'undefined'
     ? new OffscreenCanvas(width, height)
     : Object.assign(document.createElement('canvas'), { width, height });
+}
+
+function canvasBlob(canvas) {
+  if ('convertToBlob' in canvas) return canvas.convertToBlob({ type: 'image/webp', quality: .82 });
+  return new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .82));
 }
 
 async function imageBitmap(blob) {
@@ -304,32 +341,6 @@ async function imageFallback(record) {
   return { blob: await canvasBlob(canvas), width, height, duration: null };
 }
 
-function decodedFrame(video) {
-  if (!video.requestVideoFrameCallback) return new Promise(resolve => setTimeout(resolve, 50));
-  return new Promise(resolve => {
-    let done = false;
-    const finish = () => { if (!done) { done = true; resolve(); } };
-    const timer = setTimeout(finish, 500);
-    video.requestVideoFrameCallback(() => { clearTimeout(timer); finish(); });
-  });
-}
-
-function frameBlank(canvas) {
-  const width = Math.min(40, canvas.width);
-  const height = Math.min(28, canvas.height);
-  const sample = makeCanvas(width, height);
-  const context = sample.getContext('2d', { willReadFrequently: true });
-  context.drawImage(canvas, 0, 0, width, height);
-  const data = context.getImageData(0, 0, width, height).data;
-  let brightness = 0;
-  let count = 0;
-  for (let index = 0; index < data.length; index += 16) {
-    brightness += data[index] + data[index + 1] + data[index + 2];
-    count += 3;
-  }
-  return brightness / Math.max(1, count) < 5;
-}
-
 async function videoFallback(record) {
   const video = document.createElement('video');
   video.muted = true;
@@ -346,19 +357,13 @@ async function videoFallback(record) {
     const height = Math.max(1, Math.round(sourceHeight * scale));
     const canvas = makeCanvas(width, height);
     const context = canvas.getContext('2d', { alpha: false });
-    const end = Number.isFinite(video.duration) ? Math.max(0, video.duration - .02) : 4;
-    const times = [...new Set([.2, 1, 4].map(value => Math.min(end, value)))];
-    for (let index = 0; index < times.length; index++) {
-      if (Math.abs(video.currentTime - times[index]) > .01) {
-        if (video.fastSeek) video.fastSeek(times[index]);
-        else video.currentTime = times[index];
-        await waitFor(video, 'seeked');
-      }
-      if (video.readyState < 2) await waitFor(video, 'loadeddata');
-      await decodedFrame(video);
-      context.drawImage(video, 0, 0, width, height);
-      if (index === times.length - 1 || !frameBlank(canvas)) break;
+    const end = Number.isFinite(video.duration) ? Math.max(0, video.duration - .02) : 2;
+    if (video.duration > .2) {
+      video.currentTime = Math.min(end, 1);
+      await waitFor(video, 'seeked');
     }
+    if (video.readyState < 2) await waitFor(video, 'loadeddata');
+    context.drawImage(video, 0, 0, width, height);
     return { blob: await canvasBlob(canvas), width, height, duration: Number.isFinite(video.duration) ? video.duration : null };
   } finally {
     video.removeAttribute('src');
@@ -367,7 +372,6 @@ async function videoFallback(record) {
 }
 
 async function uploadFallback(record, result) {
-  if (!result.blob) throw new Error('Preview encoding failed');
   const response = await fetch(`/api/thumbs/${record.hash}`, {
     method: 'PUT',
     headers: {
@@ -383,54 +387,28 @@ async function uploadFallback(record, result) {
   if (!response.ok) throw new Error('Could not save preview');
 }
 
-async function canonicalExists(hash) {
-  try { return (await fetch(thumbUrl(hash), { method: 'HEAD' })).ok; }
-  catch { return false; }
-}
-
-function trimFallbackUrls() {
-  while (fallbackUrls.size > MAX_FALLBACK_URLS) {
-    const [hash, url] = fallbackUrls.entries().next().value;
-    URL.revokeObjectURL(url);
-    fallbackUrls.delete(hash);
-  }
-}
-
-function localFallbackUrl(hash, blob) {
-  const previous = fallbackUrls.get(hash);
-  if (previous) URL.revokeObjectURL(previous);
-  const url = URL.createObjectURL(blob);
-  fallbackUrls.set(hash, url);
-  trimFallbackUrls();
-  return url;
-}
-
-async function runFallback({ record, kind: mediaKind }) {
+async function runFallback(record) {
   const state = states.get(record.hash) || {};
   if (state.ready) return;
-  if (await canonicalExists(record.hash)) {
-    missRounds = 0;
-    scheduleCheck();
-    return;
-  }
-
   try {
-    const result = mediaKind === 'image' ? await imageFallback(record) : await videoFallback(record);
+    const result = record.kind === 'video' ? await videoFallback(record) : await imageFallback(record);
     if (states.get(record.hash)?.ready) return;
-    if (await canonicalExists(record.hash)) {
-      missRounds = 0;
-      scheduleCheck();
-      return;
-    }
     await uploadFallback(record, result);
-    applyReady(record.hash, result.width, result.height, localFallbackUrl(record.hash, result.blob));
+    const cache = await cacheStorage();
+    const response = new Response(result.blob, { headers: { 'content-type': 'image/webp' } });
+    cache?.put(thumbUrl(record.hash), response.clone()).catch(() => {});
+    state.url = rememberObjectUrl(record.hash, result.blob);
+    state.ready = true;
+    state.missingSince = 0;
+    state.nextCheck = 0;
+    states.set(record.hash, state);
+    rememberDimensions(record.hash, result.width, result.height);
+    paint(record.hash);
   } catch (error) {
-    const latest = states.get(record.hash) || {};
-    latest.fallbackFailures = (latest.fallbackFailures || 0) + 1;
-    latest.nextFallback = performance.now() + Math.min(120_000, 30_000 * latest.fallbackFailures);
-    states.set(record.hash, latest);
+    state.nextFallback = performance.now() + 30_000;
+    states.set(record.hash, state);
     for (const card of cardsFor(record.hash)) {
-      const box = card.querySelector('.media-thumb');
+      const box = mediaBox(card);
       if (!box) continue;
       box.classList.add('thumb-failed');
       box.title = `Preview unavailable: ${error.message}`;
@@ -440,10 +418,10 @@ async function runFallback({ record, kind: mediaKind }) {
 
 function pumpFallback() {
   if (CLIENT || fallbackActive || !fallbackQueue.length || document.hidden) return;
-  const job = fallbackQueue.shift();
-  fallbackQueued.delete(job.record.hash);
+  const record = fallbackQueue.shift();
+  fallbackQueued.delete(record.hash);
   fallbackActive = true;
-  const run = () => runFallback(job).finally(() => {
+  const run = () => runFallback(record).finally(() => {
     fallbackActive = false;
     pumpFallback();
   });
@@ -452,18 +430,15 @@ function pumpFallback() {
 }
 
 const observer = files ? new IntersectionObserver(entries => {
-  let entered = false;
   for (const entry of entries) {
+    const card = entry.target;
     if (entry.isIntersecting) {
-      nearby.add(entry.target);
-      entered = true;
-    } else nearby.delete(entry.target);
+      nearby.add(card);
+      pending(card);
+      loadHash(card.dataset.hash);
+    } else nearby.delete(card);
   }
-  if (entered) {
-    missRounds = 0;
-    scheduleCheck();
-  }
-}, { rootMargin: '1200px 0px' }) : null;
+}, { rootMargin: '1400px 0px' }) : null;
 
 function cardsIn(node) {
   if (!(node instanceof Element)) return [];
@@ -479,6 +454,7 @@ function observeTree(node) {
     indexCard(card);
     if (observed.has(card) || !kind(card)) continue;
     observed.add(card);
+    pending(card);
     observer.observe(card);
   }
 }
@@ -494,23 +470,25 @@ function forgetTree(node) {
 }
 
 if (files) {
-  for (const card of files.querySelectorAll('[data-hash]')) observeTree(card);
-  const mutations = new MutationObserver(records => {
+  observeTree(files);
+  new MutationObserver(records => {
     for (const record of records) {
       for (const node of record.removedNodes) forgetTree(node);
       for (const node of record.addedNodes) observeTree(node);
     }
-  });
-  mutations.observe(files, { childList: true, subtree: true });
+  }).observe(files, { childList: true, subtree: true });
+
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
-      missRounds = 0;
-      scheduleCheck();
+      for (const card of nearby) loadHash(card.dataset.hash);
+      scheduleCheck(100);
       pumpFallback();
     }
   });
+
+  window.addEventListener('mochimono:catalog-updated', () => scheduleCheck(100));
   addEventListener('beforeunload', () => {
     clearTimeout(checkTimer);
-    for (const url of fallbackUrls.values()) URL.revokeObjectURL(url);
-  });
+    for (const url of objectUrls.values()) URL.revokeObjectURL(url);
+  }, { once: true });
 }
