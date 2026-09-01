@@ -12,6 +12,7 @@ const THUMB_VERSION = 3;
 
 let searchTimer;
 let catalog = [];
+let catalogIndex = new Map();
 let catalogVersion = '';
 let filtered = [];
 let filteredIndex = new Map();
@@ -44,6 +45,7 @@ let viewerImageLoad = null;
 let scrubbing = false;
 let lastScrubAt = 0;
 let lastRenderKey = '';
+let lastRailKey = '';
 
 const fileDates = new Map();
 window.mochimonoFileDates = fileDates;
@@ -153,11 +155,17 @@ function normalizeFile(file) {
 }
 
 function rebuildIndexes() {
+  catalogIndex = new Map(catalog.map((file, index) => [file.hash, index]));
   sourceNames = new Map(imports.map(item => [Number(item.id), String(item.sourceName || '')]));
   searchIndex = new Map(catalog.map(file => [
     file.hash,
     `${buildSearchText(file, sourceNames)} ${locationSearch.get(file.hash) || ''}`.trim()
   ]));
+}
+
+function catalogFile(hash) {
+  const index = catalogIndex.get(String(hash || ''));
+  return Number.isInteger(index) ? catalog[index] : null;
 }
 
 function renderFileCount(count = filtered.length) {
@@ -224,7 +232,7 @@ function groupsHtml(groups) {
 }
 
 function renderKey() {
-  return [view, sort, renderOffset, renderLimit, loaded.map(file => `${file.hash}:${timelineMs(file)}`).join(',')].join('|');
+  return [view, sort, renderOffset, renderLimit, loaded.map(file => `${file.hash}:${timelineMs(file)}:${file.width}x${file.height}:${file.size}:${file.filename}`).join(',')].join('|');
 }
 
 function captureAnchor() {
@@ -304,7 +312,7 @@ function sortFiles(items) {
   return items.sort((a, b) => b.dateMs - a.dateMs || a.hash.localeCompare(b.hash));
 }
 
-function applyFilters(reset = true, preserve = false) {
+function applyFilters(reset = true, preserve = false, keepHash = '') {
   if (view === 'folders') return loadFolder();
   const terms = queryTerms($('#search').value, $('#source').options);
   const sourceId = Number(importId) || 0;
@@ -316,14 +324,20 @@ function applyFilters(reset = true, preserve = false) {
     return !terms.length || terms.every(term => (searchIndex.get(file.hash) || '').includes(term));
   }));
   filteredIndex = new Map(filtered.map((file, index) => [file.hash, index]));
-  if (reset) { renderOffset = 0; renderLimit = PAGE; }
-  else if (renderOffset >= filtered.length) renderOffset = Math.max(0, filtered.length - PAGE);
+  if (reset) {
+    renderOffset = 0;
+    renderLimit = PAGE;
+  } else {
+    const keepIndex = keepHash ? filteredIndex.get(keepHash) : null;
+    if (Number.isInteger(keepIndex) && (keepIndex < renderOffset || keepIndex >= renderOffset + renderLimit)) {
+      renderOffset = Math.max(0, Math.min(keepIndex - Math.floor(renderLimit / 2), Math.max(0, filtered.length - renderLimit)));
+    } else if (renderOffset >= filtered.length) renderOffset = Math.max(0, filtered.length - PAGE);
+  }
   updateWindow();
   renderFileCount();
-  lastRenderKey = '';
   renderFiles(preserve);
   if (selected) {
-    const current = catalog.find(file => file.hash === selected.hash);
+    const current = catalogFile(selected.hash);
     if (current) selected = normalizeFile(current);
     updateViewerNav();
   }
@@ -414,8 +428,16 @@ function renderRail() {
   const entries = railEntries();
   rail.hidden = !entries.length;
   document.documentElement.classList.toggle('library-scroll', Boolean(entries.length));
-  if (!entries.length) return;
-  rail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `<button data-index="${entry.index}" class="rail-tick ${entry.major ? 'major' : ''}" style="top:${(entry.position * 100).toFixed(3)}%" title="${escapeHtml(entry.label)}"><span>${escapeHtml(entry.short || entry.label)}</span><i></i></button>`).join('')}<div id="railThumb" class="rail-thumb"><span></span><i></i></div>`;
+  if (!entries.length) {
+    lastRailKey = '';
+    rail.replaceChildren();
+    return;
+  }
+  const key = entries.map(entry => `${entry.index}:${entry.position.toFixed(5)}:${entry.short || entry.label}:${entry.major ? 1 : 0}`).join('|');
+  if (key !== lastRailKey) {
+    lastRailKey = key;
+    rail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `<button data-index="${entry.index}" class="rail-tick ${entry.major ? 'major' : ''}" style="top:${(entry.position * 100).toFixed(3)}%" title="${escapeHtml(entry.label)}"><span>${escapeHtml(entry.short || entry.label)}</span><i></i></button>`).join('')}<div id="railThumb" class="rail-thumb"><span></span><i></i></div>`;
+  }
   updateRailActive();
 }
 
@@ -487,6 +509,8 @@ async function syncCatalog(force = false) {
   if (!force && catalogVersion === remote.version) return;
   const localMedia = new Map(catalog.filter(file => file.width && file.height).map(file => [file.hash, [file.width, file.height]]));
   const fresh = await fetchCatalog();
+  const anchor = captureAnchor();
+  const keepHash = anchor?.hash || (!$('#viewer').hidden ? selected?.hash : '');
   catalog = fresh.files.map(file => {
     const dimensions = localMedia.get(file.hash);
     return dimensions ? { ...file, width: dimensions[0], height: dimensions[1] } : file;
@@ -495,7 +519,9 @@ async function syncCatalog(force = false) {
   catalogVersion = fresh.version;
   rebuildIndexes();
   renderImports();
-  applyFilters(true);
+  // A late cloud/backup reconciliation must never reset a user who is already
+  // browsing the fast local catalog back to index zero.
+  applyFilters(false, true, keepHash);
 }
 
 function currentFolderSource() { return imports.find(item => String(item.id) === String(folderImportId)); }
@@ -552,6 +578,7 @@ async function loadFolder() {
 function setView(next) {
   view = next;
   lastRenderKey = '';
+  lastRailKey = '';
   const folderMode = view === 'folders';
   $('#sort').hidden = folderMode;
   $('#typeFilter').hidden = folderMode;
@@ -583,9 +610,13 @@ function setCollectionHashes(hashes) {
 window.mochimonoSetCollectionHashes = setCollectionHashes;
 
 const viewerItems = () => view === 'folders' ? (folderData?.files || []).map(normalizeFile) : filtered;
+function viewerIndex(items = viewerItems()) {
+  if (view !== 'folders') return filteredIndex.get(selected?.hash) ?? -1;
+  return items.findIndex(file => file.hash === selected?.hash);
+}
 function updateViewerNav() {
   const items = viewerItems();
-  const index = items.findIndex(file => file.hash === selected?.hash);
+  const index = viewerIndex(items);
   $('#viewer-prev').disabled = index <= 0;
   $('#viewer-next').disabled = index < 0 || index >= items.length - 1;
 }
@@ -601,6 +632,7 @@ function loadFullViewerImage(file) {
   const hash = file.hash;
   const fullUrl = shown.dataset.fullSrc;
   const image = new Image();
+  image.decoding = 'async';
   viewerImageLoad = image;
   const swap = () => {
     if (selected?.hash !== hash || viewerImageLoad !== image || !shown.isConnected) return;
@@ -609,7 +641,10 @@ function loadFullViewerImage(file) {
     shown.onerror = null;
     viewerImageLoad = null;
   };
-  image.onload = swap;
+  image.onload = async () => {
+    try { await image.decode(); } catch {}
+    swap();
+  };
   image.onerror = () => { if (viewerImageLoad === image) viewerImageLoad = null; };
   shown.onerror = () => {
     if (selected?.hash !== hash || !shown.dataset.fullSrc) return;
@@ -635,8 +670,10 @@ function renderViewerState() {
 
 function preloadAround() {
   const items = viewerItems();
-  const index = items.findIndex(file => file.hash === selected?.hash);
-  viewerPreloads = [-1, 1].map(step => items[index + step]).filter(Boolean).map(file => {
+  const index = viewerIndex(items);
+  // Most navigation proceeds forward. Queue next first, then previous; the
+  // viewer-performance layer keeps local full-resolution warming sequential.
+  viewerPreloads = [1, -1].map(step => items[index + step]).filter(Boolean).map(file => {
     if (kind(file) === 'image') { const image = new Image(); image.src = objectUrl(file); return image; }
     if (kind(file) === 'video') { const video = document.createElement('video'); video.preload = 'metadata'; video.muted = true; video.src = `${objectUrl(file)}#t=0.1`; return video; }
     return null;
@@ -644,7 +681,7 @@ function preloadAround() {
 }
 
 function openViewer(hash, fallback = null) {
-  selected = catalog.find(file => file.hash === hash) || folderData?.files?.find(file => file.hash === hash) || fallback;
+  selected = catalogFile(hash) || folderData?.files?.find(file => file.hash === hash) || fallback;
   if (!selected) return false;
   selected = normalizeFile(selected);
   if ($('#viewer').hidden) viewerScrollY = window.scrollY;
@@ -679,14 +716,14 @@ function closeViewer() {
   selected = null;
   if (viewerDirty) {
     viewerDirty = false;
-    if (view === 'folders') loadFolder().catch(console.error); else applyFilters(false, true);
+    if (view === 'folders') loadFolder().catch(console.error); else applyFilters(false, true, returnHash);
   }
   revealViewerHash(returnHash);
 }
 
 function navigateViewer(step) {
   const items = viewerItems();
-  const index = items.findIndex(file => file.hash === selected?.hash);
+  const index = viewerIndex(items);
   const next = items[index + step];
   if (next) { selected = normalizeFile(next); renderViewerState(); }
 }
@@ -705,6 +742,7 @@ async function removeSelected(ignore) {
   searchIndex.delete(hash);
   locationSearch.delete(hash);
   fileDates.delete(hash);
+  rebuildIndexes();
   viewerDirty = false;
   closeViewer();
   await Promise.all([loadStats(), refreshImports()]);
@@ -728,24 +766,34 @@ window.mochimonoLibrary = {
     applyFilters(true);
   },
   setLocationSearch(entries) {
+    const anchor = captureAnchor();
     locationSearch = entries instanceof Map ? entries : new Map(entries || []);
     rebuildIndexes();
-    applyFilters(false, true);
+    applyFilters(false, true, anchor?.hash || '');
   },
   upsert(file) { this.upsertMany(file ? [file] : []); },
   upsertMany(items) {
     if (!items?.length) return;
+    const anchor = captureAnchor();
+    const keepHash = anchor?.hash || (!$('#viewer').hidden ? selected?.hash : '');
     let changed = false;
     for (const raw of items) {
-      if (!raw?.hash) continue;
-      const index = catalog.findIndex(item => item.hash === raw.hash);
-      if (index >= 0) {
+      const hash = String(raw?.hash || '');
+      if (!hash) continue;
+      const index = catalogIndex.get(hash);
+      if (Number.isInteger(index)) {
         const current = catalog[index];
         catalog[index] = normalizeFile({ ...current, ...raw, searchText: [current.searchText, raw.searchText].filter(Boolean).join(' ') });
-      } else catalog.push(normalizeFile(raw));
+      } else {
+        catalogIndex.set(hash, catalog.length);
+        catalog.push(normalizeFile(raw));
+      }
       changed = true;
     }
-    if (changed) { rebuildIndexes(); applyFilters(false, true); }
+    if (changed) {
+      rebuildIndexes();
+      applyFilters(false, true, keepHash);
+    }
   },
   extend: extendWindow,
   refresh: () => syncCatalog(true),
@@ -754,9 +802,11 @@ window.mochimonoLibrary = {
   remove(hashes) {
     const removed = new Set(hashes || []);
     if (!removed.size) return;
+    const anchor = captureAnchor();
     catalog = catalog.filter(file => !removed.has(file.hash));
     for (const hash of removed) { searchIndex.delete(hash); locationSearch.delete(hash); fileDates.delete(hash); }
-    applyFilters(false, true);
+    rebuildIndexes();
+    applyFilters(false, true, anchor?.hash || '');
   },
   state: () => ({ total: catalog.length, filtered: filtered.length, offset: renderOffset, loaded: loaded.length, hasMore, hasPrevious, view, sort, locationFilter })
 };
