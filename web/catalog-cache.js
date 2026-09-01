@@ -1,223 +1,185 @@
-const CLIENT = document.documentElement.classList.contains('client-library');
+const DB_NAME = 'mochimono-library';
+const DB_VERSION = 1;
+const SCHEMA = 1;
+const META_KEY = 'catalog';
+const WRITE_BATCH = 1500;
 
-if (CLIENT && 'indexedDB' in window) {
-  const DB_NAME = 'mochimono-catalog';
-  const DB_VERSION = 3;
-  const META_KEY = 'client-catalog-v3';
-  const SCHEMA = 3;
-  const MAX_AGE = 7 * 24 * 60 * 60 * 1000;
-  const PAGE = 5000;
-  const WRITE_BATCH = 1000;
+let dbPromise = null;
+let meta = null;
+let records = new Map();
 
-  const app = document.querySelector('#app');
-  const filesElement = document.querySelector('#files');
-  let dbPromise = null;
-  let meta = null;
-  let records = new Map();
-  let refreshTimer = 0;
-  let refreshing = false;
+const requestResult = request => new Promise((resolve, reject) => {
+  request.onsuccess = () => resolve(request.result);
+  request.onerror = () => reject(request.error);
+});
 
-  const requestResult = request => new Promise((resolve, reject) => {
+const transactionDone = transaction => new Promise((resolve, reject) => {
+  transaction.oncomplete = () => resolve();
+  transaction.onerror = () => reject(transaction.error);
+  transaction.onabort = () => reject(transaction.error);
+});
+
+const idle = () => new Promise(resolve => {
+  if ('requestIdleCallback' in window) requestIdleCallback(() => resolve(), { timeout: 500 });
+  else setTimeout(resolve, 0);
+});
+
+function openDb() {
+  if (!('indexedDB' in window)) return Promise.resolve(null);
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      db.createObjectStore('files', { keyPath: 'hash' });
+      db.createObjectStore('meta', { keyPath: 'key' });
+    };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
+  }).catch(error => {
+    console.warn('Mochimono local catalog is unavailable.', error);
+    return null;
   });
+  return dbPromise;
+}
 
-  const transactionDone = transaction => new Promise((resolve, reject) => {
-    transaction.oncomplete = resolve;
-    transaction.onerror = () => reject(transaction.error);
-    transaction.onabort = () => reject(transaction.error);
-  });
+function publicFile(file) {
+  if (!file) return file;
+  const { __snapshot, ...clean } = file;
+  return clean;
+}
 
-  const idle = () => new Promise(resolve => {
-    if ('requestIdleCallback' in window) requestIdleCallback(() => resolve(), { timeout: 250 });
-    else setTimeout(resolve, 0);
-  });
+function mergeGeometry(file) {
+  const previous = records.get(String(file?.hash || ''));
+  if (!previous) return file;
+  if (Number(file.width) > 0 && Number(file.height) > 0) return file;
+  if (!(Number(previous.width) > 0 && Number(previous.height) > 0)) return file;
+  return { ...file, width: Number(previous.width), height: Number(previous.height) };
+}
 
-  function openDb() {
-    if (dbPromise) return dbPromise;
-    dbPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'hash' });
-        if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
-        // The old implementation stored thumbnail blobs in IndexedDB. Mochimono
-        // now has an immutable HTTP cache plus a persistent Agent-side preview
-        // cache, so keeping a second copy in IndexedDB only wastes space.
-        if (db.objectStoreNames.contains('thumbs')) db.deleteObjectStore('thumbs');
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    }).catch(error => {
-      console.warn('Mochimono catalog cache unavailable', error);
-      return null;
-    });
-    return dbPromise;
+async function load() {
+  const db = await openDb();
+  if (!db) return null;
+  const transaction = db.transaction(['files', 'meta']);
+  const done = transactionDone(transaction);
+  const [storedMeta, all] = await Promise.all([
+    requestResult(transaction.objectStore('meta').get(META_KEY)),
+    requestResult(transaction.objectStore('files').getAll())
+  ]);
+  await done;
+  if (!storedMeta || storedMeta.schema !== SCHEMA || !storedMeta.version) return null;
+
+  const files = all.filter(file => file.__snapshot === storedMeta.version).map(publicFile);
+  if (files.length !== Number(storedMeta.count || 0)) return null;
+
+  meta = storedMeta;
+  records = new Map(files.map(file => [String(file.hash), file]));
+  return {
+    version: String(storedMeta.version),
+    imports: Array.isArray(storedMeta.imports) ? storedMeta.imports : [],
+    files,
+    savedAt: Number(storedMeta.savedAt) || 0
+  };
+}
+
+async function save(files, options = {}) {
+  const db = await openDb();
+  if (!db || !Array.isArray(files)) return;
+  const version = String(options.version || '');
+  if (!version) return;
+
+  const clean = files
+    .filter(file => /^[a-f0-9]{64}$/.test(String(file?.hash || '')))
+    .map(file => mergeGeometry(publicFile(file)));
+
+  for (let offset = 0; offset < clean.length; offset += WRITE_BATCH) {
+    const transaction = db.transaction('files', 'readwrite');
+    const store = transaction.objectStore('files');
+    for (const file of clean.slice(offset, offset + WRITE_BATCH)) {
+      store.put({ ...file, __snapshot: version });
+    }
+    await transactionDone(transaction);
+    await idle();
   }
 
-  async function readSnapshot() {
-    const db = await openDb();
-    if (!db) return null;
-    const transaction = db.transaction(['files', 'meta']);
-    const done = transactionDone(transaction);
-    const [files, storedMeta] = await Promise.all([
-      requestResult(transaction.objectStore('files').getAll()),
-      requestResult(transaction.objectStore('meta').get(META_KEY))
-    ]);
-    await done;
-    if (!storedMeta || storedMeta.schema !== SCHEMA || storedMeta.writing) return null;
-    if (Date.now() - Number(storedMeta.savedAt || 0) > MAX_AGE) return null;
-    if (Number(storedMeta.count) !== files.length) return null;
-    return { files, meta: storedMeta };
-  }
-
-  async function writeMeta(next) {
-    const db = await openDb();
-    if (!db) return;
+  const nextMeta = {
+    key: META_KEY,
+    schema: SCHEMA,
+    version,
+    imports: Array.isArray(options.imports) ? options.imports : [],
+    count: clean.length,
+    savedAt: Date.now()
+  };
+  {
     const transaction = db.transaction('meta', 'readwrite');
-    transaction.objectStore('meta').put({ key: META_KEY, schema: SCHEMA, ...next });
+    transaction.objectStore('meta').put(nextMeta);
     await transactionDone(transaction);
   }
 
-  function mergeLearnedGeometry(file) {
-    const previous = records.get(String(file?.hash || ''));
-    if (!previous) return file;
-    if (Number(file.width) > 0 && Number(file.height) > 0) return file;
-    if (!(Number(previous.width) > 0 && Number(previous.height) > 0)) return file;
-    return { ...file, width: Number(previous.width), height: Number(previous.height) };
-  }
+  meta = nextMeta;
+  records = new Map(clean.map(file => [String(file.hash), file]));
+  cleanupOldSnapshots(version).catch(() => {});
+}
 
-  async function writeSnapshot(files, version) {
-    const db = await openDb();
-    if (!db || !Array.isArray(files)) return;
-    const clean = files.filter(file => /^[a-f0-9]{64}$/.test(String(file?.hash || ''))).map(mergeLearnedGeometry);
+async function cleanupOldSnapshots(version) {
+  await idle();
+  const db = await openDb();
+  if (!db) return;
+  const transaction = db.transaction('files', 'readwrite');
+  const store = transaction.objectStore('files');
+  await new Promise((resolve, reject) => {
+    const request = store.openCursor();
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return resolve();
+      if (cursor.value?.__snapshot !== version) cursor.delete();
+      cursor.continue();
+    };
+  });
+  await transactionDone(transaction);
+}
 
-    await writeMeta({ writing: true, savedAt: Date.now(), version: String(version || ''), count: clean.length });
+async function rememberDimensions(hash, width, height) {
+  hash = String(hash || '');
+  width = Number(width) || 0;
+  height = Number(height) || 0;
+  if (!hash || !width || !height) return;
 
-    {
-      const transaction = db.transaction('files', 'readwrite');
-      transaction.objectStore('files').clear();
-      await transactionDone(transaction);
-    }
+  let previous = records.get(hash);
+  if (previous && Number(previous.width) === width && Number(previous.height) === height) return;
 
-    for (let offset = 0; offset < clean.length; offset += WRITE_BATCH) {
-      const transaction = db.transaction('files', 'readwrite');
-      const store = transaction.objectStore('files');
-      for (const file of clean.slice(offset, offset + WRITE_BATCH)) store.put(file);
-      await transactionDone(transaction);
-      await idle();
-    }
-
-    meta = { key: META_KEY, schema: SCHEMA, writing: false, savedAt: Date.now(), version: String(version || ''), count: clean.length };
-    await writeMeta(meta);
-    records = new Map(clean.map(file => [String(file.hash), file]));
-  }
-
-  async function rememberDimensions(hash, width, height) {
-    hash = String(hash || '');
-    width = Number(width) || 0;
-    height = Number(height) || 0;
-    if (!hash || !width || !height) return;
-    const previous = records.get(hash);
-    if (!previous) return;
-    if (Number(previous.width) === width && Number(previous.height) === height) return;
-    const next = { ...previous, width, height };
-    records.set(hash, next);
-    const db = await openDb();
-    if (!db) return;
-    const transaction = db.transaction('files', 'readwrite');
-    transaction.objectStore('files').put(next);
+  const db = await openDb();
+  if (!db) return;
+  if (!previous) {
+    const transaction = db.transaction('files');
+    previous = publicFile(await requestResult(transaction.objectStore('files').get(hash)));
     await transactionDone(transaction).catch(() => {});
   }
+  if (!previous) return;
 
-  function libraryReady() {
-    return !app?.hidden && window.mochimonoLibrary?.upsertMany && window.mochimonoLibrary?.state;
-  }
-
-  async function restore() {
-    const snapshot = await readSnapshot().catch(() => null);
-    if (!snapshot?.files?.length) return;
-    meta = snapshot.meta;
-    records = new Map(snapshot.files.map(file => [String(file.hash), file]));
-
-    // app.js starts its health check before this module runs. Wait until it has
-    // made the Library visible, then restore exactly once. If the fresh catalog
-    // already won the race, do nothing rather than mixing stale data into it.
-    const started = performance.now();
-    while (!libraryReady() && performance.now() - started < 3000) {
-      await new Promise(resolve => requestAnimationFrame(resolve));
-    }
-    const library = window.mochimonoLibrary;
-    if (!library?.upsertMany || library.state().total > 0) return;
-    library.upsertMany(snapshot.files);
-    window.dispatchEvent(new CustomEvent('mochimono:catalog-cache-restored', { detail: { count: snapshot.files.length } }));
-  }
-
-  async function fetchFreshSnapshot() {
-    if (refreshing || document.hidden) return;
-    refreshing = true;
-    try {
-      const versionResponse = await fetch('/api/catalog/version', { cache: 'no-store' });
-      if (!versionResponse.ok) return;
-      const version = String((await versionResponse.json()).version || '');
-      if (meta?.version === version && meta?.count === records.size && records.size) return;
-
-      const fresh = [];
-      let after = '';
-      do {
-        const response = await fetch(`/api/catalog?limit=${PAGE}&after=${encodeURIComponent(after)}`, { cache: 'no-store' });
-        if (!response.ok) return;
-        const page = await response.json();
-        fresh.push(...(page.files || []));
-        after = page.nextAfter || '';
-        await idle();
-      } while (after);
-
-      await writeSnapshot(fresh, version);
-    } catch (error) {
-      console.warn('Could not refresh Mochimono catalog cache', error);
-    } finally {
-      refreshing = false;
-    }
-  }
-
-  function scheduleRefresh(delay = 1500) {
-    clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => {
-      const run = () => fetchFreshSnapshot().catch(() => {});
-      if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout: 2000 });
-      else run();
-    }, delay);
-  }
-
-  filesElement?.addEventListener('load', event => {
-    const image = event.target;
-    if (!(image instanceof HTMLImageElement) || !image.classList.contains('cached-thumb')) return;
-    const hash = image.closest('[data-hash]')?.dataset?.hash || '';
-    if (hash && image.naturalWidth && image.naturalHeight) rememberDimensions(hash, image.naturalWidth, image.naturalHeight).catch(() => {});
-  }, true);
-
-  // Do not infer application state from UI wording. In particular, locations.js
-  // intentionally renames "All sources" to "Origin". The old startup helpers
-  // used that text as a readiness signal, which made canonical-date/timeline
-  // behavior depend on MutationObserver ordering. A version check is the source
-  // of truth now, and cache maintenance stays off the first-paint critical path.
-  setTimeout(() => scheduleRefresh(0), 5000);
-  window.addEventListener('mochimono:locations-updated', () => scheduleRefresh(1500));
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) scheduleRefresh(2500);
-  });
-  window.addEventListener('focus', () => scheduleRefresh(2500), { passive: true });
-  addEventListener('beforeunload', () => clearTimeout(refreshTimer), { once: true });
-
-  // Retire the two partial caches. Keeping them around would make debugging
-  // future startup behavior unnecessarily ambiguous even though their scripts
-  // are no longer loaded.
-  try {
-    localStorage.removeItem('mochimono-fast-local-v1');
-    localStorage.removeItem('mochimono-timeline-rail-v1');
-  } catch {}
-
-  window.mochimonoCatalogCache = { rememberDimensions, refresh: () => scheduleRefresh(0) };
-  restore().catch(() => {});
+  const next = { ...previous, width, height };
+  records.set(hash, next);
+  const transaction = db.transaction('files', 'readwrite');
+  transaction.objectStore('files').put({ ...next, __snapshot: meta?.version || previous.__snapshot || '' });
+  await transactionDone(transaction).catch(() => {});
 }
+
+async function clear() {
+  const db = await openDb();
+  if (!db) return;
+  const transaction = db.transaction(['files', 'meta'], 'readwrite');
+  transaction.objectStore('files').clear();
+  transaction.objectStore('meta').clear();
+  await transactionDone(transaction);
+  meta = null;
+  records.clear();
+}
+
+window.mochimonoCatalogCache = {
+  load,
+  save,
+  rememberDimensions,
+  clear,
+  state: () => ({ version: meta?.version || '', count: records.size, savedAt: Number(meta?.savedAt) || 0 })
+};
