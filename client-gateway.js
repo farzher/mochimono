@@ -84,10 +84,10 @@ function firstCandidate(snapshot, hash) {
   return snapshot.candidates.get(String(hash))?.[0] || null;
 }
 
-function queueSnapshotProvider(snapshot, file) {
+function queueSnapshotProvider(snapshot, file, background = false) {
   const candidate = firstCandidate(snapshot, file?.hash);
   if (!file || !candidate) return false;
-  return queueProviderThumbnail({ hash: file.hash, filename: file.filename, mime: file.mime, candidate });
+  return queueProviderThumbnail({ hash: file.hash, filename: file.filename, mime: file.mime, candidate }, { background });
 }
 
 function queueCanonicalPreview(snapshot, file) {
@@ -108,6 +108,7 @@ function queueCanonicalPreview(snapshot, file) {
 async function checkThumbnails(req, res) {
   const body = await readJson(req, 256 * 1024);
   if (!Array.isArray(body.hashes) || body.hashes.length > 500) return json(res, 400, { error: 'hashes must be an array of at most 500 items' });
+  const background = body.background === true;
   const hashes = [...new Set(body.hashes.map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
   const ready = new Map();
   const locals = localCandidates(hashes);
@@ -127,15 +128,14 @@ async function checkThumbnails(req, res) {
     }
 
     // A local image can paint immediately from its original file, but still
-    // create a small persistent preview in the deliberately bounded background
-    // queue. Subsequent grid visits then use the WebP cache instead of decoding
-    // the full original again. Videos still need an actual generated frame.
+    // create a small persistent preview. Explicit folder warming is background
+    // priority, while visible grid/viewer checks remain urgent.
     if (String(candidate.mime || '').startsWith('image/')) {
       ready.set(hash, { hash, width: 0, height: 0, duration: null });
-      queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate });
+      queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
       return;
     }
-    queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate });
+    queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
   }));
 
   let snapshot = null;
@@ -151,7 +151,7 @@ async function checkThumbnails(req, res) {
       }
       const thumb = await providerThumbnail(hash);
       if (thumb) ready.set(hash, thumb);
-      else queueSnapshotProvider(snapshot, file);
+      else queueSnapshotProvider(snapshot, file, background);
     }));
   }
 
@@ -188,7 +188,10 @@ async function serveLocalObject(req, res, candidate) {
   const headers = {
     'content-type': candidate.mime || 'application/octet-stream',
     'accept-ranges': 'bytes',
-    'cache-control': 'private, max-age=60'
+    // /api/objects is content-addressed by SHA-256. A successful response for a
+    // hash is immutable, so let the browser keep large local originals instead
+    // of rereading/redecoding them every time the viewer returns to that file.
+    'cache-control': 'private, max-age=31536000, immutable'
   };
   const range = String(req.headers.range || '');
   if (!range) {
@@ -322,7 +325,9 @@ export async function handleClientGateway(req, res, url) {
     return true;
   }
   if (req.method === 'GET' && url.pathname === '/api/client/local-catalog') {
-    json(res, 200, localCatalog(url.searchParams.get('limit')));
+    const path = String(url.searchParams.get('path') || '');
+    const offset = url.searchParams.has('offset') ? url.searchParams.get('offset') : null;
+    json(res, 200, localCatalog(url.searchParams.get('limit'), path, offset));
     return true;
   }
   if (req.method === 'POST' && url.pathname === '/api/reveal-file') {
