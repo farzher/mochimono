@@ -33,7 +33,8 @@
   gap:20px!important;
   min-height:26px;
 }
-#storagePane.storage-v2 .storage-folder-facts [data-folder-size]{
+#storagePane.storage-v2 .storage-folder-facts [data-folder-size],
+#storagePane.storage-v2 .storage-folder-facts [data-dashboard-folder-size]{
   width:9ch;
   white-space:nowrap;
 }
