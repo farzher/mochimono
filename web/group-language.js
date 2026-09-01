@@ -1,3 +1,5 @@
+import './minimal-toolbar.js';
+
 const source = document.querySelector('#source');
 const filter = document.querySelector('#collectionFilter');
 const selectionGroup = document.querySelector('#selectionCollection');
