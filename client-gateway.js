@@ -118,8 +118,6 @@ async function checkThumbnails(req, res) {
       return;
     }
     if (String(candidate.mime || '').startsWith('image/')) {
-      // Local photos are already immediately addressable over localhost. Do not
-      // spend CPU decoding + WebP-encoding a duplicate provider thumbnail.
       ready.set(hash, { hash, width: 0, height: 0, duration: null });
       return;
     }
@@ -271,6 +269,12 @@ async function proxyApi(req, res, url) {
 }
 
 export async function handleClientGateway(req, res, url) {
+  if (req.method === 'GET' && url.pathname === '/api/health') {
+    // This route only proves that the local Agent/gateway is responsive. Do not
+    // block first paint on building the entire merged server/backup/local catalog.
+    json(res, 200, { ok: true });
+    return true;
+  }
   if (req.method === 'POST' && url.pathname === '/api/client/login') {
     await login(req, res);
     return true;
