@@ -12,6 +12,7 @@ let stopped = false;
 let saveTimer = 0;
 let warmTimer = 0;
 let fullCatalogStarted = false;
+let fullCatalogFinished = false;
 
 function needsRestore() {
   const files = document.querySelector('#files');
@@ -161,13 +162,32 @@ async function readCompleteLocalCatalog() {
       const data = await response.json();
       const files = Array.isArray(data.files) ? data.files : [];
       if (files.length) applyFiles(files);
-      if (data.nextOffset == null) break;
+      if (data.nextOffset == null) {
+        fullCatalogFinished = true;
+        break;
+      }
       offset = Number(data.nextOffset) || 0;
       // Yield between SQLite/JSON pages so first-paint interaction always wins.
       await new Promise(resolve => setTimeout(resolve, 0));
     }
-    window.dispatchEvent(new CustomEvent('mochimono:local-catalog-ready', { detail: { count: cached.size } }));
+    if (fullCatalogFinished) window.dispatchEvent(new CustomEvent('mochimono:local-catalog-ready', { detail: { count: cached.size } }));
   } catch {}
+  finally {
+    // If a tab was hidden midway, allow the complete SQLite pass to resume when
+    // visible instead of considering a partial read permanently finished.
+    if (!fullCatalogFinished) fullCatalogStarted = false;
+  }
+}
+
+async function browseIndexingActive() {
+  if (stopped || document.hidden) return false;
+  try {
+    const response = await fetch('/api/state', { cache:'no-store' });
+    if (!response.ok) return false;
+    const data = await response.json();
+    const job = data.job;
+    return Boolean(job?.status === 'running' && /^Indexing$/i.test(String(job?.progress?.phase || '')));
+  } catch { return false; }
 }
 
 async function fastLocalStart() {
@@ -187,14 +207,20 @@ async function fastLocalStart() {
   setTimeout(() => refreshReadyThumbs().catch(() => {}), 30_000);
 
   const started = Date.now();
-  const timer = setInterval(() => {
+  const timer = setInterval(async () => {
     if (stopped || Date.now() - started > 90_000) {
-      stopped = true;
       clearInterval(timer);
       return;
     }
-    readFastCatalog();
+    // Fast local metadata only needs repeated merging while an index is actively
+    // publishing staged rows. Idle libraries already have their full SQLite pass;
+    // rereading 2k rows every 1.5s was wasted work and could downgrade dates.
+    if (await browseIndexingActive()) readFastCatalog();
   }, 1500);
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && !fullCatalogFinished) readCompleteLocalCatalog().catch(() => {});
+  });
   window.addEventListener('beforeunload', () => {
     stopped = true;
     clearInterval(timer);
