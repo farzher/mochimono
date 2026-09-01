@@ -1,0 +1,73 @@
+/* Storage dashboard values may update while indexing/syncing, but the layout should not move. */
+#storagePane.storage-v2,
+#serverStorage{
+  font-variant-numeric:tabular-nums lining-nums;
+}
+
+#storagePane.storage-v2 .storage-status-main{
+  position:relative;
+}
+#storagePane.storage-v2 .storage-status-word{
+  position:absolute;
+  left:calc(50% + 42px);
+  white-space:nowrap;
+}
+
+#storagePane.storage-v2 .storage-ring strong{
+  min-width:7ch;
+  text-align:center;
+}
+#storagePane.storage-v2 .storage-ring small{
+  min-width:12ch;
+  text-align:center;
+}
+#storagePane.storage-v2 .storage-file-check small{
+  min-width:7ch;
+  text-align:center;
+}
+
+#storagePane.storage-v2 .storage-folder-facts{
+  display:grid!important;
+  grid-template-columns:9ch minmax(12ch,1fr)!important;
+  align-items:baseline!important;
+  gap:20px!important;
+  min-height:26px;
+}
+#storagePane.storage-v2 .storage-folder-facts [data-folder-size]{
+  width:9ch;
+  white-space:nowrap;
+}
+#storagePane.storage-v2 .storage-folder-facts [data-folder-count]{
+  min-width:12ch;
+  white-space:nowrap;
+}
+#storagePane.storage-v2 .storage-folder-node>span{
+  min-width:5.5ch;
+}
+#storagePane.storage-v2 .storage-folder-node small{
+  display:block;
+  min-width:5.5ch;
+  white-space:nowrap;
+}
+#storagePane.storage-v2 .storage-folder-node:last-child>span{
+  text-align:right;
+}
+
+#storagePane.storage-v2 .storage-backup-head strong{
+  display:inline-block;
+  min-width:4ch;
+}
+#storagePane.storage-v2 .storage-backup-foot span:first-child{
+  min-width:17ch;
+}
+#storagePane.storage-v2 .storage-backup-foot span:last-child{
+  min-width:8ch;
+  text-align:right;
+}
+
+/* Status meters should jump to their new state; only real job progress should animate. */
+#storagePane.storage-v2 .storage-route-line i,
+#storagePane.storage-v2 .storage-folder-route-line i,
+#storagePane.storage-v2 .storage-backup-bar i{
+  transition:none!important;
+}
