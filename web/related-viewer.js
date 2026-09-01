@@ -6,15 +6,16 @@ const actions = document.querySelector('.viewer-actions');
 const infoButton = document.querySelector('#viewer-info-button');
 
 if (viewer && viewerOpen && prev && next && actions) {
-  const labels = {
-    view: 'Current view',
-    similar: 'Similar',
-    nearby: 'Nearby',
-    folder: 'Same folder',
-    origin: 'Same origin',
-    type: 'Same type',
-    tags: 'Same groups'
+  const modes = {
+    view: { label: 'Normal navigation', detail: 'Use the current library order' },
+    similar: { label: 'Related files', detail: 'Group, folder, source, type, name & date' },
+    nearby: { label: 'Nearby in time', detail: 'Browse the library by file date' },
+    folder: { label: 'Same folder', detail: 'Only files from this folder' },
+    origin: { label: 'Same source', detail: 'Only files from the same import/source' },
+    type: { label: 'Same type', detail: 'Only files of this media type' },
+    tags: { label: 'Same groups', detail: 'Files sharing any group with this file' }
   };
+  const labels = Object.fromEntries(Object.entries(modes).map(([key, value]) => [key, value.label]));
 
   const style = document.createElement('style');
   style.textContent = `
@@ -25,28 +26,41 @@ if (viewer && viewerOpen && prev && next && actions) {
     .viewer-related svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.55;stroke-linecap:round;stroke-linejoin:round}
     .viewer-related-label{display:none;font-size:9px;font-weight:700;white-space:nowrap}
     .viewer-related.active .viewer-related-label{display:inline}
-    .viewer-related-popover{position:absolute;z-index:130;right:0;top:40px;width:154px;padding:5px;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:#181619;box-shadow:0 16px 45px rgba(0,0,0,.5)}
-    .viewer-related-popover button{display:block;width:100%;height:32px;padding:0 9px;border-radius:7px;background:transparent;color:#bdb4b1;font-size:10px;font-weight:650;text-align:left}
+    .viewer-related-popover{position:absolute;z-index:130;right:0;top:40px;width:246px;padding:6px;border:1px solid rgba(255,255,255,.08);border-radius:10px;background:#181619;box-shadow:0 16px 45px rgba(0,0,0,.5)}
+    .viewer-related-popover button{display:grid;width:100%;min-height:43px;align-content:center;gap:2px;padding:6px 9px;border-radius:7px;background:transparent;color:#bdb4b1;text-align:left}
     .viewer-related-popover button:hover{background:#282428;color:#fff}
     .viewer-related-popover button.active{color:#efb0aa;background:rgba(239,160,154,.07)}
-    @media(max-width:700px){.viewer-related.active .viewer-related-label{display:none}.viewer-related-popover{position:fixed;right:8px;top:50px;width:160px}}
+    .viewer-related-popover button strong{font-size:10px;font-weight:700;color:inherit}
+    .viewer-related-popover button span{font-size:9px;font-weight:500;line-height:1.25;color:#7f7775}
+    .viewer-related-popover button.active span,.viewer-related-popover button:hover span{color:#aaa19e}
+    .viewer-related-hint{position:absolute;right:0;top:40px;display:none;align-items:center;gap:7px;padding:6px 9px;border-radius:8px;background:rgba(20,18,21,.88);color:#a89f9c;font-size:9px;font-weight:600;white-space:nowrap;pointer-events:none;box-shadow:0 5px 20px rgba(0,0,0,.25)}
+    .viewer-related.active:not([open]) .viewer-related-hint.show{display:flex}
+    .viewer-related-hint b{color:#eee7e3;font-size:10px;font-weight:700}
+    @media(max-width:700px){
+      .viewer-related.active .viewer-related-label{display:none}
+      .viewer-related-popover{position:fixed;right:8px;top:50px;width:min(270px,calc(100vw - 16px))}
+      .viewer-related-hint{right:-6px}
+    }
   `;
   document.head.append(style);
 
   const control = document.createElement('details');
   control.className = 'viewer-related';
   control.innerHTML = `
-    <summary title="Browse related" aria-label="Browse related">
+    <summary title="Related navigation" aria-label="Related navigation">
       <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="6" cy="10" r="3"/><circle cx="14" cy="10" r="3"/><path d="M9 10h2"/></svg>
       <span class="viewer-related-label"></span>
     </summary>
     <div class="viewer-related-popover">
-      ${Object.entries(labels).map(([value, label]) => `<button type="button" data-related-mode="${value}">${label}</button>`).join('')}
-    </div>`;
+      ${Object.entries(modes).map(([value, item]) => `<button type="button" data-related-mode="${value}"><strong>${item.label}</strong><span>${item.detail}</span></button>`).join('')}
+    </div>
+    <div class="viewer-related-hint"><b></b><span>← → browse</span></div>`;
   actions.insertBefore(control, infoButton || actions.firstChild);
 
   const summary = control.querySelector('summary');
   const modeLabel = control.querySelector('.viewer-related-label');
+  const hint = control.querySelector('.viewer-related-hint');
+  const hintLabel = hint.querySelector('b');
   const modeButtons = [...control.querySelectorAll('[data-related-mode]')];
 
   let mode = 'view';
@@ -54,6 +68,7 @@ if (viewer && viewerOpen && prev && next && actions) {
   let context = [];
   let generation = 0;
   let catalogPromise = null;
+  let hintTimer = 0;
   const collectionsCache = new Map();
   const collectionHashesCache = new Map();
 
@@ -182,17 +197,29 @@ if (viewer && viewerOpen && prev && next && actions) {
     return [];
   }
 
+  function showHint() {
+    clearTimeout(hintTimer);
+    if (mode === 'view') {
+      hint.classList.remove('show');
+      return;
+    }
+    hintLabel.textContent = `${labels[mode]} · ${context.length.toLocaleString()}`;
+    hint.classList.add('show');
+    hintTimer = setTimeout(() => hint.classList.remove('show'), 3200);
+  }
+
   function syncUi(loading = false) {
     control.classList.toggle('active', mode !== 'view');
     for (const button of modeButtons) button.classList.toggle('active', button.dataset.relatedMode === mode);
     if (mode === 'view') {
       modeLabel.textContent = '';
-      summary.title = 'Browse related';
+      summary.title = 'Related navigation';
+      hint.classList.remove('show');
       return;
     }
     const text = loading ? `${labels[mode]}…` : `${labels[mode]} · ${context.length.toLocaleString()}`;
     modeLabel.textContent = text;
-    summary.title = `${text} · use left/right arrows`;
+    summary.title = `${text} · left/right arrows browse this set`;
   }
 
   function updateButtons() {
@@ -226,11 +253,15 @@ if (viewer && viewerOpen && prev && next && actions) {
       if (mine !== generation || mode === 'view') return;
       context = built;
       if (!context.some(file => file.hash === currentHash())) window.mochimonoOpenViewer?.(anchorHash);
-      requestAnimationFrame(updateButtons);
+      requestAnimationFrame(() => {
+        updateButtons();
+        showHint();
+      });
     } catch {
       if (mine !== generation) return;
       context = [];
       updateButtons();
+      showHint();
     }
   }
 
@@ -285,6 +316,7 @@ if (viewer && viewerOpen && prev && next && actions) {
     anchorHash = '';
     context = [];
     control.open = false;
+    clearTimeout(hintTimer);
     syncUi(false);
   }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 
