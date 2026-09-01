@@ -2,6 +2,8 @@ const CLIENT = document.documentElement.classList.contains('client-library');
 const SNAPSHOT_KEY = 'mochimono-fast-local-v1';
 const SNAPSHOT_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 const READY_LIMIT = 24000;
+const FAST_LIMIT = 2000;
+const SNAPSHOT_LIMIT = 1200;
 const cached = new Map();
 const readyThumbs = new Set();
 window.mochimonoReadyThumbs = readyThumbs;
@@ -24,6 +26,11 @@ function paint(items) {
   return true;
 }
 
+function snapshotFiles() {
+  const time = file => new Date(file?.fileDate || file?.createdAt || 0).getTime() || 0;
+  return [...cached.values()].sort((a, b) => time(b) - time(a)).slice(0, SNAPSHOT_LIMIT);
+}
+
 function scheduleSave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
@@ -31,7 +38,7 @@ function scheduleSave() {
       const ready = [...readyThumbs];
       localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({
         savedAt: Date.now(),
-        files: [...cached.values()].slice(0, 720),
+        files: snapshotFiles(),
         ready: ready.slice(Math.max(0, ready.length - READY_LIMIT))
       }));
     } catch {}
@@ -130,12 +137,14 @@ function scheduleWarm(delay) {
 async function readFastCatalog() {
   if (!CLIENT || stopped || document.hidden) return;
   try {
-    const response = await fetch('/api/client/local-catalog?limit=720', { cache: 'no-store' });
+    const response = await fetch(`/api/client/local-catalog?limit=${FAST_LIMIT}`, { cache: 'no-store' });
     if (!response.ok) return;
     const data = await response.json();
     const files = Array.isArray(data.files) ? data.files : [];
     applyFiles(files);
-    refreshReadyThumbs(files).catch(() => {});
+    // Do not bulk-check/generate every preview here. thumbs.js checks the actual
+    // visible cards immediately after they render, so those previews get the
+    // thumbnail queue first. Background warming starts only after first paint.
   } catch {}
 }
 
