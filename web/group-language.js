@@ -6,6 +6,10 @@ const selectionGroup = document.querySelector('#selectionCollection');
 const viewerGroups = document.querySelector('#viewerCollections');
 const search = document.querySelector('#search');
 
+function closePopovers() {
+  for (const item of document.querySelectorAll('.library-filter-menu[open],.library-size-menu[open],.library-view-menu[open],.viewer-related[open]')) item.open = false;
+}
+
 function text(element, value) {
   if (element && element.textContent !== value) element.textContent = value;
 }
@@ -61,4 +65,8 @@ function schedule() {
 }
 
 new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
+window.addEventListener('blur', closePopovers);
+window.addEventListener('message', event => {
+  if (event.data?.type === 'mochimono-close-popovers') closePopovers();
+});
 sync();
