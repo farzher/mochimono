@@ -163,7 +163,11 @@ export function driveCoverage(row) {
     FROM objects o WHERE o.state = 'active' AND ${filter.sql}
   `).get(...filter.params);
   const protectedRow = db.prepare(`
-    SELECT COUNT(*) AS count, COALESCE(SUM(o.size), 0) AS bytes
+    SELECT COUNT(*) AS count,
+           COALESCE(SUM(o.size), 0) AS bytes,
+           COALESCE(SUM(CASE WHEN r.verified_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS verifiedCount,
+           MIN(r.verified_at) AS oldestVerifiedAt,
+           MAX(r.verified_at) AS lastVerifiedAt
     FROM objects o
     JOIN replicas r ON r.object_hash = o.hash AND r.drive_id = ?
     WHERE o.state = 'active' AND ${filter.sql}
@@ -176,7 +180,10 @@ export function driveCoverage(row) {
     desiredCount: Number(desired.count) || 0,
     desiredBytes: Number(desired.bytes) || 0,
     protectedCount: Number(protectedRow.count) || 0,
-    protectedBytes: Number(protectedRow.bytes) || 0
+    protectedBytes: Number(protectedRow.bytes) || 0,
+    verifiedCount: Number(protectedRow.verifiedCount) || 0,
+    oldestVerifiedAt: protectedRow.oldestVerifiedAt || null,
+    lastVerifiedAt: protectedRow.lastVerifiedAt || null
   };
 }
 
