@@ -55,7 +55,6 @@ setTimeout(() => {
     MOCHIMONO_URL: serverUrl,
     MOCHIMONO_CONFIG_DIR: devConfigDir,
     MOCHIMONO_AGENT_PORT: '8643',
-    MOCHIMONO_THUMBNAIL_WORKERS: process.env.MOCHIMONO_THUMBNAIL_WORKERS || '1',
     MOCHIMONO_NO_OPEN: '1'
   });
 }, 250);
