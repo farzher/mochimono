@@ -70,6 +70,7 @@ if (commandbar && search) {
     .commandbar>.library-size-menu{margin-left:auto}
     .commandbar>.file-count:not([hidden])~.library-size-menu{margin-left:0}
     .commandbar>.views{flex:0 0 auto}
+    .collection-strip button:not(.active):not(.save-view){display:none}
     @media(max-width:840px){
       .commandbar{flex-wrap:nowrap;top:5px}
       .commandbar .search{flex:1 1 auto;min-width:0}
@@ -105,10 +106,15 @@ if (commandbar && search) {
     filterMenu.querySelector('summary').title = count ? `Filters · ${count} active` : 'Filters';
     const searching = Boolean(search.value.trim());
     if (fileCount) fileCount.hidden = !searching && !count;
+    if (sizeMenu && mediaSizes) {
+      sizeMenu.hidden = mediaSizes.hidden;
+      if (sizeMenu.hidden) sizeMenu.open = false;
+    }
   }
 
   for (const [control] of controls) control.addEventListener('change', sync);
   search.addEventListener('input', sync);
+  if (mediaSizes) new MutationObserver(sync).observe(mediaSizes, { attributes: true, attributeFilter: ['hidden'] });
   sync();
 
   const menus = [filterMenu, sizeMenu].filter(Boolean);
