@@ -37,7 +37,7 @@ if (files && viewer) {
   }, true);
 
   const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
-  const center = rect => ({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+  const centerX = rect => rect.left + rect.width / 2;
 
   function currentViewerHash() {
     const match = viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([^/?#]+)/);
@@ -61,30 +61,35 @@ if (files && viewer) {
     return cardFor(hash);
   }
 
+  function visualRows() {
+    const items = [...files.querySelectorAll('.file-card[data-hash]')]
+      .map(card => ({ card, rect: card.getBoundingClientRect() }))
+      .filter(item => item.rect.width > 0 && item.rect.height > 0)
+      .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
+    const rows = [];
+    for (const item of items) {
+      const row = rows.at(-1);
+      if (!row || Math.abs(item.rect.top - row.top) > 4) {
+        rows.push({ top: item.rect.top, items: [item] });
+      } else {
+        row.items.push(item);
+        row.top = Math.min(row.top, item.rect.top);
+      }
+    }
+    return rows;
+  }
+
   function verticalTarget(current, direction) {
     if (!current) return null;
-    const origin = center(current.getBoundingClientRect());
-    const candidates = [];
-    for (const card of files.querySelectorAll('.file-card[data-hash]')) {
-      if (card === current || !card.isConnected) continue;
-      const rect = card.getBoundingClientRect();
-      if (!rect.width || !rect.height) continue;
-      const point = center(rect);
-      const vertical = direction * (point.y - origin.y);
-      if (vertical <= 3) continue;
-      candidates.push({ card, point, vertical });
-    }
-    if (!candidates.length) return null;
-
-    // The gallery is justified and columns are intentionally not fixed. Find the
-    // immediately adjacent visual row first, then choose the item whose center is
-    // horizontally closest to the current item. This behaves like navigating the
-    // actual grid rather than guessing a column count.
-    const nearestRow = Math.min(...candidates.map(item => item.vertical));
-    const rowTolerance = 5;
-    const row = candidates.filter(item => Math.abs(item.vertical - nearestRow) <= rowTolerance);
-    row.sort((a, b) => Math.abs(a.point.x - origin.x) - Math.abs(b.point.x - origin.x));
-    return row[0]?.card || null;
+    const rows = visualRows();
+    const rowIndex = rows.findIndex(row => row.items.some(item => item.card === current));
+    if (rowIndex < 0) return null;
+    const targetRow = rows[rowIndex + direction];
+    if (!targetRow) return null;
+    const x = centerX(current.getBoundingClientRect());
+    return targetRow.items
+      .slice()
+      .sort((a, b) => Math.abs(centerX(a.rect) - x) - Math.abs(centerX(b.rect) - x))[0]?.card || null;
   }
 
   let verticalNavigation = false;
@@ -95,8 +100,6 @@ if (files && viewer) {
       const hash = currentViewerHash();
       let current = await ensureCard(hash);
       if (!current) return;
-      // gallery.js may still have a pending layout after a newly learned aspect
-      // ratio or a virtual-window jump.
       await frame();
       let target = verticalTarget(current, direction);
       if (!target && window.mochimonoLibrary?.extend?.(direction)) {
@@ -111,7 +114,10 @@ if (files && viewer) {
     }
   }
 
-  document.addEventListener('keydown', event => {
+  // Own Up/Down at window capture level while the viewer is open. The grid
+  // keyboard cursor also listens at window capture; registering this earlier and
+  // stopping propagation prevents it from focusing the hidden grid underneath.
+  window.addEventListener('keydown', event => {
     if (viewer.hidden || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
     event.preventDefault();
