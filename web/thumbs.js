@@ -161,7 +161,10 @@ async function responseFor(hash) {
   const cached = await cache?.match(canonical);
   if (cached?.ok) return cached;
 
-  const response = await fetch(canonical, { cache: 'no-store' });
+  // Preserve anything the previous viewer already put in the browser's immutable
+  // HTTP cache. The first visit after this rewrite promotes that response into
+  // Mochimono's explicit Cache Storage without downloading it again.
+  const response = await fetch(canonical, { cache: 'force-cache' });
   if (!response.ok) return response;
   cache?.put(canonical, response.clone()).catch(() => {});
   return response;
@@ -271,7 +274,8 @@ async function checkNearby() {
       }
     }
     await requestCanonical(missing);
-    for (const card of cards) if (missing.includes(card.dataset.hash)) queueFallback(card);
+    const missingSet = new Set(missing);
+    for (const card of cards) if (missingSet.has(card.dataset.hash)) queueFallback(card);
   } catch {
     for (const hash of hashes) {
       const state = states.get(hash) || {};
