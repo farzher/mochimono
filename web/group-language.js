@@ -4,12 +4,15 @@ const source = document.querySelector('#source');
 const filter = document.querySelector('#collectionFilter');
 const selectionGroup = document.querySelector('#selectionCollection');
 const viewerGroups = document.querySelector('#viewerCollections');
+const search = document.querySelector('#search');
 
 function text(element, value) {
   if (element && element.textContent !== value) element.textContent = value;
 }
 
 function sync() {
+  if (search) search.placeholder = 'Search';
+
   source?.setAttribute('aria-label', 'Origin');
   if (source?.options[0]) text(source.options[0], 'Origin');
 
