@@ -11,7 +11,6 @@ if (CLIENT && 'indexedDB' in window) {
 
   const app = document.querySelector('#app');
   const filesElement = document.querySelector('#files');
-  const source = document.querySelector('#source');
   let dbPromise = null;
   let meta = null;
   let records = new Map();
@@ -182,10 +181,6 @@ if (CLIENT && 'indexedDB' in window) {
     }
   }
 
-  function canonicalSettled() {
-    return source?.options?.[0]?.textContent?.trim() === 'All sources';
-  }
-
   function scheduleRefresh(delay = 1500) {
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
@@ -202,17 +197,17 @@ if (CLIENT && 'indexedDB' in window) {
     if (hash && image.naturalWidth && image.naturalHeight) rememberDimensions(hash, image.naturalWidth, image.naturalHeight).catch(() => {});
   }, true);
 
-  if (source) {
-    const observer = new MutationObserver(() => {
-      if (canonicalSettled()) scheduleRefresh();
-    });
-    observer.observe(source, { childList: true, subtree: true });
-    if (canonicalSettled()) scheduleRefresh();
-  }
-
+  // Do not infer application state from UI wording. In particular, locations.js
+  // intentionally renames "All sources" to "Origin". The old startup helpers
+  // used that text as a readiness signal, which made canonical-date/timeline
+  // behavior depend on MutationObserver ordering. A version check is the source
+  // of truth now, and cache maintenance stays off the first-paint critical path.
+  setTimeout(() => scheduleRefresh(0), 5000);
+  window.addEventListener('mochimono:locations-updated', () => scheduleRefresh(1500));
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && canonicalSettled()) scheduleRefresh(2500);
+    if (!document.hidden) scheduleRefresh(2500);
   });
+  window.addEventListener('focus', () => scheduleRefresh(2500), { passive: true });
   addEventListener('beforeunload', () => clearTimeout(refreshTimer), { once: true });
 
   // Retire the two partial caches. Keeping them around would make debugging
