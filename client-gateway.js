@@ -234,15 +234,23 @@ function configuredFolder(path) {
 
 function openNativePath(path, selectFile = false) {
   let child;
+  const options = { detached: true, stdio: 'ignore', windowsHide: true };
   if (platform() === 'win32') {
-    child = spawn('explorer.exe', selectFile ? [`/select,${path}`] : [path], { detached: true, stdio: 'ignore', windowsHide: true });
+    // explorer.exe parses /select, as an option followed by the file path. Keep
+    // the path as its own argument so Node handles spaces/quoting correctly.
+    child = spawn('explorer.exe', selectFile ? ['/select,', path] : [path], options);
   } else if (platform() === 'darwin') {
-    child = spawn('open', selectFile ? ['-R', path] : [path], { detached: true, stdio: 'ignore' });
+    child = spawn('open', selectFile ? ['-R', path] : [path], options);
   } else {
-    child = spawn('xdg-open', [selectFile ? dirname(path) : path], { detached: true, stdio: 'ignore' });
+    child = spawn('xdg-open', [selectFile ? dirname(path) : path], options);
   }
-  child.on('error', () => {});
-  child.unref();
+  return new Promise((resolvePromise, reject) => {
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolvePromise();
+    });
+  });
 }
 
 async function proxyApi(req, res, url) {
@@ -327,8 +335,12 @@ export async function handleClientGateway(req, res, url) {
       const info = candidate ? await stat(candidate.path).catch(() => null) : null;
       if (!candidate || !info?.isFile()) json(res, 404, { error: 'No local copy is currently available' });
       else {
-        openNativePath(candidate.path, true);
-        json(res, 200, { ok: true });
+        try {
+          await openNativePath(candidate.path, true);
+          json(res, 200, { ok: true, path: candidate.path });
+        } catch (error) {
+          json(res, 500, { error: `Could not open file browser: ${error?.message || error}` });
+        }
       }
     }
     return true;
@@ -339,8 +351,12 @@ export async function handleClientGateway(req, res, url) {
     const info = path ? await stat(path).catch(() => null) : null;
     if (!path || !info?.isDirectory()) json(res, 404, { error: 'Folder is not available' });
     else {
-      openNativePath(path, false);
-      json(res, 200, { ok: true });
+      try {
+        await openNativePath(path, false);
+        json(res, 200, { ok: true, path });
+      } catch (error) {
+        json(res, 500, { error: `Could not open folder: ${error?.message || error}` });
+      }
     }
     return true;
   }
