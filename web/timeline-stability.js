@@ -101,7 +101,9 @@ if (CLIENT && rail && source) {
     if (holdingCache) queueRestore();
     else saveCanonicalRail();
   });
-  railObserver.observe(rail, { childList:true, subtree:true, attributes:true, attributeFilter:['hidden'] });
+  // Only observe replacement of the rail itself. The active tick and thumb move
+  // during normal scrolling and should not create cache work.
+  railObserver.observe(rail, { childList:true, subtree:false, attributes:true, attributeFilter:['hidden'] });
 
   const userChangedView = () => {
     if (!defaultView()) holdingCache = false;
