@@ -5,6 +5,7 @@ const sizes = sizeButtons.map(button => Number(button.dataset.mediaSize));
 const pendingGrids = new Set();
 let frame = 0;
 let fullLayout = false;
+let lastFilesWidth = 0;
 
 function mediaSize() {
   return Number(sizeInput.value) || 170;
@@ -261,7 +262,12 @@ new MutationObserver(records => {
   const grids = changedGrids(records);
   for (const grid of grids) schedule(grid);
 }).observe(files, { childList: true, subtree: true });
-new ResizeObserver(scheduleAll).observe(files);
+new ResizeObserver(entries => {
+  const width = Math.round(entries[0]?.contentRect?.width || 0);
+  if (!width || width === lastFilesWidth) return;
+  lastFilesWidth = width;
+  scheduleAll();
+}).observe(files);
 
 const saved = Number(localStorage.getItem('mochimono-media-size')) || 170;
 const nearest = sizes.reduce((best, size) => Math.abs(size - saved) < Math.abs(best - saved) ? size : best, sizes[0]);
