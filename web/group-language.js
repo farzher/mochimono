@@ -24,10 +24,10 @@ function sync() {
   }
 
   if (selectionGroup) {
-    text(selectionGroup, 'Add to group');
     selectionGroup.title = selectionGroup.disabled && selectionGroup.title
       ? selectionGroup.title
       : 'Add selected files to a group';
+    selectionGroup.setAttribute('aria-label', 'Add selected files to a group');
   }
 
   const add = viewerGroups?.querySelector('[data-add-collection]');
