@@ -1,6 +1,7 @@
 const viewer = document.querySelector('#viewer');
-const viewerMedia = document.querySelector('#viewer-media');
 const viewerOpen = document.querySelector('#viewer-open');
+const viewerPrev = document.querySelector('#viewer-prev');
+const viewerNext = document.querySelector('#viewer-next');
 const files = document.querySelector('#files');
 
 const objectHash = value => String(value || '').match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
@@ -10,111 +11,165 @@ const hasLocalCopy = hash => Boolean(hash && (
   window.mochimonoLocations?.forHash?.(hash)?.length
 ));
 
-// app.js already does the right thing for the current image: keep the small
-// thumbnail visible, load/decode the full object offscreen, then swap it in.
-// Earlier local-first code bypassed that handoff and also blocked both neighbor
-// preloads. Keep the current loader intact and only serialize LOCAL neighbor
-// warming so huge photos do not all decode at once.
 const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
-const approved = new WeakSet();
-const pending = [];
-const kept = [];
+const decoded = new Map();
+const preloads = new Map();
 const hoverWarm = new Map();
-let warming = null;
-let queuedFor = '';
+const MAX_DECODED = 4;
+const MAX_DECODED_PIXELS = 50_000_000;
+const MAX_PRELOADS = 2;
+let decodedPixels = 0;
+let currentLoad = null;
 let hoverTimer = 0;
+let navPending = 0;
+let navTimer = 0;
+let lastNavAt = 0;
 
-function keep(image) {
-  kept.push(image);
-  while (kept.length > 3) kept.shift();
+function nativeSet(image, value) {
+  descriptor?.set?.call(image, value);
 }
 
-function clearPendingFor(current) {
-  if (queuedFor === current) return;
-  queuedFor = current;
-  pending.length = 0;
+function abortImage(image) {
+  if (!image) return;
+  preloads.delete(image);
+  if (currentLoad === image) currentLoad = null;
+  image.onload = null;
+  image.onerror = null;
+  try { nativeSet(image, ''); } catch {}
 }
 
-function queueNeighbor(value) {
-  const hash = objectHash(value);
-  if (!hash || !viewer || viewer.hidden || !hasLocalCopy(hash)) return false;
-  const current = currentHash();
-  if (!current || hash === current) return false;
-  clearPendingFor(current);
-  if (!pending.some(item => item.hash === hash)) pending.push({ hash, url: String(value) });
-  return true;
-}
-
-function warmNext() {
-  if (warming || !viewer || viewer.hidden) return;
-  const current = currentHash();
-  clearPendingFor(current);
-  let task;
-  while ((task = pending.shift())) {
-    if (task.hash && task.hash !== current) break;
-    task = null;
+function retain(hash, image) {
+  if (!hash || !image?.naturalWidth || !image?.naturalHeight) return;
+  const pixels = image.naturalWidth * image.naturalHeight;
+  const previous = decoded.get(hash);
+  if (previous) decodedPixels -= previous.pixels;
+  decoded.delete(hash);
+  decoded.set(hash, { image, pixels });
+  decodedPixels += pixels;
+  while (decoded.size > MAX_DECODED || decodedPixels > MAX_DECODED_PIXELS) {
+    const [oldHash, old] = decoded.entries().next().value;
+    decoded.delete(oldHash);
+    decodedPixels -= old.pixels;
   }
-  if (!task) return;
-
-  const image = new Image();
-  approved.add(image);
-  warming = image;
-  image.decoding = 'async';
-  const done = async () => {
-    if (warming !== image) return;
-    try { await image.decode(); } catch {}
-    keep(image);
-    warming = null;
-    warmNext();
-  };
-  image.onload = done;
-  image.onerror = () => {
-    if (warming === image) warming = null;
-    warmNext();
-  };
-  image.src = task.url;
 }
 
-function warmGridCard(card) {
-  if (!card?.matches?.('.file-card.media-card[data-hash]') || card.classList.contains('video-card')) return;
-  const hash = String(card.dataset.hash || '');
-  if (!hash || !hasLocalCopy(hash) || hoverWarm.has(hash)) return;
-  const image = new Image();
-  approved.add(image);
-  image.decoding = 'async';
-  hoverWarm.set(hash, image);
-  while (hoverWarm.size > 2) hoverWarm.delete(hoverWarm.keys().next().value);
-  image.onload = async () => {
+function retainAfterLoad(hash, image) {
+  image.addEventListener('load', async () => {
     try { await image.decode(); } catch {}
-    keep(image);
-  };
-  image.onerror = () => hoverWarm.delete(hash);
-  image.src = `/api/objects/${hash}`;
+    if (image.naturalWidth && image.naturalHeight) retain(hash, image);
+    preloads.delete(image);
+    if (currentLoad === image) currentLoad = null;
+  }, { once:true });
+  image.addEventListener('error', () => {
+    preloads.delete(image);
+    if (currentLoad === image) currentLoad = null;
+  }, { once:true });
+}
+
+function clearStalePreloads() {
+  for (const image of [...preloads.keys()]) abortImage(image);
+}
+
+function trackObjectImage(image, value) {
+  const hash = objectHash(value);
+  if (!hash || !viewer || viewer.hidden || image.isConnected) return;
+  const current = currentHash();
+  if (!current) return;
+
+  retainAfterLoad(hash, image);
+  if (hash === current) {
+    if (currentLoad && currentLoad !== image) abortImage(currentLoad);
+    clearStalePreloads();
+    currentLoad = image;
+    try { image.fetchPriority = 'high'; } catch {}
+    return;
+  }
+
+  try { image.fetchPriority = 'low'; } catch {}
+  preloads.set(image, hash);
+  while (preloads.size > MAX_PRELOADS) abortImage(preloads.keys().next().value);
 }
 
 if (descriptor?.get && descriptor?.set) {
   Object.defineProperty(HTMLImageElement.prototype, 'src', {
-    configurable: true,
-    enumerable: descriptor.enumerable,
-    get: descriptor.get,
+    configurable:true,
+    enumerable:descriptor.enumerable,
+    get:descriptor.get,
     set(value) {
-      if (!approved.has(this) && !this.isConnected && queueNeighbor(value)) return;
+      trackObjectImage(this, value);
       descriptor.set.call(this, value);
     }
   });
 }
 
-if (viewerMedia) {
-  viewerMedia.addEventListener('load', event => {
-    const image = event.target;
-    if (!(image instanceof HTMLImageElement) || !image.isConnected) return;
-    const hash = objectHash(image.currentSrc || image.src);
-    if (!hash || hash !== currentHash()) return;
-    // The visible current full-resolution image has completed its swap. Now the
-    // queued next/previous originals can use spare time without competing with it.
-    warmNext();
-  }, true);
+function warmGridCard(card) {
+  if (!card?.matches?.('.file-card.media-card[data-hash]') || card.classList.contains('video-card')) return;
+  const hash = String(card.dataset.hash || '');
+  if (!hash || !hasLocalCopy(hash) || decoded.has(hash) || hoverWarm.has(hash)) return;
+
+  const image = new Image();
+  image.decoding = 'async';
+  try { image.fetchPriority = 'low'; } catch {}
+  hoverWarm.set(hash, image);
+  while (hoverWarm.size > 2) {
+    const [oldHash, oldImage] = hoverWarm.entries().next().value;
+    hoverWarm.delete(oldHash);
+    abortImage(oldImage);
+  }
+  image.onload = async () => {
+    try { await image.decode(); } catch {}
+    hoverWarm.delete(hash);
+    retain(hash, image);
+  };
+  image.onerror = () => hoverWarm.delete(hash);
+  nativeSet(image, `/api/objects/${hash}`);
 }
+
+function navigateOne(direction) {
+  const button = direction < 0 ? viewerPrev : viewerNext;
+  if (!button || button.disabled || viewer.hidden) return false;
+  button.click();
+  lastNavAt = performance.now();
+  return true;
+}
+
+function flushNavigation() {
+  navTimer = 0;
+  if (!navPending || viewer.hidden) {
+    navPending = 0;
+    return;
+  }
+  const direction = Math.sign(navPending);
+  navPending -= direction;
+  if (!navigateOne(direction)) {
+    navPending = 0;
+    return;
+  }
+  if (!navPending) return;
+  const delay = Math.max(0, 34 - (performance.now() - lastNavAt));
+  navTimer = setTimeout(flushNavigation, delay);
+}
+
+function queueNavigation(direction) {
+  if (navPending && Math.sign(navPending) !== direction) navPending = 0;
+  navPending = Math.max(-4, Math.min(4, navPending + direction));
+  if (!navTimer) flushNavigation();
+}
+
+document.addEventListener('keydown', event => {
+  if (!viewer || viewer.hidden || !['ArrowLeft','ArrowRight','ArrowDown','ArrowUp'].includes(event.key)) return;
+  const direction = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  queueNavigation(direction);
+}, true);
+
+document.addEventListener('keyup', event => {
+  if (!['ArrowLeft','ArrowRight','ArrowDown','ArrowUp'].includes(event.key)) return;
+  navPending = 0;
+  clearTimeout(navTimer);
+  navTimer = 0;
+}, true);
 
 if (files) {
   files.addEventListener('pointerover', event => {
@@ -131,4 +186,13 @@ if (files) {
   files.addEventListener('focusin', event => warmGridCard(event.target.closest?.('.file-card.media-card[data-hash]')));
 }
 
-window.addEventListener('mochimono:locations-updated', warmNext);
+if (viewer) {
+  new MutationObserver(() => {
+    if (!viewer.hidden) return;
+    navPending = 0;
+    clearTimeout(navTimer);
+    navTimer = 0;
+    clearStalePreloads();
+    abortImage(currentLoad);
+  }).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
+}
