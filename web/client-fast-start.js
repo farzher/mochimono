@@ -55,6 +55,11 @@ window.mochimonoRememberReadyThumbs = hashes => {
   if (added.length) publishReady(added);
 };
 
+window.addEventListener('mochimono:ready-thumb-missed', event => {
+  const hash = String(event.detail?.hash || '');
+  if (hash && readyThumbs.delete(hash)) scheduleSave();
+});
+
 function restoreSnapshot() {
   if (!CLIENT) return;
   try {
