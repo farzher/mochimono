@@ -2,7 +2,9 @@ const files = document.querySelector('#files');
 const sizeInput = document.querySelector('#mediaSize');
 const sizeButtons = [...document.querySelectorAll('[data-media-size]')];
 const sizes = sizeButtons.map(button => Number(button.dataset.mediaSize));
+const pendingGrids = new Set();
 let frame = 0;
+let fullLayout = false;
 
 function mediaSize() {
   return Number(sizeInput.value) || 158;
@@ -24,10 +26,19 @@ function cardRatio(card) {
   return Number(card.style.getPropertyValue('--ratio')) || 4 / 3;
 }
 
+function px(value) {
+  return `${Math.round(value * 100) / 100}px`;
+}
+
+function setPx(card, property, value) {
+  const next = px(value);
+  if (card.style.getPropertyValue(property) !== next) card.style.setProperty(property, next);
+}
+
 function clearSize(card) {
-  card.style.removeProperty('width');
-  card.style.removeProperty('height');
-  card.style.removeProperty('flex-basis');
+  if (card.style.width) card.style.removeProperty('width');
+  if (card.style.height) card.style.removeProperty('height');
+  if (card.style.flexBasis) card.style.removeProperty('flex-basis');
 }
 
 function setRow(cards, width, target, full, gap) {
@@ -38,9 +49,9 @@ function setRow(cards, width, target, full, gap) {
   const height = full ? fullHeight : target;
   cards.forEach((card, index) => {
     const itemWidth = ratios[index] * height;
-    card.style.width = `${itemWidth}px`;
-    card.style.height = `${height}px`;
-    card.style.flexBasis = `${itemWidth}px`;
+    setPx(card, 'width', itemWidth);
+    setPx(card, 'height', height);
+    setPx(card, 'flex-basis', itemWidth);
   });
 }
 
@@ -113,15 +124,13 @@ function syncRunBreaks(container, cards) {
 
 function justify(container) {
   const cards = [...container.children].filter(child => child.classList.contains('file-card'));
-  if (!cards.length) return;
+  if (!cards.length) return cards;
 
   const width = container.clientWidth;
-  if (!width) return;
+  if (!width) return cards;
   const gap = parseFloat(getComputedStyle(container).columnGap) || 4;
   const target = mediaSize();
 
-  // A document used to disable the justified layout for every image/video in
-  // the same month. Keep chronological order, but isolate media/non-media runs.
   syncRunBreaks(container, cards);
   cards.filter(card => !card.classList.contains('media-card')).forEach(clearSize);
 
@@ -135,29 +144,107 @@ function justify(container) {
     run = [];
   }
   justifyRun(run, width, target, gap, false);
+  return cards;
 }
 
-function syncDayLabels() {
-  for (const grid of document.querySelectorAll('#files .date-grid')) {
-    for (const card of grid.querySelectorAll(':scope > .day-start[data-day]')) {
-      const button = [...grid.querySelectorAll(':scope > .day-group-control')]
-        .find(item => item.dataset.periodKey === card.dataset.day);
-      if (!button) continue;
-      button.style.left = `${card.offsetLeft}px`;
-      button.style.top = `${card.offsetTop - 19}px`;
+function dayButton(key, label) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'timeline-group-select day-group-control';
+  button.dataset.selectPeriod = 'day';
+  button.dataset.periodKey = key;
+  button.dataset.periodLabel = label;
+  button.setAttribute('aria-label', `Select ${label}`);
+  button.innerHTML = `<span class="timeline-check" aria-hidden="true"></span><span>${label}</span>`;
+  return button;
+}
+
+function syncDayLabels(grid, cards = [...grid.querySelectorAll(':scope > .file-card[data-hash]')]) {
+  if (!cards.length) return;
+
+  for (const card of cards) card.classList.remove('day-start', 'day-row-start');
+  const starts = [];
+  let previousDay = '';
+  for (const card of cards) {
+    const day = card.dataset.day || '';
+    if (day && day !== previousDay) {
+      card.classList.add('day-start');
+      starts.push(card);
+    }
+    previousDay = day;
+  }
+
+  const rowTop = new Map(cards.map(card => [card, card.offsetTop]));
+  const startRows = new Set(starts.map(card => rowTop.get(card)));
+  for (const card of cards) {
+    const top = rowTop.get(card);
+    for (const row of startRows) {
+      if (Math.abs((top ?? 0) - (row ?? 0)) <= 1) {
+        card.classList.add('day-row-start');
+        break;
+      }
     }
   }
+
+  const existing = new Map([...grid.querySelectorAll(':scope > .day-group-control')].map(button => [button.dataset.periodKey, button]));
+  const used = new Set();
+  for (const card of starts) {
+    const key = card.dataset.day;
+    const label = card.dataset.dayLabel || key;
+    let button = existing.get(key);
+    if (!button) {
+      button = dayButton(key, label);
+      grid.append(button);
+    }
+    used.add(key);
+    const left = px(card.offsetLeft);
+    const top = px(card.offsetTop - 19);
+    if (button.style.left !== left) button.style.left = left;
+    if (button.style.top !== top) button.style.top = top;
+  }
+  for (const [key, button] of existing) if (!used.has(key)) button.remove();
+}
+
+function layoutGrid(grid) {
+  if (!grid?.isConnected || !files.classList.contains('grid')) return;
+  const cards = justify(grid);
+  syncDayLabels(grid, cards);
 }
 
 function layout() {
   frame = 0;
-  if (!files.classList.contains('grid')) return;
-  document.querySelectorAll('#files .date-grid').forEach(justify);
-  requestAnimationFrame(syncDayLabels);
+  if (!files.classList.contains('grid')) {
+    pendingGrids.clear();
+    fullLayout = false;
+    return;
+  }
+
+  if (fullLayout) {
+    fullLayout = false;
+    pendingGrids.clear();
+    for (const grid of files.querySelectorAll('.date-grid')) layoutGrid(grid);
+    return;
+  }
+
+  const grids = [...pendingGrids];
+  pendingGrids.clear();
+  for (const grid of grids) layoutGrid(grid);
 }
 
-function schedule() {
+function schedule(grid = null) {
+  if (grid) pendingGrids.add(grid);
+  else fullLayout = true;
   if (!frame) frame = requestAnimationFrame(layout);
+}
+
+function structuralMutation(records) {
+  for (const record of records) {
+    for (const node of [...record.addedNodes, ...record.removedNodes]) {
+      if (!(node instanceof Element)) continue;
+      if (node.matches('.file-card,.date-grid,.date-group') || node.querySelector?.('.file-card,.date-grid,.date-group')) return true;
+    }
+  }
+  return false;
 }
 
 const style = document.createElement('style');
@@ -174,17 +261,20 @@ style.textContent = `
 document.head.append(style);
 
 sizeButtons.forEach(button => button.addEventListener('click', () => setMediaSize(Number(button.dataset.mediaSize))));
-sizeInput.addEventListener('input', schedule);
+sizeInput.addEventListener('input', () => schedule());
 files.addEventListener('load', event => {
   const image = event.target;
   if (!(image instanceof HTMLImageElement) || !image.classList.contains('cached-thumb')) return;
   const card = image.closest('.media-card');
-  if (!card || !image.naturalWidth || !image.naturalHeight) return;
-  card.style.setProperty('--ratio', Math.max(.65, Math.min(2.1, image.naturalWidth / image.naturalHeight)));
-  schedule();
+  const grid = card?.closest('.date-grid');
+  if (!card || !grid || !image.naturalWidth || !image.naturalHeight) return;
+  const ratio = Math.max(.65, Math.min(2.1, image.naturalWidth / image.naturalHeight));
+  if (Math.abs(cardRatio(card) - ratio) < .001) return;
+  card.style.setProperty('--ratio', ratio);
+  schedule(grid);
 }, true);
-new MutationObserver(schedule).observe(files, { childList: true, subtree: true });
-new ResizeObserver(schedule).observe(files);
+new MutationObserver(records => { if (structuralMutation(records)) schedule(); }).observe(files, { childList:true, subtree:true });
+new ResizeObserver(() => schedule()).observe(files);
 
 const saved = Number(localStorage.getItem('mochimono-media-size')) || 158;
 const nearest = sizes.reduce((best, size) => Math.abs(size - saved) < Math.abs(best - saved) ? size : best, sizes[0]);
