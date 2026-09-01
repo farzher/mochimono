@@ -10,6 +10,17 @@ const frame = document.querySelector('#filesFrame');
 let loading = false;
 let queued = false;
 
+const groupStyle = document.createElement('style');
+groupStyle.textContent = `
+  #folders:has(.folder-mode-group){gap:22px!important}
+  .folder-mode-group{display:grid;gap:7px;min-width:0}
+  .folder-group-head{display:flex;align-items:center;gap:7px;padding:0 2px;color:#8d8582}
+  .folder-group-head span{font-size:11px;font-weight:680;letter-spacing:.01em}
+  .folder-group-head small{color:#67615f;font-size:9px;font-weight:650}
+  .folder-mode-list{display:grid;gap:0;min-width:0}
+`;
+document.head.append(groupStyle);
+
 const samePath = (a, b) => String(a || '').replace(/[\\/]+$/, '').toLowerCase() === String(b || '').replace(/[\\/]+$/, '').toLowerCase();
 const pathName = path => String(path || '').replace(/[\\/]+$/, '').split(/[\\/]+/).filter(Boolean).at(-1) || String(path || 'Folder');
 
