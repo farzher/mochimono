@@ -67,6 +67,31 @@ function localCopyCount(hash) {
   catch { return 0; }
 }
 
+function targetMet(target, copies) {
+  const qualified = (copies || []).filter(copy => copy.verified && copy.reliability !== 'low');
+  const devices = new Set(qualified.map(copy => String(copy.id || copy.deviceName || copy.name || '').toLowerCase()).filter(Boolean));
+  const sites = new Set(qualified.map(copy => String(copy.site || copy.deviceName || copy.id || '').toLowerCase()).filter(Boolean));
+  const remote = qualified.filter(copy => copy.remote).length;
+  return qualified.length >= Number(target?.copies || 0) && devices.size >= Number(target?.devices || 0) &&
+    sites.size >= Number(target?.sites || 0) && remote >= Number(target?.remote || 0);
+}
+
+async function reachableProtection(hash) {
+  const [protection, client] = await Promise.all([
+    jsonRequest(`/api/protection/objects/${hash}`),
+    jsonRequest(`${CONTROL}/api/client/protection/state`)
+  ]);
+  const attached = new Set((client.backups || []).map(item => item.id));
+  const onlinePeers = new Set((client.peers || []).filter(item => item.online).map(item => item.id));
+  const copies = (protection.copies || []).filter(copy => {
+    if (copy.kind === 'primary') return true;
+    if (copy.kind === 'backup') return attached.has(copy.id);
+    if (copy.kind === 'peer') return onlinePeers.has(copy.id);
+    return false;
+  });
+  return { protection, copies, meets:targetMet(protection.target, copies) };
+}
+
 function copyDescription(copy) {
   const parts = [
     copy.kind === 'peer' ? 'Encrypted remote' : copy.kind === 'primary' ? 'Mochimono' : copy.kind === 'source' ? 'Local source' : 'Backup'
@@ -138,8 +163,14 @@ async function freeLocal(button) {
   if (!hash || !CLIENT) return;
   button.disabled = true;
   const status = section.querySelector('[data-protection-status]');
-  if (status) status.textContent = 'Checking other copies…';
+  if (status) status.textContent = 'Checking reachable copies…';
   try {
+    const live = await reachableProtection(hash);
+    if (!live.meets) {
+      if (status) status.textContent = 'Your protection target currently depends on an offline or unreachable copy. Reconnect it or create another reachable verified copy before freeing this file.';
+      button.disabled = false;
+      return;
+    }
     const result = await jsonRequest(`${CONTROL}/api/client/protection/free-local`, {
       method:'POST', body:JSON.stringify({ hash })
     });
