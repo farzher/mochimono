@@ -174,16 +174,13 @@ function syncDayLabels(grid, cards = [...grid.querySelectorAll(':scope > .file-c
     previousDay = day;
   }
 
-  const rowTop = new Map(cards.map(card => [card, card.offsetTop]));
+  // offsetTop is effectively integer row geometry. Index the day-start rows once
+  // instead of comparing every card against every start row during each layout.
+  const rowTop = new Map(cards.map(card => [card, Math.round(card.offsetTop)]));
   const startRows = new Set(starts.map(card => rowTop.get(card)));
   for (const card of cards) {
-    const top = rowTop.get(card);
-    for (const row of startRows) {
-      if (Math.abs((top ?? 0) - (row ?? 0)) <= 1) {
-        card.classList.add('day-row-start');
-        break;
-      }
-    }
+    const row = rowTop.get(card) ?? 0;
+    if (startRows.has(row) || startRows.has(row - 1) || startRows.has(row + 1)) card.classList.add('day-row-start');
   }
 
   const existing = new Map([...grid.querySelectorAll(':scope > .day-group-control')].map(button => [button.dataset.periodKey, button]));

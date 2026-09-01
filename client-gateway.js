@@ -122,20 +122,8 @@ async function checkThumbnails(req, res) {
     }
 
     const thumb = await providerThumbnail(hash);
-    if (thumb) {
-      ready.set(hash, thumb);
-      return;
-    }
-
-    // A local image can paint immediately from its original file, but still
-    // create a small persistent preview. Explicit folder warming is background
-    // priority, while visible grid/viewer checks remain urgent.
-    if (String(candidate.mime || '').startsWith('image/')) {
-      ready.set(hash, { hash, width: 0, height: 0, duration: null });
-      queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
-      return;
-    }
-    queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
+    if (thumb) ready.set(hash, thumb);
+    else queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
   }));
 
   let snapshot = null;
@@ -369,18 +357,10 @@ export async function handleClientGateway(req, res, url) {
 
   const thumb = /^\/api\/thumbs\/([a-f0-9]{64})$/.exec(url.pathname);
   if (thumb && (req.method === 'GET' || req.method === 'HEAD')) {
-    // Grid previews should use the small persistent local cache when available.
-    // Only fall back to the full local original while that preview is missing.
+    // Provider thumbnails are the only local grid image path. If a local or
+    // attached-backup preview is missing, serveProviderThumbnail queues its small
+    // WebP and answers 404 until it is ready; full originals stay viewer-only.
     if (await serveProviderThumbnail(req, res, thumb[1])) return true;
-    const candidate = localCandidate(thumb[1]);
-    if (candidate && String(candidate.mime || '').startsWith('image/')) {
-      res.writeHead(302, {
-        location: `/api/objects/${thumb[1]}`,
-        'cache-control': 'no-store'
-      });
-      res.end();
-      return true;
-    }
   }
   if (url.pathname === '/files' || url.pathname.startsWith('/files/')) {
     if (!await serveLibrary(res, url.pathname)) json(res, 404, { error: 'Not found' });
