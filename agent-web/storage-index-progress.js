@@ -31,6 +31,21 @@ if (pane && folders) {
     .storage-index-track{height:3px;flex:1;min-width:36px;overflow:hidden;border-radius:99px;background:#302c31}
     .storage-index-track i{display:block;width:38%;height:100%;border-radius:inherit;background:#d0a75f;animation:storage-index-slide 1.25s ease-in-out infinite}
     .folder-item.storage-indexing .storage-folder-facts{visibility:hidden}
+    .folder-item.storage-indexing .storage-preview-warm{display:none}
+    .storage-preview-warm{
+      --p:0;
+      position:absolute;z-index:7;right:9px;bottom:9px;
+      min-width:78px;height:27px;padding:0 9px;
+      display:flex;align-items:center;justify-content:center;gap:6px;
+      border:1px solid rgba(255,255,255,.1);border-radius:9px;
+      background:linear-gradient(90deg,rgba(112,178,132,.20) calc(var(--p) * 1%),rgba(17,16,18,.88) 0);
+      backdrop-filter:blur(7px);color:#aaa29e;font-size:9px;font-weight:720;
+      font-variant-numeric:tabular-nums;cursor:pointer;
+    }
+    .storage-preview-warm:hover{border-color:#5a5158;color:#ded6d2}
+    .storage-preview-warm.running{border-color:#35513d;color:#a8d2b3}
+    .storage-preview-warm.complete{border-color:#35513d;color:#8ec89d}
+    .storage-preview-warm span{font-size:11px;line-height:1}
     .storage-status-card.storage-verify-action .storage-status-main{cursor:pointer}
     .storage-status-card.storage-verify-action .storage-status-main:focus-visible{outline:2px solid #d9b776;outline-offset:5px;border-radius:14px}
     @keyframes storage-index-spin{to{transform:rotate(360deg)}}
@@ -39,8 +54,17 @@ if (pane && folders) {
   `;
   document.head.append(style);
 
+  const PREVIEW_WARM_KEY = 'mochimono-preview-warm-v1';
   const clean = value => String(value || '').replace(/[\\/]+$/, '').toLowerCase();
   const samePath = (a, b) => clean(a) === clean(b);
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const warmers = new Map();
+  let enabledWarmPaths = new Set();
+  try { enabledWarmPaths = new Set(JSON.parse(localStorage.getItem(PREVIEW_WARM_KEY) || '[]').map(String)); } catch {}
+  const saveWarmPaths = () => {
+    try { localStorage.setItem(PREVIEW_WARM_KEY, JSON.stringify([...enabledWarmPaths])); } catch {}
+  };
+
   const formatBytes = number => {
     const units = ['B','KB','MB','GB','TB','PB'];
     let value = Number(number) || 0;
@@ -121,6 +145,173 @@ if (pane && folders) {
     runHeroVerify();
   });
 
+  function rowForPath(path) {
+    return [...folders.querySelectorAll('[data-folder-path]')].find(node => samePath(node.dataset.folderPath, path));
+  }
+
+  function previewControl(row) {
+    let button = row?.querySelector('.storage-preview-warm');
+    if (button) return button;
+    const samples = row?.querySelector('.storage-folder-samples');
+    if (!samples) return null;
+    button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'storage-preview-warm';
+    button.innerHTML = '<span>▦</span><b>Previews</b>';
+    samples.append(button);
+    return button;
+  }
+
+  function renderWarmer(path) {
+    const row = rowForPath(path);
+    const button = previewControl(row);
+    if (!button) return;
+    const state = warmers.get(clean(path)) || {};
+    const enabled = enabledWarmPaths.has(path) || enabledWarmPaths.has(clean(path));
+    const total = Number(state.total) || 0;
+    const ready = Number(state.ready) || 0;
+    const failed = Number(state.failed) || 0;
+    const percent = total ? Math.max(0, Math.min(100, ready / total * 100)) : 0;
+    button.style.setProperty('--p', percent.toFixed(2));
+    button.classList.toggle('running', Boolean(state.running && enabled));
+    button.classList.toggle('complete', Boolean(state.complete && !failed));
+    if (state.discovering) button.innerHTML = '<span>▦</span><b>…</b>';
+    else if (state.running && enabled) button.innerHTML = `<span>Ⅱ</span><b>${Math.round(percent)}%</b>`;
+    else if (state.complete && !failed) button.innerHTML = '<span>✓</span><b>Previews</b>';
+    else button.innerHTML = '<span>▦</span><b>Previews</b>';
+    const detail = state.discovering ? 'Finding indexed media…'
+      : total ? `${ready.toLocaleString()} / ${total.toLocaleString()} previews${failed ? ` · ${failed.toLocaleString()} unavailable` : ''}`
+      : 'Generate local thumbnails in the background';
+    button.title = state.running && enabled ? `Pause · ${detail}` : `${state.complete ? 'Refresh' : 'Start'} · ${detail}`;
+    button.setAttribute('aria-label', button.title);
+  }
+
+  function syncPreviewControls() {
+    for (const row of folders.querySelectorAll('[data-folder-path]')) {
+      const path = row.dataset.folderPath || '';
+      previewControl(row);
+      renderWarmer(path);
+      if ([...enabledWarmPaths].some(saved => samePath(saved, path)) && !warmers.get(clean(path))?.running) startWarmer(path);
+    }
+  }
+
+  async function indexedMedia(path, state) {
+    const files = [];
+    const seen = new Set();
+    let offset = 0;
+    state.discovering = true;
+    state.total = 0;
+    state.ready = 0;
+    state.failed = 0;
+    renderWarmer(path);
+    do {
+      if (!state.enabled) break;
+      const response = await fetch(`/api/client/local-catalog?path=${encodeURIComponent(path)}&limit=2000&offset=${offset}`, { cache:'no-store' });
+      if (!response.ok) throw new Error('Could not read local index');
+      const data = await response.json();
+      for (const file of data.files || []) {
+        if (!/^(image|video)\//.test(String(file?.mime || '')) || seen.has(file.hash)) continue;
+        seen.add(file.hash);
+        files.push(file);
+      }
+      state.total = files.length;
+      renderWarmer(path);
+      if (data.nextOffset == null) break;
+      offset = Number(data.nextOffset) || 0;
+      await sleep(0);
+    } while (state.enabled);
+    state.discovering = false;
+    state.total = files.length;
+    renderWarmer(path);
+    return files;
+  }
+
+  async function checkPreviewBatch(batch) {
+    const response = await fetch('/api/thumbs/check', {
+      method:'POST',
+      headers:{ 'content-type':'application/json' },
+      body:JSON.stringify({ background:true, hashes:batch.map(file => file.hash) })
+    });
+    if (!response.ok) return new Set();
+    const data = await response.json();
+    return new Set((data.thumbnails || [])
+      .filter(item => Number(item.width) > 0 && Number(item.height) > 0)
+      .map(item => String(item.hash)));
+  }
+
+  async function warmBatch(path, state, batch) {
+    const pending = new Map(batch.map(file => [file.hash, file]));
+    let quietRounds = 0;
+    while (state.enabled && pending.size && quietRounds < 240) {
+      const before = pending.size;
+      const ready = await checkPreviewBatch([...pending.values()]);
+      for (const hash of ready) pending.delete(hash);
+      const gained = before - pending.size;
+      if (gained) {
+        state.ready += gained;
+        quietRounds = 0;
+      } else quietRounds++;
+      renderWarmer(path);
+      if (pending.size && state.enabled) await sleep(700);
+    }
+    if (state.enabled && pending.size) state.failed += pending.size;
+  }
+
+  async function runWarmer(path, state) {
+    try {
+      const media = await indexedMedia(path, state);
+      if (!state.enabled) return;
+      for (let offset = 0; offset < media.length && state.enabled; offset += 6) {
+        await warmBatch(path, state, media.slice(offset, offset + 6));
+      }
+      if (state.enabled) {
+        state.complete = true;
+        enabledWarmPaths = new Set([...enabledWarmPaths].filter(saved => !samePath(saved, path)));
+        saveWarmPaths();
+      }
+    } catch (error) {
+      state.error = String(error?.message || error);
+    } finally {
+      state.running = false;
+      state.discovering = false;
+      renderWarmer(path);
+    }
+  }
+
+  function startWarmer(path) {
+    const key = clean(path);
+    if (!key) return;
+    let state = warmers.get(key);
+    if (state?.running) return;
+    state = { ...(state || {}), path, enabled:true, running:true, complete:false, error:'' };
+    warmers.set(key, state);
+    enabledWarmPaths.add(path);
+    saveWarmPaths();
+    renderWarmer(path);
+    runWarmer(path, state);
+  }
+
+  function stopWarmer(path) {
+    const key = clean(path);
+    const state = warmers.get(key);
+    if (state) state.enabled = false;
+    enabledWarmPaths = new Set([...enabledWarmPaths].filter(saved => !samePath(saved, path)));
+    saveWarmPaths();
+    renderWarmer(path);
+  }
+
+  folders.addEventListener('click', event => {
+    const button = event.target.closest('.storage-preview-warm');
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const row = button.closest('[data-folder-path]');
+    const path = row?.dataset.folderPath || '';
+    const state = warmers.get(clean(path));
+    if (state?.running && state.enabled) stopWarmer(path);
+    else startWarmer(path);
+  });
+
   // The base Storage renderer also owns a hidden [data-folder-size] node and
   // refreshes it every five seconds. The visual dashboard originally reused
   // that same hook, so two formatters alternated values such as 132 MB and
@@ -190,7 +381,7 @@ if (pane && folders) {
   }
 
   function setStableStats(item) {
-    const row = [...folders.querySelectorAll('[data-folder-path]')].find(node => samePath(node.dataset.folderPath, item.path));
+    const row = rowForPath(item.path);
     if (!row) return;
     const size = claimVisibleSize(row);
     const count = row.querySelector('.storage-folder-facts [data-folder-count]');
@@ -213,7 +404,7 @@ if (pane && folders) {
       const item = (data.folders || []).find(folder => samePath(folder.path, path));
       if (item) setStableStats(item);
     } catch {}
-    const row = [...folders.querySelectorAll('[data-folder-path]')].find(node => samePath(node.dataset.folderPath, path));
+    const row = rowForPath(path);
     row?.classList.remove('storage-indexing');
     const live = row?.querySelector('.storage-index-live');
     if (live) live.hidden = true;
@@ -232,6 +423,7 @@ if (pane && folders) {
       const path = active ? String(job.progress.path) : '';
       show(job);
       syncStorageLanguage();
+      syncPreviewControls();
       if (runningPath && !active) await settle(runningPath);
       runningPath = path;
     } catch {}
@@ -250,6 +442,7 @@ if (pane && folders) {
       sizeSyncQueued = false;
       syncVisibleSizes();
       syncStorageLanguage();
+      syncPreviewControls();
     });
   };
 
@@ -260,5 +453,6 @@ if (pane && folders) {
   if (hero) new MutationObserver(syncStorageLanguage).observe(hero, { childList:true, subtree:true, characterData:true });
   syncVisibleSizes();
   syncStorageLanguage();
+  syncPreviewControls();
   if (!pane.hidden) wake();
 }
