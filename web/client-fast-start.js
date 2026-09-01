@@ -98,7 +98,7 @@ function mergeLocalFile(previous, file) {
   return merged;
 }
 
-function applyFiles(files, persist = true) {
+function cacheFiles(files) {
   const fresh = [];
   for (const file of files) {
     const hash = String(file?.hash || '');
@@ -108,6 +108,11 @@ function applyFiles(files, persist = true) {
     if (!previous) fresh.push(merged);
     cached.set(hash, merged);
   }
+  return fresh;
+}
+
+function applyFiles(files, persist = true) {
+  const fresh = cacheFiles(files);
   const painted = fresh.length ? paint(fresh) : needsRestore() ? paint([...cached.values()]) : false;
   if (persist && files.length) scheduleSave();
   return painted;
@@ -181,9 +186,8 @@ async function readFastCatalog() {
     const data = await response.json();
     const files = Array.isArray(data.files) ? data.files : [];
     applyFiles(files);
-    // Do not bulk-check/generate every preview here. thumbs.js checks the actual
-    // visible cards immediately after they render, so those previews get the
-    // thumbnail queue first. Background warming starts only after first paint.
+    // Visible cards get the preview queue first. Bulk thumbnail warming starts
+    // only after the initial library is interactive.
   } catch {}
 }
 
@@ -191,26 +195,35 @@ async function readCompleteLocalCatalog() {
   if (!CLIENT || stopped || document.hidden || fullCatalogStarted) return;
   fullCatalogStarted = true;
   let offset = 0;
+  const publish = [];
+  let complete = false;
   try {
     while (!stopped && !document.hidden) {
       const response = await fetch(`/api/client/local-catalog?limit=${FULL_PAGE_LIMIT}&offset=${offset}`, { cache: 'no-store' });
       if (!response.ok) break;
       const data = await response.json();
       const files = Array.isArray(data.files) ? data.files : [];
-      if (files.length) applyFiles(files);
+      // Cache each SQLite page without touching the visible library. Re-sorting
+      // and re-rendering thousands of files once per page caused startup jitter.
+      if (files.length) publish.push(...cacheFiles(files));
       if (data.nextOffset == null) {
-        fullCatalogFinished = true;
+        complete = true;
         break;
       }
       offset = Number(data.nextOffset) || 0;
-      // Yield between SQLite/JSON pages so first-paint interaction always wins.
       await new Promise(resolve => setTimeout(resolve, 0));
     }
-    if (fullCatalogFinished) window.dispatchEvent(new CustomEvent('mochimono:local-catalog-ready', { detail: { count: cached.size } }));
+
+    if (complete && !stopped && !document.hidden) {
+      fullCatalogFinished = true;
+      if (publish.length) paint(publish);
+      if (publish.length) scheduleSave();
+      window.dispatchEvent(new CustomEvent('mochimono:local-catalog-ready', { detail: { count: cached.size } }));
+    }
   } catch {}
   finally {
-    // If a tab was hidden midway, allow the complete SQLite pass to resume when
-    // visible instead of considering a partial read permanently finished.
+    // If interrupted while hidden, allow a clean retry. Cached rows are harmless;
+    // only a complete pass is published into the visible sorted library.
     if (!fullCatalogFinished) fullCatalogStarted = false;
   }
 }
@@ -235,8 +248,8 @@ async function fastLocalStart() {
   if (readyThumbs.size) publishReady();
 
   readFastCatalog();
-  // Let the snapshot/first 2k paint first, then fill the complete indexed local
-  // timeline from SQLite instead of waiting for the cloud/provider merge.
+  // Let the remembered snapshot/first local batch paint first, then fill the
+  // complete SQLite catalog as one coherent visible update.
   setTimeout(() => readCompleteLocalCatalog().catch(() => {}), 120);
   scheduleWarm(3500);
   setTimeout(() => refreshReadyThumbs().catch(() => {}), 12_000);
@@ -245,9 +258,6 @@ async function fastLocalStart() {
   if (source) {
     const canonicalObserver = new MutationObserver(() => {
       if (!canonicalSettled()) return;
-      // renderImports and the canonical applyFilters run in the same task. Read
-      // the completed global date map on the following microtask and keep those
-      // dates in the next fast-start snapshot.
       queueMicrotask(rememberCanonicalDates);
       canonicalObserver.disconnect();
     });
@@ -261,9 +271,7 @@ async function fastLocalStart() {
       clearInterval(timer);
       return;
     }
-    // Fast local metadata only needs repeated merging while an index is actively
-    // publishing staged rows. Idle libraries already have their full SQLite pass;
-    // rereading 2k rows every 1.5s was wasted work and could downgrade dates.
+    // Only actively indexing Browse folders need repeated staged fast merges.
     if (await browseIndexingActive()) readFastCatalog();
   }, 1500);
 
