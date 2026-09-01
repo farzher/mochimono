@@ -7,6 +7,7 @@ const FULL_PAGE_LIMIT = 3000;
 const SNAPSHOT_LIMIT = 1200;
 const cached = new Map();
 const readyThumbs = new Set();
+const source = document.querySelector('#source');
 window.mochimonoReadyThumbs = readyThumbs;
 let stopped = false;
 let saveTimer = 0;
@@ -83,18 +84,53 @@ function restoreSnapshot() {
   } catch {}
 }
 
+function mergeLocalFile(previous, file) {
+  if (!previous) return file;
+  const merged = { ...previous, ...file };
+  // A local SQLite row only knows filesystem mtime. Once the canonical catalog
+  // has taught this browser a better photo/file date, do not downgrade the next
+  // reload back to mtime while the fresh canonical catalog is still loading.
+  if (previous.dateSource === 'cached.canonical' && file?.dateSource === 'filesystem.mtime') {
+    merged.fileDate = previous.fileDate || merged.fileDate;
+    merged.addedAt = previous.addedAt || merged.addedAt;
+    merged.dateSource = previous.dateSource;
+  }
+  return merged;
+}
+
 function applyFiles(files, persist = true) {
   const fresh = [];
   for (const file of files) {
     const hash = String(file?.hash || '');
     if (!hash) continue;
     const previous = cached.get(hash);
-    if (!previous) fresh.push(file);
-    cached.set(hash, previous ? { ...previous, ...file } : file);
+    const merged = mergeLocalFile(previous, file);
+    if (!previous) fresh.push(merged);
+    cached.set(hash, merged);
   }
   const painted = fresh.length ? paint(fresh) : needsRestore() ? paint([...cached.values()]) : false;
   if (persist && files.length) scheduleSave();
   return painted;
+}
+
+function rememberCanonicalDates() {
+  const dates = window.mochimonoFileDates;
+  if (!dates?.get || !cached.size) return;
+  let changed = false;
+  for (const [hash, file] of cached) {
+    const date = dates.get(hash);
+    if (!date?.fileDate) continue;
+    const fileDate = date.fileDate || file.fileDate;
+    const addedAt = date.addedAt || file.addedAt;
+    if (file.dateSource === 'cached.canonical' && file.fileDate === fileDate && file.addedAt === addedAt) continue;
+    cached.set(hash, { ...file, fileDate, addedAt, dateSource:'cached.canonical' });
+    changed = true;
+  }
+  if (changed) scheduleSave();
+}
+
+function canonicalSettled() {
+  return source?.options?.[0]?.textContent?.trim() === 'All sources';
 }
 
 function restoreNow() {
@@ -205,6 +241,19 @@ async function fastLocalStart() {
   scheduleWarm(3500);
   setTimeout(() => refreshReadyThumbs().catch(() => {}), 12_000);
   setTimeout(() => refreshReadyThumbs().catch(() => {}), 30_000);
+
+  if (source) {
+    const canonicalObserver = new MutationObserver(() => {
+      if (!canonicalSettled()) return;
+      // renderImports and the canonical applyFilters run in the same task. Read
+      // the completed global date map on the following microtask and keep those
+      // dates in the next fast-start snapshot.
+      queueMicrotask(rememberCanonicalDates);
+      canonicalObserver.disconnect();
+    });
+    canonicalObserver.observe(source, { childList:true, subtree:true });
+    if (canonicalSettled()) queueMicrotask(rememberCanonicalDates);
+  }
 
   const started = Date.now();
   const timer = setInterval(async () => {
