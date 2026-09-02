@@ -75,7 +75,7 @@ function mediaBox(card, mediaKind = kind(card)) {
 
 function pending(card) {
   const box = mediaBox(card);
-  if (!box || box.querySelector('.cached-thumb,.video-thumb-pending')) return;
+  if (!box || box.querySelector('.video-thumb-pending')) return;
   const item = document.createElement('span');
   item.className = 'video-thumb-pending';
   item.dataset.videoThumb = card.dataset.hash || '';
@@ -111,6 +111,8 @@ function markLoaded(hash, card, image) {
   const box = mediaBox(card);
   box?.classList.remove('thumb-failed');
   box?.removeAttribute('title');
+  box?.querySelector('.video-thumb-pending')?.remove();
+  image.hidden = false;
   rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
 }
 
@@ -132,22 +134,25 @@ function paintCard(card, force = false) {
   const canonical = thumbUrl(hash);
   const current = box.querySelector('img.cached-thumb');
 
-  if (current?.dataset.thumbHash === hash && !force) {
+  if (current?.dataset.thumbHash === hash) {
     if (current.complete && current.naturalWidth) markLoaded(hash, card, current);
     else if (!interactionActive() && current.dataset.pendingThumbSrc) startThumbnailImage(current, current.dataset.pendingThumbSrc, false);
     return;
   }
 
+  pending(card);
   const image = document.createElement('img');
   image.className = 'cached-thumb';
-  image.alt = filename(card);
+  image.alt = '';
+  image.hidden = true;
   image.decoding = 'async';
-  // Visible images still load immediately, while the browser is free to defer
-  // far-off cards inside the bounded render window.
-  image.loading = 'lazy';
-  try { image.fetchPriority = 'low'; } catch {}
+  image.loading = 'eager';
+  try { image.fetchPriority = nearby.has(card) ? 'high' : 'low'; } catch {}
   image.dataset.thumbHash = hash;
-  image.onload = () => markLoaded(hash, card, image);
+  image.onload = () => {
+    if (!image.isConnected || image.dataset.thumbHash !== hash) return;
+    markLoaded(hash, card, image);
+  };
   image.onerror = () => {
     if (!image.isConnected || image.dataset.thumbHash !== hash) return;
     image.remove();
@@ -160,8 +165,7 @@ function paintCard(card, force = false) {
     if (nearby.has(card) && !interactionActive()) scheduleCheck(80);
   };
 
-  const old = box.querySelector('img.cached-thumb,.video-thumb-pending');
-  old ? old.replaceWith(image) : box.prepend(image);
+  box.prepend(image);
   startThumbnailImage(image, canonical, Boolean(states.get(hash)?.ready));
 }
 
@@ -439,7 +443,6 @@ function observeTree(node) {
     indexCard(card);
     if (observed.has(card) || !kind(card)) continue;
     observed.add(card);
-    paintCard(card);
     observer.observe(card);
   }
 }
