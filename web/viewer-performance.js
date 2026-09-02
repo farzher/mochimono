@@ -3,35 +3,19 @@ const viewerOpen = document.querySelector('#viewer-open');
 const viewerClose = document.querySelector('#viewer-close');
 const viewerPrev = document.querySelector('#viewer-prev');
 const viewerNext = document.querySelector('#viewer-next');
-const viewerMedia = document.querySelector('#viewer-media');
 const viewerInfo = document.querySelector('#viewerInfo');
 const files = document.querySelector('#files');
 
-const imageSrc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
-const mediaSrc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
 const arrows = new Set(['ArrowLeft','ArrowRight','ArrowDown','ArrowUp']);
-const objectHash = value => String(value || '').match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
-const currentHash = () => objectHash(viewerOpen?.getAttribute('href'));
 const RAPID_MS = 90;
-
 let rapidUntil = 0;
 let settleTimer = 0;
-let deferredImage = null;
-let deferredVideo = null;
 let queuedDirection = 0;
 let navFrame = 0;
 const settleCallbacks = new Set();
 
 const rapid = () => performance.now() < rapidUntil;
-
-function nativeImageSrc(image, value) {
-  imageSrc?.set?.call(image, value);
-}
-
-function clearDeferred() {
-  deferredImage = null;
-  deferredVideo = null;
-}
+const currentHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 
 function scheduleSettle() {
   if (settleTimer) return;
@@ -45,19 +29,6 @@ function settle() {
     settleTimer = setTimeout(settle, wait + 3);
     return;
   }
-
-  const image = deferredImage;
-  deferredImage = null;
-  if (image && !viewer.hidden && currentHash() === image.hash) nativeImageSrc(image.element, image.src);
-
-  const video = deferredVideo;
-  deferredVideo = null;
-  if (video && !viewer.hidden && currentHash() === video.hash && video.element.isConnected) {
-    video.element.src = video.src;
-    video.element.autoplay = true;
-    video.element.play().catch(() => {});
-  }
-
   const callbacks = [...settleCallbacks];
   settleCallbacks.clear();
   for (const callback of callbacks) callback();
@@ -72,57 +43,11 @@ function defer(callback) {
 
 window.mochimonoViewerPerformance = { rapid, defer };
 
-function interceptImage(image, value) {
-  const hash = objectHash(value);
-  if (!hash || !viewer || viewer.hidden || image.isConnected || !rapid()) return false;
-  if (hash === currentHash()) deferredImage = { element: image, src: value, hash };
-  return true;
-}
-
-if (imageSrc?.get && imageSrc?.set) {
-  Object.defineProperty(HTMLImageElement.prototype, 'src', {
-    configurable: true,
-    enumerable: imageSrc.enumerable,
-    get: imageSrc.get,
-    set(value) {
-      if (!interceptImage(this, value)) imageSrc.set.call(this, value);
-    }
-  });
-}
-
-if (mediaSrc?.get && mediaSrc?.set) {
-  Object.defineProperty(HTMLMediaElement.prototype, 'src', {
-    configurable: true,
-    enumerable: mediaSrc.enumerable,
-    get: mediaSrc.get,
-    set(value) {
-      if (this instanceof HTMLVideoElement && !this.isConnected && objectHash(value) && rapid()) return;
-      mediaSrc.set.call(this, value);
-    }
-  });
-}
-
-function deferVisibleVideo() {
-  if (!rapid() || viewer?.hidden) return;
-  const video = viewerMedia?.querySelector('video[src]');
-  const hash = currentHash();
-  const src = video?.getAttribute('src');
-  if (!video || !hash || !src) return;
-  video.pause();
-  video.autoplay = false;
-  video.poster = `/api/thumbs/${hash}?v=3`;
-  video.removeAttribute('src');
-  video.load();
-  deferredVideo = { element: video, src, hash };
-  scheduleSettle();
-}
-
 function navigateOne(direction) {
   const button = direction < 0 ? viewerPrev : viewerNext;
   if (!button || button.disabled || viewer.hidden) return false;
   if (typeof button.onclick === 'function') button.onclick.call(button);
   else button.click();
-  deferVisibleVideo();
   return true;
 }
 
@@ -131,7 +56,8 @@ function flushNavigation() {
   const direction = queuedDirection;
   queuedDirection = 0;
   if (!direction || viewer.hidden) return;
-  if (navigateOne(direction) && queuedDirection) navFrame = requestAnimationFrame(flushNavigation);
+  navigateOne(direction);
+  navFrame = requestAnimationFrame(flushNavigation);
 }
 
 function queueNavigation(direction) {
@@ -139,8 +65,9 @@ function queueNavigation(direction) {
   queuedDirection = direction;
   scheduleSettle();
   if (navFrame) return;
+  const first = queuedDirection;
   queuedDirection = 0;
-  if (!navigateOne(direction)) return;
+  if (!navigateOne(first)) return;
   navFrame = requestAnimationFrame(flushNavigation);
 }
 
@@ -174,8 +101,6 @@ document.addEventListener('keyup', event => {
 }, true);
 
 viewerClose?.addEventListener('click', prepareGridReturn, true);
-viewerMedia && new MutationObserver(deferVisibleVideo).observe(viewerMedia, { childList: true });
-
 if (viewer) new MutationObserver(() => {
   if (!viewer.hidden) return;
   queuedDirection = 0;
@@ -185,5 +110,4 @@ if (viewer) new MutationObserver(() => {
   clearTimeout(settleTimer);
   settleTimer = 0;
   settleCallbacks.clear();
-  clearDeferred();
 }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
