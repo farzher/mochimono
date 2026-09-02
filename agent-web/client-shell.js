@@ -71,6 +71,16 @@ brand?.addEventListener('keydown', event => {
 clientMenu?.addEventListener('click', event => {
   if (event.target.closest('button') && !event.target.closest('[data-client-tab]')) queueMicrotask(() => clientMenu.removeAttribute('open'));
 });
+
+const libraryArrows = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown']);
+addEventListener('keydown', event => {
+  if (!libraryArrows.has(event.key) || filesPane.hidden) return;
+  if (event.target?.closest?.('button,a,input,select,textarea,summary,dialog,[contenteditable="true"]')) return;
+  frame.contentWindow?.postMessage({ type: 'mochimono-grid-keyboard-start' }, location.origin);
+  frame.contentWindow?.focus();
+  event.preventDefault();
+}, true);
+
 showTab('files');
 addEventListener('resize', syncHeaderScroll, { passive: true });
 

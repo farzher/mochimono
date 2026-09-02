@@ -31,6 +31,11 @@ if (location.pathname.startsWith('/files')) {
     restoreObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
   }
 
+  addEventListener('message', event => {
+    if (event.source !== parent || event.origin !== location.origin) return;
+    if (event.data?.type === 'mochimono-grid-keyboard-start') window.mochimonoGridKeyboardStart?.();
+  });
+
   let scrollFrame = 0;
   addEventListener('scroll', () => {
     if (scrollFrame || shellScrollY() === reportedScrollY) return;

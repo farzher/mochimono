@@ -83,6 +83,11 @@ function focusedCard(state) {
   return null;
 }
 
+function activeCard(state) {
+  const card = document.activeElement?.closest?.('#files [data-hash]');
+  return card && state.byCard.has(card) ? card : null;
+}
+
 function firstVisibleCard(state) {
   const top = scrollY + state.viewportTop;
   const bottom = scrollY + innerHeight;
@@ -93,7 +98,7 @@ function firstVisibleCard(state) {
     if (entry.top < rowTop - 3) { rowTop = entry.top; best = entry; }
     else if (Math.abs(entry.top - rowTop) <= 3 && entry.cx < best.cx) best = entry;
   }
-  return best?.card || state.cards[0] || null;
+  return best?.card || state.cards[0] || files.querySelector('[data-hash]') || null;
 }
 
 function freezeRailScan() {
@@ -130,6 +135,17 @@ function moveFocus(card, state = currentLayout()) {
   else if (bottom > innerHeight - 2) scrollBy(0, bottom - (innerHeight - 2));
   return true;
 }
+
+function bootstrapCursor() {
+  if (!viewer?.hidden || !gridActive()) return false;
+  const state = currentLayout();
+  const card = focusedCard(state) || activeCard(state) || firstVisibleCard(state);
+  if (!moveFocus(card, state)) return false;
+  if (!holding) releaseRailScan();
+  return true;
+}
+
+window.mochimonoGridKeyboardStart = bootstrapCursor;
 
 function adjacentVertical(state, current, direction) {
   const info = state.byCard.get(current);
@@ -261,7 +277,7 @@ document.addEventListener('keydown', event => {
   if (!arrowKeys.has(event.key) || !viewer?.hidden || !gridActive() || editingControl(event)) return;
   if (!holding) {
     const state = currentLayout();
-    directFocused = focusedCard(state);
+    directFocused = focusedCard(state) || activeCard(state);
     holding = true;
     if (!directFocused) {
       if (!moveFocus(firstVisibleCard(state), state)) { holding = false; return; }
@@ -270,6 +286,7 @@ document.addEventListener('keydown', event => {
       event.stopImmediatePropagation();
       return;
     }
+    if (!directFocused.classList.contains('keyboard-cursor')) moveFocus(directFocused, state);
   }
   if (!navigate(event.key)) return;
   event.preventDefault();
