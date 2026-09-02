@@ -2,6 +2,7 @@ import { buildSearchText, fileKind as kind, matchesDetails, matchesSmart, normal
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
+const CLIENT = document.documentElement.classList.contains('client-library');
 const login = $('#login');
 const app = $('#app');
 const logout = $('#logout');
@@ -715,7 +716,7 @@ function renderViewerState() {
   ensureViewerGridWindow();
   viewerImageLoad = null;
   $('#viewer-name').textContent = selected.filename;
-  $('#viewer-meta').textContent = `${shortDate(normalizeFile(selected))} · ${formatBytes(selected.size)}`;
+  $('#viewer-meta').textContent = `${formatBytes(selected.size)} · ${shortDate(normalizeFile(selected))}`;
   $('#viewer-open').href = objectUrl(selected);
   $('#viewer-media').innerHTML = viewerMedia(selected);
   if (kind(selected) === 'image') loadFullViewerImage(selected);
@@ -899,6 +900,23 @@ async function restoreLocalCatalog() {
 
 async function boot() {
   const generation = ++bootGeneration;
+  const mediaSize = Math.max(96, Math.min(420, Number(localStorage.getItem('mochimono-media-size')) || 170));
+  $('#mediaSize').value = mediaSize;
+  document.documentElement.style.setProperty('--media-size', `${mediaSize}px`);
+
+  // The Agent library is already a trusted local shell. Restore IndexedDB first
+  // so a warm reload can paint the grid before any server/Cloud health request.
+  let restored = false;
+  if (CLIENT && !catalog.length) {
+    restored = await restoreLocalCatalog();
+    if (generation !== bootGeneration) return;
+    if (restored) {
+      login.hidden = true;
+      app.hidden = false;
+      logout.hidden = false;
+    }
+  } else restored = Boolean(catalog.length);
+
   try {
     await request('/api/health');
     if (generation !== bootGeneration) return;
@@ -906,14 +924,14 @@ async function boot() {
     app.hidden = false;
     logout.hidden = false;
 
-    const mediaSize = Math.max(96, Math.min(420, Number(localStorage.getItem('mochimono-media-size')) || 170));
-    $('#mediaSize').value = mediaSize;
-    document.documentElement.style.setProperty('--media-size', `${mediaSize}px`);
+    // Keep the standalone server UI's authentication gate: it restores cached
+    // private data only after health/auth succeeds. The Agent path above is local.
+    if (!CLIENT && !catalog.length) {
+      restored = await restoreLocalCatalog();
+      if (generation !== bootGeneration) return;
+    }
 
-    if (!catalog.length) filesElement.innerHTML = '<div class="empty">Loading…</div>';
-    const restored = await restoreLocalCatalog();
-    if (generation !== bootGeneration) return;
-
+    if (!restored && !catalog.length) filesElement.innerHTML = '<div class="empty">Loading…</div>';
     loadStats().catch(() => {});
     loadDrives().catch(() => {});
 
