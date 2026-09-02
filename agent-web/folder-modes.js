@@ -16,7 +16,8 @@ const readyPreviews = new Set();
 
 const style = document.createElement('style');
 style.textContent = `
-  .storage-mode{display:inline-flex;margin-left:8px;padding:2px 6px;border-radius:999px;background:#211e22;color:#8f8784;font-size:9px;font-weight:700;vertical-align:1px}
+  .storage-modes{display:inline-flex;gap:5px;margin-left:8px;vertical-align:1px}
+  .storage-mode{display:inline-flex;padding:2px 6px;border-radius:999px;background:#211e22;color:#8f8784;font-size:9px;font-weight:700}
   .storage-mode.protected{color:#b8d1be}.storage-mode.local{color:#9da3af}
   .storage-open-folder svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linejoin:round}
   #storagePane .folder-item.browse-only-folder .storage-meter{display:none}
@@ -203,17 +204,27 @@ function decorateRow(row, folder) {
     title.dataset.openNativeFolderPath = folder.path;
   }
 
-  let badge = row.querySelector('[data-folder-mode]');
-  if (!badge) {
-    badge = document.createElement('span');
-    badge.dataset.folderMode = '';
-    title?.after(badge);
+  let badges = row.querySelector('[data-folder-mode]');
+  if (!badges) {
+    badges = document.createElement('span');
+    badges.dataset.folderMode = '';
+    title?.after(badges);
   }
-  badge.className = `storage-mode ${protectedFolder ? 'protected' : 'local'}`;
-  setText(badge, protectedFolder ? 'This PC + Mochimono' : 'This PC only');
-  badge.title = protectedFolder
-    ? 'Originals stay on this PC and Mochimono keeps another copy. Individual files may also have backup copies elsewhere.'
-    : 'Indexed from this PC only. Mochimono does not keep another copy.';
+  badges.className = 'storage-modes';
+  const locations = protectedFolder ? ['This PC', 'Mochimono'] : ['This PC'];
+  const key = locations.join('|');
+  if (badges.dataset.locations !== key) {
+    badges.dataset.locations = key;
+    badges.replaceChildren(...locations.map((label, index) => {
+      const badge = document.createElement('span');
+      badge.className = `storage-mode ${index ? 'protected' : 'local'}`;
+      badge.textContent = label;
+      badge.title = label === 'Mochimono'
+        ? 'Mochimono keeps another copy.'
+        : 'The original files are on this PC.';
+      return badge;
+    }));
+  }
 
   const actions = row.querySelector('.item-actions');
   let open = actions?.querySelector('[data-open-native-folder]');
