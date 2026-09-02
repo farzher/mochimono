@@ -15,7 +15,6 @@ const fallbackQueued = new Set();
 let checkTimer = 0;
 let checking = false;
 let fallbackActive = false;
-let geometryTimer = 0;
 
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
@@ -83,24 +82,13 @@ function pending(card) {
   box.prepend(item);
 }
 
-function persistDimensions(hash, width, height) {
-  window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height).catch(() => {});
-}
-
 function rememberDimensions(hash, width, height) {
   if (!width || !height) return;
   const state = states.get(hash) || {};
   state.width = Number(width) || state.width || 0;
   state.height = Number(height) || state.height || 0;
   states.set(hash, state);
-  persistDimensions(hash, state.width, state.height);
-}
-
-function persistLearnedDimensions() {
-  clearTimeout(geometryTimer);
-  geometryTimer = setTimeout(() => {
-    for (const [hash, state] of states) if (state.width && state.height) persistDimensions(hash, state.width, state.height);
-  }, 800);
+  window.mochimonoCatalogCache?.rememberDimensions?.(hash, state.width, state.height).catch(() => {});
 }
 
 function markLoaded(hash, card, image) {
@@ -126,7 +114,7 @@ function startThumbnailImage(image, canonical, knownReady = false) {
   image.src = canonical;
 }
 
-function paintCard(card, force = false) {
+function paintCard(card) {
   if (!card?.isConnected || !kind(card)) return;
   const hash = String(card.dataset.hash || '');
   if (!hash) return;
@@ -170,14 +158,10 @@ function paintCard(card, force = false) {
   startThumbnailImage(image, canonical, Boolean(states.get(hash)?.ready));
 }
 
-function paint(hash, force = false) {
-  for (const card of cardsFor(hash)) paintCard(card, force);
-}
-
-function loadHash(hash, force = false) {
+function loadHash(hash) {
   hash = String(hash || '');
   if (!hash) return;
-  paint(hash, force);
+  for (const card of cardsFor(hash)) paintCard(card);
 }
 
 async function requestCanonical(hashes) {
@@ -247,7 +231,7 @@ async function checkNearby() {
         state.ready = true;
         state.nextCheck = 0;
         states.set(hash, state);
-        loadHash(hash, true);
+        loadHash(hash);
       } else {
         state.ready = false;
         state.missingSince ||= now;
@@ -386,7 +370,7 @@ async function runFallback(record) {
     state.nextCheck = 0;
     states.set(record.hash, state);
     rememberDimensions(record.hash, result.width, result.height);
-    loadHash(record.hash, true);
+    loadHash(record.hash);
   } catch (error) {
     state.nextFallback = performance.now() + 30_000;
     states.set(record.hash, state);
@@ -503,12 +487,8 @@ if (files) {
   });
 
   window.addEventListener('mochimono:catalog-updated', () => {
-    persistLearnedDimensions();
     if (!interactionActive()) scheduleCheck(50);
   });
 
-  addEventListener('beforeunload', () => {
-    clearTimeout(checkTimer);
-    clearTimeout(geometryTimer);
-  }, { once: true });
+  addEventListener('beforeunload', () => clearTimeout(checkTimer), { once: true });
 }
