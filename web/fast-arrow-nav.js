@@ -87,6 +87,10 @@ function buildLayout() {
     byHash,
     viewportTop: (commandbar?.getBoundingClientRect().bottom || 0) + 2
   };
+  const selected = cursorHash && byHash.get(cursorHash);
+  const stale = files.querySelector('.keyboard-cursor[data-hash]');
+  if (stale && stale !== selected) stale.classList.remove('keyboard-cursor');
+  selected?.classList.add('keyboard-cursor');
   dirty = false;
   return layout;
 }
@@ -138,8 +142,10 @@ function prioritizeRow(card, state) {
 
 function moveCursor(card, state = currentLayout()) {
   if (!card) return false;
-  const previous = cursorCard(state) || files.querySelector('.keyboard-cursor[data-hash]');
+  const previous = cursorCard(state);
+  const visual = files.querySelector('.keyboard-cursor[data-hash]');
   if (previous && previous !== card) previous.classList.remove('keyboard-cursor');
+  if (visual && visual !== card && visual !== previous) visual.classList.remove('keyboard-cursor');
   cursorHash = card.dataset.hash || '';
   card.classList.add('keyboard-cursor');
   document.documentElement.classList.add('keyboard-navigation-active');
@@ -214,7 +220,15 @@ function rotateWindow(direction, current, after = null) {
   const anchorTop = current.getBoundingClientRect().top;
   const token = nextPagingToken++;
   pagingToken = token;
-  if (!window.mochimonoLibrary?.extend?.(direction)) {
+  let extended = false;
+  try {
+    extended = Boolean(window.mochimonoLibrary?.extend?.(direction));
+  } catch (error) {
+    if (pagingToken === token) pagingToken = 0;
+    console.error('Mochimono grid extension failed.', error);
+    return false;
+  }
+  if (!extended) {
     if (pagingToken === token) pagingToken = 0;
     return false;
   }
@@ -321,13 +335,13 @@ function resetNavigation(clearCursor = false) {
   holding = false;
   releaseRail();
   if (!clearCursor) return;
-  files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
+  for (const card of files.querySelectorAll('.keyboard-cursor')) card.classList.remove('keyboard-cursor');
   cursorHash = '';
   document.documentElement.classList.remove('keyboard-navigation-active');
 }
 
 function syncReturnedCursor(hash) {
-  resetNavigation();
+  resetNavigation(true);
   cursorHash = String(hash || '');
   dirty = true;
   const state = currentLayout();
