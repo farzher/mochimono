@@ -71,6 +71,12 @@ if (viewer && stage && media && prev && next) {
     applyZoom(animate);
   }
 
+  function resetInteractionState() {
+    consumedPointer = null;
+    if (!zoomed() && !zoom.x && !zoom.y && !pan && !pinch && !pointers.size && !lastTap && !tapTimer) return;
+    resetZoom();
+  }
+
   function naturalScale(current) {
     const scale = Math.max(
       Number(current.naturalWidth || 0) / Math.max(1, current.clientWidth),
@@ -166,12 +172,8 @@ if (viewer && stage && media && prev && next) {
     const startedZoomed = zoomed();
     const side = !startedZoomed ? sideButton(event.clientX, Boolean(video)) : null;
 
-    // Side navigation never participates in double-tap zoom. Clearing here
-    // makes rapid left/right taps independent navigation gestures.
     if (side) clearTap();
 
-    // A zoomed double-tap reset is atomic: recognize tap #2 immediately,
-    // reset once, and consume the rest of this physical pointer sequence.
     if (startedZoomed && imageHit && isDoubleTap(event.clientX, event.clientY)) {
       clearTap();
       consumedPointer = event.pointerId;
@@ -261,9 +263,6 @@ if (viewer && stage && media && prev && next) {
       return;
     }
 
-    // Fit-mode image gestures are viewer-owned. Prevent root scrolling once a
-    // horizontal/meaningful gesture begins; the document itself is also locked
-    // while the viewer is open.
     if (!point.video && travel >= TAP_TRAVEL) {
       clearTap();
       event.preventDefault();
@@ -380,16 +379,10 @@ if (viewer && stage && media && prev && next) {
     clearTap();
   }, true);
 
-  new MutationObserver(() => {
-    consumedPointer = null;
-    resetZoom();
-  }).observe(media, { childList: true });
+  new MutationObserver(resetInteractionState).observe(media, { childList: true });
 
   new MutationObserver(() => {
-    if (viewer.hidden) {
-      consumedPointer = null;
-      resetZoom();
-    }
+    if (viewer.hidden) resetInteractionState();
   }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 
   window.addEventListener('resize', () => {
