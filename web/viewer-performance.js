@@ -13,6 +13,7 @@ const hasLocalCopy = hash => Boolean(hash && (
 ));
 
 const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+const mediaDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
 const decoded = new Map();
 const preloads = new Map();
 const hoverWarm = new Map();
@@ -194,6 +195,21 @@ if (descriptor?.get && descriptor?.set) {
     set(value) {
       if (trackObjectImage(this, value)) return;
       descriptor.set.call(this, value);
+    }
+  });
+}
+
+if (mediaDescriptor?.get && mediaDescriptor?.set) {
+  Object.defineProperty(HTMLMediaElement.prototype, 'src', {
+    configurable:true,
+    enumerable:mediaDescriptor.enumerable,
+    get:mediaDescriptor.get,
+    set(value) {
+      // library-app's adjacent video preloads are detached elements. They add
+      // disk/network work on every rapid key step but cannot improve what is
+      // currently visible, so simply do not start them while scrubbing.
+      if (this instanceof HTMLVideoElement && !this.isConnected && objectHash(value) && rapidNavigation()) return;
+      mediaDescriptor.set.call(this, value);
     }
   });
 }
