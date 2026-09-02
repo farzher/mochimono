@@ -217,12 +217,13 @@ const afterLayout = callback => requestAnimationFrame(() => requestAnimationFram
 
 function rotateWindow(direction, current, after) {
   const hash = current.dataset.hash || '';
-  const anchorTop = current.getBoundingClientRect().top;
   const token = nextPagingToken++;
   pagingToken = token;
 
   let extended = false;
   try {
+    // The library owns scroll-anchor preservation when it appends/prepends/trims.
+    // Do not independently compensate here or the two scroll corrections race.
     extended = Boolean(window.mochimonoLibrary?.extend?.(direction));
   } catch (error) {
     console.error('Mochimono grid extension failed.', error);
@@ -230,11 +231,6 @@ function rotateWindow(direction, current, after) {
   if (!extended) {
     if (pagingToken === token) pagingToken = 0;
     return false;
-  }
-
-  if (current.isConnected) {
-    const delta = current.getBoundingClientRect().top - anchorTop;
-    if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
   }
 
   dirty = true;
