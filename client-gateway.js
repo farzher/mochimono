@@ -105,6 +105,36 @@ function queueCanonicalPreview(snapshot, file) {
   return queueRemoteThumbnail({ hash: file.hash, size: file.size, filename: file.filename, mime: file.mime });
 }
 
+async function serverThumbnails(hashes) {
+  if (!settings.token || !hashes.length) return new Map();
+  try {
+    const response = await fetch(`${settings.server}/api/thumbs/check`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ hashes })
+    });
+    if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
+    const data = await response.json();
+    return new Map((data.thumbnails || []).map(item => [String(item.hash), item]));
+  } catch {
+    return new Map();
+  }
+}
+
+function queueUnresolvedThumbnails(hashes, background) {
+  if (!hashes.length) return;
+  setImmediate(() => {
+    thumbnailProviders(hashes).then(snapshot => {
+      for (const hash of hashes) {
+        const file = snapshot.byHash.get(hash);
+        if (!file) continue;
+        if (file.serverStored) queueCanonicalPreview(snapshot, file);
+        else queueSnapshotProvider(snapshot, file, background);
+      }
+    }).catch(() => {});
+  });
+}
+
 async function checkThumbnails(req, res) {
   const body = await readJson(req, 256 * 1024);
   if (!Array.isArray(body.hashes) || body.hashes.length > 500) return json(res, 400, { error: 'hashes must be an array of at most 500 items' });
@@ -112,54 +142,24 @@ async function checkThumbnails(req, res) {
   const hashes = [...new Set(body.hashes.map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
   const ready = new Map();
   const locals = localCandidates(hashes);
-  const remaining = [];
 
-  await Promise.all(hashes.map(async hash => {
+  const [providerEntries, remoteReady] = await Promise.all([
+    Promise.all(hashes.map(async hash => [hash, await providerThumbnail(hash)])),
+    serverThumbnails(hashes)
+  ]);
+
+  for (const [hash, thumb] of providerEntries) if (thumb) ready.set(hash, thumb);
+  for (const [hash, thumb] of remoteReady) if (!ready.has(hash)) ready.set(hash, thumb);
+
+  const unresolved = [];
+  for (const hash of hashes) {
+    if (ready.has(hash)) continue;
     const candidate = locals.get(hash);
-    if (!candidate) {
-      remaining.push(hash);
-      return;
-    }
-
-    const thumb = await providerThumbnail(hash);
-    if (thumb) ready.set(hash, thumb);
-    else queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
-  }));
-
-  let snapshot = null;
-  const serverHashes = [];
-  if (remaining.length) {
-    snapshot = await thumbnailProviders(remaining);
-    await Promise.all(remaining.map(async hash => {
-      const file = snapshot.byHash.get(hash);
-      if (!file) return;
-      if (file.serverStored) {
-        serverHashes.push(hash);
-        return;
-      }
-      const thumb = await providerThumbnail(hash);
-      if (thumb) ready.set(hash, thumb);
-      else queueSnapshotProvider(snapshot, file, background);
-    }));
+    if (candidate) {
+      queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
+    } else unresolved.push(hash);
   }
-
-  if (snapshot && settings.token && serverHashes.length) {
-    try {
-      const response = await fetch(`${settings.server}/api/thumbs/check`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ hashes: serverHashes })
-      });
-      if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
-      const data = await response.json();
-      for (const item of data.thumbnails || []) ready.set(item.hash, item);
-      const remoteReady = new Set((data.thumbnails || []).map(item => item.hash));
-      for (const hash of serverHashes) {
-        if (remoteReady.has(hash)) continue;
-        queueCanonicalPreview(snapshot, snapshot.byHash.get(hash));
-      }
-    } catch {}
-  }
+  queueUnresolvedThumbnails(unresolved, background);
 
   json(res, 200, { thumbnails: [...ready.values()].map(item => ({
     hash: item.hash, width: Number(item.width) || 0, height: Number(item.height) || 0,
@@ -375,9 +375,9 @@ export async function handleClientGateway(req, res, url) {
 
   const thumb = /^\/api\/thumbs\/([a-f0-9]{64})$/.exec(url.pathname);
   if (thumb && (req.method === 'GET' || req.method === 'HEAD')) {
-    // Provider thumbnails are the only local grid image path. If a local or
-    // attached-backup preview is missing, serveProviderThumbnail queues its small
-    // WebP and answers 404 until it is ready; full originals stay viewer-only.
+    // Serve an existing provider preview immediately. Missing provider generation
+    // is queued by the batched /api/thumbs/check path; otherwise fall through to
+    // the server thumbnail for the same content hash.
     if (await serveProviderThumbnail(req, res, thumb[1])) return true;
   }
   if (url.pathname === '/files' || url.pathname.startsWith('/files/')) {
