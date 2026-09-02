@@ -1,17 +1,13 @@
 const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
-const rail = document.querySelector('#dateRail');
 const commandbar = document.querySelector('.commandbar');
+const arrows = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 
-let layout = null;
-let dirty = true;
-let cursorHash = '';
+let selectedHash = '';
 let holding = false;
-let railWasHidden = null;
-let sentinelState = null;
+let frozenSentinels = null;
 
-const arrows = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown']);
-const gridActive = () => files?.classList.contains('grid');
+const gridActive = () => Boolean(files?.classList.contains('grid'));
 
 function editingControl(event) {
   const control = event.target?.closest?.('input,select,textarea,[contenteditable="true"]');
@@ -19,296 +15,188 @@ function editingControl(event) {
   return !(control.id === 'search' && (event.key === 'ArrowUp' || event.key === 'ArrowDown' || !control.value));
 }
 
-function structuralMutation(records) {
-  for (const record of records) {
-    for (const node of [...record.addedNodes, ...record.removedNodes]) {
-      if (!(node instanceof Element)) continue;
-      if (node.matches('[data-hash],.date-grid,.date-group') || node.querySelector?.('[data-hash],.date-grid,.date-group')) return true;
-    }
-  }
-  return false;
-}
-
-function buildLayout() {
-  const entries = [];
-  const byHash = new Map();
-  for (const card of files.querySelectorAll('[data-hash]')) {
+function mountedCards() {
+  return [...files.querySelectorAll('[data-hash]')].filter(card => {
     const rect = card.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) continue;
-    const entry = {
-      card,
-      hash: card.dataset.hash || '',
-      index: entries.length,
-      cx: rect.left + rect.width / 2,
-      top: rect.top + scrollY,
-      height: rect.height
-    };
-    entries.push(entry);
-    if (entry.hash) byHash.set(entry.hash, card);
-  }
-
-  const rows = [];
-  const byCard = new WeakMap();
-  for (const entry of entries) {
-    let row = rows.at(-1);
-    if (!row || Math.abs(row.top - entry.top) > 3) {
-      row = { top: entry.top, entries: [] };
-      rows.push(row);
-    }
-    row.entries.push(entry);
-  }
-  rows.forEach((row, rowIndex) => {
-    row.entries.sort((a, b) => a.cx - b.cx);
-    row.entries.forEach(entry => byCard.set(entry.card, { entry, rowIndex }));
+    return rect.width > 0 && rect.height > 0;
   });
-
-  layout = {
-    entries,
-    cards: entries.map(entry => entry.card),
-    rows,
-    byCard,
-    byHash,
-    viewportTop: (commandbar?.getBoundingClientRect().bottom || 0) + 2
-  };
-
-  const selected = cursorHash && byHash.get(cursorHash);
-  for (const card of files.querySelectorAll('.keyboard-cursor[data-hash]')) {
-    if (card !== selected) card.classList.remove('keyboard-cursor');
-  }
-  selected?.classList.add('keyboard-cursor');
-  dirty = false;
-  return layout;
 }
 
-const currentLayout = () => !layout || dirty ? buildLayout() : layout;
-const cursorCard = state => cursorHash ? state.byHash.get(cursorHash) || null : null;
+function viewportTop() {
+  return (commandbar?.getBoundingClientRect().bottom || 0) + 2;
+}
 
-function visibleInfo(state, card) {
-  if (!card || !state.byCard.has(card)) return null;
+function visible(card) {
+  if (!card?.isConnected) return false;
   const rect = card.getBoundingClientRect();
-  return rect.bottom > state.viewportTop && rect.top < innerHeight ? rect : null;
+  return rect.bottom > viewportTop() && rect.top < innerHeight;
 }
 
-function activeCard(state) {
-  const card = document.activeElement?.closest?.('#files [data-hash]');
-  return visibleInfo(state, card) ? card : null;
+function selectedCard() {
+  if (selectedHash) {
+    const card = files.querySelector(`[data-hash="${CSS.escape(selectedHash)}"]`);
+    if (card) return card;
+  }
+  const active = document.activeElement?.closest?.('#files [data-hash]');
+  return active || null;
 }
 
-function visibleAnchor(state) {
+function visibleStart(cards = mountedCards()) {
+  const active = selectedCard();
+  if (visible(active)) return active;
+
   let best = null;
   let bestTop = Infinity;
-  let bestX = Infinity;
-  for (const entry of state.entries) {
-    const top = entry.top - scrollY;
-    if (top + entry.height <= state.viewportTop || top >= innerHeight) continue;
-    if (entry.top < bestTop - 3 || (Math.abs(entry.top - bestTop) <= 3 && entry.cx < bestX)) {
-      best = entry.card;
-      bestTop = entry.top;
-      bestX = entry.cx;
+  let bestLeft = Infinity;
+  const top = viewportTop();
+  for (const card of cards) {
+    const rect = card.getBoundingClientRect();
+    if (rect.bottom <= top || rect.top >= innerHeight) continue;
+    if (rect.top < bestTop - 3 || (Math.abs(rect.top - bestTop) <= 3 && rect.left < bestLeft)) {
+      best = card;
+      bestTop = rect.top;
+      bestLeft = rect.left;
     }
   }
-  return best || state.cards[0] || null;
+  return best || cards[0] || null;
 }
 
-function freezeRail() {
-  if (!rail) return;
-  if (railWasHidden == null) railWasHidden = rail.hidden;
-  if (railWasHidden) return;
-  rail.classList.add('fast-keyboard-rail');
-  rail.hidden = true;
-}
-
-function releaseRail() {
-  if (!rail || railWasHidden == null) return;
-  const hidden = railWasHidden;
-  railWasHidden = null;
-  rail.classList.remove('fast-keyboard-rail');
-  rail.hidden = hidden;
-}
-
-function hideSentinels() {
-  if (sentinelState?.top) sentinelState.top.hidden = true;
-  if (sentinelState?.bottom) sentinelState.bottom.hidden = true;
-}
-
-function freezeSentinels() {
-  if (!sentinelState) {
-    const top = document.querySelector('#top-scroll-sentinel');
-    const bottom = document.querySelector('#scroll-sentinel');
-    sentinelState = { top, bottom, topHidden: top?.hidden, bottomHidden: bottom?.hidden };
-  }
-  hideSentinels();
-}
-
-function releaseSentinels() {
-  if (!sentinelState) return;
-  const { top, bottom, topHidden, bottomHidden } = sentinelState;
-  sentinelState = null;
-  const state = window.mochimonoLibrary?.state?.();
-  if (top) top.hidden = state ? !state.hasPrevious : Boolean(topHidden);
-  if (bottom) bottom.hidden = state ? !state.hasMore : Boolean(bottomHidden);
-}
-
-function prioritizeRow(card, state) {
-  const info = state.byCard.get(card);
-  const row = info && state.rows[info.rowIndex];
-  window.mochimonoThumbnails?.prioritize?.(row ? row.entries.map(entry => entry.card) : [card]);
-}
-
-function keepVisible(card) {
-  const rect = card.getBoundingClientRect();
-  const viewportTop = (commandbar?.getBoundingClientRect().bottom || 0) + 2;
-  let delta = 0;
-  if (rect.top < viewportTop) delta = rect.top - viewportTop;
-  else if (rect.bottom > innerHeight - 2) delta = rect.bottom - (innerHeight - 2);
-  if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
-}
-
-function moveCursor(card, state = currentLayout()) {
+function selectCard(card, block = 'nearest') {
   if (!card) return false;
-  for (const previous of files.querySelectorAll('.keyboard-cursor[data-hash]')) {
+  for (const previous of files.querySelectorAll('.keyboard-cursor')) {
     if (previous !== card) previous.classList.remove('keyboard-cursor');
   }
-  cursorHash = card.dataset.hash || '';
+  selectedHash = card.dataset.hash || '';
   card.classList.add('keyboard-cursor');
   document.documentElement.classList.add('keyboard-navigation-active');
-  freezeRail();
-  prioritizeRow(card, state);
-  keepVisible(card);
+  card.focus({ preventScroll: true });
+  card.scrollIntoView({ behavior: 'auto', block, inline: 'nearest' });
+  window.mochimonoThumbnails?.prioritize?.([card]);
   return true;
 }
 
-function bootstrapCursor() {
-  if (!viewer?.hidden || !gridActive()) return false;
-  dirty = true;
-  const state = currentLayout();
-  const existing = cursorCard(state);
-  const card = visibleInfo(state, existing) ? existing : activeCard(state) || visibleAnchor(state);
-  return moveCursor(card, state);
+function freezeSentinels() {
+  if (!frozenSentinels) {
+    frozenSentinels = {
+      top: document.querySelector('#top-scroll-sentinel'),
+      bottom: document.querySelector('#scroll-sentinel')
+    };
+  }
+  if (frozenSentinels.top) frozenSentinels.top.hidden = true;
+  if (frozenSentinels.bottom) frozenSentinels.bottom.hidden = true;
 }
 
-function verticalTarget(state, current, direction) {
-  const info = state.byCard.get(current);
-  const row = info && state.rows[info.rowIndex + direction];
-  if (!info || !row) return null;
+function releaseSentinels() {
+  if (!frozenSentinels) return;
+  const { top, bottom } = frozenSentinels;
+  frozenSentinels = null;
+  const state = window.mochimonoLibrary?.state?.();
+  if (top) top.hidden = state ? !state.hasPrevious : true;
+  if (bottom) bottom.hidden = state ? !state.hasMore : true;
+}
+
+function verticalTarget(cards, current, direction) {
+  const rect = current.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
   let best = null;
-  let distance = Infinity;
-  for (const entry of row.entries) {
-    const next = Math.abs(entry.cx - info.entry.cx);
-    if (next < distance) {
-      best = entry.card;
-      distance = next;
+  let bestScore = Infinity;
+
+  for (const card of cards) {
+    if (card === current) continue;
+    const next = card.getBoundingClientRect();
+    const nx = next.left + next.width / 2;
+    const ny = next.top + next.height / 2;
+    const dy = ny - cy;
+    if (direction < 0 ? dy >= -3 : dy <= 3) continue;
+    const score = Math.abs(dy) * 4 + Math.abs(nx - cx);
+    if (score < bestScore) {
+      best = card;
+      bestScore = score;
     }
   }
   return best;
 }
 
-function targetFor(state, current, key) {
-  const info = state.byCard.get(current);
-  if (!info) return null;
-  if (key === 'ArrowLeft' || key === 'ArrowRight') return state.cards[info.entry.index + (key === 'ArrowLeft' ? -1 : 1)] || null;
-  return verticalTarget(state, current, key === 'ArrowUp' ? -1 : 1);
-}
-
-function shiftWindowAndContinue(key, current) {
+function ensureAdjacentWindow(direction) {
   const library = window.mochimonoLibrary;
-  const page = library?.state?.();
-  if (!page || !library.ensureIndex) return true;
-
-  const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
-  const probe = direction < 0 ? page.offset - 1 : page.offset + page.loaded;
-  if (probe < 0 || probe >= page.filtered) return true;
-
-  const hash = current.dataset.hash || '';
-  const anchorTop = current.getBoundingClientRect().top;
+  const state = library?.state?.();
+  if (!state || !library.ensureIndex) return false;
+  const probe = direction < 0 ? state.offset - 1 : state.offset + state.loaded;
+  if (probe < 0 || probe >= state.filtered) return false;
   library.ensureIndex(probe);
-  hideSentinels();
-  dirty = true;
-
-  const same = hash && files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
-  if (!same) return true;
-  const delta = same.getBoundingClientRect().top - anchorTop;
-  if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
-
-  const state = buildLayout();
-  const start = state.byHash.get(hash);
-  const target = start && targetFor(state, start, key);
-  if (target) moveCursor(target, state);
-  else if (start) moveCursor(start, state);
+  freezeSentinels();
   return true;
 }
 
+function horizontalTarget(current, direction) {
+  const library = window.mochimonoLibrary;
+  const hashes = library?.filteredHashes?.();
+  if (!hashes?.length) return null;
+  const index = hashes.indexOf(current.dataset.hash || '');
+  const targetIndex = index + direction;
+  if (index < 0 || targetIndex < 0 || targetIndex >= hashes.length) return null;
+  library.ensureIndex?.(targetIndex);
+  freezeSentinels();
+  return files.querySelector(`[data-hash="${CSS.escape(hashes[targetIndex])}"]`);
+}
+
 function navigate(key) {
-  const state = currentLayout();
-  const current = cursorCard(state) || activeCard(state);
-  if (!current) return bootstrapCursor();
-  if (!cursorHash || cursorHash !== current.dataset.hash) moveCursor(current, state);
-  const target = targetFor(state, current, key);
-  return target ? moveCursor(target, state) : shiftWindowAndContinue(key, current);
+  let current = selectedCard();
+  if (!current) return selectCard(visibleStart());
+
+  if (key === 'ArrowLeft' || key === 'ArrowRight') {
+    return selectCard(horizontalTarget(current, key === 'ArrowLeft' ? -1 : 1)) || true;
+  }
+
+  const direction = key === 'ArrowUp' ? -1 : 1;
+  let cards = mountedCards();
+  let target = verticalTarget(cards, current, direction);
+  if (target) return selectCard(target);
+
+  if (!ensureAdjacentWindow(direction)) return true;
+  current = selectedHash && files.querySelector(`[data-hash="${CSS.escape(selectedHash)}"]`);
+  if (!current) return true;
+  cards = mountedCards();
+  target = verticalTarget(cards, current, direction);
+  return selectCard(target) || selectCard(current);
 }
 
 function press(key) {
   if (!arrows.has(key) || !viewer?.hidden || !gridActive()) return false;
+
   if (!holding) {
     holding = true;
     freezeSentinels();
-    dirty = true;
-    const state = currentLayout();
-    const existing = cursorCard(state);
-    if (!visibleInfo(state, existing)) {
-      const start = activeCard(state) || visibleAnchor(state);
-      if (!moveCursor(start, state)) {
-        holding = false;
-        releaseRail();
-        releaseSentinels();
-      }
-      return true;
-    }
+    const current = selectedCard();
+    if (!visible(current)) return selectCard(visibleStart());
   }
+
   navigate(key);
   return true;
 }
 
 function release() {
-  if (!holding && railWasHidden == null && !sentinelState) return;
   holding = false;
-  releaseRail();
   releaseSentinels();
-  dirty = true;
-  const card = cursorHash && files.querySelector(`[data-hash="${CSS.escape(cursorHash)}"]`);
-  if (!card) return;
-  const y = scrollY;
-  card.focus({ preventScroll: true });
-  if (scrollY !== y) scrollTo({ top: y, left: 0, behavior: 'auto' });
 }
 
-function resetNavigation(clearCursor = false) {
-  holding = false;
-  releaseRail();
-  releaseSentinels();
-  if (!clearCursor) return;
-  for (const card of files.querySelectorAll('.keyboard-cursor')) card.classList.remove('keyboard-cursor');
-  cursorHash = '';
+function reset(clear = false) {
+  release();
+  if (!clear) return;
+  files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
+  selectedHash = '';
   document.documentElement.classList.remove('keyboard-navigation-active');
 }
 
-function syncReturnedCursor(hash) {
-  resetNavigation(true);
-  cursorHash = String(hash || '');
-  dirty = true;
-  const state = currentLayout();
-  const card = cursorCard(state);
-  if (!card || !gridActive()) return;
-  card.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' });
-  dirty = true;
-  moveCursor(card, currentLayout());
-  releaseRail();
-  const y = scrollY;
-  card.focus({ preventScroll: true });
-  if (scrollY !== y) scrollTo({ top: y, left: 0, behavior: 'auto' });
+function returnTo(hash) {
+  reset(true);
+  selectedHash = String(hash || '');
+  const card = selectedCard();
+  if (card && gridActive()) selectCard(card, 'center');
 }
 
-window.mochimonoGridKeyboard = { press, release, reset: resetNavigation };
+window.mochimonoGridKeyboard = { press, release, reset };
 
 document.addEventListener('keydown', event => {
   if (!arrows.has(event.key) || !viewer?.hidden || !gridActive() || editingControl(event)) return;
@@ -316,17 +204,11 @@ document.addEventListener('keydown', event => {
   event.stopImmediatePropagation();
   press(event.key);
 }, true);
-document.addEventListener('keyup', event => {
-  if (!arrows.has(event.key)) return;
-  release();
-}, true);
-window.addEventListener('blur', () => resetNavigation());
-window.addEventListener('mochimono-viewer-return', event => syncReturnedCursor(event.detail?.hash));
-files?.addEventListener('pointerdown', () => resetNavigation(true), true);
 
-if (files) {
-  new MutationObserver(records => { if (structuralMutation(records)) dirty = true; }).observe(files, { childList: true, subtree: true });
-  new ResizeObserver(() => { dirty = true; }).observe(files);
-}
-window.addEventListener('mochimono:grid-laid-out', () => { if (!holding) dirty = true; });
-window.addEventListener('mochimono:media-size', () => { dirty = true; });
+document.addEventListener('keyup', event => {
+  if (arrows.has(event.key)) release();
+}, true);
+
+window.addEventListener('blur', release);
+window.addEventListener('mochimono-viewer-return', event => returnTo(event.detail?.hash));
+files?.addEventListener('pointerdown', () => reset(true), true);
