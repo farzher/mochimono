@@ -62,6 +62,11 @@ if (files) {
        browser already skips off-screen painting; content-visibility caused
        visible activation flashes when rapidly reversing through the grid. */
     .files.grid>.date-group{contain:layout style}
+    /* During a fast key/scroll burst the focus outline is enough feedback.
+       Avoid continuously animating text overlays over large image surfaces. */
+    html.grid-interaction-active #files .file-context-badge{
+      opacity:0!important;transform:none!important;transition:none!important
+    }
   `;
   document.head.append(style);
 
