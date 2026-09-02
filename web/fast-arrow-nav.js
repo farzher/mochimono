@@ -37,12 +37,13 @@ function structuralMutation(records) {
 }
 
 function buildLayout() {
-  const cards = [...files.querySelectorAll('[data-hash]')].filter(card => card.offsetWidth > 0 && card.offsetHeight > 0);
-  const entries = cards.map((card, index) => {
+  const entries = [];
+  for (const card of files.querySelectorAll('[data-hash]')) {
     const rect = card.getBoundingClientRect();
-    return { card, hash: card.dataset.hash || '', index, cx: rect.left + rect.width / 2, top: rect.top + scrollY, height: rect.height };
-  });
-
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    entries.push({ card, hash: card.dataset.hash || '', index: entries.length, cx: rect.left + rect.width / 2, top: rect.top + scrollY, height: rect.height });
+  }
+  const cards = entries.map(entry => entry.card);
   const rows = [];
   const byCard = new WeakMap();
   for (const entry of entries) {
@@ -104,7 +105,8 @@ function releaseRailScan() {
 
 function moveFocus(card, state = currentLayout()) {
   if (!card) return false;
-  files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
+  if (directFocused && directFocused !== card) directFocused.classList.remove('keyboard-cursor');
+  else if (!directFocused) files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
   directFocused = card;
   card.classList.add('keyboard-cursor');
   document.documentElement.classList.add('keyboard-navigation-active');
