@@ -59,6 +59,7 @@ if (CLIENT && viewer && viewerOpen && actions) {
 
   async function sync() {
     const current = hash();
+    if (!viewer.hidden && window.mochimonoViewerPerformance?.defer?.(sync)) return;
     const mine = ++generation;
     resetState();
     emphasizeViewerSize();
@@ -76,16 +77,10 @@ if (CLIENT && viewer && viewerOpen && actions) {
     } catch {}
   }
 
-  // Pointer interaction with viewer chrome should not move browser focus away
-  // from the viewer itself. That keeps Esc/arrow keyboard navigation reliable
-  // after clicking Reveal, Open, navigation arrows, or the overflow menu.
   viewer.addEventListener('mousedown', event => {
     if (event.target.closest('.viewer-bar button,.viewer-bar a,.viewer-bar summary,.viewer-nav')) event.preventDefault();
   }, true);
 
-  // Capture Escape before a focused <button>, <a>, or <details> control gets a
-  // chance to consume it. The existing close button remains the single owner of
-  // viewer teardown/history behavior.
   window.addEventListener('keydown', event => {
     if (viewer.hidden || event.key !== 'Escape') return;
     event.preventDefault();
@@ -101,8 +96,6 @@ if (CLIENT && viewer && viewerOpen && actions) {
     button.disabled = true;
     resetState();
     try {
-      // Resolve the exact current local candidate by content hash on the Agent.
-      // Do not rebuild a filesystem path in the browser from provenance metadata.
       const response = await fetch('/api/reveal-file', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
