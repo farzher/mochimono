@@ -179,6 +179,11 @@ function resetDesktopZoom(animate = false) {
   applyDesktopZoom(animate);
 }
 
+function resetDesktopState() {
+  if (!desktopZoomed() && !desktopZoom.x && !desktopZoom.y && !desktopPan && !desktopNavState && !stage?.classList.contains('viewer-desktop-panning')) return;
+  resetDesktopZoom();
+}
+
 function naturalZoom(image) {
   const scale = Math.max(
     Number(image.naturalWidth || 0) / Math.max(1, image.clientWidth),
@@ -328,9 +333,9 @@ if (stage && viewer) {
     event.stopImmediatePropagation();
   });
 
-  new MutationObserver(() => resetDesktopZoom()).observe(viewerMedia, { childList: true });
+  new MutationObserver(resetDesktopState).observe(viewerMedia, { childList: true });
   new MutationObserver(() => {
-    if (viewer.hidden) resetDesktopZoom();
+    if (viewer.hidden) resetDesktopState();
   }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 
   window.addEventListener('resize', () => {
