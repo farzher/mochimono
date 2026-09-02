@@ -236,6 +236,7 @@ function navigate(key) {
 
 function settleHold() {
   clearPreextend();
+  queuedKey = '';
   if (!holding && railWasHidden == null) return;
   holding = false;
   releaseRailScan();
