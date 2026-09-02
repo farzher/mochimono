@@ -1,20 +1,16 @@
 const files = document.querySelector('#files');
 const CLIENT = document.documentElement.classList.contains('client-library');
 const THUMB_VERSION = 3;
-const CACHE_NAME = `mochimono-thumbnails-v${THUMB_VERSION}`;
 const THUMB_EDGE = 768;
 const IMAGE_FALLBACK_DELAY = 8_000;
 const VIDEO_FALLBACK_DELAY = 15_000;
-const MAX_OBJECT_URLS = 240;
 
 const states = new Map();
 const cardIndex = new Map();
 const observed = new Set();
 const nearby = new Set();
-const objectUrls = new Map();
 const fallbackQueue = [];
 const fallbackQueued = new Set();
-let cachePromise = null;
 let checkTimer = 0;
 let checking = false;
 let fallbackActive = false;
@@ -44,30 +40,7 @@ function kind(card) {
 }
 
 function recordFor(card) {
-  const mediaKind = kind(card);
-  return { hash: String(card.dataset.hash || ''), filename: filename(card), kind: mediaKind, mime: sourceMime({ filename: filename(card) }) };
-}
-
-function cacheStorage() {
-  if (!('caches' in window)) return Promise.resolve(null);
-  if (!cachePromise) cachePromise = caches.open(CACHE_NAME).catch(() => null);
-  return cachePromise;
-}
-
-function rememberObjectUrl(hash, blob) {
-  const previous = objectUrls.get(hash);
-  if (previous) URL.revokeObjectURL(previous);
-  const url = URL.createObjectURL(blob);
-  objectUrls.delete(hash);
-  objectUrls.set(hash, url);
-  while (objectUrls.size > MAX_OBJECT_URLS) {
-    const [oldHash, oldUrl] = objectUrls.entries().next().value;
-    objectUrls.delete(oldHash);
-    URL.revokeObjectURL(oldUrl);
-    const state = states.get(oldHash);
-    if (state?.url === oldUrl) state.url = '';
-  }
-  return url;
+  return { hash: String(card.dataset.hash || ''), filename: filename(card), kind: kind(card), mime: sourceMime({ filename: filename(card) }) };
 }
 
 function indexCard(card) {
@@ -86,9 +59,7 @@ function unindexCard(card) {
   if (!group.size) cardIndex.delete(hash);
 }
 
-function cardsFor(hash) {
-  return cardIndex.get(String(hash || '')) || [];
-}
+const cardsFor = hash => cardIndex.get(String(hash || '')) || [];
 
 function mediaBox(card, mediaKind = kind(card)) {
   let box = card.querySelector('.media-thumb');
@@ -120,104 +91,74 @@ function rememberDimensions(hash, width, height) {
   state.width = Number(width) || state.width || 0;
   state.height = Number(height) || state.height || 0;
   states.set(hash, state);
-
-  // Thumbnail decoding is paint, not layout. Learn missing geometry for the next
-  // render, but never resize a card that is already on screen.
   persistDimensions(hash, state.width, state.height);
 }
 
 function persistLearnedDimensions() {
   clearTimeout(geometryTimer);
   geometryTimer = setTimeout(() => {
-    for (const [hash, state] of states) {
-      if (state.width && state.height) persistDimensions(hash, state.width, state.height);
-    }
+    for (const [hash, state] of states) if (state.width && state.height) persistDimensions(hash, state.width, state.height);
   }, 800);
 }
 
-function paint(hash) {
-  const state = states.get(hash);
-  if (!state?.ready || !state.url) return;
-  for (const card of cardsFor(hash)) {
-    if (!card.isConnected || !kind(card)) continue;
-    const box = mediaBox(card);
-    if (!box) continue;
-    const current = box.querySelector('img.cached-thumb');
-    if (current?.dataset.objectUrl === state.url) continue;
-
-    const image = document.createElement('img');
-    image.className = 'cached-thumb';
-    image.alt = filename(card);
-    image.decoding = 'async';
-    image.loading = 'eager';
-    image.dataset.objectUrl = state.url;
-    image.onload = () => {
-      box.classList.remove('thumb-failed');
-      box.removeAttribute('title');
-      rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
-    };
-    image.onerror = () => {
-      if (image.dataset.objectUrl !== state.url) return;
-      image.remove();
-      state.ready = false;
-      state.url = '';
-      state.nextCheck = performance.now();
-      states.set(hash, state);
-      pending(card);
-      scheduleCheck(50);
-    };
-    const old = box.querySelector('img,.video-thumb-pending');
-    old ? old.replaceWith(image) : box.prepend(image);
-    image.src = state.url;
-  }
+function markLoaded(hash, card, image) {
+  const state = states.get(hash) || {};
+  state.ready = true;
+  state.missingSince = 0;
+  state.nextCheck = 0;
+  states.set(hash, state);
+  const box = mediaBox(card);
+  box?.classList.remove('thumb-failed');
+  box?.removeAttribute('title');
+  rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
 }
 
-async function responseFor(hash) {
+function paintCard(card, force = false) {
+  if (!card?.isConnected || !kind(card)) return;
+  const hash = String(card.dataset.hash || '');
+  if (!hash) return;
+  const box = mediaBox(card);
+  if (!box) return;
   const canonical = thumbUrl(hash);
-  const cache = await cacheStorage();
-  const cached = await cache?.match(canonical);
-  if (cached?.ok) return cached;
+  const current = box.querySelector('img.cached-thumb');
 
-  // Preserve anything the previous viewer already put in the browser's immutable
-  // HTTP cache. The first visit after this rewrite promotes that response into
-  // Mochimono's explicit Cache Storage without downloading it again.
-  const response = await fetch(canonical, { cache: 'force-cache' });
-  if (!response.ok) return response;
-  cache?.put(canonical, response.clone()).catch(() => {});
-  return response;
+  if (current?.dataset.thumbHash === hash && !force) {
+    if (current.complete && current.naturalWidth) markLoaded(hash, card, current);
+    return;
+  }
+
+  const image = document.createElement('img');
+  image.className = 'cached-thumb';
+  image.alt = filename(card);
+  image.decoding = 'async';
+  image.loading = 'lazy';
+  image.dataset.thumbHash = hash;
+  image.onload = () => markLoaded(hash, card, image);
+  image.onerror = () => {
+    if (!image.isConnected || image.dataset.thumbHash !== hash) return;
+    image.remove();
+    const state = states.get(hash) || {};
+    state.ready = false;
+    state.missingSince ||= performance.now();
+    state.nextCheck = performance.now() + 250;
+    states.set(hash, state);
+    pending(card);
+    if (nearby.has(card)) scheduleCheck(80);
+  };
+
+  const old = box.querySelector('img.cached-thumb,.video-thumb-pending');
+  old ? old.replaceWith(image) : box.prepend(image);
+  image.src = canonical;
 }
 
-async function loadHash(hash) {
+function paint(hash, force = false) {
+  for (const card of cardsFor(hash)) paintCard(card, force);
+}
+
+function loadHash(hash, force = false) {
   hash = String(hash || '');
   if (!hash) return;
-  const state = states.get(hash) || {};
-  if (state.ready && state.url) return paint(hash);
-  if (state.loading) return;
-  state.loading = true;
-  states.set(hash, state);
-
-  try {
-    const response = await responseFor(hash);
-    if (!response.ok) {
-      state.ready = false;
-      state.missingSince ||= performance.now();
-      state.nextCheck = performance.now() + 300;
-      return;
-    }
-    const blob = await response.blob();
-    state.url = rememberObjectUrl(hash, blob);
-    state.ready = true;
-    state.missingSince = 0;
-    state.nextCheck = 0;
-    paint(hash);
-  } catch {
-    state.ready = false;
-    state.nextCheck = performance.now() + 1000;
-  } finally {
-    state.loading = false;
-    states.set(hash, state);
-    if (!state.ready) scheduleCheck(300);
-  }
+  paint(hash, force);
 }
 
 async function requestCanonical(hashes) {
@@ -256,7 +197,7 @@ async function checkNearby() {
   const now = performance.now();
   const hashes = [...new Set(cards.map(card => card.dataset.hash).filter(hash => {
     const state = states.get(hash) || {};
-    return !state.ready && !state.loading && now >= (state.nextCheck || 0);
+    return !state.ready && now >= (state.nextCheck || 0);
   }))];
   if (!hashes.length) return;
 
@@ -280,10 +221,12 @@ async function checkNearby() {
       const item = ready.get(hash);
       if (item) {
         rememberDimensions(hash, Number(item.width), Number(item.height));
+        state.ready = true;
         state.nextCheck = 0;
         states.set(hash, state);
-        loadHash(hash);
+        loadHash(hash, true);
       } else {
+        state.ready = false;
         state.missingSince ||= now;
         state.nextCheck = now + 1200;
         states.set(hash, state);
@@ -415,16 +358,12 @@ async function runFallback(record) {
     const result = record.kind === 'video' ? await videoFallback(record) : await imageFallback(record);
     if (states.get(record.hash)?.ready) return;
     await uploadFallback(record, result);
-    const cache = await cacheStorage();
-    const response = new Response(result.blob, { headers: { 'content-type': 'image/webp' } });
-    cache?.put(thumbUrl(record.hash), response.clone()).catch(() => {});
-    state.url = rememberObjectUrl(record.hash, result.blob);
     state.ready = true;
     state.missingSince = 0;
     state.nextCheck = 0;
     states.set(record.hash, state);
     rememberDimensions(record.hash, result.width, result.height);
-    paint(record.hash);
+    loadHash(record.hash, true);
   } catch (error) {
     state.nextFallback = performance.now() + 30_000;
     states.set(record.hash, state);
@@ -455,11 +394,13 @@ const observer = files ? new IntersectionObserver(entries => {
     const card = entry.target;
     if (entry.isIntersecting) {
       nearby.add(card);
-      pending(card);
+      const image = card.querySelector('img.cached-thumb');
+      if (image) image.fetchPriority = 'high';
       loadHash(card.dataset.hash);
+      if (!states.get(card.dataset.hash)?.ready) scheduleCheck(50);
     } else nearby.delete(card);
   }
-}, { rootMargin: '1400px 0px' }) : null;
+}, { rootMargin: '2200px 0px' }) : null;
 
 function cardsIn(node) {
   if (!(node instanceof Element)) return [];
@@ -475,13 +416,10 @@ function observeTree(node) {
     indexCard(card);
     if (observed.has(card) || !kind(card)) continue;
     observed.add(card);
-    const hash = String(card.dataset.hash || '');
-    const state = states.get(hash);
-    // A catalog refresh can replace card DOM even when the visible files did not
-    // change. Reuse the already-loaded object URL synchronously instead of
-    // waiting for IntersectionObserver to fire again and flashing a blank tile.
-    if (state?.ready && state.url) paint(hash);
-    else pending(card);
+    // Install the immutable canonical thumbnail immediately. Browser lazy-loading
+    // decides when an off-screen image needs bytes, while an HTTP-cache hit near
+    // the viewport can paint before IntersectionObserver gets another turn.
+    paintCard(card);
     observer.observe(card);
   }
 }
@@ -508,18 +446,18 @@ if (files) {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       for (const card of nearby) loadHash(card.dataset.hash);
-      scheduleCheck(100);
+      scheduleCheck(50);
       pumpFallback();
     }
   });
 
   window.addEventListener('mochimono:catalog-updated', () => {
     persistLearnedDimensions();
-    scheduleCheck(100);
+    scheduleCheck(50);
   });
+
   addEventListener('beforeunload', () => {
     clearTimeout(checkTimer);
     clearTimeout(geometryTimer);
-    for (const url of objectUrls.values()) URL.revokeObjectURL(url);
   }, { once: true });
 }
