@@ -76,9 +76,15 @@ const libraryArrows = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown']);
 addEventListener('keydown', event => {
   if (!libraryArrows.has(event.key) || filesPane.hidden || connection?.open) return;
   if (event.target?.closest?.('input,select,textarea,[contenteditable="true"]')) return;
-  frame.contentWindow?.mochimonoGridKeyboardStart?.();
-  frame.contentWindow?.focus();
+  const keyboard = frame.contentWindow?.mochimonoGridKeyboard;
+  if (!keyboard?.press?.(event.key)) return;
+  frame.contentWindow.focus();
   event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+addEventListener('keyup', event => {
+  if (!libraryArrows.has(event.key) || filesPane.hidden) return;
+  frame.contentWindow?.mochimonoGridKeyboard?.release?.();
 }, true);
 
 showTab('files');
