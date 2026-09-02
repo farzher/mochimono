@@ -1,15 +1,9 @@
-import './context-ui.js';
-
-const folderbar = document.querySelector('#folderbar');
-const files = document.querySelector('#files');
-const source = document.querySelector('#source');
 const views = document.querySelector('#views');
 const mediaSizeControl = document.querySelector('#mediaSizeControl');
 const GRID_FOLDERS_KEY = 'mochimono-grid-folders';
 
 let restoring = false;
-let syncFrame = 0;
-let gridFolderGeneration = 0;
+let restoreComplete = false;
 let gridFoldersEnabled = localStorage.getItem(GRID_FOLDERS_KEY) !== '0';
 
 const gridFolderToggle = document.createElement('button');
@@ -23,49 +17,11 @@ mediaSizeControl.after(gridFolderToggle);
 const gridFolderStrip = document.createElement('section');
 gridFolderStrip.className = 'grid-folder-strip';
 gridFolderStrip.hidden = true;
-folderbar.after(gridFolderStrip);
+document.querySelector('#folderbar').after(gridFolderStrip);
 
-function currentView() {
-  return views.querySelector('[data-view].active')?.dataset.view || 'grid';
-}
-
-function clearFolderUi() {
-  folderbar.hidden = true;
-  folderbar.replaceChildren();
-}
-
-function folderState() {
-  if (folderbar.hidden) return null;
-  const sourceCrumb = folderbar.querySelector('[data-folder-depth="0"]');
-  if (!sourceCrumb) return null;
-  const path = [...folderbar.querySelectorAll('[data-folder-depth]')]
-    .filter(button => Number(button.dataset.folderDepth) > 0)
-    .map(button => button.textContent.trim())
-    .join('/');
-  return { source: sourceCrumb.textContent.trim(), path };
-}
-
-function replaceFolderParams(state) {
-  const url = new URL(location.href);
-  if (state?.source) {
-    url.searchParams.set('source', state.source);
-    if (state.path) url.searchParams.set('path', state.path);
-    else url.searchParams.delete('path');
-  } else {
-    url.searchParams.delete('source');
-    url.searchParams.delete('path');
-  }
-  history.replaceState(history.state, '', url);
-}
-
-function syncUrl() {
-  syncFrame = 0;
-  if (!restoring) replaceFolderParams(folderState());
-}
-
-function scheduleSync() {
-  if (!syncFrame) syncFrame = requestAnimationFrame(syncUrl);
-}
+const library = () => window.mochimonoLibrary;
+const currentView = () => views.querySelector('[data-view].active')?.dataset.view || 'grid';
+const state = () => library()?.folderState?.() || { importId: '', path: '', sourceName: '' };
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
@@ -79,14 +35,23 @@ function formatBytes(bytes) {
   return `${value < 10 && unit ? value.toFixed(2) : value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
 }
 
-function syncGridFolderToggle() {
-  gridFolderToggle.hidden = currentView() !== 'grid';
-  gridFolderToggle.classList.toggle('active', gridFoldersEnabled);
-  gridFolderToggle.setAttribute('aria-pressed', String(gridFoldersEnabled));
+function syncUrl() {
+  if (restoring) return;
+  const folder = state();
+  const url = new URL(location.href);
+  if (folder.sourceName) {
+    url.searchParams.set('source', folder.sourceName);
+    if (folder.path) url.searchParams.set('path', folder.path);
+    else url.searchParams.delete('path');
+  } else {
+    url.searchParams.delete('source');
+    url.searchParams.delete('path');
+  }
+  if (url.href !== location.href) history.replaceState(history.state, '', url);
 }
 
-function sourceCards(imports) {
-  return imports.map(item => `
+function sourceCards(items) {
+  return items.map(item => `
     <button class="grid-folder-card source-card" data-grid-folder-source="${escapeHtml(item.id)}">
       <span class="grid-folder-icon" aria-hidden="true"></span>
       <span class="grid-folder-copy"><strong>${escapeHtml(item.sourceName)}</strong><small>${Number(item.files || 0).toLocaleString()} files · ${formatBytes(item.referencedBytes)}</small></span>
@@ -94,8 +59,8 @@ function sourceCards(imports) {
     </button>`).join('');
 }
 
-function folderCards(folders) {
-  return folders.map(folder => `
+function folderCards(items) {
+  return items.map(folder => `
     <button class="grid-folder-card" data-grid-folder-name="${escapeHtml(folder.name)}">
       <span class="grid-folder-icon" aria-hidden="true"></span>
       <span class="grid-folder-copy"><strong>${escapeHtml(folder.name)}</strong><small>${Number(folder.files || 0).toLocaleString()} files</small></span>
@@ -103,7 +68,7 @@ function folderCards(folders) {
     </button>`).join('');
 }
 
-function renderGridFolderStrip(label, cards) {
+function renderStrip(label, cards) {
   if (!cards) {
     gridFolderStrip.hidden = true;
     gridFolderStrip.replaceChildren();
@@ -113,160 +78,71 @@ function renderGridFolderStrip(label, cards) {
   gridFolderStrip.innerHTML = `<div class="grid-folder-head"><span>${escapeHtml(label)}</span></div><div class="grid-folder-grid">${cards}</div>`;
 }
 
-function waitFor(find, timeout = 8000) {
-  return new Promise((resolve, reject) => {
-    const started = performance.now();
-    const check = () => {
-      const value = find();
-      if (value) return resolve(value);
-      if (performance.now() - started >= timeout) return reject(new Error('Folder location is no longer available.'));
-      setTimeout(check, 30);
-    };
-    check();
-  });
+function refresh() {
+  const grid = currentView() === 'grid';
+  gridFolderToggle.hidden = !grid;
+  gridFolderToggle.classList.toggle('active', gridFoldersEnabled);
+  gridFolderToggle.setAttribute('aria-pressed', String(gridFoldersEnabled));
+  if (!grid || !gridFoldersEnabled || restoring) return renderStrip('', '');
+
+  const folder = state();
+  if (!folder.importId) return renderStrip('Sources', sourceCards(library()?.sources?.() || []));
+  return renderStrip('Folders', folderCards(library()?.folderContents?.()?.folders || []));
 }
 
-function dispatchFolderClick(attribute, value) {
-  const bridge = document.createElement('button');
-  bridge.type = 'button';
-  bridge.hidden = true;
-  bridge.dataset[attribute] = value;
-  files.append(bridge);
-  bridge.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  bridge.remove();
-}
-
-async function enterSource(id) {
-  const option = [...source.options].find(item => item.value === String(id));
-  if (!option) return;
-  dispatchFolderClick('folderSource', option.value);
-  await waitFor(() => folderState()?.source === option.textContent.trim());
-}
-
-async function enterFolder(name) {
-  const before = folderState();
-  if (!before) return;
-  const wantedPath = before.path ? `${before.path}/${name}` : name;
-  dispatchFolderClick('folderName', name);
-  await waitFor(() => folderState()?.path === wantedPath);
-}
-
-async function refreshGridFolders() {
-  syncGridFolderToggle();
-  const generation = ++gridFolderGeneration;
-  if (!gridFoldersEnabled || currentView() !== 'grid' || restoring) {
-    gridFolderStrip.hidden = true;
-    return;
-  }
-
-  const state = folderState();
-  try {
-    if (!state) {
-      const response = await fetch('/api/imports');
-      if (!response.ok) throw new Error(`${response.status}`);
-      const imports = (await response.json()).imports || [];
-      if (generation !== gridFolderGeneration || !gridFoldersEnabled || currentView() !== 'grid' || folderState()) return;
-      renderGridFolderStrip('Sources', sourceCards(imports));
-      return;
-    }
-
-    const importId = source.value;
-    if (!importId) return renderGridFolderStrip('', '');
-    const response = await fetch(`/api/folders?import=${encodeURIComponent(importId)}&path=${encodeURIComponent(state.path)}`);
-    if (!response.ok) throw new Error(`${response.status}`);
-    const data = await response.json();
-    if (generation !== gridFolderGeneration || !gridFoldersEnabled || currentView() !== 'grid') return;
-    const current = folderState();
-    if (!current || current.source !== state.source || current.path !== state.path) return;
-    renderGridFolderStrip('Folders', folderCards(data.folders || []));
-  } catch (error) {
-    if (generation === gridFolderGeneration) {
-      console.warn('Could not load grid folders.', error);
-      gridFolderStrip.hidden = true;
-    }
-  }
+async function openFolder(importId, path = '') {
+  await library()?.openFolder?.(importId, path);
+  syncUrl();
+  refresh();
 }
 
 async function restoreFolder() {
+  if (restoreComplete) return;
   const url = new URL(location.href);
   const wantedSource = url.searchParams.get('source');
-  if (!wantedSource) return;
-  const parts = String(url.searchParams.get('path') || '').split('/').filter(Boolean);
+  if (!wantedSource) {
+    restoreComplete = true;
+    return refresh();
+  }
+  const source = library()?.sources?.().find(item => item.sourceName === wantedSource);
+  if (!source) return;
 
   restoring = true;
   try {
-    const option = await waitFor(() => [...source.options].find(item => item.textContent === wantedSource));
-    await enterSource(option.value);
-    for (const part of parts) await enterFolder(part);
+    await library().openFolder(source.id, url.searchParams.get('path') || '');
+    restoreComplete = true;
   } catch (error) {
-    console.warn(error.message);
+    console.warn(error);
   } finally {
     restoring = false;
-    scheduleSync();
-    refreshGridFolders();
+    syncUrl();
+    refresh();
   }
 }
 
 gridFolderToggle.addEventListener('click', () => {
   gridFoldersEnabled = !gridFoldersEnabled;
   localStorage.setItem(GRID_FOLDERS_KEY, gridFoldersEnabled ? '1' : '0');
-  refreshGridFolders();
+  refresh();
 });
 
 gridFolderStrip.addEventListener('click', event => {
   const sourceCard = event.target.closest('[data-grid-folder-source]');
+  if (sourceCard) return void openFolder(sourceCard.dataset.gridFolderSource).catch(console.warn);
   const folderCard = event.target.closest('[data-grid-folder-name]');
-  const action = sourceCard
-    ? enterSource(sourceCard.dataset.gridFolderSource)
-    : folderCard
-      ? enterFolder(folderCard.dataset.gridFolderName)
-      : null;
-  action?.then(() => {
-    scheduleSync();
-    refreshGridFolders();
-  }).catch(error => console.warn(error.message));
+  if (!folderCard) return;
+  const folder = state();
+  const path = folder.path ? `${folder.path}/${folderCard.dataset.gridFolderName}` : folderCard.dataset.gridFolderName;
+  openFolder(folder.importId, path).catch(console.warn);
 });
 
-new MutationObserver(() => {
-  scheduleSync();
-  refreshGridFolders();
-}).observe(folderbar, {
-  childList: true,
-  subtree: true,
-  attributes: true,
-  attributeFilter: ['hidden']
+window.addEventListener('mochimono:folder-changed', () => {
+  syncUrl();
+  refresh();
 });
+window.addEventListener('mochimono:catalog-cache-restored', restoreFolder);
+window.addEventListener('mochimono:catalog-updated', restoreFolder);
+new MutationObserver(refresh).observe(views, { subtree: true, attributes: true, attributeFilter: ['class'] });
 
-new MutationObserver(refreshGridFolders).observe(source, { childList: true });
-
-source.addEventListener('change', () => {
-  if (!restoring && currentView() !== 'folders') {
-    clearFolderUi();
-    replaceFolderParams(null);
-  }
-  setTimeout(() => {
-    scheduleSync();
-    refreshGridFolders();
-  });
-});
-
-views.addEventListener('click', () => setTimeout(() => {
-  scheduleSync();
-  refreshGridFolders();
-}));
-
-files.addEventListener('click', event => {
-  if (event.target.closest('[data-folder-source], [data-folder-name]')) setTimeout(() => {
-    scheduleSync();
-    refreshGridFolders();
-  });
-});
-
-folderbar.addEventListener('click', () => setTimeout(() => {
-  scheduleSync();
-  refreshGridFolders();
-}));
-
-syncGridFolderToggle();
-refreshGridFolders();
+refresh();
 restoreFolder().catch(console.warn);
