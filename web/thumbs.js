@@ -252,12 +252,10 @@ const observer = files ? new IntersectionObserver(entries => {
       continue;
     }
     nearby.add(card);
-    const rect = entry.boundingClientRect;
-    const visible = rect.bottom > 0 && rect.top < innerHeight;
-    paintCard(card, visible);
+    paintCard(card, true);
   }
   scheduleCheck(40);
-}, { rootMargin: '900px 0px' }) : null;
+}, { rootMargin: '600px 0px' }) : null;
 
 function observeTree(node) {
   if (!observer) return;
