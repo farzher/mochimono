@@ -11,8 +11,7 @@ let queuedKey = '';
 let holding = false;
 let directFocused = null;
 let railWasHidden = null;
-let preextendHandle = 0;
-let preextendIdle = false;
+let preextendCancel = null;
 let preextendDirection = 0;
 
 const arrowKeys = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown']);
@@ -146,12 +145,9 @@ function navigateWithin(state, current, key) {
   return adjacentVertical(state, current, key === 'ArrowUp' ? -1 : 1);
 }
 
-function cancelPreextend() {
-  if (!preextendHandle) return;
-  if (preextendIdle) cancelIdleCallback(preextendHandle);
-  else clearTimeout(preextendHandle);
-  preextendHandle = 0;
-  preextendIdle = false;
+function clearPreextend() {
+  preextendCancel?.();
+  preextendCancel = null;
   preextendDirection = 0;
 }
 
@@ -162,83 +158,68 @@ function nearWindowEdge(card, state, direction) {
   return direction < 0 ? info.entry.index < margin : info.entry.index >= state.cards.length - margin;
 }
 
-function finishPaging() {
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    currentLayout();
-    paging = false;
-    const queued = queuedKey;
-    queuedKey = '';
-    if (queued) navigate(queued);
-  }));
-}
-
-function schedulePreextend(card, state, key) {
-  const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
-  if (!nearWindowEdge(card, state, direction)) {
-    if (preextendDirection === direction) cancelPreextend();
-    return;
-  }
-  if (preextendHandle && preextendDirection === direction) return;
-  cancelPreextend();
-  preextendDirection = direction;
-
-  const run = () => {
-    preextendHandle = 0;
-    preextendIdle = false;
-    const wanted = preextendDirection;
-    preextendDirection = 0;
-    if (!holding || paging || !directFocused?.isConnected) return;
-    const latest = currentLayout();
-    if (!nearWindowEdge(directFocused, latest, wanted)) return;
-
-    const anchorTop = directFocused.getBoundingClientRect().top;
-    paging = true;
-    if (!window.mochimonoLibrary?.extend?.(wanted)) {
-      paging = false;
-      return;
-    }
-    if (directFocused.isConnected) {
-      const delta = directFocused.getBoundingClientRect().top - anchorTop;
-      if (Math.abs(delta) > .5) scrollBy(0, delta);
-    }
-    dirty = true;
-    finishPaging();
-  };
-
-  if ('requestIdleCallback' in window) {
-    preextendIdle = true;
-    preextendHandle = requestIdleCallback(run, { timeout: 70 });
-  } else preextendHandle = setTimeout(run, 16);
-}
-
-function extendAndContinue(key, current) {
-  cancelPreextend();
-  const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
+function rotateWindow(direction, current, afterLayout = null) {
+  clearPreextend();
   const hash = current.dataset.hash || '';
   const anchorTop = current.getBoundingClientRect().top;
-  if (!window.mochimonoLibrary?.extend?.(direction)) return false;
-
+  paging = true;
+  if (!window.mochimonoLibrary?.extend?.(direction)) {
+    paging = false;
+    return false;
+  }
   if (current.isConnected) {
     const delta = current.getBoundingClientRect().top - anchorTop;
     if (Math.abs(delta) > .5) scrollBy(0, delta);
   }
 
-  paging = true;
   dirty = true;
   requestAnimationFrame(() => requestAnimationFrame(() => {
     const state = currentLayout();
     const start = state.entries.find(entry => entry.hash === hash)?.card || focusedCard(state);
-    const target = start && navigateWithin(state, start, key);
-    if (target) {
-      moveFocus(target, state);
-      schedulePreextend(target, state, key);
-    }
+    afterLayout?.(state, start);
     paging = false;
     const queued = queuedKey;
     queuedKey = '';
     if (queued) navigate(queued);
   }));
   return true;
+}
+
+function schedulePreextend(card, state, key) {
+  const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
+  if (!nearWindowEdge(card, state, direction)) {
+    if (preextendDirection === direction) clearPreextend();
+    return;
+  }
+  if (preextendCancel && preextendDirection === direction) return;
+  clearPreextend();
+  preextendDirection = direction;
+
+  const run = () => {
+    preextendCancel = null;
+    preextendDirection = 0;
+    if (!holding || paging || !directFocused?.isConnected) return;
+    const latest = currentLayout();
+    if (nearWindowEdge(directFocused, latest, direction)) rotateWindow(direction, directFocused);
+  };
+
+  if ('requestIdleCallback' in window) {
+    const handle = requestIdleCallback(run, { timeout: 70 });
+    preextendCancel = () => cancelIdleCallback(handle);
+  } else {
+    const handle = setTimeout(run, 16);
+    preextendCancel = () => clearTimeout(handle);
+  }
+}
+
+function extendAndContinue(key, current) {
+  const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
+  return rotateWindow(direction, current, (state, start) => {
+    const target = start && navigateWithin(state, start, key);
+    if (!target) return;
+    moveFocus(target, state);
+    schedulePreextend(target, state, key);
+  });
 }
 
 function navigate(key) {
@@ -254,7 +235,7 @@ function navigate(key) {
 }
 
 function settleHold() {
-  cancelPreextend();
+  clearPreextend();
   if (!holding && railWasHidden == null) return;
   holding = false;
   releaseRailScan();
