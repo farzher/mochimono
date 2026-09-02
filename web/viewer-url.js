@@ -1,6 +1,7 @@
 const viewer = document.querySelector('#viewer');
 const openLink = document.querySelector('#viewer-open');
 const closeButton = document.querySelector('#viewer-close');
+const viewerContext = document.querySelector('#viewer-context');
 const VIEWER_STATE = 'mochimonoViewer';
 
 function fileParam() {
@@ -72,6 +73,15 @@ new MutationObserver(syncUrl).observe(viewer, {
   attributes: true,
   attributeFilter: ['hidden', 'href']
 });
+
+// Context chips intentionally navigate *forward* from a viewer into a filtered
+// library view. Preserve the current viewer entry and add a new non-viewer entry
+// before file-info.js closes it, so browser Back restores this exact file.
+viewerContext?.addEventListener('click', event => {
+  if (viewer.hidden || !event.target.closest('[data-context-kind]')) return;
+  if (!history.state?.[VIEWER_STATE]) return;
+  history.pushState(viewerState(false), '', fileUrl(''));
+}, true);
 
 async function directFile(hash) {
   const response = await fetch(`/api/files/${encodeURIComponent(hash)}/details`);
