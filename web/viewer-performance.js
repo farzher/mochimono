@@ -9,6 +9,7 @@ const files = document.querySelector('#files');
 
 const objectHash = value => String(value || '').match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 const currentHash = () => objectHash(viewerOpen?.getAttribute('href'));
+const arrowKeys = new Set(['ArrowLeft','ArrowRight','ArrowDown','ArrowUp']);
 
 const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
 const mediaDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
@@ -156,6 +157,12 @@ function waitForRapidSettle() {
   if (!settlePromise) settlePromise = new Promise(resolve => { settleResolve = resolve; });
   if (!settleTimer) settleTimer = setTimeout(settleCheck, Math.max(0, rapidUntil - performance.now()) + 3);
   return settlePromise;
+}
+
+function accelerateRapidSettle(delay = 28) {
+  if (!settleTimer) return;
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(settleCheck, delay);
 }
 
 function finishRapidSettle() {
@@ -343,7 +350,7 @@ document.addEventListener('keydown', event => {
     if (!document.querySelector('dialog[open]') && (!viewerInfo || viewerInfo.hidden)) prepareGridReturn();
     return;
   }
-  if (!['ArrowLeft','ArrowRight','ArrowDown','ArrowUp'].includes(event.key)) return;
+  if (!arrowKeys.has(event.key)) return;
   const direction = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
   event.preventDefault();
   event.stopImmediatePropagation();
@@ -351,14 +358,13 @@ document.addEventListener('keydown', event => {
 }, true);
 
 document.addEventListener('keyup', event => {
-  if (!['ArrowLeft','ArrowRight','ArrowDown','ArrowUp'].includes(event.key)) return;
+  if (!arrowKeys.has(event.key)) return;
   navPending = 0;
   cancelAnimationFrame(navFrame);
   navFrame = 0;
-  if (deferredCurrent || deferredVideo) {
-    rapidUntil = Math.min(rapidUntil, performance.now() + 24);
-    scheduleDeferredFlush(28);
-  }
+  rapidUntil = Math.min(rapidUntil, performance.now() + 24);
+  accelerateRapidSettle(28);
+  if (deferredCurrent || deferredVideo) scheduleDeferredFlush(28);
 }, true);
 
 viewerClose?.addEventListener('click', prepareGridReturn, true);
