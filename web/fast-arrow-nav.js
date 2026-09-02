@@ -13,8 +13,14 @@ let directFocused = null;
 let railWasHidden = null;
 
 const arrowKeys = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown']);
-const typingTarget = target => Boolean(target?.closest?.('input,select,textarea,[contenteditable="true"]'));
 const gridActive = () => views?.querySelector('[data-view="grid"]')?.classList.contains('active');
+
+function editingControl(event) {
+  const control = event.target?.closest?.('input,select,textarea,[contenteditable="true"]');
+  if (!control) return false;
+  if (control.id === 'search' && (event.key === 'ArrowUp' || event.key === 'ArrowDown' || !control.value)) return false;
+  return true;
+}
 
 const style = document.createElement('style');
 style.textContent = `#dateRail.fast-keyboard-rail[hidden]{display:block!important}`;
@@ -184,13 +190,14 @@ function settleHold() {
 }
 
 document.addEventListener('keydown', event => {
-  if (!arrowKeys.has(event.key) || !viewer?.hidden || !gridActive() || typingTarget(event.target)) return;
+  if (!arrowKeys.has(event.key) || !viewer?.hidden || !gridActive() || editingControl(event)) return;
   if (!holding) {
     const state = currentLayout();
     directFocused = focusedCard(state);
     holding = true;
     if (!directFocused) {
       if (!moveFocus(firstVisibleCard(state), state)) { holding = false; return; }
+      document.activeElement?.closest?.('input,select,textarea,[contenteditable="true"]')?.blur?.();
       event.preventDefault();
       event.stopImmediatePropagation();
       return;
