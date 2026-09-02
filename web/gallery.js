@@ -198,6 +198,10 @@ function syncDayLabels(grid, cards) {
 function layoutGrid(grid) {
   if (!grid?.isConnected || !files.classList.contains('grid')) return;
   const cards = justify(grid);
+  if (window.mochimonoGridInteraction?.active?.()) {
+    deferredGeometryGrids.add(grid);
+    return;
+  }
   syncDayLabels(grid, cards);
 }
 
