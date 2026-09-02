@@ -62,13 +62,6 @@ if (files) {
     html.grid-interaction-active .commandbar{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:rgba(24,22,25,.98)!important}
     html.grid-interaction-active #files .file-context-badge{opacity:0!important;transform:none!important;transition:none!important}
     html.grid-interaction-active #files .file-card:hover{background:var(--surface)!important;box-shadow:none!important}
-
-    .media-thumb{position:relative;overflow:hidden;background:#09080a}
-    .video-thumb-pending{position:absolute!important;inset:0;display:block!important;z-index:0;pointer-events:none;background:linear-gradient(100deg,#080709 12%,#171219 36%,#513543 50%,#171219 64%,#080709 88%)!important;background-size:220% 100%!important;animation:mochimono-thumb-pending 1.35s ease-in-out infinite alternate!important;will-change:background-position}
-    .media-thumb>img.cached-thumb{position:relative;z-index:1}
-    .media-thumb>.play-badge{z-index:2}
-    .thumb-failed .video-thumb-pending{animation:none!important;background:repeating-linear-gradient(135deg,#0d0c0e 0,#0d0c0e 8px,#131115 8px,#131115 16px)!important}
-    @keyframes mochimono-thumb-pending{from{background-position:100% 0}to{background-position:-100% 0}}
   `;
   document.head.append(style);
 
