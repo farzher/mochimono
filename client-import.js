@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { mkdir, readdir, rm, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { basename, dirname, join, parse, resolve } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { CONFIG_DIR, api, json, readJson, settings } from './lib/agent-context.js';
@@ -14,6 +15,33 @@ function cleanRelative(value) {
   const parts = String(value || '').replaceAll('\\', '/').split('/').filter(part => part && part !== '.');
   if (!parts.length || parts.some(part => part === '..')) throw Object.assign(new Error('Invalid file path'), { status: 400 });
   return parts.join('/');
+}
+
+async function browseLocalFolders(res, url) {
+  const requested = String(url.searchParams.get('path') || '').trim() || homedir();
+  const target = resolve(requested);
+  const info = await stat(target).catch(() => null);
+  if (!info?.isDirectory()) return json(res, 404, { error: 'Folder is unavailable' });
+
+  let entries;
+  try {
+    entries = await readdir(target, { withFileTypes: true });
+  } catch (error) {
+    return json(res, 403, { error: error?.message || 'Folder cannot be opened' });
+  }
+
+  const root = parse(target).root;
+  const directories = entries
+    .filter(entry => entry.isDirectory())
+    .map(entry => ({ name: entry.name, path: join(target, entry.name) }))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+  return json(res, 200, {
+    path: target,
+    parent: target === root ? null : dirname(target),
+    root,
+    directories
+  });
 }
 
 async function startImport(req, res) {
@@ -85,6 +113,10 @@ async function importFile(req, res, url) {
 }
 
 export async function handleClientImport(req, res, url) {
+  if (req.method === 'GET' && url.pathname === '/api/client/folder-browser') {
+    await browseLocalFolders(res, url);
+    return true;
+  }
   if (req.method === 'POST' && url.pathname === '/api/client/import/start') {
     await startImport(req, res);
     return true;
