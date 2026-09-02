@@ -194,11 +194,8 @@ function bootstrapCursor() {
   const state = currentLayout();
   const existing = cursorCard(state);
   const card = visibleInfo(state, existing) ? existing : activeCard(state) || visibleAnchor(state);
-  const moved = moveCursor(card, state);
-  if (moved && !holding) releaseRail();
-  return moved;
+  return moveCursor(card, state);
 }
-window.mochimonoGridKeyboardStart = bootstrapCursor;
 
 function verticalTarget(state, current, direction) {
   const info = state.byCard.get(current);
@@ -234,7 +231,7 @@ function extendAndContinue(key, current) {
     console.error('Mochimono grid extension failed.', error);
   }
   hideSentinels();
-  if (!extended) return false;
+  if (!extended) return true;
 
   dirty = true;
   const same = hash && files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
@@ -246,7 +243,16 @@ function extendAndContinue(key, current) {
   const state = buildLayout();
   const start = state.byHash.get(hash);
   const target = start && targetFor(state, start, key);
-  return target ? moveCursor(target, state) : Boolean(start);
+  if (target) moveCursor(target, state);
+
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!holding || !cursorHash) return;
+    dirty = true;
+    const settled = currentLayout();
+    const selected = cursorCard(settled);
+    if (selected) moveCursor(selected, settled);
+  }));
+  return true;
 }
 
 function navigate(key) {
@@ -258,7 +264,28 @@ function navigate(key) {
   return target ? moveCursor(target, state) : extendAndContinue(key, current);
 }
 
-function settleHold() {
+function press(key) {
+  if (!arrows.has(key) || !viewer?.hidden || !gridActive()) return false;
+  if (!holding) {
+    holding = true;
+    freezeSentinels();
+    dirty = true;
+    const state = currentLayout();
+    const existing = cursorCard(state);
+    if (!visibleInfo(state, existing)) {
+      if (!moveCursor(activeCard(state) || visibleAnchor(state), state)) {
+        holding = false;
+        releaseRail();
+        releaseSentinels();
+        return false;
+      }
+      return true;
+    }
+  }
+  return navigate(key);
+}
+
+function release() {
   if (!holding && railWasHidden == null && !sentinelState) return;
   holding = false;
   releaseRail();
@@ -288,38 +315,26 @@ function syncReturnedCursor(hash) {
   const state = currentLayout();
   const card = cursorCard(state);
   if (!card || !gridActive()) return;
-  moveCursor(card, state);
+  card.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' });
+  dirty = true;
+  moveCursor(card, currentLayout());
   releaseRail();
   const y = scrollY;
   card.focus({ preventScroll: true });
   if (scrollY !== y) scrollTo({ top: y, left: 0, behavior: 'auto' });
 }
 
+window.mochimonoGridKeyboard = { press, release, reset: resetNavigation };
+
 document.addEventListener('keydown', event => {
-  if (!arrows.has(event.key) || !viewer?.hidden || !gridActive() || editingControl(event)) return;
+  if (editingControl(event) || !press(event.key)) return;
   event.preventDefault();
   event.stopImmediatePropagation();
-
-  if (!holding) {
-    holding = true;
-    freezeSentinels();
-    dirty = true;
-    const state = currentLayout();
-    const existing = cursorCard(state);
-    if (!visibleInfo(state, existing)) {
-      const start = activeCard(state) || visibleAnchor(state);
-      if (!moveCursor(start, state)) {
-        holding = false;
-        releaseRail();
-        releaseSentinels();
-      }
-      return;
-    }
-  }
-  navigate(event.key);
 }, true);
-
-document.addEventListener('keyup', event => { if (arrows.has(event.key)) settleHold(); }, true);
+document.addEventListener('keyup', event => {
+  if (!arrows.has(event.key)) return;
+  release();
+}, true);
 window.addEventListener('blur', () => resetNavigation());
 window.addEventListener('mochimono-viewer-return', event => syncReturnedCursor(event.detail?.hash));
 files?.addEventListener('pointerdown', () => resetNavigation(true), true);
