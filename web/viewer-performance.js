@@ -24,6 +24,9 @@ let rapidUntil = 0;
 let deferredCurrent = null;
 let deferredVideo = null;
 let deferredTimer = 0;
+let settlePromise = null;
+let settleResolve = null;
+let settleTimer = 0;
 
 function nativeSet(image, value) {
   descriptor?.set?.call(image, value);
@@ -127,15 +130,32 @@ function viewerSecondaryHash(input, init) {
   return '';
 }
 
+function settleCheck() {
+  settleTimer = 0;
+  const wait = rapidUntil - performance.now();
+  if (wait > 0) {
+    settleTimer = setTimeout(settleCheck, wait + 3);
+    return;
+  }
+  const resolve = settleResolve;
+  settlePromise = null;
+  settleResolve = null;
+  resolve?.();
+}
+
 function waitForRapidSettle() {
-  return new Promise(resolve => {
-    const check = () => {
-      const wait = rapidUntil - performance.now();
-      if (wait > 0) setTimeout(check, wait + 3);
-      else resolve();
-    };
-    check();
-  });
+  if (!settlePromise) settlePromise = new Promise(resolve => { settleResolve = resolve; });
+  if (!settleTimer) settleTimer = setTimeout(settleCheck, Math.max(0, rapidUntil - performance.now()) + 3);
+  return settlePromise;
+}
+
+function finishRapidSettle() {
+  clearTimeout(settleTimer);
+  settleTimer = 0;
+  const resolve = settleResolve;
+  settlePromise = null;
+  settleResolve = null;
+  resolve?.();
 }
 
 window.fetch = function(input, init) {
@@ -329,6 +349,7 @@ if (viewer) {
     cancelAnimationFrame(navFrame);
     navFrame = 0;
     rapidUntil = 0;
+    finishRapidSettle();
     clearDeferred();
     clearStalePreloads();
     abortImage(currentLoad);
