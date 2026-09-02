@@ -25,7 +25,22 @@ if (CLIENT && viewer && viewerOpen && actions) {
 
   let generation = 0;
   let stateTimer = 0;
+  let localPath = '';
   const hash = () => viewerOpen.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
+
+  function pathFromLocations(data) {
+    const locations = new Map((data.locations || []).map(location => [String(location.id), location]));
+    for (const entry of data.files || []) {
+      const [, locationId, relativePath] = entry || [];
+      const location = locations.get(String(locationId || ''));
+      const root = String(location?.rootPath || '').replace(/[\\/]+$/, '');
+      const relative = String(relativePath || '').replace(/^[\\/]+/, '');
+      if (!root || !relative) continue;
+      const separator = root.includes('\\') ? '\\' : '/';
+      return `${root}${separator}${relative.replace(/[\\/]+/g, separator)}`;
+    }
+    return '';
+  }
 
   function resetState() {
     clearTimeout(stateTimer);
@@ -46,32 +61,48 @@ if (CLIENT && viewer && viewerOpen && actions) {
     const current = hash();
     const mine = ++generation;
     resetState();
+    localPath = '';
     button.hidden = true;
     if (!current || viewer.hidden) return;
-
-    if (window.mochimonoLocations?.forHash?.(current)?.length) button.hidden = false;
 
     try {
       const response = await fetch(`/api/client/locations?hash=${encodeURIComponent(current)}`, { cache: 'no-store' });
       if (!response.ok) return;
       const data = await response.json();
       if (mine !== generation || current !== hash()) return;
-      button.hidden = !(data.files || []).length;
+      localPath = pathFromLocations(data);
+      button.hidden = !localPath;
     } catch {}
   }
+
+  // Pointer interaction with viewer chrome should not move browser focus away
+  // from the viewer itself. That keeps Esc/arrow keyboard navigation reliable
+  // after clicking Reveal, Open, navigation arrows, or the overflow menu.
+  viewer.addEventListener('mousedown', event => {
+    if (event.target.closest('.viewer-bar button,.viewer-bar a,.viewer-bar summary,.viewer-nav')) event.preventDefault();
+  }, true);
+
+  // Capture Escape before a focused <button>, <a>, or <details> control gets a
+  // chance to consume it. The existing close button remains the single owner of
+  // viewer teardown/history behavior.
+  window.addEventListener('keydown', event => {
+    if (viewer.hidden || event.key !== 'Escape') return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    document.querySelector('#viewer-close')?.click();
+  }, true);
 
   button.addEventListener('click', async event => {
     event.preventDefault();
     event.stopPropagation();
-    const current = hash();
-    if (!current || button.disabled) return;
+    if (!localPath || button.disabled) return;
     button.disabled = true;
     resetState();
     try {
-      const response = await fetch('/api/reveal-file', {
+      const response = await fetch('/api/open-folder', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ hash: current })
+        body: JSON.stringify({ path: localPath, select: true })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || `Could not open Explorer (${response.status})`);
