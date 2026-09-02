@@ -30,6 +30,12 @@ function kind(card) {
   return '';
 }
 
+function inViewport(card) {
+  if (!card?.isConnected) return false;
+  const rect = card.getBoundingClientRect();
+  return rect.bottom > 0 && rect.top < innerHeight;
+}
+
 function cardsIn(node) {
   if (!(node instanceof Element)) return [];
   const cards = [];
@@ -175,7 +181,7 @@ async function checkNearby() {
   if (checking || document.hidden || !nearby.size) return;
 
   const now = performance.now();
-  const cursorHash = files.querySelector('.keyboard-cursor[data-hash]')?.dataset.hash || '';
+  const cursor = files.querySelector('.keyboard-cursor[data-hash]');
   const hashes = [];
   const seen = new Set();
   const add = hash => {
@@ -184,17 +190,16 @@ async function checkNearby() {
     seen.add(hash);
     hashes.push(hash);
   };
-  add(cursorHash);
+  if (inViewport(cursor)) add(cursor.dataset.hash || '');
+
   const center = innerHeight / 2;
   const candidates = [...nearby]
-    .filter(card => card.isConnected && kind(card))
+    .filter(card => kind(card) && inViewport(card))
     .map(card => {
       const rect = card.getBoundingClientRect();
-      const visible = rect.bottom > 0 && rect.top < innerHeight;
-      const distance = visible ? 0 : rect.bottom < 0 ? -rect.bottom : rect.top - innerHeight;
-      return { card, visible, distance, centerDistance: Math.abs((rect.top + rect.bottom) / 2 - center) };
+      return { card, centerDistance: Math.abs((rect.top + rect.bottom) / 2 - center) };
     })
-    .sort((a, b) => Number(b.visible) - Number(a.visible) || a.distance - b.distance || a.centerDistance - b.centerDistance);
+    .sort((a, b) => a.centerDistance - b.centerDistance);
   for (const { card } of candidates) {
     add(card.dataset.hash || '');
     if (hashes.length >= CHECK_LIMIT) break;
@@ -240,7 +245,7 @@ async function checkNearby() {
     }
   } finally {
     checking = false;
-    if ([...nearby].some(card => card.isConnected && !states.get(card.dataset.hash)?.ready)) scheduleCheck(500);
+    if ([...nearby].some(card => kind(card) && inViewport(card) && !states.get(card.dataset.hash)?.ready)) scheduleCheck(500);
   }
 }
 
@@ -252,7 +257,7 @@ const observer = files ? new IntersectionObserver(entries => {
       continue;
     }
     nearby.add(card);
-    paintCard(card, true);
+    if (inViewport(card)) paintCard(card, true);
   }
   scheduleCheck(40);
 }, { rootMargin: '1200px 0px' }) : null;
@@ -338,7 +343,7 @@ if (files) {
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
-    for (const card of nearby) paintCard(card);
+    for (const card of nearby) if (inViewport(card)) paintCard(card);
     scheduleCheck(50);
   });
   window.addEventListener('mochimono:catalog-updated', () => scheduleCheck(50));
