@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="/library-ui.css">
   <link rel="stylesheet" href="/collections.css">
   <link rel="stylesheet" href="/file-info.css">
+  <style>.viewer-title-sub>#viewer-meta{order:-1;display:block;flex:0 0 auto;color:#f2ece9;font-size:10.5px;font-weight:760;white-space:nowrap}.viewer-title-sub>#viewer-context{min-width:0;overflow:hidden}</style>
 </head>
 <body>
   <main class="shell">
@@ -63,7 +64,7 @@
   </main>
 
   <div id="viewer" class="viewer" hidden>
-    <div class="viewer-bar"><button id="viewer-close" class="viewer-icon" aria-label="Close">×</button><div class="viewer-title"><strong id="viewer-name"></strong><div class="viewer-title-sub"><div id="viewer-context" class="viewer-context"></div><span id="viewer-meta"></span></div></div><div class="viewer-actions"><a id="viewer-open" class="viewer-action" target="_blank">Open</a><details id="viewer-menu" class="viewer-menu"><summary aria-label="More">•••</summary><div><button id="viewer-info-button" class="viewer-menu-action" type="button">Details</button><button id="delete" class="viewer-menu-action">Delete</button><button id="delete-ignore" class="viewer-menu-action danger-text">Delete + Ignore</button></div></details></div></div>
+    <div class="viewer-bar"><button id="viewer-close" class="viewer-icon" aria-label="Close">×</button><div class="viewer-title"><strong id="viewer-name"></strong><div class="viewer-title-sub"><span id="viewer-meta"></span><div id="viewer-context" class="viewer-context"></div></div></div><div class="viewer-actions"><a id="viewer-open" class="viewer-action" target="_blank">Open</a><details id="viewer-menu" class="viewer-menu"><summary aria-label="More">•••</summary><div><button id="viewer-info-button" class="viewer-menu-action" type="button">Details</button><button id="delete" class="viewer-menu-action">Delete</button><button id="delete-ignore" class="viewer-menu-action danger-text">Delete + Ignore</button></div></details></div></div>
     <div id="viewerCollections" class="viewer-collections"></div>
     <div id="viewer-stage" class="viewer-stage"><button id="viewer-prev" class="viewer-nav viewer-prev" aria-label="Previous">‹</button><div id="viewer-media" class="viewer-media"></div><button id="viewer-next" class="viewer-nav viewer-next" aria-label="Next">›</button></div>
     <aside id="viewerInfo" class="viewer-info" hidden></aside>

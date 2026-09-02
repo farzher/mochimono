@@ -131,7 +131,9 @@ function paintCard(card, force = false) {
   image.className = 'cached-thumb';
   image.alt = filename(card);
   image.decoding = 'async';
-  image.loading = 'lazy';
+  // The library intentionally renders a bounded window. Start those thumbnail
+  // requests immediately so an immutable HTTP-cache hit can be part of first paint.
+  image.loading = 'eager';
   image.dataset.thumbHash = hash;
   image.onload = () => markLoaded(hash, card, image);
   image.onerror = () => {
@@ -416,9 +418,9 @@ function observeTree(node) {
     indexCard(card);
     if (observed.has(card) || !kind(card)) continue;
     observed.add(card);
-    // Install the immutable canonical thumbnail immediately. Browser lazy-loading
-    // decides when an off-screen image needs bytes, while an HTTP-cache hit near
-    // the viewport can paint before IntersectionObserver gets another turn.
+    // Install the immutable canonical thumbnail immediately. The rendered card
+    // window is bounded, so eager cache lookup is cheaper and visually steadier
+    // than waiting for a later visibility callback.
     paintCard(card);
     observer.observe(card);
   }
