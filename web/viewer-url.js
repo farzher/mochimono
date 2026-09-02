@@ -4,6 +4,8 @@ const closeButton = document.querySelector('#viewer-close');
 const viewerContext = document.querySelector('#viewer-context');
 const VIEWER_STATE = 'mochimonoViewer';
 
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+
 const fileParam = () => new URL(location.href).searchParams.get('file');
 
 function fileUrl(hash) {
