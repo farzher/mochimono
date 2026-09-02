@@ -133,5 +133,5 @@ if (files) {
         }
       }
     }
-  }).observe(files, { childList:true, subtree:true });
+  }).observe(files, { childList:true });
 }
