@@ -107,6 +107,7 @@ function sectionHtml(state, hash) {
 
 async function decorateDetails() {
   if (decorating || !panel || panel.hidden) return;
+  if (window.mochimonoViewerPerformance?.defer?.(decorateDetails)) return;
   const hash = currentHash();
   if (!hash || panel.querySelector(`[data-protection-section][data-hash="${hash}"]`)) return;
   const mine = ++generation;
