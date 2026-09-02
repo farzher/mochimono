@@ -4,13 +4,21 @@ const viewer = document.querySelector('#viewer');
 let interactionActive = false;
 let interactionUntil = 0;
 let interactionTimer = 0;
+let interactionTimerAt = 0;
 
-function scheduleFinish(delay) {
-  if (!interactionTimer) interactionTimer = setTimeout(finishInteraction, delay);
+function scheduleFinish(delay, sooner = false) {
+  const at = performance.now() + delay;
+  if (interactionTimer) {
+    if (!sooner || interactionTimerAt <= at) return;
+    clearTimeout(interactionTimer);
+  }
+  interactionTimerAt = at;
+  interactionTimer = setTimeout(finishInteraction, delay);
 }
 
 function finishInteraction() {
   interactionTimer = 0;
+  interactionTimerAt = 0;
   const wait = interactionUntil - performance.now();
   if (wait > 0) {
     scheduleFinish(wait + 4);
@@ -36,7 +44,7 @@ function pulseInteraction(duration = 130) {
 function releaseInteraction() {
   if (!interactionActive) return;
   interactionUntil = Math.min(interactionUntil, performance.now() + 45);
-  scheduleFinish(50);
+  scheduleFinish(50, true);
 }
 
 window.mochimonoGridInteraction = { active: () => interactionActive, pulse: pulseInteraction };
