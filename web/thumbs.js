@@ -8,6 +8,7 @@ const cardsByHash = new Map();
 const observed = new Set();
 const nearby = new Set();
 const pendingTrees = new Set();
+const browserFallback = CLIENT ? null : import('./browser-thumbnail-fallback.js').catch(() => null);
 let observeFrame = 0;
 let checkTimer = 0;
 let checkAt = 0;
@@ -152,12 +153,20 @@ function scheduleCheck(delay = 80) {
 }
 
 async function requestMissing(hashes) {
-  if (CLIENT || !hashes.length) return;
-  fetch('/api/thumbs/request', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ hashes })
-  }).catch(() => {});
+  if (!hashes.length) return;
+  if (!CLIENT) {
+    fetch('/api/thumbs/request', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hashes })
+    }).catch(() => {});
+
+    const fallback = await browserFallback;
+    for (const hash of hashes) {
+      const card = [...(cardsByHash.get(hash) || [])].find(item => item.isConnected && nearby.has(item));
+      if (card) fallback?.queueBrowserThumbnail?.({ hash, filename: filename(card), kind: kind(card) });
+    }
+  }
 }
 
 async function checkNearby() {
@@ -325,6 +334,17 @@ if (files) {
   });
   window.addEventListener('mochimono:catalog-updated', () => scheduleCheck(50));
   window.addEventListener('mochimono:grid-interaction-end', () => scheduleCheck(40));
+  window.addEventListener('mochimono:browser-thumbnail-ready', event => {
+    const hash = String(event.detail?.hash || '');
+    if (!hash) return;
+    const state = states.get(hash) || {};
+    state.ready = false;
+    state.nextCheck = 0;
+    state.nextTry = 0;
+    states.set(hash, state);
+    loadHash(hash);
+    scheduleCheck(50);
+  });
   addEventListener('beforeunload', () => {
     if (checkTimer) clearTimeout(checkTimer);
     if (observeFrame) cancelAnimationFrame(observeFrame);
