@@ -1,7 +1,7 @@
 const files = document.querySelector('#files');
 const CLIENT = document.documentElement.classList.contains('client-library');
 const THUMB_VERSION = 3;
-const CHECK_LIMIT = 200;
+const CHECK_LIMIT = 320;
 
 const states = new Map();
 const cardsByHash = new Map();
@@ -95,7 +95,7 @@ function markLoaded(hash, card, image) {
   rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
 }
 
-function paintCard(card) {
+function paintCard(card, urgent = false) {
   if (!card?.isConnected || !kind(card)) return;
   const hash = String(card.dataset.hash || '');
   const box = hash && mediaBox(card);
@@ -121,7 +121,7 @@ function paintCard(card) {
   image.decoding = 'async';
   image.loading = 'eager';
   image.dataset.thumbHash = hash;
-  try { image.fetchPriority = card.classList.contains('keyboard-cursor') ? 'high' : 'low'; } catch {}
+  try { image.fetchPriority = urgent || card.classList.contains('keyboard-cursor') ? 'high' : 'low'; } catch {}
   image.onload = () => {
     if (image.isConnected && image.dataset.thumbHash === hash) markLoaded(hash, card, image);
   };
@@ -185,8 +185,17 @@ async function checkNearby() {
     hashes.push(hash);
   };
   add(cursorHash);
-  for (const card of nearby) {
-    if (!card.isConnected || !kind(card)) continue;
+  const center = innerHeight / 2;
+  const candidates = [...nearby]
+    .filter(card => card.isConnected && kind(card))
+    .map(card => {
+      const rect = card.getBoundingClientRect();
+      const visible = rect.bottom > 0 && rect.top < innerHeight;
+      const distance = visible ? 0 : rect.bottom < 0 ? -rect.bottom : rect.top - innerHeight;
+      return { card, visible, distance, centerDistance: Math.abs((rect.top + rect.bottom) / 2 - center) };
+    })
+    .sort((a, b) => Number(b.visible) - Number(a.visible) || a.distance - b.distance || a.centerDistance - b.centerDistance);
+  for (const { card } of candidates) {
     add(card.dataset.hash || '');
     if (hashes.length >= CHECK_LIMIT) break;
   }
@@ -243,10 +252,12 @@ const observer = files ? new IntersectionObserver(entries => {
       continue;
     }
     nearby.add(card);
-    paintCard(card);
+    const rect = entry.boundingClientRect;
+    const visible = rect.bottom > 0 && rect.top < innerHeight;
+    paintCard(card, visible);
   }
-  scheduleCheck(60);
-}, { rootMargin: '2200px 0px' }) : null;
+  scheduleCheck(40);
+}, { rootMargin: '900px 0px' }) : null;
 
 function observeTree(node) {
   if (!observer) return;
@@ -307,9 +318,9 @@ window.mochimonoThumbnails = {
     for (const card of Array.isArray(cards) ? cards : [cards]) {
       if (!card?.isConnected || !kind(card)) continue;
       indexCard(card);
-      paintCard(card);
+      paintCard(card, true);
     }
-    scheduleCheck(40);
+    scheduleCheck(30);
   }
 };
 
