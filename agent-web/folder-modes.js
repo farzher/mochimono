@@ -34,9 +34,10 @@ style.textContent = `
   .storage-folder-sample.thumb-ready .sample-glyph,
   .storage-folder-sample.thumb-ready .sample-name{display:none}
   .storage-folder-sample.video.thumb-ready:after{
-    content:'▶';position:absolute;left:7px;bottom:6px;width:22px;height:22px;
-    display:grid;place-items:center;border-radius:50%;background:rgba(0,0,0,.62);
-    color:#fff;font-size:8px;padding-left:1px
+    content:'▶';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:34px;height:34px;display:grid;place-items:center;border-radius:50%;
+    background:rgba(0,0,0,.62);box-shadow:0 2px 10px rgba(0,0,0,.28);
+    color:#fff;font-size:12px;padding-left:2px
   }
   .storage-folder-samples:hover{outline:1px solid rgba(255,255,255,.18);outline-offset:1px}
   @media(max-width:700px){
