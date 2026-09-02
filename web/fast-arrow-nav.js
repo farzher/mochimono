@@ -63,7 +63,7 @@ function focusedCard(state) {
   if (holding && directFocused?.isConnected && state.byCard.has(directFocused)) return directFocused;
   const active = document.activeElement?.closest?.('#files [data-hash]');
   if (active && state.byCard.has(active)) return active;
-  return directFocused?.isConnected && state.byCard.has(directFocused) ? directFocused : files.querySelector('.context-keyboard-focus[data-hash]');
+  return directFocused?.isConnected && state.byCard.has(directFocused) ? directFocused : files.querySelector('.keyboard-cursor[data-hash]');
 }
 
 function freezeRailScan() {
@@ -85,9 +85,9 @@ function releaseRailScan() {
 
 function moveFocus(card, state = currentLayout()) {
   if (!card) return false;
-  if (directFocused && directFocused !== card) directFocused.classList.remove('context-keyboard-focus');
+  if (directFocused && directFocused !== card) directFocused.classList.remove('keyboard-cursor');
   directFocused = card;
-  card.classList.add('context-keyboard-focus');
+  card.classList.add('keyboard-cursor');
   document.documentElement.classList.add('keyboard-navigation-active');
   freezeRailScan();
 
@@ -122,15 +122,23 @@ function navigateWithin(state, current, key) {
   return adjacentVertical(state, current, key === 'ArrowUp' ? -1 : 1);
 }
 
-function extendAndContinue(key, hash) {
+function extendAndContinue(key, current) {
   const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
+  const hash = current.dataset.hash || '';
+  const anchorTop = current.getBoundingClientRect().top;
   if (!window.mochimonoLibrary?.extend?.(direction)) return false;
+
+  if (current.isConnected) {
+    const delta = current.getBoundingClientRect().top - anchorTop;
+    if (Math.abs(delta) > .5) scrollBy(0, delta);
+  }
+
   paging = true;
   dirty = true;
   requestAnimationFrame(() => requestAnimationFrame(() => {
     const state = currentLayout();
-    const current = state.entries.find(entry => entry.hash === hash)?.card || focusedCard(state);
-    const target = current && navigateWithin(state, current, key);
+    const start = state.entries.find(entry => entry.hash === hash)?.card || focusedCard(state);
+    const target = start && navigateWithin(state, start, key);
     if (target) moveFocus(target, state);
     paging = false;
     const queued = queuedKey;
@@ -146,7 +154,7 @@ function navigate(key) {
   const current = focusedCard(state);
   if (!current) return false;
   const target = navigateWithin(state, current, key);
-  return target ? moveFocus(target, state) : extendAndContinue(key, current.dataset.hash || '');
+  return target ? moveFocus(target, state) : extendAndContinue(key, current);
 }
 
 function settleHold() {
@@ -157,13 +165,15 @@ function settleHold() {
   const card = directFocused?.isConnected ? directFocused : null;
   if (!card) return;
   if (card.tabIndex < 0) card.tabIndex = 0;
+  const y = scrollY;
   card.focus({ preventScroll: true });
+  if (scrollY !== y) scrollTo(0, y);
 }
 
 document.addEventListener('keydown', event => {
   if (!arrowKeys.has(event.key) || !viewer?.hidden || !gridActive() || typingTarget(event.target)) return;
   if (!holding) {
-    directFocused = document.activeElement?.closest?.('#files [data-hash]') || files.querySelector('.context-keyboard-focus[data-hash]');
+    directFocused = document.activeElement?.closest?.('#files [data-hash]') || files.querySelector('.keyboard-cursor[data-hash]') || files.querySelector('.context-keyboard-focus[data-hash]');
     if (!directFocused) return;
     holding = true;
   }
