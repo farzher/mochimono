@@ -22,9 +22,11 @@ let anchorHash = '';
 let selected = new Set();
 let timelineFrame = 0;
 let timelineMembership = null;
+let mutationUiPending = false;
 
 const currentView = () => document.querySelector('#views [data-view].active')?.dataset.view || 'grid';
 const allServerStored = hashes => window.mochimonoLocations?.allServerStored?.(hashes) ?? true;
+const gridMoving = () => Boolean(window.mochimonoGridInteraction?.active?.());
 
 function saveUi() {
   localStorage.setItem(UI_KEY, JSON.stringify({ view: currentView(), sort: sort.value, type: typeFilter.value }));
@@ -45,6 +47,10 @@ function restoreUi() {
 }
 
 function syncSelectedClasses() {
+  if (!selected.size) {
+    for (const item of files.querySelectorAll('.selected[data-hash]')) item.classList.remove('selected');
+    return;
+  }
   files.querySelectorAll('[data-hash]').forEach(item => item.classList.toggle('selected', selected.has(item.dataset.hash)));
 }
 
@@ -202,6 +208,23 @@ function scheduleTimeline() {
   timelineFrame = requestAnimationFrame(decorateTimeline);
 }
 
+function syncMutationUi() {
+  invalidateTimelineMembership();
+  if (gridMoving()) {
+    mutationUiPending = true;
+    return;
+  }
+  syncSelectedClasses();
+  scheduleTimeline();
+}
+
+function flushMutationUi() {
+  if (!mutationUiPending) return;
+  mutationUiPending = false;
+  syncSelectedClasses();
+  scheduleTimeline();
+}
+
 function breadcrumbPath() {
   return [...folderbar.querySelectorAll('[data-folder-depth]')]
     .filter(button => Number(button.dataset.folderDepth) > 0)
@@ -300,7 +323,8 @@ search.addEventListener('input', () => { invalidateTimelineMembership(); if (sel
 document.querySelector('#mediaSize')?.addEventListener('input', scheduleTimeline);
 window.addEventListener('resize', scheduleTimeline, { passive: true });
 window.addEventListener('mochimono:locations-updated', () => { syncSelectionUi(); });
-new MutationObserver(() => { syncSelectedClasses(); scheduleTimeline(); }).observe(files, { childList: true });
+window.addEventListener('mochimono:grid-interaction-end', flushMutationUi);
+new MutationObserver(syncMutationUi).observe(files, { childList: true });
 
 window.mochimonoSelection = {
   hashes: () => [...selected],
