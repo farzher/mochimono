@@ -4,7 +4,7 @@
 #viewer-info-button.protection-safe,#viewer-info-button.protection-good{color:#d6ceca!important}
 #viewer-info-button.protection-warn{color:#e6c79b!important}
 #viewer-info-button.protection-danger{background:rgba(239,160,154,.08)!important;color:#f0b0aa!important}
-#viewerCollections{display:none!important}.viewer-title span{display:none!important}
+#viewerCollections{display:none!important}
 
 .viewer-info{position:absolute;z-index:120;top:0;right:0;width:min(360px,90vw);height:100dvh;max-height:none;overflow:auto;padding:66px 14px 18px;border:0;border-left:1px solid rgba(255,255,255,.07);border-radius:0;background:rgba(18,17,19,.97);backdrop-filter:blur(18px);color:#eee7e3;box-shadow:-18px 0 50px rgba(0,0,0,.34)}
 .viewer-info[hidden]{display:none}.viewer-info-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}.viewer-info-head>div{min-width:0}.viewer-info-head strong{display:block;overflow:hidden;text-overflow:ellipsis;font-size:13px;white-space:nowrap}.viewer-info-head span{display:block;margin-top:2px;color:#77706e;font-size:9px}.viewer-info-head>button{flex:0 0 auto;width:28px;height:28px;padding:0;border:0;border-radius:7px;background:transparent;color:#918887;font-size:20px}.viewer-info-head>button:hover{background:rgba(255,255,255,.08);color:#fff}

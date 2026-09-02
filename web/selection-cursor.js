@@ -1,3 +1,4 @@
+import './thumb-geometry.js';
 import './fast-arrow-nav.js';
 import './context-ui.js';
 
