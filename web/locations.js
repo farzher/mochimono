@@ -5,6 +5,7 @@ const select = document.querySelector('#locationFilter');
 const source = document.querySelector('#source');
 const collection = document.querySelector('#collectionFilter');
 const folderbar = document.querySelector('#folderbar');
+const searchInput = document.querySelector('#search');
 const library = () => window.mochimonoLibrary;
 let definitions = [];
 let drives = [];
@@ -14,6 +15,9 @@ let serverHashes = new Set();
 let damagedServer = new Set();
 let backed = new Set();
 let verifiedBacked = new Set();
+let locationSearch = new Map();
+let locationSearchGeneration = 0;
+let appliedLocationSearchGeneration = 0;
 let lastRefresh = 0;
 let lastVersion = '';
 
@@ -140,6 +144,14 @@ async function applySelection() {
   }
 }
 
+function installLocationSearch() {
+  if (appliedLocationSearchGeneration === locationSearchGeneration) return;
+  const target = library();
+  if (!target?.setLocationSearch) return;
+  target.setLocationSearch(locationSearch);
+  appliedLocationSearchGeneration = locationSearchGeneration;
+}
+
 export async function refreshLocations(force = false) {
   if (!force && Date.now() - lastRefresh < 30_000) return;
   const version = await providerVersion();
@@ -169,10 +181,15 @@ export async function refreshLocations(force = false) {
   await rebuildBackupSets();
   lastVersion = version || lastVersion;
 
-  const search = new Map([...copies].map(([hash, locations]) => [hash, locationTokens(locations)]));
-  library()?.setLocationSearch?.(search);
+  locationSearch = new Map([...copies].map(([hash, locations]) => [hash, locationTokens(locations)]));
+  locationSearchGeneration++;
+  if (String(window.mochimonoSearch?.raw?.() || '').trim()) installLocationSearch();
+
   renderOptions();
-  await applySelection();
+  // Refreshing location metadata must not rebuild an unfiltered grid. Applying an
+  // empty location filter used to destroy/recreate every visible card on startup,
+  // which made already-cached thumbnails visibly repaint.
+  if (select.value) await applySelection();
   window.dispatchEvent(new CustomEvent('mochimono:locations-updated', { detail: {
     local: new Set(copies.keys()),
     server: new Set(serverHashes),
@@ -209,6 +226,9 @@ window.mochimonoLocations = {
 };
 
 select.addEventListener('change', () => applySelection().catch(console.error));
+searchInput?.addEventListener('pointerdown', installLocationSearch, { passive: true });
+searchInput?.addEventListener('focus', installLocationSearch, { passive: true });
+searchInput?.addEventListener('input', installLocationSearch, { capture: true });
 new MutationObserver(syncOrganizationLabels).observe(source, { childList: true });
 new MutationObserver(syncOrganizationLabels).observe(collection, { childList: true });
 new MutationObserver(syncOrganizationLabels).observe(folderbar, { childList: true, subtree: true });
