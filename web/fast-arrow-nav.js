@@ -25,7 +25,15 @@ function editingControl(event) {
 }
 
 const style = document.createElement('style');
-style.textContent = `#dateRail.fast-keyboard-rail[hidden]{display:block!important}`;
+style.textContent = `
+  #dateRail.fast-keyboard-rail[hidden]{display:block!important}
+  html.keyboard-navigation-active #files.grid .file-card.context-keyboard-focus:not(.keyboard-cursor){outline:none!important;box-shadow:none!important}
+  #files.grid .file-card.keyboard-cursor{position:relative;z-index:2;outline:none!important}
+  #files.grid .file-card.media-card.keyboard-cursor::before{opacity:0!important;transform:none!important;transition:none!important}
+  #files.grid .file-card.media-card.keyboard-cursor::after{content:""!important;z-index:20!important;inset:0!important;width:auto!important;height:auto!important;padding:0!important;border-radius:3px!important;opacity:1!important;transform:none!important;background:none!important;box-shadow:inset 0 0 0 2px rgba(239,160,154,.82),inset 0 0 0 3px rgba(0,0,0,.34)!important;transition:none!important;pointer-events:none}
+  #files.grid .file-card:not(.media-card).keyboard-cursor{box-shadow:inset 0 0 0 2px rgba(239,160,154,.82),inset 0 0 0 3px rgba(0,0,0,.34)!important}
+  #files.grid .file-card.keyboard-cursor .file-context-badge{opacity:.86!important;transform:none!important;transition:none!important}
+`;
 document.head.append(style);
 
 function structuralMutation(records) {
@@ -270,6 +278,11 @@ document.addEventListener('keydown', event => {
 
 document.addEventListener('keyup', event => { if (arrowKeys.has(event.key)) settleHold(); }, true);
 window.addEventListener('blur', settleHold);
+
+files?.addEventListener('pointerdown', () => {
+  document.documentElement.classList.remove('keyboard-navigation-active');
+  files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
+}, true);
 
 if (files) {
   new MutationObserver(records => { if (structuralMutation(records)) dirty = true; }).observe(files, { childList: true, subtree: true });
