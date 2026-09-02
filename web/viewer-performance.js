@@ -94,6 +94,8 @@ function rapidNavigation() {
   return performance.now() < rapidUntil;
 }
 
+// Tiny read-only surface for any future Viewer UI that needs to avoid expensive
+// work while the user is rapidly traversing files. Keep performance policy here.
 window.mochimonoViewerPerformance = { rapid: rapidNavigation };
 
 function viewerSecondaryHash(input, init) {
