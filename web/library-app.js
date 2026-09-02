@@ -7,7 +7,7 @@ const login = $('#login');
 const app = $('#app');
 const logout = $('#logout');
 const filesElement = $('#files');
-const PAGE = 240;
+const PAGE = 160;
 const JUMP_WINDOW = PAGE * 3;
 const THUMB_VERSION = 3;
 
@@ -35,7 +35,7 @@ let folderImportId = '';
 let folderPath = '';
 let folderData = null;
 let folderLoadGeneration = 0;
-let scrollFrame = 0;
+let railScrollTimer = 0;
 let viewerScrollY = 0;
 let viewerDirty = false;
 let viewerPreloads = [];
@@ -328,6 +328,31 @@ function prependItems(items, anchor) {
   restoreAnchor(anchor);
 }
 
+function cleanupEmptyDateGroups() {
+  if (!sort.startsWith('date-')) return;
+  for (const section of filesElement.querySelectorAll(':scope > .date-group')) {
+    if (!section.querySelector('[data-hash]')) section.remove();
+  }
+  syncYearHeadings();
+}
+
+function trimRenderedStart(count, anchor) {
+  const cards = [...filesElement.querySelectorAll('[data-hash]')].slice(0, count);
+  if (!cards.length) return 0;
+  for (const card of cards) card.remove();
+  cleanupEmptyDateGroups();
+  restoreAnchor(anchor);
+  return cards.length;
+}
+
+function trimRenderedEnd(count) {
+  const cards = [...filesElement.querySelectorAll('[data-hash]')].slice(-count);
+  if (!cards.length) return 0;
+  for (const card of cards) card.remove();
+  cleanupEmptyDateGroups();
+  return cards.length;
+}
+
 function renderFiles(preserve = false) {
   if (view === 'folders') return renderFolder();
   const anchor = preserve ? currentAnchor() : null;
@@ -391,13 +416,19 @@ function extendWindow(direction = 1) {
     const items = filtered.slice(nextOffset, renderOffset);
     renderOffset = nextOffset;
     prependItems(items, anchor);
+    const excess = Math.max(0, renderEnd - renderOffset - JUMP_WINDOW);
+    if (excess) renderEnd -= trimRenderedEnd(excess);
   } else {
     if (renderEnd >= filtered.length) return false;
+    const anchor = currentAnchor();
     const nextEnd = Math.min(filtered.length, renderEnd + PAGE);
     const items = filtered.slice(renderEnd, nextEnd);
     renderEnd = nextEnd;
     appendItems(items);
+    const excess = Math.max(0, renderEnd - renderOffset - JUMP_WINDOW);
+    if (excess) renderOffset += trimRenderedStart(excess, anchor);
   }
+  syncSentinels();
   renderRail();
   return true;
 }
@@ -669,11 +700,6 @@ function updateViewerNav() {
   $('#viewer-prev').disabled = index <= 0;
   $('#viewer-next').disabled = index < 0 || index >= items.length - 1;
 }
-function ensureViewerGridWindow() {
-  if (!selected || view === 'folders') return;
-  const index = filteredIndex.get(selected.hash);
-  if (Number.isInteger(index)) ensureIndexRendered(index);
-}
 
 function loadFullViewerImage(file) {
   const shown = $('#viewer-media img[data-full-src]');
@@ -713,7 +739,6 @@ function preloadAround() {
 
 function renderViewerState() {
   if (!selected) return;
-  ensureViewerGridWindow();
   viewerImageLoad = null;
   $('#viewer-name').textContent = selected.filename;
   $('#viewer-meta').textContent = `${formatBytes(selected.size)} · ${shortDate(normalizeFile(selected))}`;
@@ -1050,14 +1075,18 @@ filesElement.addEventListener('click', event => {
 
 new IntersectionObserver(entries => {
   if (entries.some(entry => entry.isIntersecting)) extendWindow(-1);
-}, { rootMargin: '1800px 0px' }).observe(topScrollSentinel);
+}, { rootMargin: '1400px 0px' }).observe(topScrollSentinel);
 new IntersectionObserver(entries => {
   if (entries.some(entry => entry.isIntersecting)) extendWindow(1);
-}, { rootMargin: '2400px 0px' }).observe($('#scroll-sentinel'));
+}, { rootMargin: '1800px 0px' }).observe($('#scroll-sentinel'));
 
 window.addEventListener('scroll', () => {
-  if (scrollFrame || scrubbing) return;
-  scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; updateRailActive(); });
+  if (scrubbing) return;
+  clearTimeout(railScrollTimer);
+  railScrollTimer = setTimeout(() => {
+    railScrollTimer = 0;
+    updateRailActive();
+  }, 72);
 }, { passive: true });
 
 document.addEventListener('keydown', event => {

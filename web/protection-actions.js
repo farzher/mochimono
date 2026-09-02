@@ -195,7 +195,7 @@ panel?.addEventListener('change', event => {
   if (select) updateLevel(select);
 });
 document.addEventListener('click', interceptDelete, true);
-new MutationObserver(() => { relabelDeleteActions(); queueMicrotask(decorateDetails); }).observe(document.body, { childList:true, subtree:true });
+if (panel) new MutationObserver(() => queueMicrotask(decorateDetails)).observe(panel, { childList:true, subtree:true });
 window.addEventListener('mochimono:viewer-opened', () => { generation++; queueMicrotask(decorateDetails); });
 viewerOpen?.addEventListener('click', () => setTimeout(decorateDetails));
 relabelDeleteActions();
