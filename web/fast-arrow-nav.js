@@ -7,6 +7,8 @@ const commandbar = document.querySelector('.commandbar');
 let layout = null;
 let dirty = true;
 let paging = false;
+let pagingEpoch = 0;
+let pagingTimer = 0;
 let queuedKey = '';
 let holding = false;
 let directFocused = null;
@@ -182,6 +184,37 @@ function clearPreextend() {
   preextendDirection = 0;
 }
 
+function cancelPaging() {
+  if (pagingTimer) clearTimeout(pagingTimer);
+  pagingTimer = 0;
+  paging = false;
+  queuedKey = '';
+  pagingEpoch++;
+}
+
+function beginPaging() {
+  const epoch = ++pagingEpoch;
+  paging = true;
+  if (pagingTimer) clearTimeout(pagingTimer);
+  pagingTimer = setTimeout(() => {
+    if (epoch !== pagingEpoch) return;
+    pagingTimer = 0;
+    paging = false;
+    queuedKey = '';
+    pagingEpoch++;
+    dirty = true;
+  }, 180);
+  return epoch;
+}
+
+function finishPaging(epoch) {
+  if (epoch !== pagingEpoch) return false;
+  if (pagingTimer) clearTimeout(pagingTimer);
+  pagingTimer = 0;
+  paging = false;
+  return true;
+}
+
 function nearWindowEdge(card, state, direction) {
   const info = state.byCard.get(card);
   if (!info || state.cards.length < 2) return false;
@@ -193,9 +226,9 @@ function rotateWindow(direction, current, afterLayout = null) {
   clearPreextend();
   const hash = current.dataset.hash || '';
   const anchorTop = current.getBoundingClientRect().top;
-  paging = true;
+  const epoch = beginPaging();
   if (!window.mochimonoLibrary?.extend?.(direction)) {
-    paging = false;
+    finishPaging(epoch);
     return false;
   }
   if (current.isConnected) {
@@ -205,10 +238,16 @@ function rotateWindow(direction, current, afterLayout = null) {
 
   dirty = true;
   requestAnimationFrame(() => requestAnimationFrame(() => {
-    const state = currentLayout();
-    const start = state.entries.find(entry => entry.hash === hash)?.card || focusedCard(state);
-    afterLayout?.(state, start);
-    paging = false;
+    if (epoch !== pagingEpoch) return;
+    try {
+      const state = currentLayout();
+      const start = state.entries.find(entry => entry.hash === hash)?.card || focusedCard(state);
+      afterLayout?.(state, start);
+    } catch (error) {
+      console.error('Mochimono grid paging failed.', error);
+      dirty = true;
+    }
+    if (!finishPaging(epoch)) return;
     const queued = queuedKey;
     queuedKey = '';
     if (queued) navigate(queued);
@@ -281,10 +320,10 @@ function settleHold() {
 }
 
 function syncReturnedCursor(hash) {
+  cancelPaging();
   const card = hash && files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
   if (!card || !gridActive()) return;
   clearPreextend();
-  queuedKey = '';
   holding = false;
   releaseRailScan();
   files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
@@ -321,10 +360,14 @@ document.addEventListener('keydown', event => {
 }, true);
 
 document.addEventListener('keyup', event => { if (arrowKeys.has(event.key)) settleHold(); }, true);
-window.addEventListener('blur', settleHold);
+window.addEventListener('blur', () => { cancelPaging(); settleHold(); });
 window.addEventListener('mochimono-viewer-return', event => syncReturnedCursor(String(event.detail?.hash || '')));
 
 files?.addEventListener('pointerdown', () => {
+  cancelPaging();
+  clearPreextend();
+  holding = false;
+  releaseRailScan();
   document.documentElement.classList.remove('keyboard-navigation-active');
   files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
   directFocused = null;

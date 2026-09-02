@@ -74,8 +74,33 @@ if (files) {
     html.grid-interaction-active #files .file-card:hover{
       background:var(--surface)!important;box-shadow:none!important
     }
+    .video-thumb-pending{
+      background:linear-gradient(110deg,#0a090b 18%,#201b21 48%,#0a090b 78%)!important;
+      background-size:240% 100%!important;
+      animation:mochimono-thumb-pending 1.7s ease-in-out infinite alternate!important
+    }
+    .video-thumb-pending::after{display:none!important}
+    .thumb-failed .video-thumb-pending{animation:none!important;background:repeating-linear-gradient(135deg,#0d0c0e 0,#0d0c0e 8px,#131115 8px,#131115 16px)!important}
+    @keyframes mochimono-thumb-pending{
+      from{background-position:100% 0}
+      to{background-position:-100% 0}
+    }
+    @media(prefers-reduced-motion:reduce){.video-thumb-pending{animation:none!important}}
   `;
   document.head.append(style);
+
+  function cardsIn(node) {
+    if (!(node instanceof Element)) return [];
+    const cards = [];
+    if (node.matches('[data-hash]')) cards.push(node);
+    cards.push(...node.querySelectorAll('[data-hash]'));
+    return cards;
+  }
+
+  function loadedThumbnail(card) {
+    const image = card.querySelector('img.cached-thumb:not([hidden])');
+    return image?.complete && image.naturalWidth ? image : null;
+  }
 
   function removeLoadingPlaceholder() {
     for (const node of files.querySelectorAll(':scope > .empty')) {
@@ -85,9 +110,27 @@ if (files) {
 
   removeLoadingPlaceholder();
   new MutationObserver(records => {
+    const reusable = new Map();
+    for (const record of records) {
+      for (const node of record.removedNodes) {
+        for (const card of cardsIn(node)) {
+          const image = loadedThumbnail(card);
+          if (image) reusable.set(String(card.dataset.hash || ''), image);
+        }
+      }
+    }
+
     for (const record of records) {
       for (const node of record.addedNodes) {
-        if (node instanceof Element && node.matches('.empty') && node.textContent.trim() === 'Loading…') node.remove();
+        if (!(node instanceof Element)) continue;
+        if (node.matches('.empty') && node.textContent.trim() === 'Loading…') node.remove();
+        for (const card of cardsIn(node)) {
+          const image = reusable.get(String(card.dataset.hash || ''));
+          const box = image && card.querySelector('.media-thumb');
+          if (!box || box.querySelector('img.cached-thumb')) continue;
+          box.querySelector('.video-thumb-pending')?.remove();
+          box.prepend(image);
+        }
       }
     }
   }).observe(files, { childList:true });
