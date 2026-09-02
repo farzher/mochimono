@@ -1,8 +1,11 @@
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
+const viewerClose = document.querySelector('#viewer-close');
 const viewerPrev = document.querySelector('#viewer-prev');
 const viewerNext = document.querySelector('#viewer-next');
 const viewerMedia = document.querySelector('#viewer-media');
+const viewerInfo = document.querySelector('#viewerInfo');
+const files = document.querySelector('#files');
 
 const objectHash = value => String(value || '').match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 const currentHash = () => objectHash(viewerOpen?.getAttribute('href'));
@@ -327,8 +330,20 @@ function queueNavigation(direction) {
   navFrame = requestAnimationFrame(flushNavigation);
 }
 
+function prepareGridReturn() {
+  if (!files || viewer?.hidden) return;
+  const hash = currentHash();
+  const card = hash && files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
+  card?.scrollIntoView({ behavior:'auto', block:'center', inline:'nearest' });
+}
+
 document.addEventListener('keydown', event => {
-  if (!viewer || viewer.hidden || !['ArrowLeft','ArrowRight','ArrowDown','ArrowUp'].includes(event.key)) return;
+  if (!viewer || viewer.hidden) return;
+  if (event.key === 'Escape') {
+    if (!document.querySelector('dialog[open]') && (!viewerInfo || viewerInfo.hidden)) prepareGridReturn();
+    return;
+  }
+  if (!['ArrowLeft','ArrowRight','ArrowDown','ArrowUp'].includes(event.key)) return;
   const direction = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
   event.preventDefault();
   event.stopImmediatePropagation();
@@ -346,6 +361,7 @@ document.addEventListener('keyup', event => {
   }
 }, true);
 
+viewerClose?.addEventListener('click', prepareGridReturn, true);
 if (viewerMedia) new MutationObserver(handleRapidMedia).observe(viewerMedia, { childList:true });
 
 if (viewer) {
