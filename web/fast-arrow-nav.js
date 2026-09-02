@@ -49,7 +49,7 @@ function buildLayout() {
   }
   rows.forEach((row, rowIndex) => {
     row.entries.sort((a, b) => a.cx - b.cx);
-    row.entries.forEach((entry, rowPosition) => byCard.set(entry.card, { entry, rowIndex, rowPosition }));
+    row.entries.forEach(entry => byCard.set(entry.card, { entry, rowIndex }));
   });
 
   layout = { cards, entries, rows, byCard, viewportTop: (commandbar?.getBoundingClientRect().bottom || 0) + 2 };
@@ -61,9 +61,22 @@ const currentLayout = () => !layout || dirty ? buildLayout() : layout;
 
 function focusedCard(state) {
   if (holding && directFocused?.isConnected && state.byCard.has(directFocused)) return directFocused;
-  const active = document.activeElement?.closest?.('#files [data-hash]');
-  if (active && state.byCard.has(active)) return active;
-  return directFocused?.isConnected && state.byCard.has(directFocused) ? directFocused : files.querySelector('.keyboard-cursor[data-hash]');
+  const cursor = files.querySelector('.keyboard-cursor[data-hash]');
+  if (cursor && state.byCard.has(cursor)) return cursor;
+  return null;
+}
+
+function firstVisibleCard(state) {
+  const top = scrollY + state.viewportTop;
+  const bottom = scrollY + innerHeight;
+  let rowTop = Infinity;
+  let best = null;
+  for (const entry of state.entries) {
+    if (entry.top + entry.height <= top || entry.top >= bottom) continue;
+    if (entry.top < rowTop - 3) { rowTop = entry.top; best = entry; }
+    else if (Math.abs(entry.top - rowTop) <= 3 && entry.cx < best.cx) best = entry;
+  }
+  return best?.card || state.cards[0] || null;
 }
 
 function freezeRailScan() {
@@ -85,7 +98,7 @@ function releaseRailScan() {
 
 function moveFocus(card, state = currentLayout()) {
   if (!card) return false;
-  if (directFocused && directFocused !== card) directFocused.classList.remove('keyboard-cursor');
+  files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
   directFocused = card;
   card.classList.add('keyboard-cursor');
   document.documentElement.classList.add('keyboard-navigation-active');
@@ -152,7 +165,7 @@ function navigate(key) {
   if (paging) { queuedKey = key; return true; }
   const state = currentLayout();
   const current = focusedCard(state);
-  if (!current) return false;
+  if (!current) return moveFocus(firstVisibleCard(state), state);
   const target = navigateWithin(state, current, key);
   return target ? moveFocus(target, state) : extendAndContinue(key, current);
 }
@@ -173,9 +186,15 @@ function settleHold() {
 document.addEventListener('keydown', event => {
   if (!arrowKeys.has(event.key) || !viewer?.hidden || !gridActive() || typingTarget(event.target)) return;
   if (!holding) {
-    directFocused = document.activeElement?.closest?.('#files [data-hash]') || files.querySelector('.keyboard-cursor[data-hash]') || files.querySelector('.context-keyboard-focus[data-hash]');
-    if (!directFocused) return;
+    const state = currentLayout();
+    directFocused = focusedCard(state);
     holding = true;
+    if (!directFocused) {
+      if (!moveFocus(firstVisibleCard(state), state)) { holding = false; return; }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
   }
   if (!navigate(event.key)) return;
   event.preventDefault();
