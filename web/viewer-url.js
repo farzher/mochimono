@@ -3,6 +3,7 @@ const openLink = document.querySelector('#viewer-open');
 const closeButton = document.querySelector('#viewer-close');
 const viewerContext = document.querySelector('#viewer-context');
 const VIEWER_STATE = 'mochimonoViewer';
+const arrowKeys = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown']);
 
 function fileParam() {
   return new URL(location.href).searchParams.get('file');
@@ -41,15 +42,24 @@ if (initialHash) {
 
 let wasOpen = false;
 let closingFromHistory = false;
+let rapidSyncPending = false;
 let rapidSyncTimer = 0;
 
-function scheduleRapidSync() {
-  if (rapidSyncTimer) return;
+function clearRapidSync() {
+  rapidSyncPending = false;
+  clearTimeout(rapidSyncTimer);
+  rapidSyncTimer = 0;
+}
+
+function flushRapidSync(delay = 30) {
+  if (!rapidSyncPending || rapidSyncTimer) return;
   rapidSyncTimer = setTimeout(() => {
     rapidSyncTimer = 0;
-    if (!viewer.hidden && window.mochimonoViewerPerformance?.rapid?.()) scheduleRapidSync();
-    else syncUrl();
-  }, 48);
+    if (!rapidSyncPending) return;
+    if (!viewer.hidden && window.mochimonoViewerPerformance?.rapid?.()) return flushRapidSync(8);
+    rapidSyncPending = false;
+    syncUrl();
+  }, delay);
 }
 
 function syncUrl() {
@@ -59,12 +69,11 @@ function syncUrl() {
   if (open && hash) {
     finishRestore();
     if (wasOpen && window.mochimonoViewerPerformance?.rapid?.()) {
-      scheduleRapidSync();
+      rapidSyncPending = true;
       return;
     }
 
-    clearTimeout(rapidSyncTimer);
-    rapidSyncTimer = 0;
+    clearRapidSync();
     const url = fileUrl(hash);
     if (!wasOpen) {
       if (history.state?.[VIEWER_STATE] && fileParam() === hash) history.replaceState(viewerState(true), '', url);
@@ -73,8 +82,7 @@ function syncUrl() {
       history.replaceState(viewerState(true), '', url);
     }
   } else if (!open && wasOpen) {
-    clearTimeout(rapidSyncTimer);
-    rapidSyncTimer = 0;
+    clearRapidSync();
     if (closingFromHistory) {
       closingFromHistory = false;
     } else if (history.state?.[VIEWER_STATE]) {
@@ -92,6 +100,11 @@ new MutationObserver(syncUrl).observe(viewer, {
   attributes: true,
   attributeFilter: ['hidden', 'href']
 });
+
+document.addEventListener('keyup', event => {
+  if (arrowKeys.has(event.key)) flushRapidSync(30);
+}, true);
+window.addEventListener('blur', () => flushRapidSync(0));
 
 // Context chips intentionally navigate *forward* from a viewer into a filtered
 // library view. Preserve the current viewer entry and add a new non-viewer entry
