@@ -18,7 +18,14 @@ if (location.pathname.startsWith('/files')) {
     reportViewer();
   }
   if (viewerOpen) new MutationObserver(reportViewer).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
-  new MutationObserver(reportViewer).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+
+  if (document.documentElement.classList.contains('viewer-restore-pending')) {
+    const restoreObserver = new MutationObserver(() => {
+      reportViewer();
+      if (!document.documentElement.classList.contains('viewer-restore-pending')) restoreObserver.disconnect();
+    });
+    restoreObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+  }
 
   let scrollFrame = 0;
   addEventListener('scroll', () => {
