@@ -5,11 +5,15 @@ let interactionActive = false;
 let interactionUntil = 0;
 let interactionTimer = 0;
 
+function scheduleFinish(delay) {
+  if (!interactionTimer) interactionTimer = setTimeout(finishInteraction, delay);
+}
+
 function finishInteraction() {
   interactionTimer = 0;
   const wait = interactionUntil - performance.now();
   if (wait > 0) {
-    interactionTimer = setTimeout(finishInteraction, wait + 4);
+    scheduleFinish(wait + 4);
     return;
   }
   if (!interactionActive) return;
@@ -26,15 +30,13 @@ function pulseInteraction(duration = 130) {
     document.documentElement.classList.add('grid-interaction-active');
     window.dispatchEvent(new CustomEvent('mochimono:grid-interaction-start'));
   }
-  clearTimeout(interactionTimer);
-  interactionTimer = setTimeout(finishInteraction, duration + 4);
+  scheduleFinish(duration + 4);
 }
 
 function releaseInteraction() {
   if (!interactionActive) return;
   interactionUntil = Math.min(interactionUntil, performance.now() + 45);
-  clearTimeout(interactionTimer);
-  interactionTimer = setTimeout(finishInteraction, 50);
+  scheduleFinish(50);
 }
 
 window.mochimonoGridInteraction = { active: () => interactionActive, pulse: pulseInteraction };
