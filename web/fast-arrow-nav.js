@@ -111,21 +111,15 @@ function activeCard(state) {
   return visibleInfo(state, card) ? card : null;
 }
 
-function visibleAnchor(state, key, preferredX = null) {
+function visibleAnchor(state) {
   const visible = state.entries.filter(entry => {
     const top = entry.top - scrollY;
     return top + entry.height > state.viewportTop && top < innerHeight;
   });
   if (!visible.length) return state.cards[0] || null;
-
-  const direction = key === 'ArrowUp' ? -1 : 1;
-  const edgeTop = direction < 0
-    ? Math.max(...visible.map(entry => entry.top))
-    : Math.min(...visible.map(entry => entry.top));
-  const row = visible.filter(entry => Math.abs(entry.top - edgeTop) <= 3);
-  if (!row.length) return visible[0].card;
-  if (!Number.isFinite(preferredX)) return row[0].card;
-  return row.reduce((best, entry) => Math.abs(entry.cx - preferredX) < Math.abs(best.cx - preferredX) ? entry : best, row[0]).card;
+  const top = Math.min(...visible.map(entry => entry.top));
+  const row = visible.filter(entry => Math.abs(entry.top - top) <= 3);
+  return row.reduce((best, entry) => entry.cx < best.cx ? entry : best, row[0]).card;
 }
 
 function freezeRail() {
@@ -172,13 +166,12 @@ function moveCursor(card, state = currentLayout()) {
   return true;
 }
 
-function bootstrapCursor(key = 'ArrowDown') {
+function bootstrapCursor() {
   if (!viewer?.hidden || !gridActive()) return false;
   const state = currentLayout();
   const existing = cursorCard(state);
   if (visibleInfo(state, existing)) return moveCursor(existing, state);
-  const preferredX = existing ? state.byCard.get(existing)?.entry.cx : null;
-  const card = activeCard(state) || visibleAnchor(state, key, preferredX);
+  const card = activeCard(state) || visibleAnchor(state);
   const moved = moveCursor(card, state);
   if (moved && !holding) releaseRail();
   return moved;
@@ -270,9 +263,8 @@ function navigate(key) {
     return true;
   }
   const state = currentLayout();
-  let current = cursorCard(state);
-  if (!visibleInfo(state, current)) current = activeCard(state);
-  if (!current) return moveCursor(visibleAnchor(state, key), state);
+  const current = cursorCard(state) || activeCard(state);
+  if (!current) return moveCursor(visibleAnchor(state), state);
   if (!cursorHash || cursorHash !== current.dataset.hash) moveCursor(current, state);
   const target = targetFor(state, current, key);
   return target ? moveCursor(target, state) : extendAndContinue(key, current);
@@ -330,8 +322,7 @@ document.addEventListener('keydown', event => {
     holding = true;
     const existing = cursorCard(state);
     if (!visibleInfo(state, existing)) {
-      const preferredX = existing ? state.byCard.get(existing)?.entry.cx : null;
-      const start = activeCard(state) || visibleAnchor(state, event.key, preferredX);
+      const start = activeCard(state) || visibleAnchor(state);
       if (!moveCursor(start, state)) {
         holding = false;
         releaseRail();
