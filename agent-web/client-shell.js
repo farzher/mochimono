@@ -74,9 +74,9 @@ clientMenu?.addEventListener('click', event => {
 
 const libraryArrows = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown']);
 addEventListener('keydown', event => {
-  if (!libraryArrows.has(event.key) || filesPane.hidden) return;
-  if (event.target?.closest?.('button,a,input,select,textarea,summary,dialog,[contenteditable="true"]')) return;
-  frame.contentWindow?.postMessage({ type: 'mochimono-grid-keyboard-start' }, location.origin);
+  if (!libraryArrows.has(event.key) || filesPane.hidden || connection?.open) return;
+  if (event.target?.closest?.('input,select,textarea,[contenteditable="true"]')) return;
+  frame.contentWindow?.mochimonoGridKeyboardStart?.();
   frame.contentWindow?.focus();
   event.preventDefault();
 }, true);
