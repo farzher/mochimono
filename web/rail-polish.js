@@ -58,20 +58,14 @@ if (rail && sort) {
   }
 
   function dateMarkers(ticks) {
-    const groups = [];
+    const markers = [];
+    let previous = '';
     for (const tick of ticks) {
       const year = yearOf(tick.label);
-      if (!year) continue;
-      const last = groups.at(-1);
-      if (last?.label === year) last.ticks.push(tick);
-      else groups.push({ label: year, ticks: [tick] });
+      if (year && year !== previous) markers.push({ label: year, position: tick.position });
+      if (year) previous = year;
     }
-    return groups.map((group, index) => {
-      const start = group.ticks[0].position;
-      const next = groups[index + 1]?.ticks[0]?.position;
-      const end = Number.isFinite(next) ? next : Math.max(start, 1);
-      return { label: group.label, position: Math.max(0, Math.min(1, (start + end) / 2)) };
-    });
+    return markers;
   }
 
   function sizeMarkers(ticks) {
