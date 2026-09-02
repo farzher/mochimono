@@ -115,11 +115,7 @@ function recenterWindow(pending) {
   pendingTrim = null;
   trimming = true;
   restoreAfterRecenter(pending.thresholdHash, anchorTop, focusHash);
-  const changed = library.ensureIndex?.(pending.probeIndex);
-  if (changed === false) {
-    trimming = false;
-    window.removeEventListener('mochimono:grid-laid-out', restoreAfterRecenter);
-  }
+  library.ensureIndex?.(pending.probeIndex);
 }
 
 function checkTrim() {
@@ -178,6 +174,15 @@ function installBoundedWindow() {
   installed = true;
 
   const extend = library.extend.bind(library);
+  const ensureIndex = library.ensureIndex.bind(library);
+
+  // The covered grid does not need to chase Viewer navigation. The existing
+  // closeViewer/revealViewerHash path recenters once when the Viewer closes.
+  library.ensureIndex = index => {
+    if (!viewer?.hidden && !trimming) return false;
+    return ensureIndex(index);
+  };
+
   library.extend = direction => {
     direction = Number(direction) < 0 ? -1 : 1;
 
