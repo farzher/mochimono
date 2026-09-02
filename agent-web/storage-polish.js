@@ -1,5 +1,6 @@
 const storage = document.querySelector('#storagePane');
 const folders = document.querySelector('#folders');
+const toast = document.querySelector('#toast');
 
 const style = document.createElement('style');
 style.textContent = `
@@ -41,6 +42,7 @@ style.textContent = `
   #storagePane .backup-item .storage-meta{font-size:10px}
   #storagePane #protectionDashboard{margin-top:-4px}
   #storagePane #protectionDashboard .section-head{min-height:42px}
+  #storagePane #protectionDashboard .protection-main{padding-top:8px;padding-bottom:8px}
 
   @media(max-width:700px){
     #storagePane{width:min(100% - 20px,980px);gap:26px;padding-top:8px}
@@ -129,7 +131,7 @@ function polishWording(root = storage) {
   ]);
   const selectors = [
     '.empty-state', '.storage-mode', '[data-protect-folder]',
-    '.item-progress strong', '.item-progress span',
+    '.storage-meta span', '.item-progress strong', '.item-progress span',
     '#protectionDashboard strong', '#protectionDashboard span', '#protectionDashboard button'
   ];
   for (const node of root.querySelectorAll(selectors.join(','))) {
@@ -148,12 +150,24 @@ function polishWording(root = storage) {
   }
 }
 
+function orderSections() {
+  const protection = document.querySelector('#protectionDashboard');
+  const backup = [...storage?.querySelectorAll(':scope > .dashboard-section') || []]
+    .find(section => section.querySelector(':scope > .section-head h2')?.textContent.trim() === 'Backups');
+  if (protection && backup && backup.nextElementSibling !== protection) backup.after(protection);
+}
+
 let polishQueued = false;
 function polish() {
   polishQueued = false;
+  orderSections();
   for (const row of folders?.querySelectorAll('[data-folder-path]') || []) polishFolder(row);
   polishWording(storage);
   for (const box of document.querySelectorAll('dialog')) polishWording(box);
+  if (toast) {
+    const next = replacePhrase(toast.textContent);
+    if (next !== toast.textContent) toast.textContent = next;
+  }
 }
 
 function queuePolish() {
@@ -168,5 +182,6 @@ if (storage) {
     if (records.some(record => [...record.addedNodes].some(node => node instanceof HTMLDialogElement))) queuePolish();
   }).observe(document.body, { childList:true });
 }
+if (toast) new MutationObserver(queuePolish).observe(toast, { childList:true, characterData:true, subtree:true });
 
 queuePolish();
