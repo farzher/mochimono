@@ -2,6 +2,7 @@ const files = document.querySelector('#files');
 const CLIENT = document.documentElement.classList.contains('client-library');
 const THUMB_VERSION = 3;
 const CHECK_LIMIT = 320;
+const RECHECK_DELAY = CLIENT ? 120 : 500;
 
 const states = new Map();
 const cardsByHash = new Map();
@@ -222,7 +223,7 @@ async function checkNearby() {
         loadHash(hash);
       } else {
         state.ready = false;
-        state.nextCheck = performance.now() + 500;
+        state.nextCheck = performance.now() + RECHECK_DELAY;
         states.set(hash, state);
         missing.push(hash);
       }
@@ -237,7 +238,7 @@ async function checkNearby() {
     }
   } finally {
     checking = false;
-    if ([...nearby].some(card => kind(card) && !states.get(card.dataset.hash)?.ready)) scheduleCheck(500);
+    if ([...nearby].some(card => kind(card) && !states.get(card.dataset.hash)?.ready)) scheduleCheck(RECHECK_DELAY);
   }
 }
 
