@@ -6,6 +6,7 @@ let annotateQueued = false;
 let previewLoading = false;
 let previewLoadedAt = 0;
 let previewTimer = 0;
+let emptyPreviewRetries = 0;
 const previewSamples = new Map();
 
 const style = document.createElement('style');
@@ -253,8 +254,14 @@ function renderFolderPreviews() {
 }
 
 function schedulePreviewRefresh(delay = 1600) {
+  if (emptyPreviewRetries >= 8) return;
   clearTimeout(previewTimer);
   previewTimer = setTimeout(() => refreshFolderPreviews(true).catch(() => {}), delay);
+}
+
+async function liveSample(path) {
+  const data = await request(`/api/client/local-catalog?limit=5&path=${encodeURIComponent(path)}`);
+  return { path, files:Array.isArray(data.files) ? data.files.slice(0, 5) : [] };
 }
 
 async function refreshFolderPreviews(force = false) {
@@ -277,11 +284,31 @@ async function refreshFolderPreviews(force = false) {
     const data = await request('/api/client/local-catalog?limit=5');
     previewSamples.clear();
     for (const sample of data.folderSamples || []) previewSamples.set(pathKey(sample.path), sample);
+
+    // The combined sample list is intentionally cached by the Agent. If a folder
+    // was sampled while its first index was still empty, ask that folder's live
+    // catalog directly so the Storage mosaic does not wait for that cache to age out.
+    const blankRows = rows.filter(row => !(previewSamples.get(pathKey(row.dataset.folderPath))?.files?.length));
+    if (blankRows.length) {
+      const live = await Promise.all(blankRows.map(row =>
+        liveSample(row.dataset.folderPath).catch(() => null)
+      ));
+      for (const sample of live) {
+        if (sample?.files?.length) previewSamples.set(pathKey(sample.path), sample);
+      }
+    }
+
     previewLoadedAt = Date.now();
     renderFolderPreviews();
     const stillEmpty = rows.some(row => !(previewSamples.get(pathKey(row.dataset.folderPath))?.files?.length));
-    if (stillEmpty) schedulePreviewRefresh(1800);
+    if (stillEmpty) {
+      emptyPreviewRetries++;
+      schedulePreviewRefresh(1800);
+    } else {
+      emptyPreviewRetries = 0;
+    }
   } catch {
+    emptyPreviewRetries++;
     schedulePreviewRefresh(2500);
   } finally {
     previewLoading = false;
@@ -340,6 +367,7 @@ folders?.addEventListener('click', async event => {
       method:'POST', body:JSON.stringify({ path:cloud.dataset.protectFolder })
     });
     previewLoadedAt = 0;
+    emptyPreviewRetries = 0;
     annotateSoon();
     setTimeout(refreshLibrary, 250);
   } catch (error) {
@@ -351,7 +379,9 @@ folders?.addEventListener('click', async event => {
 
 if (folders) {
   new MutationObserver(records => {
-    if (records.some(record => record.addedNodes.length || record.removedNodes.length)) annotateSoon();
+    if (!records.some(record => record.addedNodes.length || record.removedNodes.length)) return;
+    emptyPreviewRetries = 0;
+    annotateSoon();
   }).observe(folders, { childList:true });
 }
 
