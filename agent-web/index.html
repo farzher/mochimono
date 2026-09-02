@@ -12,7 +12,7 @@
   <header class="client-header">
     <div class="app-brand"><span class="mini" aria-hidden="true"></span><h1>Mochimono</h1></div>
     <div class="client-head-actions">
-      <div id="serverStorage" class="client-storage" hidden title="Server storage">
+      <div id="serverStorage" class="client-storage" hidden title="Cloud storage">
         <span id="serverStorageText"></span>
         <i><b id="serverStorageBar"></b></i>
       </div>
@@ -23,7 +23,7 @@
             <button data-client-tab="storage">Storage</button>
           </nav>
           <button id="deviceButton" class="device-button"><span class="menu-label">Settings</span><span id="deviceLabel"></span></button>
-          <button id="clientConnect" class="client-logout" hidden>Connect Server</button>
+          <button id="clientConnect" class="client-logout" hidden>Connect Cloud</button>
           <button id="clientLogout" class="client-logout" hidden>Log out</button>
         </div>
       </details>
@@ -35,22 +35,22 @@
   </main>
 
   <main id="storagePane" class="dashboard" hidden>
-    <section class="dashboard-section">
+    <section class="dashboard-section storage-folders-section">
       <div class="section-head">
         <h2>Folders</h2>
-        <button id="showFolderAdd" class="round-action" title="Add folder" aria-label="Add folder">＋</button>
+        <button id="showFolderAdd" class="storage-add-button" title="Add folder"><span aria-hidden="true">＋</span>Add folder</button>
       </div>
-      <div id="folderAdd" class="folder-add" hidden>
+      <div id="folderAdd" class="folder-add" hidden aria-hidden="true">
         <div class="folder-path-row">
           <input id="importPath" placeholder="Folder or drive">
           <button id="chooseImport" class="secondary">Choose</button>
         </div>
         <div class="folder-mode-options">
-          <button id="startBrowse" class="folder-mode-option" title="View and search this folder without uploading it">
-            <strong>Browse only</strong><span>Local only · nothing uploaded</span>
+          <button id="startBrowse" class="folder-mode-option" title="View and search this folder locally">
+            <strong>Local</strong><span>Keep files where they are</span>
           </button>
-          <button id="startImport" class="folder-mode-option protect" title="Keep the local folder and a Mochimono copy">
-            <strong>Protect</strong><span>This device + Mochimono</span>
+          <button id="startImport" class="folder-mode-option protect" title="Keep a Cloud copy too">
+            <strong>Cloud</strong><span>Local + Cloud</span>
           </button>
         </div>
       </div>
@@ -64,7 +64,7 @@
         <h2>Backups</h2>
         <div class="section-actions">
           <button id="refreshBackups" class="round-action subtle" title="Refresh backups" aria-label="Refresh backups">↻</button>
-          <button id="showBackupAdd" class="round-action" title="Add backup" aria-label="Add backup">＋</button>
+          <button id="showBackupAdd" class="storage-add-button secondary-add" title="Add backup"><span aria-hidden="true">＋</span>Add backup</button>
         </div>
       </div>
       <div id="backupAdd" class="inline-add" hidden>
@@ -77,9 +77,9 @@
   </main>
 
   <dialog id="connectionDialog" class="small-dialog">
-    <div class="dialog-head"><h3>Server</h3><button class="icon" data-close>×</button></div>
+    <div class="dialog-head"><h3>Cloud</h3><button class="icon" data-close>×</button></div>
     <div class="connect-fields">
-      <input id="serverUrl" placeholder="Server">
+      <input id="serverUrl" placeholder="Cloud URL">
       <input id="serverUsername" autocomplete="username" placeholder="Username" value="admin">
       <input id="serverPassword" type="password" autocomplete="current-password" placeholder="Password">
       <input id="serverToken" type="hidden">
@@ -117,7 +117,7 @@
     <div id="restoreSummary" class="restore-summary">Loading…</div>
     <div id="restoreSources" class="restore-sources"></div>
     <div id="restoreFiles" class="restore-files"></div>
-    <div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="startRestore" class="primary">Restore to Mochimono</button></div>
+    <div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="startRestore" class="primary">Restore to Cloud</button></div>
   </dialog>
 
   <div id="toast" class="toast"></div>
@@ -126,6 +126,7 @@
   <script type="module" src="/folder-modes.js"></script>
   <script type="module" src="/multi-folder-pick.js"></script>
   <script type="module" src="/client-shell.js"></script>
+  <script type="module" src="/storage-polish.js"></script>
   <script>
     const homeBrand = document.querySelector('.client-header .app-brand');
     const homeFrame = document.querySelector('#filesFrame');
