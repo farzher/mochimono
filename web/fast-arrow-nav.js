@@ -95,6 +95,7 @@ function releaseRailScan() {
 }
 
 function paintDirectFocus(card) {
+  if (!directFocused?.isConnected) directFocused = files.querySelector('.context-keyboard-focus[data-hash]');
   if (directFocused && directFocused !== card) directFocused.classList.remove('context-keyboard-focus');
   directFocused = card;
   card.classList.add('context-keyboard-focus');
