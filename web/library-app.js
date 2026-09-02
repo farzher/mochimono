@@ -547,12 +547,14 @@ function scrubFromPointer(event, final = false) {
 }
 
 async function loadStats() {
+  if (CLIENT) return;
   const stats = await request('/api/stats');
   const percent = stats.capacityBytes ? Math.min(100, stats.bytes / stats.capacityBytes * 100) : 0;
   $('#stats').innerHTML = `<span>${formatBytes(stats.bytes)} <small>of ${formatBytes(stats.capacityBytes)}</small></span><i><b style="width:${stats.bytes ? `max(2px, ${percent}%)` : '0'}"></b></i>`;
 }
 
 async function correctFileDates(files) {
+  if (CLIENT) return files;
   for (let offset = 0; offset < files.length; offset += 5000) {
     const batch = files.slice(offset, offset + 5000);
     try {
@@ -867,6 +869,7 @@ async function removeSelected(ignore) {
 }
 
 async function loadDrives() {
+  if (CLIENT) return;
   const data = await request('/api/drives');
   $('#drives').innerHTML = data.drives.map(drive => {
     const ratio = drive.desiredBytes ? Math.min(100, drive.protectedBytes / drive.desiredBytes * 100) : 100;
