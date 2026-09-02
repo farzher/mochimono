@@ -162,6 +162,16 @@ function nearWindowEdge(card, state, direction) {
   return direction < 0 ? info.entry.index < margin : info.entry.index >= state.cards.length - margin;
 }
 
+function finishPaging() {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    currentLayout();
+    paging = false;
+    const queued = queuedKey;
+    queuedKey = '';
+    if (queued) navigate(queued);
+  }));
+}
+
 function schedulePreextend(card, state, key) {
   const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
   if (!nearWindowEdge(card, state, direction)) {
@@ -180,7 +190,19 @@ function schedulePreextend(card, state, key) {
     if (!holding || paging || !directFocused?.isConnected) return;
     const latest = currentLayout();
     if (!nearWindowEdge(directFocused, latest, wanted)) return;
-    if (window.mochimonoLibrary?.extend?.(wanted)) dirty = true;
+
+    const anchorTop = directFocused.getBoundingClientRect().top;
+    paging = true;
+    if (!window.mochimonoLibrary?.extend?.(wanted)) {
+      paging = false;
+      return;
+    }
+    if (directFocused.isConnected) {
+      const delta = directFocused.getBoundingClientRect().top - anchorTop;
+      if (Math.abs(delta) > .5) scrollBy(0, delta);
+    }
+    dirty = true;
+    finishPaging();
   };
 
   if ('requestIdleCallback' in window) {
