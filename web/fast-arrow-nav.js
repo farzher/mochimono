@@ -2,6 +2,7 @@ const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
 const commandbar = document.querySelector('.commandbar');
 const arrows = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
+const VERTICAL_NEIGHBORS = 128;
 
 let holding = false;
 let frozenSentinels = null;
@@ -14,11 +15,8 @@ function editingControl(event) {
   return !(control.id === 'search' && (event.key === 'ArrowUp' || event.key === 'ArrowDown' || !control.value));
 }
 
-function mountedCards() {
-  return [...files.querySelectorAll('[data-hash]')].filter(card => {
-    const rect = card.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  });
+function orderedCards() {
+  return [...files.querySelectorAll('[data-hash]')];
 }
 
 function viewportTop() {
@@ -35,7 +33,7 @@ function selectedCard() {
   return document.activeElement?.closest?.('#files [data-hash]') || null;
 }
 
-function visibleStart(cards = mountedCards()) {
+function visibleStart(cards = orderedCards()) {
   const active = selectedCard();
   if (visible(active)) return active;
 
@@ -45,7 +43,7 @@ function visibleStart(cards = mountedCards()) {
   const top = viewportTop();
   for (const card of cards) {
     const rect = card.getBoundingClientRect();
-    if (rect.bottom <= top || rect.top >= innerHeight) continue;
+    if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= top || rect.top >= innerHeight) continue;
     if (rect.top < bestTop - 3 || (Math.abs(rect.top - bestTop) <= 3 && rect.left < bestLeft)) {
       best = card;
       bestTop = rect.top;
@@ -88,7 +86,7 @@ function releaseSentinels() {
   if (bottom) bottom.hidden = state ? !state.hasMore : true;
 }
 
-function verticalTarget(cards, current, direction) {
+function nearestVertical(cards, current, direction) {
   const rect = current.getBoundingClientRect();
   const cx = rect.left + rect.width / 2;
   const cy = rect.top + rect.height / 2;
@@ -98,6 +96,7 @@ function verticalTarget(cards, current, direction) {
   for (const card of cards) {
     if (card === current) continue;
     const next = card.getBoundingClientRect();
+    if (next.width <= 0 || next.height <= 0) continue;
     const nx = next.left + next.width / 2;
     const ny = next.top + next.height / 2;
     const dy = ny - cy;
@@ -109,6 +108,22 @@ function verticalTarget(cards, current, direction) {
     }
   }
   return best;
+}
+
+function verticalTarget(current, direction) {
+  const cards = orderedCards();
+  const index = cards.indexOf(current);
+  if (index < 0) return null;
+
+  const start = direction < 0 ? Math.max(0, index - VERTICAL_NEIGHBORS) : index + 1;
+  const end = direction < 0 ? index : Math.min(cards.length, index + 1 + VERTICAL_NEIGHBORS);
+  const nearby = nearestVertical(cards.slice(start, end), current, direction);
+  if (nearby) return nearby;
+
+  // Extremely wide layouts can contain more than VERTICAL_NEIGHBORS cards per
+  // visual row. Keep correctness with a rare full-window fallback instead of
+  // maintaining a second cached geometry model.
+  return nearestVertical(cards, current, direction);
 }
 
 function ensureAdjacentWindow(direction) {
@@ -123,16 +138,19 @@ function ensureAdjacentWindow(direction) {
 }
 
 function horizontalTarget(current, direction) {
-  const library = window.mochimonoLibrary;
-  const hashes = library?.filteredHashes?.();
-  if (!hashes?.length) return null;
-  const index = hashes.indexOf(current.dataset.hash || '');
-  const targetIndex = index + direction;
-  if (index < 0 || targetIndex < 0 || targetIndex >= hashes.length) return null;
-  const targetHash = hashes[targetIndex];
-  library.ensureIndex?.(targetIndex);
-  freezeSentinels();
-  return files.querySelector(`[data-hash="${CSS.escape(targetHash)}"]`);
+  let cards = orderedCards();
+  let index = cards.indexOf(current);
+  if (index < 0) return null;
+  let target = cards[index + direction];
+  if (target) return target;
+
+  const currentHash = current.dataset.hash || '';
+  if (!ensureAdjacentWindow(direction)) return null;
+  current = currentHash ? files.querySelector(`[data-hash="${CSS.escape(currentHash)}"]`) : null;
+  if (!current) return null;
+  cards = orderedCards();
+  index = cards.indexOf(current);
+  return index >= 0 ? cards[index + direction] || null : null;
 }
 
 function navigate(key) {
@@ -144,16 +162,14 @@ function navigate(key) {
   }
 
   const direction = key === 'ArrowUp' ? -1 : 1;
-  let cards = mountedCards();
-  let target = verticalTarget(cards, current, direction);
+  let target = verticalTarget(current, direction);
   if (target) return selectCard(target);
 
   const currentHash = current.dataset.hash || '';
   if (!ensureAdjacentWindow(direction)) return true;
   current = currentHash ? files.querySelector(`[data-hash="${CSS.escape(currentHash)}"]`) : null;
   if (!current) return true;
-  cards = mountedCards();
-  target = verticalTarget(cards, current, direction);
+  target = verticalTarget(current, direction);
   return selectCard(target) || selectCard(current);
 }
 
