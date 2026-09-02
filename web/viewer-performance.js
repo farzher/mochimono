@@ -2,6 +2,7 @@ const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
 const viewerPrev = document.querySelector('#viewer-prev');
 const viewerNext = document.querySelector('#viewer-next');
+const viewerMedia = document.querySelector('#viewer-media');
 const files = document.querySelector('#files');
 
 const objectHash = value => String(value || '').match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
@@ -28,6 +29,7 @@ let navTimer = 0;
 let lastNavAt = 0;
 let rapidUntil = 0;
 let deferredCurrent = null;
+let deferredVideo = null;
 let deferredTimer = 0;
 
 function nativeSet(image, value) {
@@ -37,6 +39,7 @@ function nativeSet(image, value) {
 function clearDeferred(image = null) {
   if (image && deferredCurrent?.image !== image) return;
   deferredCurrent = null;
+  if (!image) deferredVideo = null;
   clearTimeout(deferredTimer);
   deferredTimer = 0;
 }
@@ -89,24 +92,54 @@ function rapidNavigation() {
   return performance.now() < rapidUntil;
 }
 
-function flushDeferredCurrent() {
+function scheduleDeferredFlush(delay = RAPID_SETTLE_MS + 4) {
+  clearTimeout(deferredTimer);
+  deferredTimer = setTimeout(flushDeferredMedia, delay);
+}
+
+function flushDeferredMedia() {
   deferredTimer = 0;
-  const deferred = deferredCurrent;
-  if (!deferred) return;
+  if (!deferredCurrent && !deferredVideo) return;
   const wait = rapidUntil - performance.now();
   if (wait > 0) {
-    deferredTimer = setTimeout(flushDeferredCurrent, wait + 4);
+    scheduleDeferredFlush(wait + 4);
     return;
   }
+
+  const image = deferredCurrent;
   deferredCurrent = null;
-  if (viewer.hidden || currentHash() !== deferred.hash || currentLoad !== deferred.image) return;
-  nativeSet(deferred.image, deferred.value);
+  if (image && !viewer.hidden && currentHash() === image.hash && currentLoad === image.image) {
+    nativeSet(image.image, image.value);
+  }
+
+  const video = deferredVideo;
+  deferredVideo = null;
+  if (video && !viewer.hidden && currentHash() === video.hash && video.element.isConnected) {
+    video.element.src = video.value;
+    video.element.autoplay = true;
+    video.element.play().catch(() => {});
+  }
 }
 
 function deferCurrentLoad(image, value, hash) {
   deferredCurrent = { image, value, hash };
-  clearTimeout(deferredTimer);
-  deferredTimer = setTimeout(flushDeferredCurrent, RAPID_SETTLE_MS + 4);
+  scheduleDeferredFlush();
+}
+
+function deferRapidVideo() {
+  const video = viewerMedia?.querySelector('video[src]');
+  const hash = currentHash();
+  if (!video || !hash || !rapidNavigation()) return;
+  const value = video.getAttribute('src');
+  if (!value) return;
+
+  video.pause();
+  video.autoplay = false;
+  video.poster = `/api/thumbs/${hash}?v=3`;
+  video.removeAttribute('src');
+  video.load();
+  deferredVideo = { element: video, value, hash };
+  scheduleDeferredFlush();
 }
 
 // Returns true when the caller should suppress the immediate native src set.
@@ -183,6 +216,7 @@ function navigateOne(direction) {
   const button = direction < 0 ? viewerPrev : viewerNext;
   if (!button || button.disabled || viewer.hidden) return false;
   button.click();
+  deferRapidVideo();
   lastNavAt = performance.now();
   return true;
 }
@@ -206,7 +240,7 @@ function flushNavigation() {
 
 function queueNavigation(direction) {
   rapidUntil = performance.now() + RAPID_SETTLE_MS;
-  if (deferredCurrent) deferCurrentLoad(deferredCurrent.image, deferredCurrent.value, deferredCurrent.hash);
+  if (deferredCurrent || deferredVideo) scheduleDeferredFlush();
   if (navPending && Math.sign(navPending) !== direction) navPending = 0;
   navPending = Math.max(-6, Math.min(6, navPending + direction));
   if (!navTimer) flushNavigation();
@@ -225,10 +259,9 @@ document.addEventListener('keyup', event => {
   navPending = 0;
   clearTimeout(navTimer);
   navTimer = 0;
-  if (deferredCurrent) {
+  if (deferredCurrent || deferredVideo) {
     rapidUntil = Math.min(rapidUntil, performance.now() + 24);
-    clearTimeout(deferredTimer);
-    deferredTimer = setTimeout(flushDeferredCurrent, 28);
+    scheduleDeferredFlush(28);
   }
 }, true);
 
@@ -246,6 +279,8 @@ if (files) {
   }, { passive:true });
   files.addEventListener('focusin', event => warmGridCard(event.target.closest?.('.file-card.media-card[data-hash]')));
 }
+
+if (viewerMedia) new MutationObserver(deferRapidVideo).observe(viewerMedia, { childList:true });
 
 if (viewer) {
   new MutationObserver(() => {
