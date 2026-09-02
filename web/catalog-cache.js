@@ -5,6 +5,7 @@ const META_KEY = 'catalog';
 const WRITE_BATCH = 1500;
 
 let dbPromise = null;
+let loadPromise = null;
 let meta = null;
 let records = new Map();
 
@@ -57,7 +58,17 @@ function mergeGeometry(file) {
   return { ...file, width: Number(previous.width), height: Number(previous.height) };
 }
 
-async function load() {
+function memorySnapshot() {
+  if (!meta?.version || records.size !== Number(meta.count || 0)) return null;
+  return {
+    version: String(meta.version),
+    imports: Array.isArray(meta.imports) ? meta.imports : [],
+    files: [...records.values()].map(publicFile),
+    savedAt: Number(meta.savedAt) || 0
+  };
+}
+
+async function loadFromDb() {
   const db = await openDb();
   if (!db) return null;
   const transaction = db.transaction(['files', 'meta']);
@@ -74,12 +85,16 @@ async function load() {
 
   meta = storedMeta;
   records = new Map(files.map(file => [String(file.hash), file]));
-  return {
-    version: String(storedMeta.version),
-    imports: Array.isArray(storedMeta.imports) ? storedMeta.imports : [],
-    files,
-    savedAt: Number(storedMeta.savedAt) || 0
-  };
+  return memorySnapshot();
+}
+
+async function load() {
+  const memory = memorySnapshot();
+  if (memory) return memory;
+  if (!loadPromise) {
+    loadPromise = loadFromDb().finally(() => { loadPromise = null; });
+  }
+  return loadPromise;
 }
 
 async function save(files, options = {}) {
@@ -183,3 +198,8 @@ window.mochimonoCatalogCache = {
   clear,
   state: () => ({ version: meta?.version || '', count: records.size, savedAt: Number(meta?.savedAt) || 0 })
 };
+
+// Start the IndexedDB read immediately, before library-app waits on the server
+// health check. Normal reloads can then restore the cached grid from memory in
+// the same frame instead of briefly painting a Loading screen first.
+load().catch(() => {});

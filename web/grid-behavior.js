@@ -8,11 +8,12 @@ if (files && viewer) {
   const style = document.createElement('style');
   style.textContent = `
     /* Day labels are timeline text, not chips. Keep the selection affordance but
-       do not draw a pill/bubble behind the date itself. */
+       inset the text from the thumbnail edge by the same small visual gutter used
+       by media labels elsewhere in the grid. */
     .files.grid .day-group-control,
     .files.grid .day-group-control:hover,
     .files.grid .day-group-control:focus-visible{
-      padding:0!important;
+      padding:0 6px!important;
       border:0!important;
       border-radius:0!important;
       background:transparent!important;
