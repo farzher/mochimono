@@ -137,13 +137,18 @@ function releaseRail() {
   rail.hidden = hidden;
 }
 
+function hideSentinels() {
+  if (sentinelState?.top) sentinelState.top.hidden = true;
+  if (sentinelState?.bottom) sentinelState.bottom.hidden = true;
+}
+
 function freezeSentinels() {
-  if (sentinelState) return;
-  const top = document.querySelector('#top-scroll-sentinel');
-  const bottom = document.querySelector('#scroll-sentinel');
-  sentinelState = { top, bottom, topHidden: top?.hidden, bottomHidden: bottom?.hidden };
-  if (top) top.hidden = true;
-  if (bottom) bottom.hidden = true;
+  if (!sentinelState) {
+    const top = document.querySelector('#top-scroll-sentinel');
+    const bottom = document.querySelector('#scroll-sentinel');
+    sentinelState = { top, bottom, topHidden: top?.hidden, bottomHidden: bottom?.hidden };
+  }
+  hideSentinels();
 }
 
 function releaseSentinels() {
@@ -228,6 +233,7 @@ function extendAndContinue(key, current) {
   } catch (error) {
     console.error('Mochimono grid extension failed.', error);
   }
+  hideSentinels();
   if (!extended) return false;
 
   dirty = true;
