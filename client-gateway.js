@@ -106,7 +106,8 @@ function queueCanonicalPreview(snapshot, file) {
 }
 
 async function serverThumbnails(hashes) {
-  if (!settings.token || !hashes.length) return new Map();
+  const empty = () => ({ ready: new Map(), missing: new Map() });
+  if (!settings.token || !hashes.length) return empty();
   try {
     const response = await fetch(`${settings.server}/api/thumbs/check`, {
       method: 'POST',
@@ -115,9 +116,12 @@ async function serverThumbnails(hashes) {
     });
     if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
     const data = await response.json();
-    return new Map((data.thumbnails || []).map(item => [String(item.hash), item]));
+    return {
+      ready: new Map((data.thumbnails || []).map(item => [String(item.hash), item])),
+      missing: new Map((data.missing || []).map(item => [String(item.hash), item]))
+    };
   } catch {
-    return new Map();
+    return empty();
   }
 }
 
@@ -143,13 +147,13 @@ async function checkThumbnails(req, res) {
   const ready = new Map();
   const locals = localCandidates(hashes);
 
-  const [providerEntries, remoteReady] = await Promise.all([
+  const [providerEntries, remote] = await Promise.all([
     Promise.all(hashes.map(async hash => [hash, await providerThumbnail(hash)])),
     serverThumbnails(hashes)
   ]);
 
   for (const [hash, thumb] of providerEntries) if (thumb) ready.set(hash, thumb);
-  for (const [hash, thumb] of remoteReady) if (!ready.has(hash)) ready.set(hash, thumb);
+  for (const [hash, thumb] of remote.ready) if (!ready.has(hash)) ready.set(hash, thumb);
 
   const unresolved = [];
   for (const hash of hashes) {
@@ -157,7 +161,11 @@ async function checkThumbnails(req, res) {
     const candidate = locals.get(hash);
     if (candidate) {
       queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
-    } else unresolved.push(hash);
+      continue;
+    }
+    const serverFile = remote.missing.get(hash);
+    if (serverFile) queueRemoteThumbnail(serverFile);
+    else unresolved.push(hash);
   }
   queueUnresolvedThumbnails(unresolved, background);
 

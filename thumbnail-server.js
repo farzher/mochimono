@@ -165,7 +165,8 @@ function thumbnailStatuses(hashes) {
   if (!hashes.length) return [];
   const marks = hashes.map(() => '?').join(',');
   return db.prepare(`
-    SELECT o.hash,
+    SELECT o.hash, o.size, o.mime,
+           COALESCE((SELECT MIN(s.filename) FROM sources s WHERE s.object_hash = o.hash), o.hash) AS filename,
            CASE WHEN t.object_hash IS NULL THEN 0 ELSE 1 END AS ready,
            COALESCE(t.width, 0) AS width,
            COALESCE(t.height, 0) AS height,
@@ -178,8 +179,10 @@ function thumbnailStatuses(hashes) {
 
 async function checkThumbnails(req, res) {
   const hashes = cleanHashes(await readJson(req, 128 * 1024));
-  const thumbnails = thumbnailStatuses(hashes).filter(row => row.ready).map(({ ready, ...row }) => row);
-  json(res, 200, { version: THUMB_VERSION, thumbnails });
+  const statuses = thumbnailStatuses(hashes);
+  const thumbnails = statuses.filter(row => row.ready).map(({ ready, size, mime, filename, ...row }) => row);
+  const missing = statuses.filter(row => !row.ready).map(({ ready, width, height, duration, ...row }) => row);
+  json(res, 200, { version: THUMB_VERSION, thumbnails, missing });
 }
 
 async function requestThumbnails(req, res) {
