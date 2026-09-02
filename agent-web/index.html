@@ -7,7 +7,6 @@
   <title>Mochimono</title>
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/client-shell.css">
-  <link rel="stylesheet" href="/storage-stability.css">
 </head>
 <body>
   <header class="client-header">
@@ -21,7 +20,7 @@
         <summary aria-label="Mochimono menu" title="More">•••</summary>
         <div class="client-menu-popover">
           <nav class="client-tabs" aria-label="Mochimono">
-            <button data-client-tab="storage">Folders & backups</button>
+            <button data-client-tab="storage">Storage</button>
           </nav>
           <button id="deviceButton" class="device-button"><span class="menu-label">Settings</span><span id="deviceLabel"></span></button>
           <button id="clientConnect" class="client-logout" hidden>Connect Server</button>
@@ -54,7 +53,6 @@
             <strong>Protect</strong><span>This device + Mochimono</span>
           </button>
         </div>
-        <div class="folder-mode-note">Protect keeps the local copy. Mochimono never deletes local files automatically.</div>
       </div>
       <div id="folders" class="item-list"><div class="muted">Loading…</div></div>
     </section>
@@ -100,7 +98,6 @@
         <option value="2">2 uploads</option>
         <option value="4">4 uploads</option>
       </select>
-      <div class="folder-mode-note">Parallel files sent to the Mochimono server. Try 1 for large files or slower server disks; 2–4 can help with many small files.</div>
     </div>
     <div class="dialog-actions"><div class="spacer"></div><button id="saveDevice" class="primary">Save</button></div>
   </dialog>
@@ -129,14 +126,6 @@
   <script type="module" src="/folder-modes.js"></script>
   <script type="module" src="/multi-folder-pick.js"></script>
   <script type="module" src="/client-shell.js"></script>
-  <script type="module" src="/storage-overview.js"></script>
-  <script type="module" src="/storage-material.js"></script>
-  <script type="module" src="/relative-time.js"></script>
-  <script type="module" src="/storage-polish.js"></script>
-  <script type="module" src="/storage-visual-dashboard.js"></script>
-  <script type="module" src="/storage-index-progress.js"></script>
-  <script type="module" src="/storage-cleanup.js"></script>
-  <script type="module" src="/storage-local-live.js"></script>
   <script>
     const homeBrand = document.querySelector('.client-header .app-brand');
     const homeFrame = document.querySelector('#filesFrame');
