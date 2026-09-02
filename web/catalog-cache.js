@@ -8,6 +8,8 @@ let dbPromise = null;
 let loadPromise = null;
 let meta = null;
 let records = new Map();
+let pendingGeometry = new Map();
+let geometryJob = 0;
 
 const requestResult = request => new Promise((resolve, reject) => {
   request.onsuccess = () => resolve(request.result);
@@ -155,32 +157,57 @@ async function cleanupOldSnapshots(version) {
   await transactionDone(transaction);
 }
 
-async function rememberDimensions(hash, width, height) {
+function scheduleGeometryWrite() {
+  if (geometryJob) return;
+  const run = () => {
+    geometryJob = 0;
+    flushDimensions().catch(() => {});
+  };
+  if ('requestIdleCallback' in window) geometryJob = requestIdleCallback(run, { timeout: 650 });
+  else geometryJob = setTimeout(run, 100);
+}
+
+async function flushDimensions() {
+  if (!pendingGeometry.size) return;
+  if (!records.size) await load().catch(() => null);
+
+  const batch = [...pendingGeometry];
+  pendingGeometry.clear();
+  const db = await openDb();
+  if (!db) return;
+
+  const transaction = db.transaction('files', 'readwrite');
+  const store = transaction.objectStore('files');
+  for (const [hash, geometry] of batch) {
+    const previous = records.get(hash);
+    if (!previous) continue;
+    const next = { ...previous, width: geometry.width, height: geometry.height };
+    records.set(hash, next);
+    store.put({ ...next, __snapshot: meta?.version || '' });
+  }
+  await transactionDone(transaction).catch(() => {});
+  if (pendingGeometry.size) scheduleGeometryWrite();
+}
+
+function rememberDimensions(hash, width, height) {
   hash = String(hash || '');
   width = Number(width) || 0;
   height = Number(height) || 0;
   if (!hash || !width || !height) return;
 
-  let previous = records.get(hash);
+  const previous = records.get(hash);
   if (previous && Number(previous.width) === width && Number(previous.height) === height) return;
-
-  const db = await openDb();
-  if (!db) return;
-  if (!previous) {
-    const transaction = db.transaction('files');
-    previous = publicFile(await requestResult(transaction.objectStore('files').get(hash)));
-    await transactionDone(transaction).catch(() => {});
-  }
-  if (!previous) return;
-
-  const next = { ...previous, width, height };
-  records.set(hash, next);
-  const transaction = db.transaction('files', 'readwrite');
-  transaction.objectStore('files').put({ ...next, __snapshot: meta?.version || previous.__snapshot || '' });
-  await transactionDone(transaction).catch(() => {});
+  pendingGeometry.set(hash, { width, height });
+  scheduleGeometryWrite();
 }
 
 async function clear() {
+  if (geometryJob) {
+    if ('cancelIdleCallback' in window) cancelIdleCallback(geometryJob);
+    else clearTimeout(geometryJob);
+    geometryJob = 0;
+  }
+  pendingGeometry.clear();
   const db = await openDb();
   if (!db) return;
   const transaction = db.transaction(['files', 'meta'], 'readwrite');
