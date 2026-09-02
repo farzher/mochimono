@@ -216,17 +216,20 @@ function visibleCards() {
   return [...files.querySelectorAll('[data-hash]')].filter(card => card.getClientRects().length);
 }
 
+function inViewport(card) {
+  if (!card) return false;
+  const rect = card.getBoundingClientRect();
+  return rect.bottom > 80 && rect.top < innerHeight;
+}
+
 function currentCard(items = visibleCards()) {
   const cursor = currentView() === 'grid' ? files.querySelector('.keyboard-cursor[data-hash]') : null;
-  if (cursor && items.includes(cursor)) return cursor;
+  if (cursor && items.includes(cursor) && inViewport(cursor)) return cursor;
   const active = document.activeElement?.closest?.('#files [data-hash]');
-  if (active && items.includes(active)) return active;
+  if (active && items.includes(active) && inViewport(active)) return active;
   const remembered = focusedHash && items.find(card => card.dataset.hash === focusedHash);
-  if (remembered) return remembered;
-  return items.find(card => {
-    const rect = card.getBoundingClientRect();
-    return rect.bottom > 80 && rect.top < innerHeight;
-  }) || items[0] || null;
+  if (remembered && inViewport(remembered)) return remembered;
+  return items.find(inViewport) || items[0] || null;
 }
 
 function focusCard(card) {
@@ -315,9 +318,10 @@ document.addEventListener('keydown', event => {
   }
 
   const view = currentView();
-  if (view === 'list' && event.key.startsWith('Arrow') && navigateList(event.key)) {
+  if (view === 'list' && event.key.startsWith('Arrow')) {
     event.preventDefault();
     event.stopImmediatePropagation();
+    navigateList(event.key);
     return;
   }
   if (!['grid','list'].includes(view)) return;
