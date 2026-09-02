@@ -69,13 +69,31 @@ async function reconcileDeviceIdentity() {
   }
 }
 
-async function openNativeFolder(path) {
+async function openNativePath(path, selectFile = false) {
   const target = resolve(String(path || ''));
   const info = await stat(target).catch(() => null);
-  if (!info?.isDirectory()) throw Object.assign(new Error('Folder is unavailable'), { status: 404 });
-  const command = platform() === 'win32' ? 'explorer.exe' : platform() === 'darwin' ? 'open' : 'xdg-open';
+  if (selectFile ? !info?.isFile() : !info?.isDirectory()) {
+    throw Object.assign(new Error(selectFile ? 'File is unavailable' : 'Folder is unavailable'), { status: 404 });
+  }
+
+  let command;
+  let args;
+  if (platform() === 'win32') {
+    command = 'explorer.exe';
+    // Explorer's /select option is one comma-delimited argument. Passing the
+    // option and path as separate argv entries can start Explorer successfully
+    // while silently doing nothing with the requested file.
+    args = selectFile ? [`/select,${target}`] : [target];
+  } else if (platform() === 'darwin') {
+    command = 'open';
+    args = selectFile ? ['-R', target] : [target];
+  } else {
+    command = 'xdg-open';
+    args = [selectFile ? resolve(target, '..') : target];
+  }
+
   await new Promise((resolvePromise, reject) => {
-    const child = spawn(command, [target], { detached: true, stdio: 'ignore', windowsHide: true });
+    const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: false });
     child.once('error', reject);
     child.once('spawn', () => {
       child.unref();
@@ -159,9 +177,9 @@ async function handleLocalApi(req, res, url) {
 
   if (req.method === 'POST' && url.pathname === '/api/open-folder') {
     const body = await readJson(req);
-    if (!body.path) json(res, 400, { error: 'Folder required' });
+    if (!body.path) json(res, 400, { error: body.select ? 'File required' : 'Folder required' });
     else {
-      await openNativeFolder(body.path);
+      await openNativePath(body.path, body.select === true);
       json(res, 200, { ok: true });
     }
     return true;
