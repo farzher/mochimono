@@ -1,6 +1,5 @@
 const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
-const views = document.querySelector('#views');
 const rail = document.querySelector('#dateRail');
 const commandbar = document.querySelector('.commandbar');
 
@@ -8,13 +7,11 @@ let layout = null;
 let dirty = true;
 let cursorHash = '';
 let holding = false;
-let pagingToken = 0;
-let nextPagingToken = 1;
-let queuedKey = '';
 let railWasHidden = null;
+let sentinelState = null;
 
 const arrows = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown']);
-const gridActive = () => views?.querySelector('[data-view="grid"]')?.classList.contains('active');
+const gridActive = () => files?.classList.contains('grid');
 
 function editingControl(event) {
   const control = event.target?.closest?.('input,select,textarea,[contenteditable="true"]');
@@ -26,10 +23,7 @@ const style = document.createElement('style');
 style.textContent = `
   #dateRail.fast-keyboard-rail[hidden]{display:block!important}
   html.keyboard-navigation-active #files.grid .file-card.context-keyboard-focus:not(.keyboard-cursor){outline:none!important;box-shadow:none!important}
-  #files.grid .file-card.keyboard-cursor{position:relative;z-index:2;outline:none!important}
-  #files.grid .file-card.media-card.keyboard-cursor::before{opacity:0!important;transform:none!important;transition:none!important}
-  #files.grid .file-card.media-card.keyboard-cursor::after{content:""!important;z-index:20!important;inset:0!important;width:auto!important;height:auto!important;padding:0!important;border-radius:3px!important;opacity:1!important;transform:none!important;background:none!important;box-shadow:inset 0 0 0 2px rgba(239,160,154,.82),inset 0 0 0 3px rgba(0,0,0,.34)!important;transition:none!important;pointer-events:none}
-  #files.grid .file-card:not(.media-card).keyboard-cursor{box-shadow:inset 0 0 0 2px rgba(239,160,154,.82),inset 0 0 0 3px rgba(0,0,0,.34)!important}
+  #files.grid .file-card.keyboard-cursor{position:relative;z-index:2;outline:2px solid rgba(239,160,154,.9)!important;outline-offset:-2px!important}
   #files.grid .file-card.keyboard-cursor .file-context-badge{opacity:.86!important;transform:none!important;transition:none!important}
 `;
 document.head.append(style);
@@ -112,14 +106,19 @@ function activeCard(state) {
 }
 
 function visibleAnchor(state) {
-  const visible = state.entries.filter(entry => {
+  let best = null;
+  let bestTop = Infinity;
+  let bestX = Infinity;
+  for (const entry of state.entries) {
     const top = entry.top - scrollY;
-    return top + entry.height > state.viewportTop && top < innerHeight;
-  });
-  if (!visible.length) return state.cards[0] || null;
-  const top = Math.min(...visible.map(entry => entry.top));
-  const row = visible.filter(entry => Math.abs(entry.top - top) <= 3);
-  return row.reduce((best, entry) => entry.cx < best.cx ? entry : best, row[0]).card;
+    if (top + entry.height <= state.viewportTop || top >= innerHeight) continue;
+    if (entry.top < bestTop - 3 || (Math.abs(entry.top - bestTop) <= 3 && entry.cx < bestX)) {
+      best = entry.card;
+      bestTop = entry.top;
+      bestX = entry.cx;
+    }
+  }
+  return best || state.cards[0] || null;
 }
 
 function freezeRail() {
@@ -136,6 +135,24 @@ function releaseRail() {
   railWasHidden = null;
   rail.classList.remove('fast-keyboard-rail');
   rail.hidden = hidden;
+}
+
+function freezeSentinels() {
+  if (sentinelState) return;
+  const top = document.querySelector('#top-scroll-sentinel');
+  const bottom = document.querySelector('#scroll-sentinel');
+  sentinelState = { top, bottom, topHidden: top?.hidden, bottomHidden: bottom?.hidden };
+  if (top) top.hidden = true;
+  if (bottom) bottom.hidden = true;
+}
+
+function releaseSentinels() {
+  if (!sentinelState) return;
+  const { top, bottom, topHidden, bottomHidden } = sentinelState;
+  sentinelState = null;
+  const state = window.mochimonoLibrary?.state?.();
+  if (top) top.hidden = state ? !state.hasPrevious : Boolean(topHidden);
+  if (bottom) bottom.hidden = state ? !state.hasMore : Boolean(bottomHidden);
 }
 
 function prioritizeRow(card, state) {
@@ -168,10 +185,10 @@ function moveCursor(card, state = currentLayout()) {
 
 function bootstrapCursor() {
   if (!viewer?.hidden || !gridActive()) return false;
+  dirty = true;
   const state = currentLayout();
   const existing = cursorCard(state);
-  if (visibleInfo(state, existing)) return moveCursor(existing, state);
-  const card = activeCard(state) || visibleAnchor(state);
+  const card = visibleInfo(state, existing) ? existing : activeCard(state) || visibleAnchor(state);
   const moved = moveCursor(card, state);
   if (moved && !holding) releaseRail();
   return moved;
@@ -201,97 +218,57 @@ function targetFor(state, current, key) {
   return verticalTarget(state, current, key === 'ArrowUp' ? -1 : 1);
 }
 
-function cancelPaging() {
-  pagingToken = 0;
-  queuedKey = '';
-}
-
-const afterLayout = callback => requestAnimationFrame(() => requestAnimationFrame(callback));
-
-function rotateWindow(direction, current, after) {
+function extendAndContinue(key, current) {
+  const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
   const hash = current.dataset.hash || '';
   const anchorTop = current.getBoundingClientRect().top;
-  const token = nextPagingToken++;
-  pagingToken = token;
-
   let extended = false;
   try {
     extended = Boolean(window.mochimonoLibrary?.extend?.(direction));
   } catch (error) {
     console.error('Mochimono grid extension failed.', error);
   }
-  if (!extended) {
-    if (pagingToken === token) pagingToken = 0;
-    return false;
-  }
+  if (!extended) return false;
 
-  if (current.isConnected) {
-    const delta = current.getBoundingClientRect().top - anchorTop;
+  dirty = true;
+  const same = hash && files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
+  if (same) {
+    const delta = same.getBoundingClientRect().top - anchorTop;
     if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
   }
 
-  dirty = true;
-  afterLayout(() => {
-    if (pagingToken !== token) return;
-    let queued = '';
-    try {
-      const state = currentLayout();
-      const start = state.byHash.get(hash) || cursorCard(state);
-      after?.(state, start);
-    } catch (error) {
-      console.error('Mochimono grid paging failed.', error);
-      dirty = true;
-    } finally {
-      if (pagingToken === token) {
-        pagingToken = 0;
-        queued = queuedKey;
-        queuedKey = '';
-      }
-    }
-    if (queued) navigate(queued);
-  });
-  return true;
-}
-
-function extendAndContinue(key, current) {
-  const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
-  return rotateWindow(direction, current, (state, start) => {
-    const target = start && targetFor(state, start, key);
-    if (target) moveCursor(target, state);
-  });
+  const state = buildLayout();
+  const start = state.byHash.get(hash);
+  const target = start && targetFor(state, start, key);
+  return target ? moveCursor(target, state) : Boolean(start);
 }
 
 function navigate(key) {
-  if (pagingToken) {
-    queuedKey = key;
-    return true;
-  }
   const state = currentLayout();
   const current = cursorCard(state) || activeCard(state);
-  if (!current) return moveCursor(visibleAnchor(state), state);
+  if (!current) return bootstrapCursor();
   if (!cursorHash || cursorHash !== current.dataset.hash) moveCursor(current, state);
   const target = targetFor(state, current, key);
   return target ? moveCursor(target, state) : extendAndContinue(key, current);
 }
 
 function settleHold() {
-  queuedKey = '';
-  if (!holding && railWasHidden == null) return;
+  if (!holding && railWasHidden == null && !sentinelState) return;
   holding = false;
   releaseRail();
+  releaseSentinels();
   dirty = true;
   const card = cursorHash && files.querySelector(`[data-hash="${CSS.escape(cursorHash)}"]`);
   if (!card) return;
-  if (card.tabIndex < 0) card.tabIndex = 0;
   const y = scrollY;
   card.focus({ preventScroll: true });
   if (scrollY !== y) scrollTo({ top: y, left: 0, behavior: 'auto' });
 }
 
 function resetNavigation(clearCursor = false) {
-  cancelPaging();
   holding = false;
   releaseRail();
+  releaseSentinels();
   if (!clearCursor) return;
   for (const card of files.querySelectorAll('.keyboard-cursor')) card.classList.remove('keyboard-cursor');
   cursorHash = '';
@@ -307,7 +284,6 @@ function syncReturnedCursor(hash) {
   if (!card || !gridActive()) return;
   moveCursor(card, state);
   releaseRail();
-  if (card.tabIndex < 0) card.tabIndex = 0;
   const y = scrollY;
   card.focus({ preventScroll: true });
   if (scrollY !== y) scrollTo({ top: y, left: 0, behavior: 'auto' });
@@ -315,22 +291,22 @@ function syncReturnedCursor(hash) {
 
 document.addEventListener('keydown', event => {
   if (!arrows.has(event.key) || !viewer?.hidden || !gridActive() || editingControl(event)) return;
-
   event.preventDefault();
   event.stopImmediatePropagation();
 
-  const state = currentLayout();
   if (!holding) {
     holding = true;
+    freezeSentinels();
+    dirty = true;
+    const state = currentLayout();
     const existing = cursorCard(state);
     if (!visibleInfo(state, existing)) {
       const start = activeCard(state) || visibleAnchor(state);
       if (!moveCursor(start, state)) {
         holding = false;
         releaseRail();
-        return;
+        releaseSentinels();
       }
-      document.activeElement?.closest?.('input,select,textarea,[contenteditable="true"]')?.blur?.();
       return;
     }
   }
