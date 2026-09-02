@@ -105,8 +105,8 @@ function markLoaded(hash, card, image) {
   rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
 }
 
-function startThumbnailImage(image, canonical, knownReady = false) {
-  if (interactionActive() && !knownReady) {
+function startThumbnailImage(image, canonical, allowDuringInteraction = false) {
+  if (interactionActive() && !allowDuringInteraction) {
     image.dataset.pendingThumbSrc = canonical;
     return;
   }
@@ -114,7 +114,7 @@ function startThumbnailImage(image, canonical, knownReady = false) {
   image.src = canonical;
 }
 
-function paintCard(card) {
+function paintCard(card, allowDuringInteraction = false) {
   if (!card?.isConnected || !kind(card)) return;
   const hash = String(card.dataset.hash || '');
   if (!hash) return;
@@ -124,8 +124,17 @@ function paintCard(card) {
   const current = box.querySelector('img.cached-thumb');
 
   if (current?.dataset.thumbHash === hash) {
+    if (card.classList.contains('keyboard-cursor')) {
+      try { current.fetchPriority = 'high'; } catch {}
+    }
     if (current.complete && current.naturalWidth) markLoaded(hash, card, current);
-    else if (!interactionActive() && current.dataset.pendingThumbSrc) startThumbnailImage(current, current.dataset.pendingThumbSrc, false);
+    else if ((allowDuringInteraction || !interactionActive()) && current.dataset.pendingThumbSrc) startThumbnailImage(current, current.dataset.pendingThumbSrc, true);
+    return;
+  }
+
+  const state = states.get(hash) || {};
+  if (allowDuringInteraction && interactionActive() && state.ready === false && performance.now() < (state.nextCheck || 0)) {
+    pending(card);
     return;
   }
 
@@ -136,7 +145,7 @@ function paintCard(card) {
   image.hidden = true;
   image.decoding = 'async';
   image.loading = 'eager';
-  try { image.fetchPriority = nearby.has(card) ? 'high' : 'low'; } catch {}
+  try { image.fetchPriority = card.classList.contains('keyboard-cursor') ? 'high' : nearby.has(card) && !interactionActive() ? 'high' : 'low'; } catch {}
   image.dataset.thumbHash = hash;
   image.onload = () => {
     if (!image.isConnected || image.dataset.thumbHash !== hash) return;
@@ -145,24 +154,34 @@ function paintCard(card) {
   image.onerror = () => {
     if (!image.isConnected || image.dataset.thumbHash !== hash) return;
     image.remove();
-    const state = states.get(hash) || {};
-    state.ready = false;
-    state.missingSince ||= performance.now();
-    state.nextCheck = performance.now() + 250;
-    states.set(hash, state);
+    const failed = states.get(hash) || {};
+    failed.ready = false;
+    failed.missingSince ||= performance.now();
+    failed.nextCheck = performance.now() + (interactionActive() ? 1000 : 250);
+    states.set(hash, failed);
     pending(card);
     if (nearby.has(card) && !interactionActive()) scheduleCheck(80);
   };
 
   box.prepend(image);
-  startThumbnailImage(image, canonical, Boolean(states.get(hash)?.ready));
+  startThumbnailImage(image, canonical, allowDuringInteraction || Boolean(state.ready));
 }
 
-function loadHash(hash) {
+function loadHash(hash, allowDuringInteraction = false) {
   hash = String(hash || '');
   if (!hash) return;
-  for (const card of cardsFor(hash)) paintCard(card);
+  for (const card of cardsFor(hash)) paintCard(card, allowDuringInteraction);
 }
+
+window.mochimonoThumbnails = {
+  prioritize(cards) {
+    for (const card of Array.isArray(cards) ? cards : [cards]) {
+      if (!card?.isConnected || !kind(card)) continue;
+      indexCard(card);
+      paintCard(card, true);
+    }
+  }
+};
 
 async function requestCanonical(hashes) {
   if (CLIENT || !hashes.length || interactionActive()) return;
