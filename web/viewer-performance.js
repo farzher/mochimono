@@ -1,18 +1,11 @@
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
-const viewerClose = document.querySelector('#viewer-close');
 const viewerPrev = document.querySelector('#viewer-prev');
 const viewerNext = document.querySelector('#viewer-next');
 const viewerMedia = document.querySelector('#viewer-media');
-const files = document.querySelector('#files');
 
 const objectHash = value => String(value || '').match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
-let activeHash = objectHash(viewerOpen?.getAttribute('href'));
-const currentHash = () => {
-  const hash = objectHash(viewerOpen?.getAttribute('href'));
-  if (hash !== activeHash) activeHash = hash;
-  return activeHash;
-};
+const currentHash = () => objectHash(viewerOpen?.getAttribute('href'));
 
 const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
 const mediaDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
@@ -31,11 +24,6 @@ let rapidUntil = 0;
 let deferredCurrent = null;
 let deferredVideo = null;
 let deferredTimer = 0;
-let closing = false;
-
-if (viewerOpen) new MutationObserver(() => {
-  activeHash = objectHash(viewerOpen.getAttribute('href'));
-}).observe(viewerOpen, { attributes:true, attributeFilter:['href'] });
 
 function nativeSet(image, value) {
   descriptor?.set?.call(image, value);
@@ -313,99 +301,23 @@ function queueNavigation(direction) {
   navFrame = requestAnimationFrame(flushNavigation);
 }
 
-function stopNavigation() {
-  navPending = 0;
-  cancelAnimationFrame(navFrame);
-  navFrame = 0;
-}
-
-function cardFor(hash) {
-  return hash && files ? files.querySelector(`[data-hash="${CSS.escape(hash)}"]`) : null;
-}
-
-function waitForGridLayout() {
-  return new Promise(resolve => {
-    let firstFrame = 0;
-    let secondFrame = 0;
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      cancelAnimationFrame(firstFrame);
-      cancelAnimationFrame(secondFrame);
-      window.removeEventListener('mochimono:grid-laid-out', finish);
-      resolve();
-    };
-    window.addEventListener('mochimono:grid-laid-out', finish, { once:true });
-    firstFrame = requestAnimationFrame(() => { secondFrame = requestAnimationFrame(finish); });
-  });
-}
-
-async function prepareGridReturn(hash) {
-  if (!hash || !files) return;
-  const library = window.mochimonoLibrary;
-  if (!library || library.state?.().view === 'folders') return;
-
-  let card = cardFor(hash);
-  if (!card) {
-    const index = library.filteredHashes?.().indexOf(hash) ?? -1;
-    if (index < 0) return;
-    const changed = library.ensureIndex?.(index);
-    if (changed) await waitForGridLayout();
-    card = cardFor(hash);
-  }
-  card?.scrollIntoView({ behavior:'auto', block:'center', inline:'nearest' });
-}
-
-async function closeViewerFast() {
-  if (closing || !viewer || viewer.hidden) return;
-  closing = true;
-  stopNavigation();
-  clearDeferred();
-  clearStalePreloads();
-  abortImage(currentLoad);
-  viewerMedia?.querySelector('video')?.pause();
-  const hash = currentHash();
-  try {
-    await prepareGridReturn(hash);
-    if (viewer.hidden || currentHash() !== hash) return;
-    if (typeof viewerClose?.onclick === 'function') viewerClose.onclick.call(viewerClose);
-    else viewerClose?.click();
-  } finally {
-    closing = false;
-  }
-}
-
 document.addEventListener('keydown', event => {
-  if (!viewer || viewer.hidden) return;
-  if (event.key === 'Escape') {
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    closeViewerFast().catch(console.warn);
-    return;
-  }
-  if (!['ArrowLeft','ArrowRight','ArrowDown','ArrowUp'].includes(event.key)) return;
+  if (!viewer || viewer.hidden || !['ArrowLeft','ArrowRight','ArrowDown','ArrowUp'].includes(event.key)) return;
+  const direction = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
   event.preventDefault();
   event.stopImmediatePropagation();
-  if (closing) return;
-  const direction = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
   queueNavigation(direction);
 }, true);
 
 document.addEventListener('keyup', event => {
   if (!['ArrowLeft','ArrowRight','ArrowDown','ArrowUp'].includes(event.key)) return;
-  stopNavigation();
+  navPending = 0;
+  cancelAnimationFrame(navFrame);
+  navFrame = 0;
   if (deferredCurrent || deferredVideo) {
     rapidUntil = Math.min(rapidUntil, performance.now() + 24);
     scheduleDeferredFlush(28);
   }
-}, true);
-
-viewerClose?.addEventListener('click', event => {
-  if (closing || viewer.hidden) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  closeViewerFast().catch(console.warn);
 }, true);
 
 if (viewerMedia) new MutationObserver(handleRapidMedia).observe(viewerMedia, { childList:true });
@@ -413,7 +325,9 @@ if (viewerMedia) new MutationObserver(handleRapidMedia).observe(viewerMedia, { c
 if (viewer) {
   new MutationObserver(() => {
     if (!viewer.hidden) return;
-    stopNavigation();
+    navPending = 0;
+    cancelAnimationFrame(navFrame);
+    navFrame = 0;
     rapidUntil = 0;
     clearDeferred();
     clearStalePreloads();
