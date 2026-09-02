@@ -6,6 +6,7 @@ const backupSection = [...document.querySelectorAll('#storagePane .dashboard-sec
 let state = null;
 let dialog = null;
 let refreshing = false;
+let mainRenderKey = '';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({
   '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
@@ -22,17 +23,17 @@ function bytes(number) {
 function age(value) {
   const time = new Date(value || 0).getTime();
   if (!time) return '';
-  const seconds = Math.max(0, Math.round((Date.now() - time) / 1000));
-  if (seconds < 60) return 'just now';
-  const minutes = Math.round(seconds / 60);
+  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
+  const hours = Math.floor(minutes / 60);
   if (hours < 48) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
+  const days = Math.floor(hours / 24);
   if (days < 60) return `${days}d ago`;
-  const months = Math.round(days / 30.44);
-  if (months < 24) return `${months}mo ago`;
-  return `${Math.round(months / 12)}y ago`;
+  const months = Math.floor(days / 30.44);
+  if (months < 24) return `${Math.max(1, months)}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
 }
 
 async function request(base, path, options = {}) {
@@ -136,6 +137,7 @@ function renderMain() {
   const body = document.querySelector('#protectionBody');
   const summary = state?.summary;
   if (!summary) {
+    mainRenderKey = '';
     body.innerHTML = '<div class="error">Protection unavailable</div>';
     return;
   }
@@ -146,6 +148,14 @@ function renderMain() {
   const job = state.job?.status === 'running' && state.job.type === 'protection' ? state.job : null;
   const progress = job?.progress || {};
   const offline = trustedOfflineLocations();
+  const renderKey = JSON.stringify([
+    percent, needs, background,
+    job?.id || '', job?.status || '', progress.phase || '',
+    progress.copied ?? null, progress.copiedBytes ?? null, progress.checked ?? null,
+    offline.map(location => location.id).sort()
+  ]);
+  if (renderKey === mainRenderKey) return;
+  mainRenderKey = renderKey;
 
   const jobHtml = job ? `
     <div class="protection-job">
@@ -206,6 +216,7 @@ async function refresh(force = false) {
     const body = document.querySelector('#protectionBody');
     body.className = 'error';
     body.textContent = error.message;
+    mainRenderKey = '';
   } finally {
     refreshing = false;
   }
