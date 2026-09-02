@@ -1,10 +1,6 @@
 const viewer = document.querySelector('#viewer');
-const viewerOpen = document.querySelector('#viewer-open');
-const viewerClose = document.querySelector('#viewer-close');
 const viewerPrev = document.querySelector('#viewer-prev');
 const viewerNext = document.querySelector('#viewer-next');
-const viewerInfo = document.querySelector('#viewerInfo');
-const files = document.querySelector('#files');
 
 const arrows = new Set(['ArrowLeft','ArrowRight','ArrowDown','ArrowUp']);
 const RAPID_MS = 90;
@@ -15,7 +11,6 @@ let navFrame = 0;
 const settleCallbacks = new Set();
 
 const rapid = () => performance.now() < rapidUntil;
-const currentHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 
 function scheduleSettle() {
   if (settleTimer) return;
@@ -72,19 +67,8 @@ function queueNavigation(direction) {
   navFrame = requestAnimationFrame(flushNavigation);
 }
 
-function prepareGridReturn() {
-  if (!files || viewer?.hidden) return;
-  const hash = currentHash();
-  files.querySelector(`[data-hash="${CSS.escape(hash)}"]`)?.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' });
-}
-
 document.addEventListener('keydown', event => {
-  if (!viewer || viewer.hidden) return;
-  if (event.key === 'Escape') {
-    if (!document.querySelector('dialog[open]') && (!viewerInfo || viewerInfo.hidden)) prepareGridReturn();
-    return;
-  }
-  if (!arrows.has(event.key)) return;
+  if (!viewer || viewer.hidden || !arrows.has(event.key)) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   queueNavigation(event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1);
@@ -101,7 +85,6 @@ document.addEventListener('keyup', event => {
   scheduleSettle();
 }, true);
 
-viewerClose?.addEventListener('click', prepareGridReturn, true);
 if (viewer) new MutationObserver(() => {
   if (!viewer.hidden) return;
   queuedDirection = 0;
