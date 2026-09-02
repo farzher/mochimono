@@ -1,6 +1,7 @@
 const CLIENT = document.documentElement.classList.contains('client-library');
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
+const viewerMeta = document.querySelector('#viewer-meta');
 const actions = viewer?.querySelector('.viewer-actions');
 
 if (CLIENT && viewer && viewerOpen && actions) {
@@ -20,26 +21,23 @@ if (CLIENT && viewer && viewerOpen && actions) {
     .viewer-reveal-local svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.35;stroke-linecap:round;stroke-linejoin:round}
     .viewer-reveal-local[data-state="ok"]{color:#9bd7aa!important}
     .viewer-reveal-local[data-state="error"]{color:#ff9d96!important}
+    .viewer-title-sub>#viewer-meta{order:-1;color:#e2dcda;font-size:10px;font-weight:700}
   `;
   document.head.append(style);
 
   let generation = 0;
   let stateTimer = 0;
-  let localPath = '';
+  let hasLocalCopy = false;
   const hash = () => viewerOpen.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
+  const sizeLabel = value => /^\d+(?:\.\d+)?\s*(?:B|KB|MB|GB|TB|PB)$/i.test(String(value || '').trim());
 
-  function pathFromLocations(data) {
-    const locations = new Map((data.locations || []).map(location => [String(location.id), location]));
-    for (const entry of data.files || []) {
-      const [, locationId, relativePath] = entry || [];
-      const location = locations.get(String(locationId || ''));
-      const root = String(location?.rootPath || '').replace(/[\\/]+$/, '');
-      const relative = String(relativePath || '').replace(/^[\\/]+/, '');
-      if (!root || !relative) continue;
-      const separator = root.includes('\\') ? '\\' : '/';
-      return `${root}${separator}${relative.replace(/[\\/]+/g, separator)}`;
-    }
-    return '';
+  function emphasizeViewerSize() {
+    if (!viewerMeta) return;
+    const parts = viewerMeta.textContent.split('·').map(part => part.trim()).filter(Boolean);
+    const index = parts.findIndex(sizeLabel);
+    if (index <= 0) return;
+    const [size] = parts.splice(index, 1);
+    viewerMeta.textContent = [size, ...parts].join(' · ');
   }
 
   function resetState() {
@@ -61,7 +59,8 @@ if (CLIENT && viewer && viewerOpen && actions) {
     const current = hash();
     const mine = ++generation;
     resetState();
-    localPath = '';
+    emphasizeViewerSize();
+    hasLocalCopy = false;
     button.hidden = true;
     if (!current || viewer.hidden) return;
 
@@ -70,8 +69,8 @@ if (CLIENT && viewer && viewerOpen && actions) {
       if (!response.ok) return;
       const data = await response.json();
       if (mine !== generation || current !== hash()) return;
-      localPath = pathFromLocations(data);
-      button.hidden = !localPath;
+      hasLocalCopy = Array.isArray(data.files) && data.files.length > 0;
+      button.hidden = !hasLocalCopy;
     } catch {}
   }
 
@@ -95,14 +94,17 @@ if (CLIENT && viewer && viewerOpen && actions) {
   button.addEventListener('click', async event => {
     event.preventDefault();
     event.stopPropagation();
-    if (!localPath || button.disabled) return;
+    const current = hash();
+    if (!current || !hasLocalCopy || button.disabled) return;
     button.disabled = true;
     resetState();
     try {
-      const response = await fetch('/api/open-folder', {
+      // Resolve the exact current local candidate by content hash on the Agent.
+      // Do not rebuild a filesystem path in the browser from provenance metadata.
+      const response = await fetch('/api/reveal-file', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: localPath, select: true })
+        body: JSON.stringify({ hash: current })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || `Could not open Explorer (${response.status})`);
@@ -116,6 +118,7 @@ if (CLIENT && viewer && viewerOpen && actions) {
 
   new MutationObserver(sync).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
   new MutationObserver(sync).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
+  if (viewerMeta) new MutationObserver(emphasizeViewerSize).observe(viewerMeta, { childList:true, characterData:true, subtree:true });
   window.addEventListener('mochimono:locations-updated', sync);
   addEventListener('beforeunload', () => clearTimeout(stateTimer), { once: true });
   sync();
