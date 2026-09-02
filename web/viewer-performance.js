@@ -142,6 +142,15 @@ function deferRapidVideo() {
   scheduleDeferredFlush();
 }
 
+function handleRapidMedia() {
+  if (!rapidNavigation() || viewer?.hidden) return;
+  // A video/document does not need the full image decode started for the image
+  // we just left. New images abort the previous load in trackObjectImage().
+  if (!viewerMedia?.querySelector('img[data-full-src]') && currentLoad) abortImage(currentLoad);
+  clearStalePreloads();
+  deferRapidVideo();
+}
+
 // Returns true when the caller should suppress the immediate native src set.
 function trackObjectImage(image, value) {
   const hash = objectHash(value);
@@ -216,7 +225,7 @@ function navigateOne(direction) {
   const button = direction < 0 ? viewerPrev : viewerNext;
   if (!button || button.disabled || viewer.hidden) return false;
   button.click();
-  deferRapidVideo();
+  handleRapidMedia();
   lastNavAt = performance.now();
   return true;
 }
@@ -280,7 +289,7 @@ if (files) {
   files.addEventListener('focusin', event => warmGridCard(event.target.closest?.('.file-card.media-card[data-hash]')));
 }
 
-if (viewerMedia) new MutationObserver(deferRapidVideo).observe(viewerMedia, { childList:true });
+if (viewerMedia) new MutationObserver(handleRapidMedia).observe(viewerMedia, { childList:true });
 
 if (viewer) {
   new MutationObserver(() => {
