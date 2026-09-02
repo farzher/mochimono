@@ -108,7 +108,7 @@ function renderFolderPreview(row) {
     const media = mime.startsWith('image/') || mime.startsWith('video/');
     const ready = media && readyPreviews.has(hash);
     if (ready) {
-      cells.push(`<span class="storage-folder-sample ${mime.startsWith('video/') ? 'video' : ''}" title="${String(file.filename || '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))}"><img src="/api/thumbs/${hash}" alt="" loading="lazy" decoding="async"></span>`);
+      cells.push(`<span class="storage-folder-sample ${mime.startsWith('video/') ? 'video' : ''}" title="${String(file.filename || '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[char]))}"><img src="/api/thumbs/${hash}" alt="" loading="lazy" decoding="async"></span>`);
     } else {
       const filename = String(file.filename || '');
       const safe = filename.replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -210,7 +210,10 @@ function decorateRow(row, folder) {
     title?.after(badge);
   }
   badge.className = `storage-mode ${protectedFolder ? 'protected' : 'local'}`;
-  setText(badge, protectedFolder ? 'Protected' : 'Browse only');
+  setText(badge, protectedFolder ? 'This PC + Mochimono' : 'This PC only');
+  badge.title = protectedFolder
+    ? 'Originals stay on this PC and Mochimono keeps another copy. Individual files may also have backup copies elsewhere.'
+    : 'Indexed from this PC only. Mochimono does not keep another copy.';
 
   const actions = row.querySelector('.item-actions');
   let open = actions?.querySelector('[data-open-native-folder]');
@@ -236,7 +239,7 @@ function decorateRow(row, folder) {
 
   const remove = row.querySelector('[data-remove-folder]');
   if (remove) {
-    const label = protectedFolder ? 'Stop protecting' : 'Stop browsing';
+    const label = protectedFolder ? 'Stop keeping Mochimono copy' : 'Stop browsing';
     remove.title = label;
     remove.setAttribute('aria-label', label);
   }
@@ -246,7 +249,7 @@ function decorateRow(row, folder) {
     const button = document.createElement('button');
     button.className = 'action-link primary-action';
     button.dataset.protectFolder = folder.path;
-    button.textContent = 'Protect';
+    button.textContent = 'Add Mochimono copy';
     actions.prepend(button);
   } else if (protectedFolder) existingProtect?.remove();
 }
