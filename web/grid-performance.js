@@ -80,6 +80,7 @@ if (files) {
       animation:mochimono-thumb-pending 1.7s ease-in-out infinite alternate!important
     }
     .video-thumb-pending::after{display:none!important}
+    .thumb-failed .video-thumb-pending{animation:none!important;background:repeating-linear-gradient(135deg,#0d0c0e 0,#0d0c0e 8px,#131115 8px,#131115 16px)!important}
     @keyframes mochimono-thumb-pending{
       from{background-position:100% 0}
       to{background-position:-100% 0}
