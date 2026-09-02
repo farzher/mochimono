@@ -11,13 +11,13 @@ style.textContent = `
   #files.grid .file-card.media-card.keyboard-cursor::after{
     content:""!important;z-index:20!important;inset:0!important;left:0!important;top:0!important;right:0!important;bottom:0!important;
     width:auto!important;height:auto!important;padding:0!important;border-radius:3px!important;opacity:1!important;transform:none!important;
-    background:none!important;box-shadow:inset 0 0 0 4px #efa09a,inset 0 0 0 5px rgba(0,0,0,.82)!important;transition:none!important;pointer-events:none
+    background:none!important;box-shadow:inset 0 0 0 2px rgba(239,160,154,.82),inset 0 0 0 3px rgba(0,0,0,.34)!important;transition:none!important;pointer-events:none
   }
-  #files.grid .file-card:not(.media-card).keyboard-cursor{box-shadow:inset 0 0 0 4px #efa09a,inset 0 0 0 5px rgba(0,0,0,.82)!important}
-  #files.grid .file-card.keyboard-cursor .file-context-badge{opacity:1!important;transform:none!important;transition:none!important}
+  #files.grid .file-card:not(.media-card).keyboard-cursor{box-shadow:inset 0 0 0 2px rgba(239,160,154,.82),inset 0 0 0 3px rgba(0,0,0,.34)!important}
+  #files.grid .file-card.keyboard-cursor .file-context-badge{opacity:.86!important;transform:none!important;transition:none!important}
   html.keyboard-navigation-active #files.list .file-row.context-keyboard-focus,
   html.keyboard-navigation-active #files.folders .folder-row.context-keyboard-focus{
-    outline:3px solid #efa09a!important;outline-offset:-3px!important;box-shadow:none!important;border-radius:4px
+    outline:2px solid rgba(239,160,154,.78)!important;outline-offset:-2px!important;box-shadow:none!important;border-radius:4px
   }
 `;
 document.head.append(style);
