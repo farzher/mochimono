@@ -3,13 +3,15 @@ const rail = document.querySelector('#dateRail');
 const viewer = document.querySelector('#viewer');
 
 // The library renders in 240-file pages and its jump window is 720 files.
-// Keep normal browsing bounded to that same window instead of letting every
-// infinite-scroll extension remain mounted for the rest of the session.
+// Keep browsing near that size instead of letting infinite scroll accumulate
+// every card seen during the session.
 const TARGET_WINDOW = 720;
 
 let trimming = false;
 let pendingTrim = null;
 let installed = false;
+let prefetchFrame = 0;
+let sentinelObserver = null;
 
 // Normal scrolling used to make library-app scan every mounted card on every
 // animation frame just to move the date-rail thumb. Keep the already-rendered
@@ -54,8 +56,8 @@ function freezeRailDuringScroll() {
   railTimer = setTimeout(thawRail, 72);
 }
 
-// This module is loaded before library-app.js, so this scroll listener runs
-// before library-app's expensive rail scan for real user scroll events.
+// Loaded before library-app.js, so this runs before library-app's rail scroll
+// handler for real user scroll events.
 window.addEventListener('scroll', freezeRailDuringScroll, { passive: true });
 
 function hashSelector(hash) {
@@ -91,11 +93,11 @@ function restoreAfterRecenter(anchorHash, anchorTop, focusHash) {
       focused.focus({ preventScroll: true });
     }
     trimming = false;
+    schedulePrefetch();
   };
 
   window.addEventListener('mochimono:grid-laid-out', restore, { once: true });
-  // List view has no gallery-layout event; this is also a safety fallback if a
-  // grid layout was already complete synchronously.
+  // List view has no gallery-layout event; this is also a safety fallback.
   requestAnimationFrame(() => requestAnimationFrame(restore));
 }
 
@@ -144,7 +146,7 @@ function prepareTrim(direction, before, after) {
     const probeIndex = after.offset + after.loaded;
     // ensureIndex only recenters when given an index outside the current window.
     // At the absolute end of a small library there is no outside index; keeping
-    // that final partial page mounted is harmless and still bounded closely.
+    // that final partial page mounted is harmless.
     if (!hashes[thresholdIndex] || probeIndex >= hashes.length) return;
     pendingTrim = {
       direction: 1,
@@ -162,6 +164,57 @@ function prepareTrim(direction, before, after) {
     };
   }
   scheduleTrimCheck();
+}
+
+function keepLegacySentinelsInert() {
+  const sentinels = [
+    document.querySelector('#top-scroll-sentinel'),
+    document.querySelector('#scroll-sentinel')
+  ].filter(Boolean);
+  if (!sentinels.length) return;
+
+  const hide = () => {
+    for (const sentinel of sentinels) if (!sentinel.hidden) sentinel.hidden = true;
+  };
+  hide();
+  sentinelObserver?.disconnect();
+  sentinelObserver = new MutationObserver(hide);
+  for (const sentinel of sentinels) sentinelObserver.observe(sentinel, {
+    attributes: true,
+    attributeFilter: ['hidden']
+  });
+}
+
+function prefetch() {
+  prefetchFrame = 0;
+  const library = window.mochimonoLibrary;
+  const state = library?.state?.();
+  if (!library || !state || state.view === 'folders' || !viewer?.hidden || trimming) return;
+  if (pendingTrim) {
+    checkTrim();
+    return;
+  }
+
+  const hashes = library.filteredHashes?.() || [];
+  if (!hashes.length || !state.loaded) return;
+  const bottomHeadroom = Math.max(1800, innerHeight * 2.5);
+  const topHeadroom = Math.max(1400, innerHeight * 2);
+
+  if (state.hasMore) {
+    const last = cardFor(hashes[state.offset + state.loaded - 1]);
+    if (last && last.getBoundingClientRect().bottom - innerHeight < bottomHeadroom) {
+      library.extend(1);
+      return;
+    }
+  }
+  if (state.hasPrevious) {
+    const first = cardFor(hashes[state.offset]);
+    if (first && first.getBoundingClientRect().top > -topHeadroom) library.extend(-1);
+  }
+}
+
+function schedulePrefetch() {
+  if (!prefetchFrame) prefetchFrame = requestAnimationFrame(prefetch);
 }
 
 function installBoundedWindow() {
@@ -186,8 +239,8 @@ function installBoundedWindow() {
   library.extend = direction => {
     direction = Number(direction) < 0 ? -1 : 1;
 
-    // Once one extra page is mounted, do not let the two independent prefetch
-    // mechanisms keep appending more pages before the user reaches it.
+    // Once one extra page is mounted, do not let another prefetch append more
+    // before the user reaches that page and the window slides forward/backward.
     if (pendingTrim && pendingTrim.direction === direction) {
       scheduleTrimCheck();
       return false;
@@ -199,13 +252,27 @@ function installBoundedWindow() {
     if (!changed) return false;
     const after = library.state();
     prepareTrim(direction, before, after);
+    schedulePrefetch();
     return true;
   };
+
+  keepLegacySentinelsInert();
+  schedulePrefetch();
 }
 
-window.addEventListener('scroll', scheduleTrimCheck, { passive: true });
+window.addEventListener('scroll', () => {
+  scheduleTrimCheck();
+  schedulePrefetch();
+}, { passive: true });
+window.addEventListener('resize', schedulePrefetch, { passive: true });
 files?.addEventListener('focusin', scheduleTrimCheck, true);
-window.addEventListener('mochimono:grid-laid-out', scheduleTrimCheck);
+window.addEventListener('mochimono:grid-laid-out', () => {
+  scheduleTrimCheck();
+  schedulePrefetch();
+});
+window.addEventListener('mochimono:catalog-cache-restored', schedulePrefetch);
+window.addEventListener('mochimono:catalog-updated', schedulePrefetch);
+window.addEventListener('mochimono-viewer-return', schedulePrefetch);
 window.addEventListener('blur', thawRail);
 
 installBoundedWindow();
