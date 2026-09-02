@@ -1,5 +1,7 @@
 const files = document.querySelector('#files');
 let damaged = new Set();
+const pending = new Set();
+let decorateFrame = 0;
 
 const style = document.createElement('style');
 style.textContent = `
@@ -32,12 +34,36 @@ function decorate() {
   files?.querySelectorAll('[data-hash]').forEach(decorateItem);
 }
 
+function collect(node) {
+  if (!(node instanceof Element)) return;
+  if (node.matches('[data-hash]')) pending.add(node);
+  node.querySelectorAll?.('[data-hash]').forEach(item => pending.add(item));
+}
+
+function flushPending() {
+  decorateFrame = 0;
+  if (window.mochimonoGridInteraction?.active?.()) return;
+  for (const item of pending) if (item.isConnected) decorateItem(item);
+  pending.clear();
+}
+
+function schedulePending() {
+  if (!pending.size || decorateFrame || window.mochimonoGridInteraction?.active?.()) return;
+  decorateFrame = requestAnimationFrame(flushPending);
+}
+
 window.addEventListener('mochimono:locations-updated', event => {
   damaged = event.detail?.damagedServer instanceof Set ? event.detail.damagedServer : new Set(event.detail?.damagedServer || []);
+  pending.clear();
   decorate();
 });
 
 new MutationObserver(mutations => {
-  if (!mutations.some(mutation => [...mutation.addedNodes].some(node => node instanceof Element && (node.matches?.('[data-hash]') || node.querySelector?.('[data-hash]'))))) return;
-  requestAnimationFrame(decorate);
+  if (!damaged.size) return;
+  for (const mutation of mutations) for (const node of mutation.addedNodes) collect(node);
+  schedulePending();
 }).observe(files, { childList: true, subtree: true });
+
+window.addEventListener('mochimono:grid-interaction-end', () => {
+  if (pending.size) schedulePending();
+});
