@@ -59,12 +59,44 @@ function ageLabel(value) {
   if (!value) return '';
   const time = new Date(value).getTime();
   if (!Number.isFinite(time)) return '';
-  const days = Math.max(0, Math.floor((Date.now() - time) / 86400000));
-  if (days < 1) return 'today';
-  if (days < 30) return `${days}d ago`;
-  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
-  const years = days / 365;
-  return `${years < 2 ? years.toFixed(1) : Math.floor(years)}y ago`;
+  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 60) return `${days}d ago`;
+  const months = Math.floor(days / 30.44);
+  if (months < 24) return `${Math.max(1, months)}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
+
+function setRelativeTime(node, value, fallback = '') {
+  if (!node) return;
+  if (!value || !ageLabel(value)) {
+    delete node.dataset.relativeTime;
+    delete node.dataset.relativePrefix;
+    delete node.dataset.relativeSuffix;
+    node.removeAttribute('datetime');
+    node.removeAttribute('title');
+    if (node.textContent !== fallback) node.textContent = fallback;
+    return;
+  }
+  node.dataset.relativeTime = String(value);
+  node.dateTime = String(value);
+  node.title = exactDate(value);
+  const text = ageLabel(value);
+  if (node.textContent !== text) node.textContent = text;
+}
+
+function refreshRelativeTimes() {
+  for (const node of document.querySelectorAll('[data-relative-time]')) {
+    const text = ageLabel(node.dataset.relativeTime);
+    if (!text) continue;
+    const next = `${node.dataset.relativePrefix || ''}${text}${node.dataset.relativeSuffix || ''}`;
+    if (node.textContent !== next) node.textContent = next;
+  }
 }
 
 function pathName(path) {
@@ -168,7 +200,7 @@ function backupJob(location, job) {
 }
 
 function renderFolders(folders, job) {
-  const key = JSON.stringify(folders.map(folder => [folder.path, folder.importId, folder.lastSynced]));
+  const key = JSON.stringify(folders.map(folder => [folder.path, folder.importId, folder.protected !== false]));
   if (key !== foldersRenderKey) {
     foldersRenderKey = key;
     $('#folders').innerHTML = folders.length ? folders.map(folderRow).join('') : '<div class="empty-state">No protected folders</div>';
@@ -176,7 +208,7 @@ function renderFolders(folders, job) {
   for (const row of $('#folders').querySelectorAll('[data-folder-path]')) {
     const folder = folders.find(item => samePath(item.path, row.dataset.folderPath));
     if (!folder) continue;
-    row.querySelector('[data-folder-status]').textContent = exactDate(folder.lastSynced) || 'Not synced yet';
+    setRelativeTime(row.querySelector('[data-folder-status]'), folder.lastSynced, 'Not synced yet');
     renderItemProgress(row, folderJob(folder, job));
   }
 }
@@ -284,8 +316,9 @@ function backupVerification(location) {
     catalogBad ? 'catalog damaged' : ''
   ].filter(Boolean);
   if (!value) return { label: `Never fully verified${extras.length ? ` · ${extras.join(' · ')}` : ''}`, stale: true, bad, repaired, primaryRepaired, catalogBad, catalogRepaired, value: null };
-  const base = stale ? `Verify recommended · last checked ${ageLabel(value)}` : `Verified ${ageLabel(value)}`;
-  return { label: `${base}${extras.length ? ` · ${extras.join(' · ')}` : ''}`, stale, bad, repaired, primaryRepaired, catalogBad, catalogRepaired, value };
+  const prefix = stale ? 'Verify recommended · last checked ' : 'Verified ';
+  const suffix = extras.length ? ` · ${extras.join(' · ')}` : '';
+  return { label: `${prefix}${ageLabel(value)}${suffix}`, stale, bad, repaired, primaryRepaired, catalogBad, catalogRepaired, value, prefix, suffix };
 }
 
 function backupState(location) {
@@ -299,7 +332,8 @@ function backupState(location) {
   if (!remote) return { label: count ? 'Stored locally' : 'Server unavailable', className: count ? 'good' : '' };
   const missing = Math.max(0, Number(remote.desiredBytes) - Number(remote.protectedBytes));
   if (missing) return { label: `${bytes(missing)} left`, className: 'warning' };
-  return { label: exactDate(location.meta?.lastBackupAt || location.local?.oldestVerification) || (count ? 'Stored' : 'Empty'), className: count ? 'good' : '' };
+  const value = location.meta?.lastBackupAt || location.local?.oldestVerification || null;
+  return { label: value ? ageLabel(value) : (count ? 'Stored' : 'Empty'), className: count ? 'good' : '', value };
 }
 
 function backupCard(location, index) {
@@ -319,12 +353,16 @@ function backupCard(location, index) {
   const verificationTitle = verification.catalogBad && location.meta?.lastVerifyCatalogError
     ? `Backup catalog problem: ${location.meta.lastVerifyCatalogError}`
     : verification.value ? `Last full SHA-256 verification: ${exactDate(verification.value)}` : 'This backup has not had a complete SHA-256 verification yet';
+  const stateTime = state.value ? ` data-relative-time="${esc(state.value)}" title="${esc(exactDate(state.value))}"` : '';
+  const verificationTime = verification.value
+    ? ` data-relative-time="${esc(verification.value)}" data-relative-prefix="${esc(verification.prefix || '')}" data-relative-suffix="${esc(verification.suffix || '')}"`
+    : '';
 
   return `<article class="storage-item backup-item" data-backup-index="${index}">
     <div class="storage-copy">
-      <div class="storage-title"><strong>${esc(location.meta?.name || pathName(location.path))}</strong><time class="item-state ${state.className}">${esc(state.label)}</time></div>
+      <div class="storage-title"><strong>${esc(location.meta?.name || pathName(location.path))}</strong><time class="item-state ${state.className}"${stateTime}>${esc(state.label)}</time></div>
       <div class="storage-path" title="${esc(location.path)}">${esc(location.path)}</div>
-      <div class="storage-meta"><span>${esc(backupScope(location))}</span><span>·</span><span>${localCount.toLocaleString()} files</span><span>·</span><span>${bytes(localBytes)}</span><span>·</span><span>${bytes(location.freeBytes)} free</span><span>·</span><span title="${esc(verificationTitle)}">${esc(verification.label)}</span></div>
+      <div class="storage-meta"><span>${esc(backupScope(location))}</span><span>·</span><span>${localCount.toLocaleString()} files</span><span>·</span><span>${bytes(localBytes)}</span><span>·</span><span>${bytes(location.freeBytes)} free</span><span>·</span><span title="${esc(verificationTitle)}"${verificationTime}>${esc(verification.label)}</span></div>
       <div class="storage-meter backup-meter" title="${esc(meterTitle)}"><i style="width:${meterWidth}"></i></div>
       <div class="item-progress" data-item-progress hidden></div>
     </div>
@@ -373,6 +411,7 @@ async function backups(force = false) {
       wireBackupActions();
     }
     renderBackupProgress(currentJob);
+    refreshRelativeTimes();
   } catch (error) { $('#backups').innerHTML = `<div class="error">${esc(error.message)}</div>`; }
   finally { backupLoading = false; }
 }
@@ -529,5 +568,7 @@ $('#startRestore').onclick = async () => {
 state();
 refreshFolderStats();
 backups(true);
+refreshRelativeTimes();
 setInterval(state, 2000);
 setInterval(refreshFolderStats, 5000);
+setInterval(refreshRelativeTimes, 1000);
