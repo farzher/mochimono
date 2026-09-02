@@ -16,6 +16,21 @@ const manageButton = tabs.find(button => button.dataset.clientTab === 'storage')
 const clientMenu = document.querySelector('.client-menu');
 let libraryScrollY = 0;
 
+const fileHash = value => /^[a-f0-9]{64}$/.test(String(value || '')) ? String(value) : '';
+function shellFileHash() {
+  return fileHash(new URL(location.href).searchParams.get('file'));
+}
+function syncShellFileUrl(hash = '') {
+  const url = new URL(location.href);
+  const next = fileHash(hash);
+  if (next) url.searchParams.set('file', next);
+  else url.searchParams.delete('file');
+  if (url.href !== location.href) history.replaceState(history.state, '', url);
+}
+
+const initialFileHash = shellFileHash();
+if (initialFileHash && frame) frame.src = `/files/?file=${encodeURIComponent(initialFileHash)}`;
+
 if (brand && manageButton) {
   manageButton.textContent = 'Storage';
   manageButton.title = 'Storage and protection';
@@ -153,6 +168,7 @@ connectButton.addEventListener('click', async event => {
     $('#serverToken').value = '';
     connection.close();
     libraryScrollY = 0;
+    syncShellFileUrl('');
     frame.src = `/files/?connected=${Date.now()}`;
     showTab('files');
     await refreshShellState();
@@ -173,6 +189,7 @@ logoutButton.addEventListener('click', async () => {
   logoutButton.hidden = true;
   connectMenuButton.hidden = false;
   logoutButton.disabled = false;
+  syncShellFileUrl('');
   frame.src = `/files/?offline=${Date.now()}`;
   openConnection();
   notify('Logged out');
@@ -183,11 +200,20 @@ function refreshLibraryFrame() {
   frame.contentWindow?.mochimonoLocations?.refresh?.().catch?.(() => {});
 }
 
-async function chooseLocalFolder(mode) {
+function droppedFolderName(value) {
+  return String(value || '').trim().split(/[\\/]/).filter(Boolean).at(-1) || '';
+}
+
+async function chooseLocalFolder(mode, hint = '') {
   const normalized = mode === 'browse' ? 'browse' : 'protect';
-  notify(normalized === 'browse' ? 'Confirm the folder you dropped' : 'Confirm the folder you want to protect');
+  const name = droppedFolderName(hint);
+  const action = normalized === 'browse' ? 'browse locally' : 'protect';
+  notify(name ? `Select “${name}” once to ${action}` : `Select the folder to ${action}`);
   try {
-    const picked = await json('/api/pick-folder');
+    const title = name
+      ? `Select “${name}” to ${normalized === 'browse' ? 'browse in Mochimono' : 'protect with Mochimono'}`
+      : normalized === 'browse' ? 'Select the folder to browse in Mochimono' : 'Select the folder to protect with Mochimono';
+    const picked = await json(`/api/pick-folder?title=${encodeURIComponent(title)}`);
     const path = String(picked.path || '').trim();
     if (!path) return;
 
@@ -214,11 +240,12 @@ window.addEventListener('message', event => {
     return;
   }
   if (event.data?.type === 'mochimono-folder-intent') {
-    chooseLocalFolder(event.data.mode);
+    chooseLocalFolder(event.data.mode, event.data.hint);
     return;
   }
   if (event.data?.type === 'mochimono-viewer-state') {
     document.body.classList.toggle('library-viewer-open', Boolean(event.data.open));
+    if (!event.data.pending) syncShellFileUrl(event.data.open ? event.data.hash : '');
     return;
   }
   if (event.data?.type === 'mochimono-library-scroll') {
