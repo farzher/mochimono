@@ -3,6 +3,7 @@ const sizeInput = document.querySelector('#mediaSize');
 const sizeButtons = [...document.querySelectorAll('[data-media-size]')];
 const sizes = sizeButtons.map(button => Number(button.dataset.mediaSize));
 const pendingGrids = new Set();
+const deferredGeometryGrids = new Set();
 let frame = 0;
 let fullLayout = false;
 let lastFilesWidth = 0;
@@ -224,6 +225,17 @@ function scheduleAll() {
   if (!frame) frame = requestAnimationFrame(layout);
 }
 
+function scheduleGeometry(grid) {
+  if (!grid?.isConnected) return;
+  if (window.mochimonoGridInteraction?.active?.()) deferredGeometryGrids.add(grid);
+  else schedule(grid);
+}
+
+function flushDeferredGeometry() {
+  for (const grid of deferredGeometryGrids) if (grid.isConnected) schedule(grid);
+  deferredGeometryGrids.clear();
+}
+
 function changedGrids(records) {
   const result = new Set();
   for (const record of records) {
@@ -255,8 +267,9 @@ window.addEventListener('mochimono:media-size', scheduleAll);
 window.addEventListener('mochimono:geometry', event => {
   const hash = event.detail?.hash;
   if (!hash) return;
-  for (const card of files.querySelectorAll(`.media-card[data-hash="${CSS.escape(hash)}"]`)) schedule(card.closest('.date-grid'));
+  for (const card of files.querySelectorAll(`.media-card[data-hash="${CSS.escape(hash)}"]`)) scheduleGeometry(card.closest('.date-grid'));
 });
+window.addEventListener('mochimono:grid-interaction-end', flushDeferredGeometry);
 
 new MutationObserver(records => {
   const grids = changedGrids(records);

@@ -3,21 +3,15 @@ const viewerOpen = document.querySelector('#viewer-open');
 const viewerPrev = document.querySelector('#viewer-prev');
 const viewerNext = document.querySelector('#viewer-next');
 const viewerMedia = document.querySelector('#viewer-media');
-const files = document.querySelector('#files');
 
 const objectHash = value => String(value || '').match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 const currentHash = () => objectHash(viewerOpen?.getAttribute('href'));
-const hasLocalCopy = hash => Boolean(hash && (
-  window.mochimonoFastLocalHashes?.has?.(hash) ||
-  window.mochimonoLocations?.forHash?.(hash)?.length
-));
 
 const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
 const mediaDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
 const nativeFetch = window.fetch.bind(window);
 const decoded = new Map();
 const preloads = new Map();
-const hoverWarm = new Map();
 const MAX_DECODED = 4;
 const MAX_DECODED_PIXELS = 50_000_000;
 const MAX_PRELOADS = 2;
@@ -25,7 +19,6 @@ const RAPID_SETTLE_MS = 90;
 const NAV_INTERVAL_MS = 16;
 let decodedPixels = 0;
 let currentLoad = null;
-let hoverTimer = 0;
 let navPending = 0;
 let navTimer = 0;
 let lastNavAt = 0;
@@ -94,7 +87,6 @@ function rapidNavigation() {
   return performance.now() < rapidUntil;
 }
 
-// Keep rapid-navigation policy centralized for Viewer features.
 window.mochimonoViewerPerformance = { rapid: rapidNavigation };
 
 function viewerSecondaryHash(input, init) {
@@ -134,12 +126,6 @@ function waitForRapidSettle() {
   });
 }
 
-// Viewer chrome has several independent features that react to viewerOpen.href
-// (paths/provenance, local-copy reveal, collections, protection). During a held
-// arrow those requests are for files that may exist for only one frame. Hold
-// them until navigation settles and only let the final current hash reach the
-// Agent/server. Stale consumers already guard by generation/hash; a tiny empty
-// JSON response lets them finish quietly without console/network churn.
 window.fetch = function(input, init) {
   const hash = viewerSecondaryHash(input, init);
   if (!hash || viewer?.hidden || !rapidNavigation()) return nativeFetch(input, init);
@@ -201,14 +187,11 @@ function deferRapidVideo() {
 
 function handleRapidMedia() {
   if (!rapidNavigation() || viewer?.hidden) return;
-  // A video/document does not need the full image decode started for the image
-  // we just left. New images abort the previous load in trackObjectImage().
   if (!viewerMedia?.querySelector('img[data-full-src]') && currentLoad) abortImage(currentLoad);
   clearStalePreloads();
   deferRapidVideo();
 }
 
-// Returns true when the caller should suppress the immediate native src set.
 function trackObjectImage(image, value) {
   const hash = objectHash(value);
   if (!hash || !viewer || viewer.hidden || image.isConnected) return false;
@@ -222,9 +205,6 @@ function trackObjectImage(image, value) {
     try { image.fetchPriority = 'high'; } catch {}
     retainAfterLoad(hash, image);
 
-    // While flipping quickly, the visible viewer already has the cached
-    // thumbnail. Do not start/decode a full original that will be abandoned on
-    // the next key repeat. Load only the final image after navigation settles.
     if (rapidNavigation()) {
       deferCurrentLoad(image, value, hash);
       return true;
@@ -232,8 +212,6 @@ function trackObjectImage(image, value) {
     return false;
   }
 
-  // Adjacent full-resolution preloads are useful while resting on an image but
-  // are pure churn during rapid navigation. Skip them until the user settles.
   if (rapidNavigation()) return true;
 
   retainAfterLoad(hash, image);
@@ -261,36 +239,10 @@ if (mediaDescriptor?.get && mediaDescriptor?.set) {
     enumerable:mediaDescriptor.enumerable,
     get:mediaDescriptor.get,
     set(value) {
-      // library-app's adjacent video preloads are detached elements. They add
-      // disk/network work on every rapid key step but cannot improve what is
-      // currently visible, so simply do not start them while scrubbing.
       if (this instanceof HTMLVideoElement && !this.isConnected && objectHash(value) && rapidNavigation()) return;
       mediaDescriptor.set.call(this, value);
     }
   });
-}
-
-function warmGridCard(card) {
-  if (!card?.matches?.('.file-card.media-card[data-hash]') || card.classList.contains('video-card')) return;
-  const hash = String(card.dataset.hash || '');
-  if (!hash || !hasLocalCopy(hash) || decoded.has(hash) || hoverWarm.has(hash)) return;
-
-  const image = new Image();
-  image.decoding = 'async';
-  try { image.fetchPriority = 'low'; } catch {}
-  hoverWarm.set(hash, image);
-  while (hoverWarm.size > 2) {
-    const [oldHash, oldImage] = hoverWarm.entries().next().value;
-    hoverWarm.delete(oldHash);
-    abortImage(oldImage);
-  }
-  image.onload = async () => {
-    try { await image.decode(); } catch {}
-    hoverWarm.delete(hash);
-    retain(hash, image);
-  };
-  image.onerror = () => hoverWarm.delete(hash);
-  nativeSet(image, `/api/objects/${hash}`);
 }
 
 function navigateOne(direction) {
@@ -345,21 +297,6 @@ document.addEventListener('keyup', event => {
     scheduleDeferredFlush(28);
   }
 }, true);
-
-if (files) {
-  files.addEventListener('pointerover', event => {
-    const card = event.target.closest?.('.file-card.media-card[data-hash]');
-    if (!card) return;
-    clearTimeout(hoverTimer);
-    hoverTimer = setTimeout(() => warmGridCard(card), 90);
-  }, { passive:true });
-  files.addEventListener('pointerout', () => clearTimeout(hoverTimer), { passive:true });
-  files.addEventListener('pointerdown', event => {
-    clearTimeout(hoverTimer);
-    warmGridCard(event.target.closest?.('.file-card.media-card[data-hash]'));
-  }, { passive:true });
-  files.addEventListener('focusin', event => warmGridCard(event.target.closest?.('.file-card.media-card[data-hash]')));
-}
 
 if (viewerMedia) new MutationObserver(handleRapidMedia).observe(viewerMedia, { childList:true });
 

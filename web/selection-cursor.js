@@ -4,6 +4,7 @@ import './context-ui.js';
 
 const files = document.querySelector('#files');
 let keyboardMode = false;
+let syncFrame = 0;
 
 const style = document.createElement('style');
 style.textContent = `
@@ -12,7 +13,7 @@ style.textContent = `
     box-shadow:none!important
   }
   html.keyboard-navigation-active #files [data-hash].context-keyboard-focus{
-    position:relative;transform:translateZ(0);
+    position:relative;
     outline:2px solid rgba(255,255,255,.98)!important;outline-offset:-4px!important;
     box-shadow:inset 0 0 0 2px rgba(0,0,0,.82)!important
   }
@@ -63,8 +64,13 @@ function establishKeyboardFocus(event) {
 }
 
 function syncFromFocus() {
+  syncFrame = 0;
   if (!keyboardMode) return;
   if (!focusedItem()) setKeyboardMode(false);
+}
+
+function scheduleFocusSync() {
+  if (!syncFrame) syncFrame = requestAnimationFrame(syncFromFocus);
 }
 
 window.addEventListener('keydown', establishKeyboardFocus, true);
@@ -73,15 +79,13 @@ document.addEventListener('keydown', event => {
   if (!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)) return;
   if (event.target?.closest?.('input,select,textarea,[contenteditable="true"]')) return;
   setKeyboardMode(true);
-  requestAnimationFrame(syncFromFocus);
+  scheduleFocusSync();
 }, true);
 
 files?.addEventListener('focusin', () => {
-  if (keyboardMode) requestAnimationFrame(syncFromFocus);
+  if (keyboardMode) scheduleFocusSync();
 });
 
 files?.addEventListener('pointerdown', () => setKeyboardMode(false), true);
 
-files?.addEventListener('focusout', () => requestAnimationFrame(() => {
-  if (!files.contains(document.activeElement)) setKeyboardMode(false);
-}));
+files?.addEventListener('focusout', scheduleFocusSync);

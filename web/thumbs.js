@@ -29,6 +29,7 @@ const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.
 const filename = card => card.dataset.filename || card.title || card.querySelector('strong')?.textContent || '';
 const thumbUrl = hash => `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
 const sourceMime = record => MIME.get(extension(record.filename)) || 'application/octet-stream';
+const interactionActive = () => Boolean(window.mochimonoGridInteraction?.active?.());
 
 function kind(card) {
   if (card.classList.contains('video-card')) return 'video';
@@ -113,6 +114,15 @@ function markLoaded(hash, card, image) {
   rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
 }
 
+function startThumbnailImage(image, canonical, knownReady = false) {
+  if (interactionActive() && !knownReady) {
+    image.dataset.pendingThumbSrc = canonical;
+    return;
+  }
+  delete image.dataset.pendingThumbSrc;
+  image.src = canonical;
+}
+
 function paintCard(card, force = false) {
   if (!card?.isConnected || !kind(card)) return;
   const hash = String(card.dataset.hash || '');
@@ -124,6 +134,7 @@ function paintCard(card, force = false) {
 
   if (current?.dataset.thumbHash === hash && !force) {
     if (current.complete && current.naturalWidth) markLoaded(hash, card, current);
+    else if (!interactionActive() && current.dataset.pendingThumbSrc) startThumbnailImage(current, current.dataset.pendingThumbSrc, false);
     return;
   }
 
@@ -131,9 +142,10 @@ function paintCard(card, force = false) {
   image.className = 'cached-thumb';
   image.alt = filename(card);
   image.decoding = 'async';
-  // The library intentionally renders a bounded window. Start those thumbnail
-  // requests immediately so an immutable HTTP-cache hit can be part of first paint.
-  image.loading = 'eager';
+  // Visible images still load immediately, while the browser is free to defer
+  // far-off cards inside the bounded render window.
+  image.loading = 'lazy';
+  try { image.fetchPriority = 'low'; } catch {}
   image.dataset.thumbHash = hash;
   image.onload = () => markLoaded(hash, card, image);
   image.onerror = () => {
@@ -145,12 +157,12 @@ function paintCard(card, force = false) {
     state.nextCheck = performance.now() + 250;
     states.set(hash, state);
     pending(card);
-    if (nearby.has(card)) scheduleCheck(80);
+    if (nearby.has(card) && !interactionActive()) scheduleCheck(80);
   };
 
   const old = box.querySelector('img.cached-thumb,.video-thumb-pending');
   old ? old.replaceWith(image) : box.prepend(image);
-  image.src = canonical;
+  startThumbnailImage(image, canonical, Boolean(states.get(hash)?.ready));
 }
 
 function paint(hash, force = false) {
@@ -164,7 +176,7 @@ function loadHash(hash, force = false) {
 }
 
 async function requestCanonical(hashes) {
-  if (CLIENT || !hashes.length) return;
+  if (CLIENT || !hashes.length || interactionActive()) return;
   for (let offset = 0; offset < hashes.length; offset += 500) {
     fetch('/api/thumbs/request', {
       method: 'POST',
@@ -180,7 +192,7 @@ function onScreen(card) {
 }
 
 function queueFallback(card) {
-  if (CLIENT || !onScreen(card)) return;
+  if (CLIENT || interactionActive() || !onScreen(card)) return;
   const record = recordFor(card);
   const state = states.get(record.hash) || {};
   const delay = record.kind === 'video' ? VIDEO_FALLBACK_DELAY : IMAGE_FALLBACK_DELAY;
@@ -195,6 +207,10 @@ function queueFallback(card) {
 async function checkNearby() {
   checkTimer = 0;
   if (checking || document.hidden || !files) return;
+  if (interactionActive()) {
+    scheduleCheck(180);
+    return;
+  }
   const cards = [...nearby].filter(card => card.isConnected && kind(card));
   const now = performance.now();
   const hashes = [...new Set(cards.map(card => card.dataset.hash).filter(hash => {
@@ -380,6 +396,10 @@ async function runFallback(record) {
 
 function pumpFallback() {
   if (CLIENT || fallbackActive || !fallbackQueue.length || document.hidden) return;
+  if (interactionActive()) {
+    setTimeout(pumpFallback, 180);
+    return;
+  }
   const record = fallbackQueue.shift();
   fallbackQueued.delete(record.hash);
   fallbackActive = true;
@@ -397,7 +417,8 @@ const observer = files ? new IntersectionObserver(entries => {
     if (entry.isIntersecting) {
       nearby.add(card);
       const image = card.querySelector('img.cached-thumb');
-      if (image) image.fetchPriority = 'high';
+      if (image) image.fetchPriority = interactionActive() ? 'low' : 'high';
+      if (interactionActive()) continue;
       loadHash(card.dataset.hash);
       if (!states.get(card.dataset.hash)?.ready) scheduleCheck(50);
     } else nearby.delete(card);
@@ -418,9 +439,6 @@ function observeTree(node) {
     indexCard(card);
     if (observed.has(card) || !kind(card)) continue;
     observed.add(card);
-    // Install the immutable canonical thumbnail immediately. The rendered card
-    // window is bounded, so eager cache lookup is cheaper and visually steadier
-    // than waiting for a later visibility callback.
     paintCard(card);
     observer.observe(card);
   }
@@ -436,6 +454,22 @@ function forgetTree(node) {
   }
 }
 
+function flushDeferredThumbnails() {
+  for (const image of files?.querySelectorAll('img.cached-thumb[data-pending-thumb-src]') || []) {
+    if (!image.isConnected) continue;
+    const canonical = image.dataset.pendingThumbSrc;
+    if (canonical) startThumbnailImage(image, canonical, false);
+  }
+  for (const card of nearby) {
+    if (!card.isConnected) continue;
+    const image = card.querySelector('img.cached-thumb');
+    if (image) image.fetchPriority = 'high';
+    loadHash(card.dataset.hash);
+  }
+  scheduleCheck(40);
+  pumpFallback();
+}
+
 if (files) {
   observeTree(files);
   new MutationObserver(records => {
@@ -445,8 +479,11 @@ if (files) {
     }
   }).observe(files, { childList: true, subtree: true });
 
+  window.addEventListener('mochimono:grid-interaction-end', flushDeferredThumbnails);
+
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
+      if (interactionActive()) return;
       for (const card of nearby) loadHash(card.dataset.hash);
       scheduleCheck(50);
       pumpFallback();
@@ -455,7 +492,7 @@ if (files) {
 
   window.addEventListener('mochimono:catalog-updated', () => {
     persistLearnedDimensions();
-    scheduleCheck(50);
+    if (!interactionActive()) scheduleCheck(50);
   });
 
   addEventListener('beforeunload', () => {
