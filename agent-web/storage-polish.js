@@ -87,6 +87,18 @@ function ensureFolderPath(row, fullPath) {
   path.title = fullPath;
 }
 
+function pinLocalStatus(row) {
+  if (!row.classList.contains('browse-only-folder')) return;
+  const status = row.querySelector('[data-folder-status]');
+  if (!status) return;
+  delete status.dataset.relativeTime;
+  delete status.dataset.relativePrefix;
+  delete status.dataset.relativeSuffix;
+  status.removeAttribute('datetime');
+  status.removeAttribute('title');
+  if (status.textContent !== 'Local') status.textContent = 'Local';
+}
+
 function polishFolder(row) {
   const fullPath = String(row.dataset.folderPath || '');
   if (!fullPath) return;
@@ -98,6 +110,7 @@ function polishFolder(row) {
     title.title = fullPath;
   }
   ensureFolderPath(row, fullPath);
+  pinLocalStatus(row);
 
   for (const badge of row.querySelectorAll('.storage-mode')) {
     const text = badge.textContent.trim();
@@ -152,7 +165,7 @@ function polishWording(root = storage) {
 
 function orderSections() {
   const protection = document.querySelector('#protectionDashboard');
-  const backup = [...storage?.querySelectorAll(':scope > .dashboard-section') || []]
+  const backup = [...(storage?.querySelectorAll(':scope > .dashboard-section') || [])]
     .find(section => section.querySelector(':scope > .section-head h2')?.textContent.trim() === 'Backups');
   if (protection && backup && backup.nextElementSibling !== protection) backup.after(protection);
 }
