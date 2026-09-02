@@ -9,6 +9,7 @@ const states = new Map();
 const cardIndex = new Map();
 const observed = new Set();
 const nearby = new Set();
+const pendingTrees = new Set();
 const fallbackQueue = [];
 const fallbackQueued = new Set();
 let checkTimer = 0;
@@ -447,6 +448,12 @@ function observeTree(node) {
   }
 }
 
+function queueObserveTree(node) {
+  if (!(node instanceof Element)) return;
+  if (interactionActive()) pendingTrees.add(node);
+  else observeTree(node);
+}
+
 function forgetTree(node) {
   if (!observer) return;
   for (const card of cardsIn(node)) {
@@ -458,6 +465,8 @@ function forgetTree(node) {
 }
 
 function flushDeferredThumbnails() {
+  for (const node of pendingTrees) if (node.isConnected) observeTree(node);
+  pendingTrees.clear();
   for (const image of files?.querySelectorAll('img.cached-thumb[data-pending-thumb-src]') || []) {
     if (!image.isConnected) continue;
     const canonical = image.dataset.pendingThumbSrc;
@@ -478,7 +487,7 @@ if (files) {
   new MutationObserver(records => {
     for (const record of records) {
       for (const node of record.removedNodes) forgetTree(node);
-      for (const node of record.addedNodes) observeTree(node);
+      for (const node of record.addedNodes) queueObserveTree(node);
     }
   }).observe(files, { childList: true, subtree: true });
 
