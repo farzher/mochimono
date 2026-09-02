@@ -13,8 +13,8 @@ let fullDecorate = true;
 let focusedHash = '';
 let pointerHash = '';
 let detailGeneration = 0;
-let paging = false;
-let queuedKey = '';
+let listPaging = false;
+let listQueuedKey = '';
 const pendingCards = new Set();
 const detailTimers = new Map();
 const detailsCache = new Map();
@@ -170,10 +170,9 @@ function syncCardState(card, raw = currentSearch()) {
 
 function decorate() {
   decorateFrame = 0;
+  if (window.mochimonoGridInteraction?.active?.()) return;
   const raw = currentSearch();
-  const cards = fullDecorate
-    ? [...files.querySelectorAll('[data-hash]')]
-    : [...pendingCards];
+  const cards = fullDecorate ? [...files.querySelectorAll('[data-hash]')] : [...pendingCards];
   fullDecorate = false;
   pendingCards.clear();
   for (const card of cards) syncCardState(card, raw);
@@ -183,6 +182,10 @@ function scheduleDecorate(cards = null) {
   if (cards == null) fullDecorate = true;
   else for (const card of cards) if (card?.matches?.('[data-hash]')) pendingCards.add(card);
   if (!decorateFrame) decorateFrame = requestAnimationFrame(decorate);
+}
+
+function resumeDecorate() {
+  if (!decorateFrame && (fullDecorate || pendingCards.size)) decorateFrame = requestAnimationFrame(decorate);
 }
 
 function refreshHashes(...hashes) {
@@ -211,40 +214,21 @@ function setFocusedHash(next) {
   refreshHashes(previous, next);
 }
 
-function cards() {
-  return [...files.querySelectorAll('[data-hash]')].filter(card => {
-    const rect = card.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  });
+function visibleCards() {
+  return [...files.querySelectorAll('[data-hash]')].filter(card => card.getClientRects().length);
 }
 
-function currentCard(items) {
-  const active = document.activeElement?.closest?.('[data-hash]');
+function currentCard(items = visibleCards()) {
+  const active = document.activeElement?.closest?.('#files [data-hash]');
   if (active && items.includes(active)) return active;
+  const cursor = files.querySelector('.keyboard-cursor[data-hash]');
+  if (cursor && items.includes(cursor)) return cursor;
   const remembered = focusedHash && items.find(card => card.dataset.hash === focusedHash);
-  return remembered || items.find(card => {
+  if (remembered) return remembered;
+  return items.find(card => {
     const rect = card.getBoundingClientRect();
     return rect.bottom > 80 && rect.top < innerHeight;
-  }) || items[0];
-}
-
-function verticalCard(items, current, direction) {
-  if (!current) return null;
-  const rect = current.getBoundingClientRect();
-  const cx = rect.left + rect.width / 2;
-  const cy = rect.top + rect.height / 2;
-  let best = null;
-  let score = Infinity;
-  for (const card of items) {
-    if (card === current) continue;
-    const next = card.getBoundingClientRect();
-    const dx = next.left + next.width / 2 - cx;
-    const dy = next.top + next.height / 2 - cy;
-    if ((direction < 0 && dy >= -3) || (direction > 0 && dy <= 3)) continue;
-    const candidate = Math.abs(dy) * 3 + Math.abs(dx);
-    if (candidate < score) { best = card; score = candidate; }
-  }
-  return best;
+  }) || items[0] || null;
 }
 
 function focusCard(card) {
@@ -265,76 +249,30 @@ function openCard(card) {
 
 const afterLayout = callback => requestAnimationFrame(() => requestAnimationFrame(callback));
 
-function extend(direction, callback) {
-  if (!window.mochimonoLibrary?.extend?.(direction)) return false;
-  paging = true;
-  afterLayout(() => {
-    try { callback(); }
-    finally {
-      paging = false;
-      const key = queuedKey;
-      queuedKey = '';
-      if (key) navigate(key);
-    }
-  });
-  return true;
-}
-
-function navigateGrid(key) {
-  const items = cards();
+function navigateList(key) {
+  if (listPaging) { listQueuedKey = key; return true; }
+  const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
+  const items = visibleCards();
   const current = currentCard(items);
   if (!current) return false;
+  const index = items.indexOf(current);
+  const direct = items[index + direction];
+  if (direct) return focusCard(direct);
+
   const hash = current.dataset.hash;
-  if (key === 'ArrowLeft' || key === 'ArrowRight') {
-    const direction = key === 'ArrowLeft' ? -1 : 1;
-    const direct = items[items.indexOf(current) + direction];
-    if (direct) return focusCard(direct);
-    return extend(direction, () => {
-      const next = cards();
-      const start = next.find(card => card.dataset.hash === hash);
-      focusCard(start ? next[next.indexOf(start) + direction] : next[direction > 0 ? 0 : next.length - 1]);
-    });
-  }
-  if (key === 'ArrowUp' || key === 'ArrowDown') {
-    const direction = key === 'ArrowUp' ? -1 : 1;
-    const direct = verticalCard(items, current, direction);
-    if (direct) return focusCard(direct);
-    return extend(direction, () => {
-      const next = cards();
-      const start = next.find(card => card.dataset.hash === hash);
-      focusCard(verticalCard(next, start, direction));
-    });
-  }
-  return false;
-}
-
-function navigateViewer(key) {
-  if (key !== 'ArrowUp' && key !== 'ArrowDown') return false;
-  const direction = key === 'ArrowUp' ? -1 : 1;
-  const hash = viewerHash();
-  if (!hash) return false;
-  const items = cards();
-  const current = items.find(card => card.dataset.hash === hash);
-  const direct = verticalCard(items, current, direction);
-  if (direct) {
-    setFocusedHash(direct.dataset.hash);
-    window.mochimonoOpenViewer?.(focusedHash);
-    return true;
-  }
-  return extend(direction, () => {
-    const next = cards();
+  if (!window.mochimonoLibrary?.extend?.(direction)) return false;
+  listPaging = true;
+  afterLayout(() => {
+    const next = visibleCards();
     const start = next.find(card => card.dataset.hash === hash);
-    const target = verticalCard(next, start, direction);
-    if (target) {
-      setFocusedHash(target.dataset.hash);
-      window.mochimonoOpenViewer?.(focusedHash);
-    }
+    const startIndex = start ? next.indexOf(start) : direction > 0 ? -1 : next.length;
+    focusCard(next[startIndex + direction]);
+    listPaging = false;
+    const queued = listQueuedKey;
+    listQueuedKey = '';
+    if (queued) navigateList(queued);
   });
-}
-
-function navigate(key) {
-  if (paging) { queuedKey = key; return true; }
-  return viewer.hidden ? navigateGrid(key) : navigateViewer(key);
+  return true;
 }
 
 files.addEventListener('pointermove', event => {
@@ -362,17 +300,7 @@ search?.addEventListener('input', () => {
 document.addEventListener('keydown', event => {
   const viewerOpenNow = !viewer.hidden;
   if (typingTarget(event.target) && !viewerOpenNow) return;
-  if (paging && event.key.startsWith('Arrow')) {
-    queuedKey = event.key;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    return;
-  }
   if (viewerOpenNow) {
-    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-      if (navigate(event.key)) { event.preventDefault(); event.stopImmediatePropagation(); }
-      return;
-    }
     if ((event.code === 'Space' || event.key === 'Enter') && !document.activeElement?.closest?.('#viewer video,#viewer input,#viewer select,#viewer textarea,#viewer summary,#viewer button,#viewer a')) {
       setFocusedHash(viewerHash() || focusedHash);
       event.preventDefault();
@@ -387,15 +315,16 @@ document.addEventListener('keydown', event => {
     }
     return;
   }
-  if (!['grid','list'].includes(currentView())) return;
-  if (event.key.startsWith('Arrow') && navigate(event.key)) {
+
+  const view = currentView();
+  if (view === 'list' && event.key.startsWith('Arrow') && navigateList(event.key)) {
     event.preventDefault();
     event.stopImmediatePropagation();
     return;
   }
+  if (!['grid','list'].includes(view)) return;
   if (event.code === 'Space' || event.key === 'Enter') {
-    const current = currentCard(cards());
-    if (openCard(current)) {
+    if (openCard(currentCard())) {
       event.preventDefault();
       event.stopImmediatePropagation();
     }
@@ -419,6 +348,7 @@ views.addEventListener('click', () => {
   detailGeneration++;
   scheduleDecorate();
 });
+window.addEventListener('mochimono:grid-interaction-end', resumeDecorate);
 window.addEventListener('mochimono-viewer-return', event => {
   const hash = String(event.detail?.hash || '');
   if (!hash) return;
