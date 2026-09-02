@@ -30,12 +30,6 @@ function kind(card) {
   return '';
 }
 
-function inViewport(card) {
-  if (!card?.isConnected) return false;
-  const rect = card.getBoundingClientRect();
-  return rect.bottom > 0 && rect.top < innerHeight;
-}
-
 function cardsIn(node) {
   if (!(node instanceof Element)) return [];
   const cards = [];
@@ -197,15 +191,8 @@ async function checkNearby() {
   };
   if (cursor && nearby.has(cursor)) add(cursor.dataset.hash || '');
 
-  const center = innerHeight / 2;
-  const candidates = [...nearby]
-    .filter(card => kind(card))
-    .map(card => {
-      const rect = card.getBoundingClientRect();
-      return { card, centerDistance: Math.abs((rect.top + rect.bottom) / 2 - center) };
-    })
-    .sort((a, b) => a.centerDistance - b.centerDistance);
-  for (const { card } of candidates) {
+  for (const card of nearby) {
+    if (card === cursor || !kind(card)) continue;
     add(card.dataset.hash || '');
     if (hashes.length >= CHECK_LIMIT) break;
   }
