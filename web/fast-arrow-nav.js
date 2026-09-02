@@ -3,7 +3,6 @@ const viewer = document.querySelector('#viewer');
 const commandbar = document.querySelector('.commandbar');
 const arrows = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 
-let selectedHash = '';
 let holding = false;
 let frozenSentinels = null;
 
@@ -33,12 +32,7 @@ function visible(card) {
 }
 
 function selectedCard() {
-  if (selectedHash) {
-    const card = files.querySelector(`[data-hash="${CSS.escape(selectedHash)}"]`);
-    if (card) return card;
-  }
-  const active = document.activeElement?.closest?.('#files [data-hash]');
-  return active || null;
+  return document.activeElement?.closest?.('#files [data-hash]') || null;
 }
 
 function visibleStart(cards = mountedCards()) {
@@ -61,16 +55,15 @@ function visibleStart(cards = mountedCards()) {
   return best || cards[0] || null;
 }
 
-function selectCard(card, block = 'nearest') {
+function selectCard(card, scroll = true) {
   if (!card) return false;
   for (const previous of files.querySelectorAll('.keyboard-cursor')) {
     if (previous !== card) previous.classList.remove('keyboard-cursor');
   }
-  selectedHash = card.dataset.hash || '';
   card.classList.add('keyboard-cursor');
   document.documentElement.classList.add('keyboard-navigation-active');
   card.focus({ preventScroll: true });
-  card.scrollIntoView({ behavior: 'auto', block, inline: 'nearest' });
+  if (scroll) card.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
   window.mochimonoThumbnails?.prioritize?.([card]);
   return true;
 }
@@ -131,14 +124,14 @@ function ensureAdjacentWindow(direction) {
 
 function horizontalTarget(current, direction) {
   const library = window.mochimonoLibrary;
-  const hashes = library?.filteredHashes?.();
-  if (!hashes?.length) return null;
-  const index = hashes.indexOf(current.dataset.hash || '');
+  if (!library?.indexOf || !library.hashAt) return null;
+  const index = library.indexOf(current.dataset.hash || '');
   const targetIndex = index + direction;
-  if (index < 0 || targetIndex < 0 || targetIndex >= hashes.length) return null;
+  const targetHash = index >= 0 ? library.hashAt(targetIndex) : '';
+  if (!targetHash) return null;
   library.ensureIndex?.(targetIndex);
   freezeSentinels();
-  return files.querySelector(`[data-hash="${CSS.escape(hashes[targetIndex])}"]`);
+  return files.querySelector(`[data-hash="${CSS.escape(targetHash)}"]`);
 }
 
 function navigate(key) {
@@ -154,8 +147,9 @@ function navigate(key) {
   let target = verticalTarget(cards, current, direction);
   if (target) return selectCard(target);
 
+  const currentHash = current.dataset.hash || '';
   if (!ensureAdjacentWindow(direction)) return true;
-  current = selectedHash && files.querySelector(`[data-hash="${CSS.escape(selectedHash)}"]`);
+  current = currentHash ? files.querySelector(`[data-hash="${CSS.escape(currentHash)}"]`) : null;
   if (!current) return true;
   cards = mountedCards();
   target = verticalTarget(cards, current, direction);
@@ -185,15 +179,14 @@ function reset(clear = false) {
   release();
   if (!clear) return;
   files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
-  selectedHash = '';
   document.documentElement.classList.remove('keyboard-navigation-active');
 }
 
 function returnTo(hash) {
   reset(true);
-  selectedHash = String(hash || '');
-  const card = selectedCard();
-  if (card && gridActive()) selectCard(card, 'center');
+  const value = String(hash || '');
+  const card = value ? files.querySelector(`[data-hash="${CSS.escape(value)}"]`) : null;
+  if (card && gridActive()) selectCard(card, false);
 }
 
 window.mochimonoGridKeyboard = { press, release, reset };
