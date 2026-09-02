@@ -8,7 +8,11 @@ const files = document.querySelector('#files');
 
 const objectHash = value => String(value || '').match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 let activeHash = objectHash(viewerOpen?.getAttribute('href'));
-const currentHash = () => activeHash;
+const currentHash = () => {
+  const hash = objectHash(viewerOpen?.getAttribute('href'));
+  if (hash !== activeHash) activeHash = hash;
+  return activeHash;
+};
 
 const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
 const mediaDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
@@ -357,6 +361,10 @@ async function closeViewerFast() {
   if (closing || !viewer || viewer.hidden) return;
   closing = true;
   stopNavigation();
+  clearDeferred();
+  clearStalePreloads();
+  abortImage(currentLoad);
+  viewerMedia?.querySelector('video')?.pause();
   const hash = currentHash();
   try {
     await prepareGridReturn(hash);
