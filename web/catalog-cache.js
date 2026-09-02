@@ -53,10 +53,12 @@ function publicFile(file) {
 }
 
 function mergeGeometry(file) {
-  const previous = records.get(String(file?.hash || ''));
-  if (!previous) return file;
+  const hash = String(file?.hash || '');
   if (Number(file.width) > 0 && Number(file.height) > 0) return file;
-  if (!(Number(previous.width) > 0 && Number(previous.height) > 0)) return file;
+  const pending = pendingGeometry.get(hash);
+  if (pending?.width && pending?.height) return { ...file, width: pending.width, height: pending.height };
+  const previous = records.get(hash);
+  if (!(Number(previous?.width) > 0 && Number(previous?.height) > 0)) return file;
   return { ...file, width: Number(previous.width), height: Number(previous.height) };
 }
 
@@ -197,6 +199,7 @@ function rememberDimensions(hash, width, height) {
 
   const previous = records.get(hash);
   if (previous && Number(previous.width) === width && Number(previous.height) === height) return;
+  if (previous) records.set(hash, { ...previous, width, height });
   pendingGeometry.set(hash, { width, height });
   scheduleGeometryWrite();
 }
