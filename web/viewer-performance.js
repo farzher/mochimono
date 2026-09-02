@@ -94,6 +94,8 @@ function rapidNavigation() {
   return performance.now() < rapidUntil;
 }
 
+window.mochimonoViewerPerformance = { rapid: rapidNavigation };
+
 function viewerSecondaryHash(input, init) {
   const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
   if (method !== 'GET') return '';
