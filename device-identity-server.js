@@ -49,6 +49,8 @@ export async function handleDeviceIdentity(req, res, url) {
     `).run(from, to);
     db.prepare('UPDATE source_deletions SET device_name=? WHERE lower(device_name)=lower(?)').run(to, from);
 
+    db.prepare('UPDATE import_roots SET device_name=? WHERE lower(device_name)=lower(?)').run(to, from);
+    db.prepare('UPDATE imports SET source_name=? WHERE lower(source_name)=lower(?)').run(to, from);
     db.prepare('DELETE FROM storage_locations WHERE lower(id)=lower(?)').run(oldLocationId);
 
     const base = newLocation || oldLocation;
