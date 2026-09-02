@@ -10,6 +10,7 @@ const nearby = new Set();
 const pendingTrees = new Set();
 const browserFallback = CLIENT ? null : import('./browser-thumbnail-fallback.js').catch(() => null);
 let observeFrame = 0;
+let visibleFrame = 0;
 let checkTimer = 0;
 let checkAt = 0;
 let checking = false;
@@ -156,6 +157,17 @@ function scheduleCheck(delay = 80) {
   if (checkTimer) clearTimeout(checkTimer);
   checkAt = at;
   checkTimer = setTimeout(checkNearby, delay);
+}
+
+function scanVisible() {
+  visibleFrame = 0;
+  for (const card of nearby) if (inViewport(card)) paintCard(card, true);
+  scheduleCheck(0);
+}
+
+function scheduleVisibleScan() {
+  if (visibleFrame) return;
+  visibleFrame = requestAnimationFrame(scanVisible);
 }
 
 async function requestMissing(hashes) {
@@ -341,13 +353,13 @@ if (files) {
     }
   }).observe(files, { childList: true, subtree: true });
 
+  window.addEventListener('scroll', scheduleVisibleScan, { passive: true });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
-    for (const card of nearby) if (inViewport(card)) paintCard(card);
-    scheduleCheck(50);
+    scheduleVisibleScan();
   });
-  window.addEventListener('mochimono:catalog-updated', () => scheduleCheck(50));
-  window.addEventListener('mochimono:grid-interaction-end', () => scheduleCheck(40));
+  window.addEventListener('mochimono:catalog-updated', scheduleVisibleScan);
+  window.addEventListener('mochimono:grid-interaction-end', scheduleVisibleScan);
   window.addEventListener('mochimono:browser-thumbnail-ready', event => {
     const hash = String(event.detail?.hash || '');
     if (!hash) return;
@@ -357,10 +369,11 @@ if (files) {
     state.nextTry = 0;
     states.set(hash, state);
     loadHash(hash);
-    scheduleCheck(50);
+    scheduleVisibleScan();
   });
   addEventListener('beforeunload', () => {
     if (checkTimer) clearTimeout(checkTimer);
     if (observeFrame) cancelAnimationFrame(observeFrame);
+    if (visibleFrame) cancelAnimationFrame(visibleFrame);
   }, { once: true });
 }
