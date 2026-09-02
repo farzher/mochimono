@@ -39,11 +39,16 @@ if (input && choose && browse && protect && addPanel) {
     return unique([...picked, input.value.trim()]);
   }
 
+  function syncChooseLabel() {
+    choose.textContent = pathsToAdd().length ? 'Add another' : 'Choose';
+  }
+
   function render() {
     selected.hidden = picked.length < 2;
     if (picked.length < 2) {
       selected.querySelector('.multi-folder-selection-list').replaceChildren();
       selected.querySelector('[data-multi-folder-count]').textContent = '';
+      syncChooseLabel();
       return;
     }
     selected.querySelector('[data-multi-folder-count]').textContent = `${picked.length.toLocaleString()} folders selected`;
@@ -57,6 +62,7 @@ if (input && choose && browse && protect && addPanel) {
       row.querySelector('button').dataset.removeMultiFolder = String(index);
       return row;
     }));
+    syncChooseLabel();
   }
 
   function setPicked(paths) {
@@ -100,13 +106,18 @@ if (input && choose && browse && protect && addPanel) {
     event?.stopImmediatePropagation();
     choose.disabled = true;
     try {
-      const result = await request('/api/pick-folder?multiple=1');
-      const paths = Array.isArray(result.paths) ? result.paths : result.path ? [result.path] : [];
-      if (paths.length) setPicked(paths);
+      // Windows' Common Item Dialog can expose multi-folder selection, but it is
+      // inconsistent across Windows builds and has repeatedly rejected valid
+      // Ctrl-selected folders as one quoted folder name. Use the reliable native
+      // single-folder picker and accumulate selections in Mochimono instead.
+      const result = await request('/api/pick-folder');
+      const path = String(result.path || '').trim();
+      if (path) setPicked([...pathsToAdd(), path]);
     } catch (error) {
       toast(error.message);
     } finally {
       choose.disabled = false;
+      syncChooseLabel();
     }
   }
 
@@ -155,6 +166,7 @@ if (input && choose && browse && protect && addPanel) {
   choose.addEventListener('click', pickFolders, true);
   browse.addEventListener('click', event => addFolders('browse', event), true);
   protect.addEventListener('click', event => addFolders('protect', event), true);
+  input.addEventListener('input', syncChooseLabel);
 
   selected.addEventListener('click', event => {
     if (event.target.closest('[data-clear-multi-folders]')) return clearPicked();
@@ -168,4 +180,6 @@ if (input && choose && browse && protect && addPanel) {
     }
     render();
   });
+
+  syncChooseLabel();
 }
