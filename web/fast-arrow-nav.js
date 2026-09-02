@@ -118,6 +118,12 @@ function releaseRailScan() {
   rail.hidden = restoreHidden;
 }
 
+function prioritizeRow(card, state) {
+  const info = state.byCard.get(card);
+  const row = info && state.rows[info.rowIndex];
+  window.mochimonoThumbnails?.prioritize?.(row ? row.entries.map(entry => entry.card) : [card]);
+}
+
 function moveFocus(card, state = currentLayout()) {
   if (!card) return false;
   if (directFocused && directFocused !== card) directFocused.classList.remove('keyboard-cursor');
@@ -126,6 +132,7 @@ function moveFocus(card, state = currentLayout()) {
   card.classList.add('keyboard-cursor');
   document.documentElement.classList.add('keyboard-navigation-active');
   freezeRailScan();
+  prioritizeRow(card, state);
 
   const info = state.byCard.get(card);
   if (!info) return true;
@@ -273,6 +280,26 @@ function settleHold() {
   if (scrollY !== y) scrollTo(0, y);
 }
 
+function syncReturnedCursor(hash) {
+  const card = hash && files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
+  if (!card || !gridActive()) return;
+  clearPreextend();
+  queuedKey = '';
+  holding = false;
+  releaseRailScan();
+  files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
+  directFocused = card;
+  card.classList.add('keyboard-cursor');
+  document.documentElement.classList.add('keyboard-navigation-active');
+  dirty = true;
+  const state = currentLayout();
+  prioritizeRow(card, state);
+  if (card.tabIndex < 0) card.tabIndex = 0;
+  const y = scrollY;
+  card.focus({ preventScroll: true });
+  if (scrollY !== y) scrollTo(0, y);
+}
+
 document.addEventListener('keydown', event => {
   if (!arrowKeys.has(event.key) || !viewer?.hidden || !gridActive() || editingControl(event)) return;
   if (!holding) {
@@ -295,10 +322,12 @@ document.addEventListener('keydown', event => {
 
 document.addEventListener('keyup', event => { if (arrowKeys.has(event.key)) settleHold(); }, true);
 window.addEventListener('blur', settleHold);
+window.addEventListener('mochimono-viewer-return', event => syncReturnedCursor(String(event.detail?.hash || '')));
 
 files?.addEventListener('pointerdown', () => {
   document.documentElement.classList.remove('keyboard-navigation-active');
   files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
+  directFocused = null;
 }, true);
 
 if (files) {
