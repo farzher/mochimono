@@ -94,8 +94,14 @@ function retainAfterLoad(hash, image) {
   }, { once:true });
 }
 
-function clearStalePreloads() {
-  for (const image of [...preloads.keys()]) abortImage(image);
+function clearStalePreloads(keepHash = '') {
+  for (const [image, hash] of [...preloads]) {
+    if (hash === keepHash) {
+      try { image.fetchPriority = 'high'; } catch {}
+      continue;
+    }
+    abortImage(image);
+  }
 }
 
 function rapidNavigation() {
@@ -220,7 +226,7 @@ function deferRapidVideo() {
 function handleRapidMedia() {
   if (!rapidNavigation() || viewer?.hidden) return;
   if (!viewerMedia?.querySelector('img[data-full-src]') && currentLoad) abortImage(currentLoad);
-  clearStalePreloads();
+  clearStalePreloads(currentHash());
   deferRapidVideo();
 }
 
@@ -231,7 +237,7 @@ function trackObjectImage(image, value) {
   if (!current) return false;
 
   if (hash === current) {
-    clearStalePreloads();
+    clearStalePreloads(hash);
     if (useDecoded(hash)) return true;
     if (currentLoad && currentLoad !== image) abortImage(currentLoad);
     currentLoad = image;
