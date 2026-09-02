@@ -1,200 +1,195 @@
 const storage = document.querySelector('#storagePane');
-const folders = document.querySelector('#folders');
-const toast = document.querySelector('#toast');
+const protectionMenu = document.querySelector('#clientProtection');
+const serverStorage = document.querySelector('#serverStorage');
+const serverStorageText = document.querySelector('#serverStorageText');
 
 const style = document.createElement('style');
 style.textContent = `
-  #storagePane{width:min(980px,calc(100% - 36px));gap:34px;padding-top:16px}
-  #storagePane .section-head{min-height:48px}
-  #storagePane .section-head h2{font-size:17px}
+  .storage-visually-hidden{
+    position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;
+    overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important
+  }
 
-  .storage-add-button{height:36px;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 12px;border-radius:9px;background:#eee8e4;color:#171316;font-size:12px;font-weight:720;white-space:nowrap}
-  .storage-add-button:hover{background:#fff}
-  .storage-add-button>span{font-size:17px;font-weight:400;line-height:1;margin-top:-1px}
-  .storage-add-button.secondary-add{height:32px;padding:0 9px;background:#242124;color:#d8cfcb;font-size:11px}
-  .storage-add-button.secondary-add:hover{background:#302b30;color:#fff}
-  .storage-add-button.secondary-add>span{font-size:15px}
-
-  /* Folder choice is now direct: Add folder opens the picker and adds Local. */
+  #storagePane{
+    width:min(980px,calc(100% - 36px));padding-top:12px;padding-bottom:64px;gap:26px
+  }
+  #storagePane .dashboard-section{padding:0}
+  #storagePane #activityCard{display:none!important}
+  #storagePane #protectionDashboard{display:none!important}
   #folderAdd{display:none!important}
+  #folders>.empty-state,#folders>.muted,#backups>.empty-state,#backups>.muted{display:none!important}
 
-  #storagePane .folder-item{padding:14px 4px;gap:18px}
-  #storagePane .folder-item.has-folder-preview{grid-template-columns:250px minmax(0,1fr) auto;min-height:164px;align-items:center}
-  #storagePane .folder-item.has-folder-preview .storage-folder-samples{width:250px;height:136px;border-radius:13px}
-  #storagePane .folder-item .storage-copy{align-self:center}
-  #storagePane .folder-item .storage-title{gap:8px}
-  #storagePane .folder-item .storage-title strong{font-size:15px;letter-spacing:-.015em}
-  #storagePane .folder-item .storage-path{margin-top:4px;color:#77706e;font-size:10px;font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
-  #storagePane .folder-item .storage-meta{margin-top:8px;font-size:11px;color:#928986}
-  #storagePane .folder-item .storage-modes{margin-left:0;gap:4px}
-  #storagePane .folder-item .storage-mode{padding:3px 6px;border-radius:999px;font-size:9px;font-weight:720}
-  #storagePane .folder-item .storage-mode.local{background:#222126;color:#aaa8b0}
-  #storagePane .folder-item .storage-mode.protected{background:#302427;color:#e0aaa4}
-  #storagePane .folder-item .item-actions{width:auto;min-width:0;justify-content:flex-end}
-  #storagePane .folder-item.browse-only-folder .item-actions{opacity:1}
-  #storagePane .folder-item [data-protect-folder]{padding:7px 9px;border-radius:8px;background:#242124;color:#e4b1ab}
-  #storagePane .folder-item [data-protect-folder]:hover{background:#30272a;color:#fff}
-  #storagePane .folder-item .storage-open-folder{border-radius:7px}
+  #storagePane .folder-item{
+    position:relative;grid-template-columns:260px minmax(0,1fr);gap:18px;align-items:center;
+    min-height:164px;padding:12px 4px;border-bottom:1px solid #201e20;background:transparent
+  }
+  #storagePane .folder-item:hover{background:rgba(255,255,255,.016)}
+  #storagePane .folder-item .storage-copy{min-width:0;align-self:center}
+  #storagePane .folder-item .storage-title{display:flex;align-items:center;gap:7px;min-width:0}
+  #storagePane .folder-item .storage-title strong{
+    min-width:0;display:flex;align-items:baseline;font-weight:400;letter-spacing:0;cursor:pointer;overflow:hidden
+  }
+  .storage-path-parent{
+    min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#77706e;
+    font:10px/1.35 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace
+  }
+  .storage-path-name{
+    flex:0 0 auto;color:#e9e1dd;font-size:15px;font-weight:740;letter-spacing:-.015em;white-space:nowrap
+  }
+  #storagePane .folder-item .item-state{display:none!important}
+  #storagePane .folder-item .storage-meta{margin-top:9px;gap:6px;color:#948b88;font-size:11px}
+  #storagePane .folder-item .storage-meta span:nth-child(4),
+  #storagePane .folder-item .storage-meta span:nth-child(5){display:none}
+  #storagePane .folder-item .storage-meter{display:none!important}
+  #storagePane .folder-item .storage-modes{display:inline-flex;flex:0 0 auto;margin:0}
+  #storagePane .folder-item .storage-mode,
+  #storagePane .folder-item .storage-modes{
+    padding:2px 6px;border-radius:999px;background:#302427;color:#d9a49e;font-size:9px;font-weight:720
+  }
 
-  #storagePane .backup-item{padding:14px 4px}
-  #storagePane .backup-item .storage-title strong{font-size:14px}
-  #storagePane .backup-item .storage-path{font-size:10px;color:#746d6b}
-  #storagePane .backup-item .storage-meta{font-size:10px}
-  #storagePane #protectionDashboard{margin-top:-4px}
-  #storagePane #protectionDashboard .section-head{min-height:42px}
-  #storagePane #protectionDashboard .protection-main{padding-top:8px;padding-bottom:8px}
+  #storagePane .folder-item .item-actions{
+    position:absolute;z-index:3;right:9px;top:50%;width:auto;min-width:0;padding:4px;
+    display:flex;gap:1px;align-items:center;border-radius:9px;background:rgba(18,16,19,.88);
+    backdrop-filter:blur(8px);opacity:0;transform:translateY(calc(-50% + 3px));pointer-events:none;
+    transition:opacity .12s ease,transform .12s ease
+  }
+  #storagePane .folder-item:hover .item-actions,
+  #storagePane .folder-item:focus-within .item-actions{
+    opacity:1;transform:translateY(-50%);pointer-events:auto
+  }
+  #storagePane .folder-item .item-actions .action-link,
+  #storagePane .folder-item .item-actions .icon{
+    padding:6px 7px;border-radius:6px;background:transparent;color:#a79d9a;font-size:11px
+  }
+  #storagePane .folder-item .item-actions .action-link:hover,
+  #storagePane .folder-item .item-actions .icon:hover{background:#2b272b;color:#fff}
+  #storagePane .folder-item .item-actions .primary-action{color:#e2aaa4}
+
+  .storage-add-card{
+    width:100%;border:0;border-radius:0;background:transparent;color:#847b79;text-align:left;font-weight:650
+  }
+  .storage-add-card:hover{background:rgba(255,255,255,.016);color:#d9d0cc}
+  .storage-add-folder{
+    min-height:164px;padding:12px 4px;display:grid;grid-template-columns:260px minmax(0,1fr);
+    gap:18px;align-items:center;border-bottom:1px solid #201e20
+  }
+  .storage-add-folder .storage-add-visual{
+    width:260px;height:140px;display:grid;place-items:center;border:1px dashed #353035;border-radius:13px;
+    background:#111013;color:#655e60;font-size:32px;font-weight:300;transition:.12s
+  }
+  .storage-add-folder:hover .storage-add-visual{border-color:#5a5055;background:#161417;color:#b0a5a3}
+  .storage-add-folder .storage-add-copy{font-size:14px;color:#817876}
+  .storage-add-folder:hover .storage-add-copy{color:#d8cfcb}
+
+  .storage-backups-section{margin-top:12px;padding-top:18px!important;border-top:1px solid #211e21}
+  #storagePane .backup-item{
+    position:relative;min-height:78px;padding:13px 4px 13px 58px;border-bottom:1px solid #201e20;background:transparent
+  }
+  #storagePane .backup-item:before{
+    content:'▱';position:absolute;left:6px;top:50%;transform:translateY(-50%);width:38px;height:38px;
+    display:grid;place-items:center;border:1px solid #302c30;border-radius:9px;background:#151316;
+    color:#7f7775;font-size:18px;font-weight:400
+  }
+  #storagePane .backup-item:hover{background:rgba(255,255,255,.016)}
+  #storagePane .backup-item .storage-title strong{font-size:14px;color:#e6ddda}
+  #storagePane .backup-item .storage-path{display:none!important}
+  #storagePane .backup-item .item-state{display:none}
+  #storagePane .backup-item .item-state.warning,
+  #storagePane .backup-item .item-state.bad,
+  #storagePane .backup-item .item-state.working{display:block}
+  #storagePane .backup-item .storage-meta{margin-top:5px;font-size:10px;color:#8d8582}
+  #storagePane .backup-item .storage-meta span:nth-child(1),
+  #storagePane .backup-item .storage-meta span:nth-child(2),
+  #storagePane .backup-item .storage-meta span:nth-child(6),
+  #storagePane .backup-item .storage-meta span:nth-child(7),
+  #storagePane .backup-item .storage-meta span:nth-child(8),
+  #storagePane .backup-item .storage-meta span:nth-child(9){display:none}
+  #storagePane .backup-item .storage-meter{height:3px;margin-top:8px;background:#262326}
+  #storagePane .backup-item .item-actions{opacity:0;pointer-events:none;transition:opacity .12s ease}
+  #storagePane .backup-item:hover .item-actions,
+  #storagePane .backup-item:focus-within .item-actions{opacity:1;pointer-events:auto}
+
+  .storage-add-backup{
+    min-height:72px;padding:10px 4px;display:grid;grid-template-columns:48px minmax(0,1fr);gap:10px;
+    align-items:center;border-bottom:1px solid #201e20
+  }
+  .storage-add-backup .storage-add-visual{
+    width:38px;height:38px;display:grid;place-items:center;border:1px dashed #373137;border-radius:9px;
+    background:#111013;color:#686062;font-size:20px;font-weight:300
+  }
+  .storage-add-backup .storage-add-copy{font-size:12px;color:#817876}
+  .storage-add-backup:hover .storage-add-visual{border-color:#5a5055;color:#b0a5a3;background:#161417}
+  .storage-add-backup:hover .storage-add-copy{color:#d8cfcb}
+  .storage-backups-section .inline-add{margin-top:8px;border:0;padding:10px 4px;background:#121013;border-radius:10px}
+
+  @media(hover:none){
+    #storagePane .folder-item .item-actions,
+    #storagePane .backup-item .item-actions{opacity:1;pointer-events:auto;background:transparent;backdrop-filter:none}
+  }
 
   @media(max-width:700px){
-    #storagePane{width:min(100% - 20px,980px);gap:26px;padding-top:8px}
-    #storagePane .section-head{min-height:46px}
-    .storage-add-button{height:34px;padding:0 10px}
-    #storagePane .folder-item.has-folder-preview{grid-template-columns:124px minmax(0,1fr);gap:11px;align-items:start;min-height:126px}
-    #storagePane .folder-item.has-folder-preview .storage-folder-samples{width:124px;height:102px;grid-row:1 / span 2}
-    #storagePane .folder-item.has-folder-preview .item-actions{grid-column:2}
-    #storagePane .folder-item .storage-title{align-items:center;flex-wrap:wrap}
-    #storagePane .folder-item .storage-title strong{flex-basis:100%;font-size:13px}
-    #storagePane .folder-item .item-state{margin-left:0;font-size:10px}
-    #storagePane .folder-item .storage-path{font-size:8px;line-height:1.3}
+    #storagePane{width:min(100% - 20px,980px);padding-top:7px;gap:20px}
+    #storagePane .folder-item{
+      grid-template-columns:126px minmax(0,1fr);gap:11px;min-height:126px;padding:10px 2px
+    }
+    .storage-path-parent{font-size:8px}
+    .storage-path-name{font-size:13px}
     #storagePane .folder-item .storage-meta{font-size:9px;gap:4px}
-    #storagePane .folder-item .item-actions{justify-content:flex-start}
+    #storagePane .folder-item .item-actions{
+      position:static;grid-column:2;padding:0;margin-top:5px;transform:none!important;justify-content:flex-start
+    }
+    .storage-add-folder{
+      grid-template-columns:126px minmax(0,1fr);gap:11px;min-height:126px;padding:10px 2px
+    }
+    .storage-add-folder .storage-add-visual{width:126px;height:104px;border-radius:10px}
+    .storage-add-folder .storage-add-copy{font-size:12px}
+    #storagePane .backup-item{padding-left:52px}
   }
 `;
 document.head.append(style);
 
-const cleanPath = value => String(value || '').replace(/[\\/]+$/, '');
-const folderName = value => cleanPath(value).split(/[\\/]+/).filter(Boolean).at(-1) || cleanPath(value);
-
-function replacePhrase(value) {
-  return String(value || '')
-    .replaceAll('already in Mochimono', 'already in Cloud')
-    .replaceAll('Mochimono repaired', 'Cloud repaired')
-    .replaceAll('Mochimono keeps another copy.', 'Cloud keeps another copy.')
-    .replaceAll('Stop keeping Mochimono copy', 'Stop keeping Cloud copy')
-    .replaceAll('Add Mochimono copy', '+ Cloud');
-}
-
-function ensureFolderPath(row, fullPath) {
-  const copy = row.querySelector('.storage-copy');
-  const title = copy?.querySelector('.storage-title');
-  if (!copy || !title) return;
-  let path = copy.querySelector(':scope > .storage-path');
-  if (!path) {
-    path = document.createElement('div');
-    path.className = 'storage-path';
-    title.after(path);
+function openProtectionSettings() {
+  const button = document.querySelector('#protectionSettings');
+  if (button) {
+    button.click();
+    return;
   }
-  if (path.textContent !== fullPath) path.textContent = fullPath;
-  path.title = fullPath;
+  setTimeout(() => document.querySelector('#protectionSettings')?.click(), 150);
 }
 
-function pinLocalStatus(row) {
-  if (!row.classList.contains('browse-only-folder')) return;
-  const status = row.querySelector('[data-folder-status]');
-  if (!status) return;
-  delete status.dataset.relativeTime;
-  delete status.dataset.relativePrefix;
-  delete status.dataset.relativeSuffix;
-  status.removeAttribute('datetime');
-  status.removeAttribute('title');
-  if (status.textContent !== 'Local') status.textContent = 'Local';
+function parseBytesLabel(value) {
+  const match = String(value || '').trim().match(/^([\d.]+)\s*(B|KB|MB|GB|TB|PB)$/i);
+  if (!match) return NaN;
+  const units = ['B','KB','MB','GB','TB','PB'];
+  const power = units.indexOf(match[2].toUpperCase());
+  return Number(match[1]) * (1000 ** Math.max(0, power));
 }
 
-function polishFolder(row) {
-  const fullPath = String(row.dataset.folderPath || '');
-  if (!fullPath) return;
-
-  const title = row.querySelector('.storage-title strong');
-  if (title) {
-    const name = folderName(fullPath);
-    if (title.textContent !== name) title.textContent = name;
-    title.title = fullPath;
+function formatBytes(number) {
+  const units = ['B','KB','MB','GB','TB','PB'];
+  let value = Math.max(0, Number(number) || 0);
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
+    unit++;
   }
-  ensureFolderPath(row, fullPath);
-  pinLocalStatus(row);
-
-  for (const badge of row.querySelectorAll('.storage-mode')) {
-    const text = badge.textContent.trim();
-    if (text === 'This PC') badge.textContent = 'Local';
-    else if (text === 'Mochimono') badge.textContent = 'Cloud';
-    badge.title = badge.textContent.trim() === 'Cloud' ? 'Cloud copy' : 'Files on this PC';
-  }
-
-  const cloud = row.querySelector('[data-protect-folder]');
-  if (cloud) {
-    if (cloud.textContent !== '+ Cloud') cloud.textContent = '+ Cloud';
-    cloud.title = 'Keep a Cloud copy';
-    cloud.setAttribute('aria-label', 'Keep a Cloud copy');
-  }
-
-  const remove = row.querySelector('[data-remove-folder]');
-  if (remove) {
-    const next = replacePhrase(remove.title);
-    if (next !== remove.title) remove.title = next;
-    const aria = replacePhrase(remove.getAttribute('aria-label'));
-    if (aria) remove.setAttribute('aria-label', aria);
-  }
+  return `${value < 10 && unit ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
 
-function polishWording(root = storage) {
-  if (!root) return;
-  const exact = new Map([
-    ['No protected folders', 'No folders'],
-    ['Mochimono', 'Cloud'],
-    ['Add Mochimono copy', '+ Cloud']
-  ]);
-  const selectors = [
-    '.empty-state', '.storage-mode', '[data-protect-folder]',
-    '.storage-meta span', '.item-progress strong', '.item-progress span',
-    '#protectionDashboard strong', '#protectionDashboard span', '#protectionDashboard button'
-  ];
-  for (const node of root.querySelectorAll(selectors.join(','))) {
-    const current = node.textContent;
-    const next = exact.get(current.trim()) || replacePhrase(current);
-    if (next !== current) node.textContent = next;
-  }
-  for (const node of root.querySelectorAll('[title],[aria-label]')) {
-    if (node.closest('.storage-folder-sample')) continue;
-    for (const attr of ['title','aria-label']) {
-      const current = node.getAttribute(attr);
-      if (!current) continue;
-      const next = replacePhrase(current);
-      if (next !== current) node.setAttribute(attr, next);
-    }
-  }
+function showUsedAndFree() {
+  if (!serverStorageText) return;
+  const match = serverStorageText.textContent.match(/^(.+?)\s*\/\s*(.+)$/);
+  if (!match) return;
+  const used = parseBytesLabel(match[1]);
+  const capacity = parseBytesLabel(match[2]);
+  if (!Number.isFinite(used) || !Number.isFinite(capacity)) return;
+  const text = `${match[1].trim()} used · ${formatBytes(Math.max(0, capacity - used))} free`;
+  serverStorageText.textContent = text;
+  if (serverStorage) serverStorage.title = `${text} · Cloud`;
 }
 
-function orderSections() {
-  const protection = document.querySelector('#protectionDashboard');
-  const backup = [...(storage?.querySelectorAll(':scope > .dashboard-section') || [])]
-    .find(section => section.querySelector(':scope > .section-head h2')?.textContent.trim() === 'Backups');
-  if (protection && backup && backup.nextElementSibling !== protection) backup.after(protection);
+protectionMenu?.addEventListener('click', openProtectionSettings);
+if (serverStorageText) {
+  new MutationObserver(showUsedAndFree).observe(serverStorageText, { childList:true, characterData:true, subtree:true });
+  queueMicrotask(showUsedAndFree);
 }
-
-let polishQueued = false;
-function polish() {
-  polishQueued = false;
-  orderSections();
-  for (const row of folders?.querySelectorAll('[data-folder-path]') || []) polishFolder(row);
-  polishWording(storage);
-  for (const box of document.querySelectorAll('dialog')) polishWording(box);
-  if (toast) {
-    const next = replacePhrase(toast.textContent);
-    if (next !== toast.textContent) toast.textContent = next;
-  }
-}
-
-function queuePolish() {
-  if (polishQueued) return;
-  polishQueued = true;
-  queueMicrotask(polish);
-}
-
-if (storage) {
-  new MutationObserver(queuePolish).observe(storage, { childList:true, subtree:true, characterData:true });
-  new MutationObserver(records => {
-    if (records.some(record => [...record.addedNodes].some(node => node instanceof HTMLDialogElement))) queuePolish();
-  }).observe(document.body, { childList:true });
-}
-if (toast) new MutationObserver(queuePolish).observe(toast, { childList:true, characterData:true, subtree:true });
-
-queuePolish();

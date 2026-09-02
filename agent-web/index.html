@@ -23,6 +23,7 @@
             <button data-client-tab="storage">Storage</button>
           </nav>
           <button id="deviceButton" class="device-button"><span class="menu-label">Settings</span><span id="deviceLabel"></span></button>
+          <button id="clientProtection" class="device-button"><span class="menu-label">Protection</span></button>
           <button id="clientConnect" class="client-logout" hidden>Connect Cloud</button>
           <button id="clientLogout" class="client-logout" hidden>Log out</button>
         </div>
@@ -36,10 +37,7 @@
 
   <main id="storagePane" class="dashboard" hidden>
     <section class="dashboard-section storage-folders-section">
-      <div class="section-head">
-        <h2>Folders</h2>
-        <button id="showFolderAdd" class="storage-add-button" title="Add folder"><span aria-hidden="true">＋</span>Add folder</button>
-      </div>
+      <h2 class="storage-visually-hidden">Folders</h2>
       <div id="folderAdd" class="folder-add" hidden aria-hidden="true">
         <div class="folder-path-row">
           <input id="importPath" placeholder="Folder or drive">
@@ -55,24 +53,27 @@
         </div>
       </div>
       <div id="folders" class="item-list"><div class="muted">Loading…</div></div>
+      <button id="showFolderAdd" class="storage-add-card storage-add-folder" title="Add folder">
+        <span class="storage-add-visual" aria-hidden="true">＋</span>
+        <span class="storage-add-copy">Add folder</span>
+      </button>
     </section>
 
     <section id="activityCard" class="background-work" hidden><div id="activity"></div></section>
 
-    <section class="dashboard-section">
-      <div class="section-head">
-        <h2>Backups</h2>
-        <div class="section-actions">
-          <button id="refreshBackups" class="round-action subtle" title="Refresh backups" aria-label="Refresh backups">↻</button>
-          <button id="showBackupAdd" class="storage-add-button secondary-add" title="Add backup"><span aria-hidden="true">＋</span>Add backup</button>
-        </div>
-      </div>
+    <section class="dashboard-section storage-backups-section">
+      <h2 class="storage-visually-hidden">Backups</h2>
+      <button id="refreshBackups" hidden aria-hidden="true">Refresh</button>
+      <div id="backups" class="item-list"><div class="muted">Loading…</div></div>
+      <button id="showBackupAdd" class="storage-add-card storage-add-backup" title="Add backup">
+        <span class="storage-add-visual storage-add-drive" aria-hidden="true">＋</span>
+        <span class="storage-add-copy">Add backup</span>
+      </button>
       <div id="backupAdd" class="inline-add" hidden>
         <input id="backupLocation" placeholder="Backup folder">
         <button id="chooseBackup" class="secondary">Browse</button>
         <button id="addBackup" class="primary">Add</button>
       </div>
-      <div id="backups" class="item-list"><div class="muted">Loading…</div></div>
     </section>
   </main>
 
