@@ -10,7 +10,6 @@ const nearby = new Set();
 const pendingTrees = new Set();
 const browserFallback = CLIENT ? null : import('./browser-thumbnail-fallback.js').catch(() => null);
 let observeFrame = 0;
-let visibleFrame = 0;
 let checkTimer = 0;
 let checkAt = 0;
 let checking = false;
@@ -159,15 +158,9 @@ function scheduleCheck(delay = 80) {
   checkTimer = setTimeout(checkNearby, delay);
 }
 
-function scanVisible() {
-  visibleFrame = 0;
-  for (const card of nearby) if (inViewport(card)) paintCard(card, true);
+function refreshVisible() {
+  for (const card of nearby) paintCard(card, true);
   scheduleCheck(0);
-}
-
-function scheduleVisibleScan() {
-  if (visibleFrame) return;
-  visibleFrame = requestAnimationFrame(scanVisible);
 }
 
 async function requestMissing(hashes) {
@@ -202,11 +195,11 @@ async function checkNearby() {
     seen.add(hash);
     hashes.push(hash);
   };
-  if (inViewport(cursor)) add(cursor.dataset.hash || '');
+  if (cursor && nearby.has(cursor)) add(cursor.dataset.hash || '');
 
   const center = innerHeight / 2;
   const candidates = [...nearby]
-    .filter(card => kind(card) && inViewport(card))
+    .filter(card => kind(card))
     .map(card => {
       const rect = card.getBoundingClientRect();
       return { card, centerDistance: Math.abs((rect.top + rect.bottom) / 2 - center) };
@@ -257,7 +250,7 @@ async function checkNearby() {
     }
   } finally {
     checking = false;
-    if ([...nearby].some(card => kind(card) && inViewport(card) && !states.get(card.dataset.hash)?.ready)) scheduleCheck(500);
+    if ([...nearby].some(card => kind(card) && !states.get(card.dataset.hash)?.ready)) scheduleCheck(500);
   }
 }
 
@@ -269,10 +262,10 @@ const observer = files ? new IntersectionObserver(entries => {
       continue;
     }
     nearby.add(card);
-    if (inViewport(card)) paintCard(card, true);
+    paintCard(card, true);
   }
   scheduleCheck(40);
-}, { rootMargin: '1200px 0px' }) : null;
+}) : null;
 
 function observeTree(node) {
   if (!observer) return;
@@ -353,13 +346,11 @@ if (files) {
     }
   }).observe(files, { childList: true, subtree: true });
 
-  window.addEventListener('scroll', scheduleVisibleScan, { passive: true });
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return;
-    scheduleVisibleScan();
+    if (!document.hidden) refreshVisible();
   });
-  window.addEventListener('mochimono:catalog-updated', scheduleVisibleScan);
-  window.addEventListener('mochimono:grid-interaction-end', scheduleVisibleScan);
+  window.addEventListener('mochimono:catalog-updated', refreshVisible);
+  window.addEventListener('mochimono:grid-interaction-end', refreshVisible);
   window.addEventListener('mochimono:browser-thumbnail-ready', event => {
     const hash = String(event.detail?.hash || '');
     if (!hash) return;
@@ -369,11 +360,10 @@ if (files) {
     state.nextTry = 0;
     states.set(hash, state);
     loadHash(hash);
-    scheduleVisibleScan();
+    scheduleCheck(50);
   });
   addEventListener('beforeunload', () => {
     if (checkTimer) clearTimeout(checkTimer);
     if (observeFrame) cancelAnimationFrame(observeFrame);
-    if (visibleFrame) cancelAnimationFrame(visibleFrame);
   }, { once: true });
 }
