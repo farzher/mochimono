@@ -184,11 +184,18 @@ async function refreshFolderPreviews(force = false) {
     previewLoadedAt = Date.now();
     previewRetryAttempt = 0;
 
-    const hashes = sampleMediaHashes();
-    const ready = await checkSamplePreviews(hashes);
-    readyPreviews.clear();
-    for (const hash of ready) readyPreviews.add(hash);
+    // The folder mosaic itself does not depend on thumbnail generation. Show it
+    // immediately with file glyphs/names, then upgrade individual cells as their
+    // cached thumbnails become available. A transient thumbnail-check failure
+    // must never make the whole visual preview disappear.
     renderFolderPreviews();
+    const hashes = sampleMediaHashes();
+    try {
+      const ready = await checkSamplePreviews(hashes);
+      readyPreviews.clear();
+      for (const hash of ready) readyPreviews.add(hash);
+      renderFolderPreviews();
+    } catch {}
     schedulePreviewRetry();
   } catch {}
   finally { previewLoading = false; }
@@ -338,5 +345,9 @@ window.addEventListener('mochimono-folder-intent-ui', event => {
   else startProtect?.focus();
 });
 
-if (folders) new MutationObserver(annotateSoon).observe(folders, { childList:true, subtree:true });
+// Folder rows are replaced only when the configured folder structure changes.
+// Watching their entire subtrees made our own progress/timestamp/preview DOM
+// updates trigger another state fetch and decoration pass, creating needless
+// repaint churn while a sync was running.
+if (folders) new MutationObserver(annotateSoon).observe(folders, { childList:true });
 annotateSoon();
