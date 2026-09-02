@@ -1,4 +1,5 @@
 import { db, json, now, readJson } from './lib/server-context.js';
+import { handleDeviceIdentity } from './device-identity-server.js';
 import { handleProtectionServer, registerProtectionStorage } from './protection-server.js';
 
 function normalizeText(value) {
@@ -188,6 +189,7 @@ export function driveCoverage(row) {
 }
 
 export async function handleBackupPolicy(req, res, url) {
+  if (await handleDeviceIdentity(req, res, url)) return true;
   if (await handleProtectionServer(req, res, url)) return true;
 
   const desired = /^\/api\/drives\/([^/]+)\/desired$/.exec(url.pathname);

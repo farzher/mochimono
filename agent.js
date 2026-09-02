@@ -19,6 +19,7 @@ const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'agent-web');
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.MOCHIMONO_AGENT_PORT || 8643);
+let deviceIdentityReconciled = false;
 
 function staticType(path) {
   if (path.endsWith('.html')) return 'text/html; charset=utf-8';
@@ -48,8 +49,44 @@ function visibleFolders() {
   ];
 }
 
+async function reconcileDeviceIdentity() {
+  if (deviceIdentityReconciled || !settings.token) return;
+  const aliases = new Set((settings.deviceAliases || []).map(String).filter(Boolean));
+  if (DEVICE && DEVICE.toLowerCase() !== settings.device.toLowerCase()) aliases.add(DEVICE);
+  let complete = true;
+  for (const alias of aliases) {
+    if (!alias || alias.toLowerCase() === settings.device.toLowerCase()) continue;
+    try {
+      await api('/api/device-identity/rename', { method: 'POST', body: { from: alias, to: settings.device } });
+      settings.deviceAliases = settings.deviceAliases.filter(item => item.toLowerCase() !== alias.toLowerCase());
+    } catch {
+      complete = false;
+    }
+  }
+  if (complete) {
+    deviceIdentityReconciled = true;
+    await persistSettings();
+  }
+}
+
+async function openNativeFolder(path) {
+  const target = resolve(String(path || ''));
+  const info = await stat(target).catch(() => null);
+  if (!info?.isDirectory()) throw Object.assign(new Error('Folder is unavailable'), { status: 404 });
+  const command = platform() === 'win32' ? 'explorer.exe' : platform() === 'darwin' ? 'open' : 'xdg-open';
+  await new Promise((resolvePromise, reject) => {
+    const child = spawn(command, [target], { detached: true, stdio: 'ignore', windowsHide: true });
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolvePromise();
+    });
+  });
+}
+
 async function handleLocalApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/state') {
+    await reconcileDeviceIdentity();
     json(res, 200, {
       settings: {
         server: settings.server, hasToken: Boolean(settings.token), device: settings.device,
@@ -65,15 +102,26 @@ async function handleLocalApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/settings') {
     const body = await readJson(req);
     const previousDevice = settings.device;
+    const previousServer = settings.server;
+    const previousToken = settings.token;
     if (body.server !== undefined) settings.server = String(body.server || 'http://127.0.0.1:8642').trim().replace(/\/$/, '');
     if (body.token !== undefined) settings.token = String(body.token || '');
-    if (body.device !== undefined) settings.device = String(body.device || DEVICE).trim() || DEVICE;
+    if (body.device !== undefined) {
+      const nextDevice = String(body.device || DEVICE).trim() || DEVICE;
+      if (nextDevice.toLowerCase() !== previousDevice.toLowerCase()) {
+        settings.deviceAliases = [...new Set([...(settings.deviceAliases || []), previousDevice])];
+      }
+      settings.device = nextDevice;
+    }
     if (body.uploadWorkers !== undefined) {
       const workers = Number(body.uploadWorkers);
       if (![1, 2, 4].includes(workers)) return json(res, 400, { error: 'Upload concurrency must be 1, 2, or 4' });
       settings.uploadWorkers = workers;
     }
     await persistSettings();
+
+    if (settings.server !== previousServer || settings.token !== previousToken || settings.device !== previousDevice) deviceIdentityReconciled = false;
+    await reconcileDeviceIdentity();
 
     if (settings.token && settings.device !== previousDevice) {
       const ids = [...new Set(settings.folders.map(folder => folder.importId).filter(Boolean))];
@@ -88,6 +136,7 @@ async function handleLocalApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/auth/revoke-self') {
     if (settings.token) await api('/api/auth/revoke-self', { method: 'POST' }).catch(() => {});
     settings.token = '';
+    deviceIdentityReconciled = false;
     await persistSettings();
     invalidateClientProviders();
     json(res, 200, { ok: true });
@@ -105,6 +154,16 @@ async function handleLocalApi(req, res, url) {
     const picked = await pickFolder({ multiple, title: multiple ? 'Choose folders for Mochimono' : 'Choose a folder for Mochimono' });
     const paths = multiple ? picked : picked ? [picked] : [];
     json(res, 200, { path: paths[0] || null, paths });
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/open-folder') {
+    const body = await readJson(req);
+    if (!body.path) json(res, 400, { error: 'Folder required' });
+    else {
+      await openNativeFolder(body.path);
+      json(res, 200, { ok: true });
+    }
     return true;
   }
 
