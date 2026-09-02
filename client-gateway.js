@@ -7,15 +7,14 @@ import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { json, pathKey, readJson, settings } from './lib/agent-context.js';
-import { clientProviders, handleClientProviderApi } from './lib/client-providers.js';
+import { backupThumbnailCandidates } from './lib/backup-thumb-candidates.js';
+import { handleClientProviderApi } from './lib/client-providers.js';
 import { localCandidate, localCandidates, localCatalog, localLocations } from './lib/local-locations.js';
 import { providerThumbnail, queueProviderThumbnail, serveProviderThumbnail } from './lib/provider-thumbs.js';
-import { queueLocalThumbnail, queueRemoteThumbnail } from './lib/thumbnail-agent.js';
+import { queueRemoteThumbnail } from './lib/thumbnail-agent.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'web');
-let thumbnailSnapshot = null;
-let thumbnailSnapshotToken = '';
 
 function staticType(path) {
   if (path.endsWith('.html')) return 'text/html; charset=utf-8';
@@ -67,42 +66,7 @@ async function login(req, res) {
     body: JSON.stringify({ username, password, device: String(body.device || 'Mochimono Client') })
   });
   const data = await response.json().catch(() => ({}));
-  thumbnailSnapshot = null;
-  thumbnailSnapshotToken = '';
   return json(res, response.status, response.ok ? { token: data.token, username: data.username } : { error: data.error || 'Login failed' });
-}
-
-async function thumbnailProviders(hashes) {
-  const token = String(settings.token || '');
-  if (thumbnailSnapshot && thumbnailSnapshotToken === token && hashes.every(hash => thumbnailSnapshot.byHash.has(hash))) return thumbnailSnapshot;
-  thumbnailSnapshot = await clientProviders();
-  thumbnailSnapshotToken = token;
-  return thumbnailSnapshot;
-}
-
-function firstCandidate(snapshot, hash) {
-  return snapshot.candidates.get(String(hash))?.[0] || null;
-}
-
-function queueSnapshotProvider(snapshot, file, background = false) {
-  const candidate = firstCandidate(snapshot, file?.hash);
-  if (!file || !candidate) return false;
-  return queueProviderThumbnail({ hash: file.hash, filename: file.filename, mime: file.mime, candidate }, { background });
-}
-
-function queueCanonicalPreview(snapshot, file) {
-  if (!file) return false;
-  const candidate = firstCandidate(snapshot, file.hash);
-  if (candidate?.path) {
-    return queueLocalThumbnail({
-      hash: file.hash,
-      path: candidate.path,
-      size: file.size,
-      mime: file.mime,
-      filename: file.filename
-    });
-  }
-  return queueRemoteThumbnail({ hash: file.hash, size: file.size, filename: file.filename, mime: file.mime });
 }
 
 async function serverThumbnails(hashes) {
@@ -125,17 +89,11 @@ async function serverThumbnails(hashes) {
   }
 }
 
-function queueUnresolvedThumbnails(hashes, background) {
+function queueBackupThumbnails(hashes, background) {
   if (!hashes.length) return;
   setImmediate(() => {
-    thumbnailProviders(hashes).then(snapshot => {
-      for (const hash of hashes) {
-        const file = snapshot.byHash.get(hash);
-        if (!file) continue;
-        if (file.serverStored) queueCanonicalPreview(snapshot, file);
-        else queueSnapshotProvider(snapshot, file, background);
-      }
-    }).catch(() => {});
+    const candidates = backupThumbnailCandidates(hashes);
+    for (const file of candidates.values()) queueProviderThumbnail(file, { background });
   });
 }
 
@@ -167,7 +125,7 @@ async function checkThumbnails(req, res) {
     if (serverFile) queueRemoteThumbnail(serverFile);
     else unresolved.push(hash);
   }
-  queueUnresolvedThumbnails(unresolved, background);
+  queueBackupThumbnails(unresolved, background);
 
   json(res, 200, { thumbnails: [...ready.values()].map(item => ({
     hash: item.hash, width: Number(item.width) || 0, height: Number(item.height) || 0,
