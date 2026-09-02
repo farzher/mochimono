@@ -37,10 +37,7 @@ function releaseInteraction() {
   interactionTimer = setTimeout(finishInteraction, 50);
 }
 
-window.mochimonoGridInteraction = {
-  active: () => interactionActive,
-  pulse: pulseInteraction
-};
+window.mochimonoGridInteraction = { active: () => interactionActive, pulse: pulseInteraction };
 
 const arrowKeys = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown']);
 const typingTarget = target => Boolean(target?.closest?.('input,select,textarea,[contenteditable="true"]'));
@@ -48,9 +45,7 @@ const typingTarget = target => Boolean(target?.closest?.('input,select,textarea,
 document.addEventListener('keydown', event => {
   if (arrowKeys.has(event.key) && !typingTarget(event.target)) pulseInteraction(event.repeat ? 140 : 180);
 }, true);
-document.addEventListener('keyup', event => {
-  if (arrowKeys.has(event.key)) releaseInteraction();
-}, true);
+document.addEventListener('keyup', event => { if (arrowKeys.has(event.key)) releaseInteraction(); }, true);
 window.addEventListener('scroll', () => pulseInteraction(140), { passive:true });
 window.addEventListener('wheel', () => pulseInteraction(180), { passive:true });
 window.addEventListener('blur', releaseInteraction);
@@ -58,14 +53,16 @@ window.addEventListener('blur', releaseInteraction);
 if (files) {
   const style = document.createElement('style');
   style.textContent = `
-    /* Keep month layout work isolated without deactivating its contents. The
-       browser already skips off-screen painting; content-visibility caused
-       visible activation flashes when rapidly reversing through the grid. */
     .files.grid>.date-group{contain:layout style}
-    /* During a fast key/scroll burst the focus outline is enough feedback.
-       Avoid continuously animating text overlays over large image surfaces. */
+    html.grid-interaction-active .commandbar{
+      backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+      background:rgba(24,22,25,.98)!important
+    }
     html.grid-interaction-active #files .file-context-badge{
       opacity:0!important;transform:none!important;transition:none!important
+    }
+    html.grid-interaction-active #files .file-card:hover{
+      background:var(--surface)!important;box-shadow:none!important
     }
   `;
   document.head.append(style);
