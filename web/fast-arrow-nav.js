@@ -11,6 +11,9 @@ let queuedKey = '';
 let holding = false;
 let directFocused = null;
 let railWasHidden = null;
+let preextendHandle = 0;
+let preextendIdle = false;
+let preextendDirection = 0;
 
 const arrowKeys = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown']);
 const gridActive = () => views?.querySelector('[data-view="grid"]')?.classList.contains('active');
@@ -143,7 +146,51 @@ function navigateWithin(state, current, key) {
   return adjacentVertical(state, current, key === 'ArrowUp' ? -1 : 1);
 }
 
+function cancelPreextend() {
+  if (!preextendHandle) return;
+  if (preextendIdle) cancelIdleCallback(preextendHandle);
+  else clearTimeout(preextendHandle);
+  preextendHandle = 0;
+  preextendIdle = false;
+  preextendDirection = 0;
+}
+
+function nearWindowEdge(card, state, direction) {
+  const info = state.byCard.get(card);
+  if (!info || state.cards.length < 2) return false;
+  const margin = Math.max(24, Math.floor(state.cards.length / 3));
+  return direction < 0 ? info.entry.index < margin : info.entry.index >= state.cards.length - margin;
+}
+
+function schedulePreextend(card, state, key) {
+  const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
+  if (!nearWindowEdge(card, state, direction)) {
+    if (preextendDirection === direction) cancelPreextend();
+    return;
+  }
+  if (preextendHandle && preextendDirection === direction) return;
+  cancelPreextend();
+  preextendDirection = direction;
+
+  const run = () => {
+    preextendHandle = 0;
+    preextendIdle = false;
+    const wanted = preextendDirection;
+    preextendDirection = 0;
+    if (!holding || paging || !directFocused?.isConnected) return;
+    const latest = currentLayout();
+    if (!nearWindowEdge(directFocused, latest, wanted)) return;
+    if (window.mochimonoLibrary?.extend?.(wanted)) dirty = true;
+  };
+
+  if ('requestIdleCallback' in window) {
+    preextendIdle = true;
+    preextendHandle = requestIdleCallback(run, { timeout: 70 });
+  } else preextendHandle = setTimeout(run, 16);
+}
+
 function extendAndContinue(key, current) {
+  cancelPreextend();
   const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
   const hash = current.dataset.hash || '';
   const anchorTop = current.getBoundingClientRect().top;
@@ -160,7 +207,10 @@ function extendAndContinue(key, current) {
     const state = currentLayout();
     const start = state.entries.find(entry => entry.hash === hash)?.card || focusedCard(state);
     const target = start && navigateWithin(state, start, key);
-    if (target) moveFocus(target, state);
+    if (target) {
+      moveFocus(target, state);
+      schedulePreextend(target, state, key);
+    }
     paging = false;
     const queued = queuedKey;
     queuedKey = '';
@@ -175,10 +225,14 @@ function navigate(key) {
   const current = focusedCard(state);
   if (!current) return moveFocus(firstVisibleCard(state), state);
   const target = navigateWithin(state, current, key);
-  return target ? moveFocus(target, state) : extendAndContinue(key, current);
+  if (!target) return extendAndContinue(key, current);
+  const moved = moveFocus(target, state);
+  if (moved) schedulePreextend(target, state, key);
+  return moved;
 }
 
 function settleHold() {
+  cancelPreextend();
   if (!holding && railWasHidden == null) return;
   holding = false;
   releaseRailScan();
