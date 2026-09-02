@@ -19,15 +19,6 @@ function editingControl(event) {
   return !(control.id === 'search' && (event.key === 'ArrowUp' || event.key === 'ArrowDown' || !control.value));
 }
 
-const style = document.createElement('style');
-style.textContent = `
-  #dateRail.fast-keyboard-rail[hidden]{display:block!important}
-  html.keyboard-navigation-active #files.grid .file-card.context-keyboard-focus:not(.keyboard-cursor){outline:none!important;box-shadow:none!important}
-  #files.grid .file-card.keyboard-cursor{position:relative;z-index:2;outline:2px solid rgba(239,160,154,.9)!important;outline-offset:-2px!important}
-  #files.grid .file-card.keyboard-cursor .file-context-badge{opacity:.86!important;transform:none!important;transition:none!important}
-`;
-document.head.append(style);
-
 function structuralMutation(records) {
   for (const record of records) {
     for (const node of [...record.addedNodes, ...record.removedNodes]) {
@@ -93,11 +84,9 @@ const currentLayout = () => !layout || dirty ? buildLayout() : layout;
 const cursorCard = state => cursorHash ? state.byHash.get(cursorHash) || null : null;
 
 function visibleInfo(state, card) {
-  const info = card && state.byCard.get(card);
-  if (!info) return null;
-  const top = info.entry.top - scrollY;
-  const bottom = top + info.entry.height;
-  return bottom > state.viewportTop && top < innerHeight ? { ...info, top, bottom } : null;
+  if (!card || !state.byCard.has(card)) return null;
+  const rect = card.getBoundingClientRect();
+  return rect.bottom > state.viewportTop && rect.top < innerHeight ? rect : null;
 }
 
 function activeCard(state) {
@@ -166,6 +155,15 @@ function prioritizeRow(card, state) {
   window.mochimonoThumbnails?.prioritize?.(row ? row.entries.map(entry => entry.card) : [card]);
 }
 
+function keepVisible(card) {
+  const rect = card.getBoundingClientRect();
+  const viewportTop = (commandbar?.getBoundingClientRect().bottom || 0) + 2;
+  let delta = 0;
+  if (rect.top < viewportTop) delta = rect.top - viewportTop;
+  else if (rect.bottom > innerHeight - 2) delta = rect.bottom - (innerHeight - 2);
+  if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
+}
+
 function moveCursor(card, state = currentLayout()) {
   if (!card) return false;
   for (const previous of files.querySelectorAll('.keyboard-cursor[data-hash]')) {
@@ -176,15 +174,7 @@ function moveCursor(card, state = currentLayout()) {
   document.documentElement.classList.add('keyboard-navigation-active');
   freezeRail();
   prioritizeRow(card, state);
-
-  const info = state.byCard.get(card);
-  if (!info) return true;
-  const top = info.entry.top - scrollY;
-  const bottom = top + info.entry.height;
-  let delta = 0;
-  if (top < state.viewportTop) delta = top - state.viewportTop;
-  else if (bottom > innerHeight - 2) delta = bottom - (innerHeight - 2);
-  if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
+  keepVisible(card);
   return true;
 }
 
@@ -220,38 +210,31 @@ function targetFor(state, current, key) {
   return verticalTarget(state, current, key === 'ArrowUp' ? -1 : 1);
 }
 
-function extendAndContinue(key, current) {
+function shiftWindowAndContinue(key, current) {
+  const library = window.mochimonoLibrary;
+  const page = library?.state?.();
+  if (!page || !library.ensureIndex) return true;
+
   const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
+  const probe = direction < 0 ? page.offset - 1 : page.offset + page.loaded;
+  if (probe < 0 || probe >= page.filtered) return true;
+
   const hash = current.dataset.hash || '';
   const anchorTop = current.getBoundingClientRect().top;
-  let extended = false;
-  try {
-    extended = Boolean(window.mochimonoLibrary?.extend?.(direction));
-  } catch (error) {
-    console.error('Mochimono grid extension failed.', error);
-  }
+  library.ensureIndex(probe);
   hideSentinels();
-  if (!extended) return true;
-
   dirty = true;
+
   const same = hash && files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
-  if (same) {
-    const delta = same.getBoundingClientRect().top - anchorTop;
-    if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
-  }
+  if (!same) return true;
+  const delta = same.getBoundingClientRect().top - anchorTop;
+  if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
 
   const state = buildLayout();
   const start = state.byHash.get(hash);
   const target = start && targetFor(state, start, key);
   if (target) moveCursor(target, state);
-
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    if (!holding || !cursorHash) return;
-    dirty = true;
-    const settled = currentLayout();
-    const selected = cursorCard(settled);
-    if (selected) moveCursor(selected, settled);
-  }));
+  else if (start) moveCursor(start, state);
   return true;
 }
 
@@ -261,7 +244,7 @@ function navigate(key) {
   if (!current) return bootstrapCursor();
   if (!cursorHash || cursorHash !== current.dataset.hash) moveCursor(current, state);
   const target = targetFor(state, current, key);
-  return target ? moveCursor(target, state) : extendAndContinue(key, current);
+  return target ? moveCursor(target, state) : shiftWindowAndContinue(key, current);
 }
 
 function press(key) {
@@ -273,16 +256,17 @@ function press(key) {
     const state = currentLayout();
     const existing = cursorCard(state);
     if (!visibleInfo(state, existing)) {
-      if (!moveCursor(activeCard(state) || visibleAnchor(state), state)) {
+      const start = activeCard(state) || visibleAnchor(state);
+      if (!moveCursor(start, state)) {
         holding = false;
         releaseRail();
         releaseSentinels();
-        return false;
       }
       return true;
     }
   }
-  return navigate(key);
+  navigate(key);
+  return true;
 }
 
 function release() {
@@ -327,9 +311,10 @@ function syncReturnedCursor(hash) {
 window.mochimonoGridKeyboard = { press, release, reset: resetNavigation };
 
 document.addEventListener('keydown', event => {
-  if (editingControl(event) || !press(event.key)) return;
+  if (!arrows.has(event.key) || !viewer?.hidden || !gridActive() || editingControl(event)) return;
   event.preventDefault();
   event.stopImmediatePropagation();
+  press(event.key);
 }, true);
 document.addEventListener('keyup', event => {
   if (!arrows.has(event.key)) return;

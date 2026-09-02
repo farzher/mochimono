@@ -225,14 +225,14 @@ async function checkNearby() {
         loadHash(hash);
       } else {
         state.ready = false;
-        state.nextCheck = performance.now() + 800;
+        state.nextCheck = performance.now() + 500;
         states.set(hash, state);
         missing.push(hash);
       }
     }
     requestMissing(missing);
   } catch {
-    const retry = performance.now() + 1400;
+    const retry = performance.now() + 1200;
     for (const hash of hashes) {
       const state = states.get(hash) || {};
       state.nextCheck = retry;
@@ -240,7 +240,7 @@ async function checkNearby() {
     }
   } finally {
     checking = false;
-    if ([...nearby].some(card => card.isConnected && !states.get(card.dataset.hash)?.ready)) scheduleCheck(850);
+    if ([...nearby].some(card => card.isConnected && !states.get(card.dataset.hash)?.ready)) scheduleCheck(500);
   }
 }
 
@@ -255,7 +255,7 @@ const observer = files ? new IntersectionObserver(entries => {
     paintCard(card, true);
   }
   scheduleCheck(40);
-}, { rootMargin: '600px 0px' }) : null;
+}, { rootMargin: '1200px 0px' }) : null;
 
 function observeTree(node) {
   if (!observer) return;
