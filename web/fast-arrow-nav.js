@@ -104,10 +104,6 @@ function afterLayout(callback) {
 }
 
 function extendAndContinue(key, hash) {
-  if (paging) {
-    queuedKey = key;
-    return true;
-  }
   const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
   if (!window.mochimonoLibrary?.extend?.(direction)) return false;
   paging = true;
@@ -126,6 +122,10 @@ function extendAndContinue(key, hash) {
 }
 
 function navigate(key) {
+  if (paging) {
+    queuedKey = key;
+    return true;
+  }
   const state = currentLayout();
   const current = focusedCard(state);
   if (!current) return false;
