@@ -200,6 +200,7 @@ if (rail && sort) {
 
   function updateActive() {
     activeFrame = 0;
+    if (rail.hidden || window.mochimonoGridInteraction?.active?.()) return;
     const markers = [...rail.querySelectorAll(':scope > .rail-semantic .rail-semantic-marker')];
     if (!markers.length) return;
     const thumb = rail.querySelector(':scope > .rail-thumb');
@@ -220,6 +221,7 @@ if (rail && sort) {
   }
 
   function scheduleActive() {
+    if (rail.hidden || window.mochimonoGridInteraction?.active?.()) return;
     if (!activeFrame) activeFrame = requestAnimationFrame(updateActive);
   }
 
@@ -235,6 +237,7 @@ if (rail && sort) {
   rail.addEventListener('pointercancel', hideHover, { passive: true });
 
   window.addEventListener('scroll', scheduleActive, { passive: true });
+  window.addEventListener('mochimono:grid-interaction-end', scheduleActive);
   sort.addEventListener('change', scheduleDecorate);
 
   new MutationObserver(scheduleDecorate).observe(rail, { childList: true, subtree: false });
