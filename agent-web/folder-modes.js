@@ -163,12 +163,29 @@ function decorateRow(row, folder) {
   }
 }
 
-function sampleGlyph(file) {
+function mediaKind(file) {
   const mime = String(file?.mime || '');
-  if (mime.startsWith('video/')) return '▶';
-  if (mime.startsWith('audio/')) return '♪';
-  if (mime.startsWith('image/')) return '▧';
-  return '▤';
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  return '';
+}
+
+function rankPreviewFiles(files) {
+  const images = [];
+  const videos = [];
+  const seen = new Set();
+  for (const file of Array.isArray(files) ? files : []) {
+    const hash = String(file?.hash || '');
+    const kind = mediaKind(file);
+    if (!/^[a-f0-9]{64}$/.test(hash) || !kind || seen.has(hash)) continue;
+    seen.add(hash);
+    (kind === 'image' ? images : videos).push(file);
+  }
+  return [...images, ...videos];
+}
+
+function sampleGlyph(file) {
+  return mediaKind(file) === 'video' ? '▶' : '▧';
 }
 
 function thumbUrl(hash, attempt = 0) {
@@ -176,13 +193,44 @@ function thumbUrl(hash, attempt = 0) {
   return `/api/thumbs/${encodeURIComponent(hash)}${suffix}`;
 }
 
-function installThumb(img, cell, hash) {
+function nearlyBlackVideoThumb(img) {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 24;
+    canvas.height = 24;
+    const context = canvas.getContext('2d', { willReadFrequently:true });
+    context.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let dark = 0;
+    let luminance = 0;
+    const count = pixels.length / 4;
+    for (let i = 0; i < pixels.length; i += 4) {
+      const value = .2126 * pixels[i] + .7152 * pixels[i + 1] + .0722 * pixels[i + 2];
+      luminance += value;
+      if (value < 18) dark++;
+    }
+    return count > 0 && dark / count > .94 && luminance / count < 14;
+  } catch {
+    return false;
+  }
+}
+
+function installThumb(img, cell, hash, onReject) {
   const delays = [450, 800, 1300, 2200, 3600, 5600, 8500];
-  img.addEventListener('load', () => cell.classList.add('thumb-ready'));
+  img.addEventListener('load', () => {
+    if (cell.classList.contains('video') && nearlyBlackVideoThumb(img) && onReject) {
+      onReject(cell);
+      return;
+    }
+    cell.classList.add('thumb-ready');
+  });
   img.addEventListener('error', () => {
     cell.classList.remove('thumb-ready');
     const attempt = Number(img.dataset.attempt || 0);
-    if (attempt >= delays.length) return;
+    if (attempt >= delays.length) {
+      onReject?.(cell);
+      return;
+    }
     img.dataset.attempt = String(attempt + 1);
     setTimeout(() => {
       if (img.isConnected) img.src = thumbUrl(hash, attempt + 1);
@@ -190,7 +238,7 @@ function installThumb(img, cell, hash) {
   });
 }
 
-function sampleCell(file, index) {
+function sampleCell(file, index, onReject) {
   const cell = document.createElement('span');
   cell.className = 'storage-folder-sample';
   if (!file) {
@@ -204,9 +252,10 @@ function sampleCell(file, index) {
   }
 
   const filename = String(file.filename || '');
-  const mime = String(file.mime || '');
+  const kind = mediaKind(file);
+  const hash = String(file.hash || '');
   cell.title = filename;
-  if (mime.startsWith('video/')) cell.classList.add('video');
+  if (kind === 'video') cell.classList.add('video');
 
   const glyph = document.createElement('span');
   glyph.className = 'sample-glyph';
@@ -216,15 +265,13 @@ function sampleCell(file, index) {
   name.textContent = filename;
   cell.append(glyph, name);
 
-  const media = mime.startsWith('image/') || mime.startsWith('video/');
-  const hash = String(file.hash || '');
-  if (media && /^[a-f0-9]{64}$/.test(hash)) {
+  if (kind && /^[a-f0-9]{64}$/.test(hash)) {
     const img = document.createElement('img');
     img.alt = '';
-    img.loading = 'lazy';
+    img.loading = 'eager';
     img.decoding = 'async';
     img.dataset.attempt = '0';
-    installThumb(img, cell, hash);
+    installThumb(img, cell, hash, onReject);
     img.src = thumbUrl(hash);
     cell.append(img);
   }
@@ -233,7 +280,7 @@ function sampleCell(file, index) {
 
 function renderFolderPreview(row) {
   const sample = previewSamples.get(pathKey(row.dataset.folderPath));
-  const files = sample?.files || [];
+  const candidates = rankPreviewFiles(sample?.files);
   let strip = row.querySelector('.storage-folder-samples');
   if (!strip) {
     strip = document.createElement('div');
@@ -244,10 +291,19 @@ function renderFolderPreview(row) {
   strip.dataset.openNativeFolderPath = row.dataset.folderPath || '';
   strip.title = 'Show in folder';
 
-  const key = files.slice(0, 5).map(file => `${file.hash}:${file.filename}:${file.mime}`).join('|') || 'empty';
+  const key = candidates.slice(0, 16).map(file => `${file.hash}:${file.filename}:${file.mime}`).join('|') || 'empty';
   if (strip.dataset.key === key) return;
   strip.dataset.key = key;
-  strip.replaceChildren(...Array.from({ length:5 }, (_, index) => sampleCell(files[index], index)));
+
+  let cursor = 0;
+  const nextCell = index => {
+    const file = candidates[cursor++] || null;
+    return sampleCell(file, index, rejected => {
+      if (!rejected.isConnected) return;
+      rejected.replaceWith(nextCell(index));
+    });
+  };
+  strip.replaceChildren(...Array.from({ length:3 }, (_, index) => nextCell(index)));
 }
 
 function renderFolderPreviews() {
@@ -261,22 +317,19 @@ function schedulePreviewRefresh(delay = 1600) {
 }
 
 async function liveSample(path) {
-  const data = await request(`/api/client/local-catalog?limit=5&path=${encodeURIComponent(path)}`);
-  return { path, files:Array.isArray(data.files) ? data.files.slice(0, 5) : [] };
+  const data = await request(`/api/client/local-catalog?limit=240&path=${encodeURIComponent(path)}`);
+  return { path, files:rankPreviewFiles(data.files).slice(0, 16) };
 }
 
 async function refreshFolderPreviews(force = false) {
   if (previewLoading || !folders) return;
   const rows = [...folders.querySelectorAll(':scope > [data-folder-path]')];
   if (!rows.length) return;
-  const missing = rows.some(row => {
-    const sample = previewSamples.get(pathKey(row.dataset.folderPath));
-    return !sample || !sample.files?.length;
-  });
-  const maxAge = missing ? 1800 : 30_000;
+  const empty = rows.some(row => !rankPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files).length);
+  const maxAge = empty ? 1800 : 30_000;
   if (!force && previewLoadedAt && Date.now() - previewLoadedAt < maxAge) {
     renderFolderPreviews();
-    if (missing) schedulePreviewRefresh(maxAge);
+    if (empty) schedulePreviewRefresh(maxAge);
     return;
   }
 
@@ -284,14 +337,19 @@ async function refreshFolderPreviews(force = false) {
   try {
     const data = await request('/api/client/local-catalog?limit=5');
     previewSamples.clear();
-    for (const sample of data.folderSamples || []) previewSamples.set(pathKey(sample.path), sample);
+    for (const sample of data.folderSamples || []) {
+      previewSamples.set(pathKey(sample.path), { ...sample, files:rankPreviewFiles(sample.files) });
+    }
 
-    // The combined sample list is intentionally cached by the Agent. If a folder
-    // was sampled while its first index was still empty, ask that folder's live
-    // catalog directly so the Storage mosaic does not wait for that cache to age out.
-    const blankRows = rows.filter(row => !(previewSamples.get(pathKey(row.dataset.folderPath))?.files?.length));
-    if (blankRows.length) {
-      const live = await Promise.all(blankRows.map(row =>
+    // The compact combined sample can miss nicer media when a folder starts with
+    // documents or videos. Search deeper whenever it has fewer than three images;
+    // images are preferred, with videos kept only as a fallback pool.
+    const weakRows = rows.filter(row => {
+      const files = rankPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files);
+      return files.filter(file => mediaKind(file) === 'image').length < 3;
+    });
+    if (weakRows.length) {
+      const live = await Promise.all(weakRows.map(row =>
         liveSample(row.dataset.folderPath).catch(() => null)
       ));
       for (const sample of live) {
@@ -301,7 +359,7 @@ async function refreshFolderPreviews(force = false) {
 
     previewLoadedAt = Date.now();
     renderFolderPreviews();
-    const stillEmpty = rows.some(row => !(previewSamples.get(pathKey(row.dataset.folderPath))?.files?.length));
+    const stillEmpty = rows.some(row => !rankPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files).length);
     if (stillEmpty) {
       emptyPreviewRetries++;
       schedulePreviewRefresh(1800);
