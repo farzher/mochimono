@@ -63,6 +63,15 @@ function syncRailTopHit() {
   railTopHit.style.height = `${rect.top}px`;
 }
 
+let railTopFrame = 0;
+function scheduleRailTopHit() {
+  if (railTopFrame) return;
+  railTopFrame = requestAnimationFrame(() => {
+    railTopFrame = 0;
+    syncRailTopHit();
+  });
+}
+
 function forwardRailPointer(type, event, forceTop = false) {
   if (dateRail.hidden) return;
   const rect = dateRail.getBoundingClientRect();
@@ -123,14 +132,14 @@ railTopHit.addEventListener('pointercancel', event => {
   railTopPointer = null;
 });
 
-new MutationObserver(() => requestAnimationFrame(syncRailTopHit)).observe(dateRail, {
+new MutationObserver(scheduleRailTopHit).observe(dateRail, {
   childList: true,
   attributes: true,
   attributeFilter: ['hidden', 'style', 'class']
 });
-window.addEventListener('resize', syncRailTopHit, { passive: true });
-views.addEventListener('click', () => requestAnimationFrame(syncRailTopHit));
-requestAnimationFrame(syncRailTopHit);
+window.addEventListener('resize', scheduleRailTopHit, { passive: true });
+views.addEventListener('click', scheduleRailTopHit);
+scheduleRailTopHit();
 
 // Escape closes the top-most dialog before the viewer/application sees it.
 document.addEventListener('keydown', event => {
@@ -239,6 +248,7 @@ function renderHoverInfo(card, data) {
 }
 
 function hideHoverInfo() {
+  if (!hoverTimer && !hoverCard && hoverInfo.hidden) return;
   clearTimeout(hoverTimer);
   hoverTimer = 0;
   hoverCard = null;
@@ -265,7 +275,7 @@ async function showHoverInfo(card, generation) {
 }
 
 files.addEventListener('pointerover', event => {
-  if (!hoverFine.matches || event.pointerType && event.pointerType !== 'mouse') return;
+  if (!hoverFine.matches || window.mochimonoGridInteraction?.active?.() || event.pointerType && event.pointerType !== 'mouse') return;
   const card = event.target.closest('.file-card.media-card[data-hash]');
   if (!card || card.contains(event.relatedTarget) || hoverCard === card) return;
   hideHoverInfo();
@@ -280,6 +290,7 @@ files.addEventListener('pointerout', event => {
   if (hoverCard === card) hideHoverInfo();
 });
 
+window.addEventListener('mochimono:grid-interaction-start', hideHoverInfo);
 window.addEventListener('scroll', hideHoverInfo, { passive: true });
 window.addEventListener('resize', hideHoverInfo, { passive: true });
 
