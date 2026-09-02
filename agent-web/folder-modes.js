@@ -19,6 +19,7 @@ style.textContent = `
   .storage-mode{display:inline-flex;margin-left:8px;padding:2px 6px;border-radius:999px;background:#211e22;color:#8f8784;font-size:9px;font-weight:700;vertical-align:1px}
   .storage-mode.protected{color:#b8d1be}.storage-mode.local{color:#9da3af}
   .storage-open-folder svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linejoin:round}
+  #storagePane .folder-item.browse-only-folder .storage-meter{display:none}
 
   #storagePane .folder-item.has-folder-preview{grid-template-columns:236px minmax(0,1fr) 190px;min-height:156px;align-items:center}
   .storage-folder-samples{width:236px;height:132px;display:grid;grid-template-columns:1.55fr 1fr 1fr;grid-template-rows:1fr 1fr;gap:3px;border-radius:12px;overflow:hidden;background:#0b0a0c;cursor:pointer}
@@ -194,6 +195,7 @@ async function refreshFolderPreviews(force = false) {
 
 function decorateRow(row, folder) {
   const protectedFolder = folder.protected !== false;
+  row.classList.toggle('browse-only-folder', !protectedFolder);
   const title = row.querySelector('.storage-title strong');
   if (title) {
     setText(title, folder.path);
