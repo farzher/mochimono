@@ -11,8 +11,8 @@ style.textContent = `
     outline:none!important;box-shadow:none!important
   }
   html.keyboard-navigation-active #files.grid .file-card.keyboard-cursor{
-    position:relative;z-index:2;outline:none!important;
-    box-shadow:inset 0 0 0 4px #efa09a,inset 0 0 0 6px rgba(0,0,0,.92)!important
+    position:relative;z-index:2;
+    outline:4px solid #efa09a!important;outline-offset:-4px!important;box-shadow:none!important
   }
   html.keyboard-navigation-active #files.grid .file-card.keyboard-cursor::after{
     content:attr(data-filename);position:absolute;z-index:6;left:0;right:0;bottom:0;
@@ -25,7 +25,7 @@ style.textContent = `
   }
   html.keyboard-navigation-active #files.list .file-row.keyboard-cursor,
   html.keyboard-navigation-active #files.folders .folder-row.keyboard-cursor{
-    outline:none!important;box-shadow:inset 0 0 0 3px #efa09a!important;border-radius:4px
+    outline:3px solid #efa09a!important;outline-offset:-3px!important;box-shadow:none!important;border-radius:4px
   }
 `;
 document.head.append(style);
