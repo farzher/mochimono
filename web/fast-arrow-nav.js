@@ -124,11 +124,12 @@ function ensureAdjacentWindow(direction) {
 
 function horizontalTarget(current, direction) {
   const library = window.mochimonoLibrary;
-  if (!library?.indexOf || !library.hashAt) return null;
-  const index = library.indexOf(current.dataset.hash || '');
+  const hashes = library?.filteredHashes?.();
+  if (!hashes?.length) return null;
+  const index = hashes.indexOf(current.dataset.hash || '');
   const targetIndex = index + direction;
-  const targetHash = index >= 0 ? library.hashAt(targetIndex) : '';
-  if (!targetHash) return null;
+  if (index < 0 || targetIndex < 0 || targetIndex >= hashes.length) return null;
+  const targetHash = hashes[targetIndex];
   library.ensureIndex?.(targetIndex);
   freezeSentinels();
   return files.querySelector(`[data-hash="${CSS.escape(targetHash)}"]`);
