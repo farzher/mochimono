@@ -18,21 +18,34 @@ const hoverWarm = new Map();
 const MAX_DECODED = 4;
 const MAX_DECODED_PIXELS = 50_000_000;
 const MAX_PRELOADS = 2;
+const RAPID_SETTLE_MS = 90;
+const NAV_INTERVAL_MS = 16;
 let decodedPixels = 0;
 let currentLoad = null;
 let hoverTimer = 0;
 let navPending = 0;
 let navTimer = 0;
 let lastNavAt = 0;
+let rapidUntil = 0;
+let deferredCurrent = null;
+let deferredTimer = 0;
 
 function nativeSet(image, value) {
   descriptor?.set?.call(image, value);
+}
+
+function clearDeferred(image = null) {
+  if (image && deferredCurrent?.image !== image) return;
+  deferredCurrent = null;
+  clearTimeout(deferredTimer);
+  deferredTimer = 0;
 }
 
 function abortImage(image) {
   if (!image) return;
   preloads.delete(image);
   if (currentLoad === image) currentLoad = null;
+  clearDeferred(image);
   image.onload = null;
   image.onerror = null;
   try { nativeSet(image, ''); } catch {}
@@ -59,10 +72,12 @@ function retainAfterLoad(hash, image) {
     if (image.naturalWidth && image.naturalHeight) retain(hash, image);
     preloads.delete(image);
     if (currentLoad === image) currentLoad = null;
+    clearDeferred(image);
   }, { once:true });
   image.addEventListener('error', () => {
     preloads.delete(image);
     if (currentLoad === image) currentLoad = null;
+    clearDeferred(image);
   }, { once:true });
 }
 
@@ -70,24 +85,63 @@ function clearStalePreloads() {
   for (const image of [...preloads.keys()]) abortImage(image);
 }
 
+function rapidNavigation() {
+  return performance.now() < rapidUntil;
+}
+
+function flushDeferredCurrent() {
+  deferredTimer = 0;
+  const deferred = deferredCurrent;
+  if (!deferred) return;
+  const wait = rapidUntil - performance.now();
+  if (wait > 0) {
+    deferredTimer = setTimeout(flushDeferredCurrent, wait + 4);
+    return;
+  }
+  deferredCurrent = null;
+  if (viewer.hidden || currentHash() !== deferred.hash || currentLoad !== deferred.image) return;
+  nativeSet(deferred.image, deferred.value);
+}
+
+function deferCurrentLoad(image, value, hash) {
+  deferredCurrent = { image, value, hash };
+  clearTimeout(deferredTimer);
+  deferredTimer = setTimeout(flushDeferredCurrent, RAPID_SETTLE_MS + 4);
+}
+
+// Returns true when the caller should suppress the immediate native src set.
 function trackObjectImage(image, value) {
   const hash = objectHash(value);
-  if (!hash || !viewer || viewer.hidden || image.isConnected) return;
+  if (!hash || !viewer || viewer.hidden || image.isConnected) return false;
   const current = currentHash();
-  if (!current) return;
+  if (!current) return false;
 
-  retainAfterLoad(hash, image);
   if (hash === current) {
     if (currentLoad && currentLoad !== image) abortImage(currentLoad);
     clearStalePreloads();
     currentLoad = image;
     try { image.fetchPriority = 'high'; } catch {}
-    return;
+    retainAfterLoad(hash, image);
+
+    // While flipping quickly, the visible viewer already has the cached
+    // thumbnail. Do not start/decode a full original that will be abandoned on
+    // the next key repeat. Load only the final image after navigation settles.
+    if (rapidNavigation()) {
+      deferCurrentLoad(image, value, hash);
+      return true;
+    }
+    return false;
   }
 
+  // Adjacent full-resolution preloads are useful while resting on an image but
+  // are pure churn during rapid navigation. Skip them until the user settles.
+  if (rapidNavigation()) return true;
+
+  retainAfterLoad(hash, image);
   try { image.fetchPriority = 'low'; } catch {}
   preloads.set(image, hash);
   while (preloads.size > MAX_PRELOADS) abortImage(preloads.keys().next().value);
+  return false;
 }
 
 if (descriptor?.get && descriptor?.set) {
@@ -96,7 +150,7 @@ if (descriptor?.get && descriptor?.set) {
     enumerable:descriptor.enumerable,
     get:descriptor.get,
     set(value) {
-      trackObjectImage(this, value);
+      if (trackObjectImage(this, value)) return;
       descriptor.set.call(this, value);
     }
   });
@@ -146,13 +200,15 @@ function flushNavigation() {
     return;
   }
   if (!navPending) return;
-  const delay = Math.max(0, 34 - (performance.now() - lastNavAt));
+  const delay = Math.max(0, NAV_INTERVAL_MS - (performance.now() - lastNavAt));
   navTimer = setTimeout(flushNavigation, delay);
 }
 
 function queueNavigation(direction) {
+  rapidUntil = performance.now() + RAPID_SETTLE_MS;
+  if (deferredCurrent) deferCurrentLoad(deferredCurrent.image, deferredCurrent.value, deferredCurrent.hash);
   if (navPending && Math.sign(navPending) !== direction) navPending = 0;
-  navPending = Math.max(-4, Math.min(4, navPending + direction));
+  navPending = Math.max(-6, Math.min(6, navPending + direction));
   if (!navTimer) flushNavigation();
 }
 
@@ -169,6 +225,11 @@ document.addEventListener('keyup', event => {
   navPending = 0;
   clearTimeout(navTimer);
   navTimer = 0;
+  if (deferredCurrent) {
+    rapidUntil = Math.min(rapidUntil, performance.now() + 24);
+    clearTimeout(deferredTimer);
+    deferredTimer = setTimeout(flushDeferredCurrent, 28);
+  }
 }, true);
 
 if (files) {
@@ -192,6 +253,8 @@ if (viewer) {
     navPending = 0;
     clearTimeout(navTimer);
     navTimer = 0;
+    rapidUntil = 0;
+    clearDeferred();
     clearStalePreloads();
     abortImage(currentLoad);
   }).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
