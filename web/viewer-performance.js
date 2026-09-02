@@ -62,6 +62,20 @@ function retain(hash, image) {
   }
 }
 
+function useDecoded(hash) {
+  const cached = decoded.get(hash);
+  const shown = viewerMedia?.querySelector('img[data-full-src]');
+  if (!cached?.image?.naturalWidth || !shown) return false;
+  decoded.delete(hash);
+  decoded.set(hash, cached);
+  if (currentLoad && currentLoad !== cached.image) abortImage(currentLoad);
+  clearDeferred();
+  cached.image.alt = shown.alt || '';
+  shown.replaceWith(cached.image);
+  currentLoad = null;
+  return true;
+}
+
 function retainAfterLoad(hash, image) {
   image.addEventListener('load', async () => {
     try { await image.decode(); } catch {}
@@ -197,8 +211,9 @@ function trackObjectImage(image, value) {
   if (!current) return false;
 
   if (hash === current) {
-    if (currentLoad && currentLoad !== image) abortImage(currentLoad);
     clearStalePreloads();
+    if (useDecoded(hash)) return true;
+    if (currentLoad && currentLoad !== image) abortImage(currentLoad);
     currentLoad = image;
     try { image.fetchPriority = 'high'; } catch {}
     retainAfterLoad(hash, image);
@@ -246,7 +261,8 @@ if (mediaDescriptor?.get && mediaDescriptor?.set) {
 function navigateOne(direction) {
   const button = direction < 0 ? viewerPrev : viewerNext;
   if (!button || button.disabled || viewer.hidden) return false;
-  button.click();
+  if (typeof button.onclick === 'function') button.onclick.call(button);
+  else button.click();
   handleRapidMedia();
   return true;
 }
