@@ -41,6 +41,16 @@ if (initialHash) {
 
 let wasOpen = false;
 let closingFromHistory = false;
+let rapidSyncTimer = 0;
+
+function scheduleRapidSync() {
+  if (rapidSyncTimer) return;
+  rapidSyncTimer = setTimeout(() => {
+    rapidSyncTimer = 0;
+    if (!viewer.hidden && window.mochimonoViewerPerformance?.rapid?.()) scheduleRapidSync();
+    else syncUrl();
+  }, 48);
+}
 
 function syncUrl() {
   const open = !viewer.hidden;
@@ -48,6 +58,13 @@ function syncUrl() {
 
   if (open && hash) {
     finishRestore();
+    if (wasOpen && window.mochimonoViewerPerformance?.rapid?.()) {
+      scheduleRapidSync();
+      return;
+    }
+
+    clearTimeout(rapidSyncTimer);
+    rapidSyncTimer = 0;
     const url = fileUrl(hash);
     if (!wasOpen) {
       if (history.state?.[VIEWER_STATE] && fileParam() === hash) history.replaceState(viewerState(true), '', url);
@@ -56,6 +73,8 @@ function syncUrl() {
       history.replaceState(viewerState(true), '', url);
     }
   } else if (!open && wasOpen) {
+    clearTimeout(rapidSyncTimer);
+    rapidSyncTimer = 0;
     if (closingFromHistory) {
       closingFromHistory = false;
     } else if (history.state?.[VIEWER_STATE]) {
