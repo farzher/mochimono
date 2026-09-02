@@ -16,12 +16,10 @@ const MAX_DECODED = 4;
 const MAX_DECODED_PIXELS = 50_000_000;
 const MAX_PRELOADS = 2;
 const RAPID_SETTLE_MS = 90;
-const NAV_INTERVAL_MS = 16;
 let decodedPixels = 0;
 let currentLoad = null;
 let navPending = 0;
-let navTimer = 0;
-let lastNavAt = 0;
+let navFrame = 0;
 let rapidUntil = 0;
 let deferredCurrent = null;
 let deferredVideo = null;
@@ -250,12 +248,11 @@ function navigateOne(direction) {
   if (!button || button.disabled || viewer.hidden) return false;
   button.click();
   handleRapidMedia();
-  lastNavAt = performance.now();
   return true;
 }
 
 function flushNavigation() {
-  navTimer = 0;
+  navFrame = 0;
   if (!navPending || viewer.hidden) {
     navPending = 0;
     return;
@@ -266,9 +263,7 @@ function flushNavigation() {
     navPending = 0;
     return;
   }
-  if (!navPending) return;
-  const delay = Math.max(0, NAV_INTERVAL_MS - (performance.now() - lastNavAt));
-  navTimer = setTimeout(flushNavigation, delay);
+  if (navPending) navFrame = requestAnimationFrame(flushNavigation);
 }
 
 function queueNavigation(direction) {
@@ -276,7 +271,18 @@ function queueNavigation(direction) {
   if (deferredCurrent || deferredVideo) scheduleDeferredFlush();
   if (navPending && Math.sign(navPending) !== direction) navPending = 0;
   navPending = Math.max(-6, Math.min(6, navPending + direction));
-  if (!navTimer) flushNavigation();
+  if (navFrame) return;
+
+  const first = Math.sign(navPending);
+  navPending -= first;
+  if (!navigateOne(first)) {
+    navPending = 0;
+    return;
+  }
+  // Hold the rest of this display frame. Any repeated key events that arrive
+  // before the next paint collapse into the pending count instead of causing
+  // multiple viewer DOM rebuilds inside one frame.
+  navFrame = requestAnimationFrame(flushNavigation);
 }
 
 document.addEventListener('keydown', event => {
@@ -290,8 +296,8 @@ document.addEventListener('keydown', event => {
 document.addEventListener('keyup', event => {
   if (!['ArrowLeft','ArrowRight','ArrowDown','ArrowUp'].includes(event.key)) return;
   navPending = 0;
-  clearTimeout(navTimer);
-  navTimer = 0;
+  cancelAnimationFrame(navFrame);
+  navFrame = 0;
   if (deferredCurrent || deferredVideo) {
     rapidUntil = Math.min(rapidUntil, performance.now() + 24);
     scheduleDeferredFlush(28);
@@ -304,8 +310,8 @@ if (viewer) {
   new MutationObserver(() => {
     if (!viewer.hidden) return;
     navPending = 0;
-    clearTimeout(navTimer);
-    navTimer = 0;
+    cancelAnimationFrame(navFrame);
+    navFrame = 0;
     rapidUntil = 0;
     clearDeferred();
     clearStalePreloads();

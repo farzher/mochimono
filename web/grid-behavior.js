@@ -1,10 +1,8 @@
 const files = document.querySelector('#files');
-const viewer = document.querySelector('#viewer');
 const rail = document.querySelector('#dateRail');
 const sort = document.querySelector('#sort');
-const viewerOpen = document.querySelector('#viewer-open');
 
-if (files && viewer) {
+if (files) {
   const style = document.createElement('style');
   style.textContent = `
     /* Day labels are timeline text, not chips. Keep the selection affordance but
@@ -25,95 +23,6 @@ if (files && viewer) {
   // Thumbnail geometry is learned and persisted by thumbs.js for the next grid
   // render/reload. Do not resize already-painted cards when a late thumbnail
   // decodes: that turns harmless cache warming into visible row reflow.
-
-  const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
-  const centerX = rect => rect.left + rect.width / 2;
-
-  function currentViewerHash() {
-    const match = viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([^/?#]+)/);
-    if (match) return decodeURIComponent(match[1]);
-    return new URL(location.href).searchParams.get('file') || '';
-  }
-
-  function cardFor(hash) {
-    return hash ? files.querySelector(`.file-card[data-hash="${CSS.escape(hash)}"]`) : null;
-  }
-
-  async function ensureCard(hash) {
-    let card = cardFor(hash);
-    if (card) return card;
-    const hashes = window.mochimonoLibrary?.filteredHashes?.() || [];
-    const index = hashes.indexOf(hash);
-    if (index < 0) return null;
-    window.mochimonoLibrary?.ensureIndex?.(index);
-    await frame();
-    await frame();
-    return cardFor(hash);
-  }
-
-  function visualRows() {
-    const items = [...files.querySelectorAll('.file-card[data-hash]')]
-      .map(card => ({ card, rect: card.getBoundingClientRect() }))
-      .filter(item => item.rect.width > 0 && item.rect.height > 0)
-      .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
-    const rows = [];
-    for (const item of items) {
-      const row = rows.at(-1);
-      if (!row || Math.abs(item.rect.top - row.top) > 4) {
-        rows.push({ top: item.rect.top, items: [item] });
-      } else {
-        row.items.push(item);
-        row.top = Math.min(row.top, item.rect.top);
-      }
-    }
-    return rows;
-  }
-
-  function verticalTarget(current, direction) {
-    if (!current) return null;
-    const rows = visualRows();
-    const rowIndex = rows.findIndex(row => row.items.some(item => item.card === current));
-    if (rowIndex < 0) return null;
-    const targetRow = rows[rowIndex + direction];
-    if (!targetRow) return null;
-    const x = centerX(current.getBoundingClientRect());
-    return targetRow.items
-      .slice()
-      .sort((a, b) => Math.abs(centerX(a.rect) - x) - Math.abs(centerX(b.rect) - x))[0]?.card || null;
-  }
-
-  let verticalNavigation = false;
-  async function navigateVertical(direction) {
-    if (verticalNavigation) return;
-    verticalNavigation = true;
-    try {
-      const hash = currentViewerHash();
-      let current = await ensureCard(hash);
-      if (!current) return;
-      await frame();
-      let target = verticalTarget(current, direction);
-      if (!target && window.mochimonoLibrary?.extend?.(direction)) {
-        await frame();
-        await frame();
-        current = cardFor(hash) || current;
-        target = verticalTarget(current, direction);
-      }
-      if (target?.dataset.hash) window.mochimonoOpenViewer?.(target.dataset.hash);
-    } finally {
-      verticalNavigation = false;
-    }
-  }
-
-  // Own Up/Down at window capture level while the viewer is open. The grid
-  // keyboard cursor also listens at window capture; registering this earlier and
-  // stopping propagation prevents it from focusing the hidden grid underneath.
-  window.addEventListener('keydown', event => {
-    if (viewer.hidden || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    navigateVertical(event.key === 'ArrowUp' ? -1 : 1).catch(console.warn);
-  }, true);
 }
 
 if (rail && sort) {
