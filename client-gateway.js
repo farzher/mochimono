@@ -233,16 +233,18 @@ function configuredFolder(path) {
 }
 
 function openNativePath(path, selectFile = false) {
+  const target = resolve(String(path || ''));
   let child;
-  const options = { detached: true, stdio: 'ignore', windowsHide: true };
+  const options = { detached: true, stdio: 'ignore', windowsHide: false };
   if (platform() === 'win32') {
-    // explorer.exe parses /select, as an option followed by the file path. Keep
-    // the path as its own argument so Node handles spaces/quoting correctly.
-    child = spawn('explorer.exe', selectFile ? ['/select,', path] : [path], options);
+    // Explorer requires /select and the path as one comma-delimited argument.
+    // Splitting them into separate argv entries can launch Explorer successfully
+    // while silently ignoring the requested file.
+    child = spawn('explorer.exe', selectFile ? [`/select,${target}`] : [target], options);
   } else if (platform() === 'darwin') {
-    child = spawn('open', selectFile ? ['-R', path] : [path], options);
+    child = spawn('open', selectFile ? ['-R', target] : [target], options);
   } else {
-    child = spawn('xdg-open', [selectFile ? dirname(path) : path], options);
+    child = spawn('xdg-open', [selectFile ? dirname(target) : target], options);
   }
   return new Promise((resolvePromise, reject) => {
     child.once('error', reject);
