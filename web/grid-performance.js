@@ -66,6 +66,7 @@ if (files) {
     .media-thumb{position:relative;overflow:hidden;background:#09080a}
     .video-thumb-pending{position:absolute!important;inset:0;display:block!important;z-index:0;pointer-events:none;background:linear-gradient(105deg,#080709 6%,#151217 36%,#30262f 50%,#151217 64%,#080709 94%)!important;background-size:260% 100%!important;animation:mochimono-thumb-pending 1.2s cubic-bezier(.45,0,.25,1) infinite!important}
     .media-thumb>img.cached-thumb{position:relative;z-index:1}
+    .media-thumb>.play-badge{z-index:2}
     .thumb-failed .video-thumb-pending{animation:none!important;background:repeating-linear-gradient(135deg,#0d0c0e 0,#0d0c0e 8px,#131115 8px,#131115 16px)!important}
     @keyframes mochimono-thumb-pending{0%{background-position:115% 0}55%,100%{background-position:-115% 0}}
     @media(prefers-reduced-motion:reduce){.video-thumb-pending{animation:none!important;background:#121014!important}}
