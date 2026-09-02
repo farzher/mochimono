@@ -7,16 +7,39 @@ const showFolderAdd = document.querySelector('#showFolderAdd');
 const frame = document.querySelector('#filesFrame');
 let loading = false;
 let queued = false;
+let previewLoading = false;
+let previewLoadedAt = 0;
+let previewRetryTimer = 0;
+let previewRetryAttempt = 0;
+const previewSamples = new Map();
+const readyPreviews = new Set();
 
 const style = document.createElement('style');
 style.textContent = `
   .storage-mode{display:inline-flex;margin-left:8px;padding:2px 6px;border-radius:999px;background:#211e22;color:#8f8784;font-size:9px;font-weight:700;vertical-align:1px}
   .storage-mode.protected{color:#b8d1be}.storage-mode.local{color:#9da3af}
   .storage-open-folder svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linejoin:round}
+
+  #storagePane .folder-item.has-folder-preview{grid-template-columns:236px minmax(0,1fr) 190px;min-height:156px;align-items:center}
+  .storage-folder-samples{width:236px;height:132px;display:grid;grid-template-columns:1.55fr 1fr 1fr;grid-template-rows:1fr 1fr;gap:3px;border-radius:12px;overflow:hidden;background:#0b0a0c;cursor:pointer}
+  .storage-folder-sample{position:relative;display:grid;place-items:center;min-width:0;min-height:0;overflow:hidden;background:#19171a;color:#706967}
+  .storage-folder-sample:first-child{grid-row:1 / 3}
+  .storage-folder-sample img{width:100%;height:100%;display:block;object-fit:cover;background:#0b0a0c}
+  .storage-folder-sample.video::after{content:'▶';position:absolute;left:7px;bottom:6px;width:22px;height:22px;display:grid;place-items:center;border-radius:50%;background:rgba(0,0,0,.62);color:#fff;font-size:8px;padding-left:1px}
+  .storage-folder-sample b{font-size:18px;font-weight:700;color:#645d5d}
+  .storage-folder-sample small{position:absolute;left:5px;right:5px;bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#77706e;font-size:7px;text-align:center}
+  .storage-folder-samples:hover{outline:1px solid #4a4348;outline-offset:1px}
+
+  @media(max-width:700px){
+    #storagePane .folder-item.has-folder-preview{grid-template-columns:128px minmax(0,1fr);gap:10px;align-items:start}
+    #storagePane .folder-item.has-folder-preview .storage-folder-samples{width:128px;height:104px;grid-row:1 / span 2}
+    #storagePane .folder-item.has-folder-preview .item-actions{grid-column:2}
+  }
 `;
 document.head.append(style);
 
 const samePath = (a, b) => String(a || '').replace(/[\\/]+$/, '').toLowerCase() === String(b || '').replace(/[\\/]+$/, '').toLowerCase();
+const previewKey = value => String(value || '').replace(/[\\/]+$/, '').toLowerCase();
 const setText = (node, value) => { if (node && node.textContent !== value) node.textContent = value; };
 
 function toast(text) {
@@ -38,6 +61,135 @@ async function request(path, options = {}) {
 function refreshLibrary() {
   frame?.contentWindow?.mochimonoLibrary?.refresh?.().catch?.(() => {});
   frame?.contentWindow?.mochimonoLocations?.refresh?.().catch?.(() => {});
+}
+
+function sampleGlyph(file) {
+  const mime = String(file?.mime || '');
+  if (mime.startsWith('video/')) return '▶';
+  if (mime.startsWith('audio/')) return '♪';
+  if (mime.startsWith('image/')) return '▧';
+  return '▤';
+}
+
+function renderFolderPreview(row) {
+  const sample = previewSamples.get(previewKey(row.dataset.folderPath));
+  const files = sample?.files || [];
+  let strip = row.querySelector('.storage-folder-samples');
+  if (!files.length) {
+    strip?.remove();
+    row.classList.remove('has-folder-preview');
+    return;
+  }
+  if (!strip) {
+    strip = document.createElement('div');
+    strip.className = 'storage-folder-samples';
+    row.prepend(strip);
+  }
+  strip.dataset.openNativeFolderPath = row.dataset.folderPath || '';
+  strip.title = 'Show in folder';
+  row.classList.add('has-folder-preview');
+
+  const key = JSON.stringify(files.slice(0, 5).map(file => [
+    file.hash, file.filename, file.mime, readyPreviews.has(String(file.hash))
+  ]));
+  if (strip.dataset.key === key) return;
+  strip.dataset.key = key;
+
+  const cells = [];
+  for (let index = 0; index < 5; index++) {
+    const file = files[index];
+    if (!file) {
+      cells.push('<span class="storage-folder-sample"></span>');
+      continue;
+    }
+    const hash = String(file.hash || '');
+    const mime = String(file.mime || '');
+    const media = mime.startsWith('image/') || mime.startsWith('video/');
+    const ready = media && readyPreviews.has(hash);
+    if (ready) {
+      cells.push(`<span class="storage-folder-sample ${mime.startsWith('video/') ? 'video' : ''}" title="${String(file.filename || '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))}"><img src="/api/thumbs/${hash}" alt="" loading="lazy" decoding="async"></span>`);
+    } else {
+      const filename = String(file.filename || '');
+      const safe = filename.replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+      cells.push(`<span class="storage-folder-sample ${mime.startsWith('video/') ? 'video' : ''}" title="${safe}"><b>${sampleGlyph(file)}</b><small>${safe}</small></span>`);
+    }
+  }
+  strip.innerHTML = cells.join('');
+}
+
+function renderFolderPreviews() {
+  for (const row of folders?.querySelectorAll('[data-folder-path]') || []) renderFolderPreview(row);
+}
+
+function sampleMediaHashes() {
+  const hashes = [];
+  const seen = new Set();
+  for (const sample of previewSamples.values()) {
+    for (const file of sample.files || []) {
+      const mime = String(file?.mime || '');
+      const hash = String(file?.hash || '');
+      if (!hash || !/^(image|video)\//.test(mime) || seen.has(hash)) continue;
+      seen.add(hash);
+      hashes.push(hash);
+    }
+  }
+  return hashes;
+}
+
+async function checkSamplePreviews(hashes) {
+  const ready = new Set();
+  for (let offset = 0; offset < hashes.length; offset += 400) {
+    const chunk = hashes.slice(offset, offset + 400);
+    const data = await request('/api/thumbs/check', {
+      method:'POST',
+      body:JSON.stringify({ background:true, hashes:chunk })
+    });
+    for (const item of data.thumbnails || []) ready.add(String(item.hash));
+  }
+  return ready;
+}
+
+function schedulePreviewRetry() {
+  clearTimeout(previewRetryTimer);
+  const hashes = sampleMediaHashes().filter(hash => !readyPreviews.has(hash));
+  if (!hashes.length || previewRetryAttempt >= 3) return;
+  const delays = [700, 1600, 3200];
+  const delay = delays[previewRetryAttempt++] || 3200;
+  previewRetryTimer = setTimeout(async () => {
+    try {
+      const ready = await checkSamplePreviews(hashes);
+      for (const hash of ready) readyPreviews.add(hash);
+      renderFolderPreviews();
+      schedulePreviewRetry();
+    } catch {}
+  }, delay);
+}
+
+async function refreshFolderPreviews(force = false) {
+  if (previewLoading) return;
+  const rows = [...(folders?.querySelectorAll('[data-folder-path]') || [])];
+  const missingFolder = rows.some(row => !previewSamples.has(previewKey(row.dataset.folderPath)));
+  if (!force && !missingFolder && previewLoadedAt && Date.now() - previewLoadedAt < 30_000) {
+    renderFolderPreviews();
+    return;
+  }
+
+  previewLoading = true;
+  try {
+    const data = await request('/api/client/local-catalog?limit=5');
+    previewSamples.clear();
+    for (const sample of data.folderSamples || []) previewSamples.set(previewKey(sample.path), sample);
+    previewLoadedAt = Date.now();
+    previewRetryAttempt = 0;
+
+    const hashes = sampleMediaHashes();
+    const ready = await checkSamplePreviews(hashes);
+    readyPreviews.clear();
+    for (const hash of ready) readyPreviews.add(hash);
+    renderFolderPreviews();
+    schedulePreviewRetry();
+  } catch {}
+  finally { previewLoading = false; }
 }
 
 function decorateRow(row, folder) {
@@ -108,6 +260,7 @@ async function annotate() {
       const folder = configured.find(item => samePath(item.path, row.dataset.folderPath));
       if (folder) decorateRow(row, folder);
     }
+    refreshFolderPreviews().catch(() => {});
   } catch {}
   finally {
     loading = false;
@@ -130,6 +283,7 @@ startBrowse?.addEventListener('click', async () => {
     importPath.value = '';
     folderAdd.hidden = true;
     showFolderAdd.classList.remove('active');
+    previewLoadedAt = 0;
     annotateSoon();
     setTimeout(refreshLibrary, 350);
   } catch (error) { toast(error.message); }
@@ -155,6 +309,7 @@ folders?.addEventListener('click', async event => {
   protect.disabled = true;
   try {
     await request('/api/browse-folders/protect', { method:'POST', body:JSON.stringify({ path:protect.dataset.protectFolder }) });
+    previewLoadedAt = 0;
     annotateSoon();
     setTimeout(refreshLibrary, 350);
   } catch (error) { toast(error.message); }
