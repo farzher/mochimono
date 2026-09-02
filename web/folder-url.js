@@ -102,7 +102,7 @@ async function restoreFolder() {
   const wantedSource = url.searchParams.get('source');
   if (!wantedSource) {
     restoreComplete = true;
-    return refresh();
+    return;
   }
   const source = library()?.sources?.().find(item => item.sourceName === wantedSource);
   if (!source) return;
@@ -116,8 +116,12 @@ async function restoreFolder() {
   } finally {
     restoring = false;
     syncUrl();
-    refresh();
   }
+}
+
+async function catalogChanged() {
+  await restoreFolder();
+  refresh();
 }
 
 gridFolderToggle.addEventListener('click', () => {
@@ -140,8 +144,8 @@ window.addEventListener('mochimono:folder-changed', () => {
   syncUrl();
   refresh();
 });
-window.addEventListener('mochimono:catalog-cache-restored', restoreFolder);
-window.addEventListener('mochimono:catalog-updated', restoreFolder);
+window.addEventListener('mochimono:catalog-cache-restored', catalogChanged);
+window.addEventListener('mochimono:catalog-updated', catalogChanged);
 new MutationObserver(refresh).observe(views, { subtree: true, attributes: true, attributeFilter: ['class'] });
 
 refresh();
