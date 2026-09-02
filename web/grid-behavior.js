@@ -22,20 +22,9 @@ if (files && viewer) {
   `;
   document.head.append(style);
 
-  // A first-time thumbnail can arrive before the catalog knows its dimensions.
-  // The grid initially reserves the conservative 4:3 fallback in that case.
-  // Once the decoded thumbnail tells us its real dimensions, immediately hand
-  // them to the canonical library geometry path. gallery.js already listens for
-  // that geometry event and re-justifies only the affected grid.
-  files.addEventListener('load', event => {
-    const image = event.target;
-    if (!(image instanceof HTMLImageElement) || !image.closest('.media-thumb')) return;
-    const card = image.closest('.media-card[data-hash]');
-    const width = Number(image.naturalWidth) || 0;
-    const height = Number(image.naturalHeight) || 0;
-    if (!card || !width || !height) return;
-    window.mochimonoLibrary?.rememberDimensions?.(card.dataset.hash, width, height);
-  }, true);
+  // Thumbnail geometry is learned and persisted by thumbs.js for the next grid
+  // render/reload. Do not resize already-painted cards when a late thumbnail
+  // decodes: that turns harmless cache warming into visible row reflow.
 
   const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
   const centerX = rect => rect.left + rect.width / 2;
