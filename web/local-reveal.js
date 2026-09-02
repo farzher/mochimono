@@ -21,7 +21,9 @@ if (CLIENT && viewer && viewerOpen && actions) {
     .viewer-reveal-local svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.35;stroke-linecap:round;stroke-linejoin:round}
     .viewer-reveal-local[data-state="ok"]{color:#9bd7aa!important}
     .viewer-reveal-local[data-state="error"]{color:#ff9d96!important}
-    .viewer-title-sub>#viewer-meta{order:-1;color:#e2dcda;font-size:10px;font-weight:700}
+    .viewer-title-sub{display:flex;align-items:center;gap:7px;min-width:0;overflow:hidden;white-space:nowrap}
+    .viewer-title-sub>#viewer-meta{order:-1;flex:0 0 auto;color:#f2ece9;font-size:10.5px;font-weight:760;white-space:nowrap}
+    .viewer-title-sub>#viewer-context{min-width:0;overflow:hidden}
   `;
   document.head.append(style);
 
