@@ -31,7 +31,7 @@ style.textContent = `
 document.head.append(style);
 
 function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+  return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 }
 
 function currentHash() {
@@ -286,6 +286,13 @@ async function load(render = Boolean(panel && !panel.hidden)) {
   }
 }
 
+function refresh() {
+  viewerContext?.replaceChildren();
+  if (!currentHash()) return;
+  if (!viewer?.hidden && window.mochimonoViewerPerformance?.defer?.(refresh)) return;
+  load(Boolean(panel && !panel.hidden));
+}
+
 function close() {
   generation++;
   if (panel) panel.hidden = true;
@@ -350,11 +357,7 @@ if (viewer) new MutationObserver(() => {
   }
 }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 
-if (viewerOpen) new MutationObserver(() => {
-  viewerContext?.replaceChildren();
-  if (!currentHash()) return;
-  load(Boolean(panel && !panel.hidden));
-}).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
+if (viewerOpen) new MutationObserver(refresh).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
 
 if (viewerCollections) new MutationObserver(() => {
   if (panel && !panel.hidden && currentHash()) load(true);
@@ -362,5 +365,5 @@ if (viewerCollections) new MutationObserver(() => {
 
 window.addEventListener('mochimono:locations-updated', () => {
   summaryCache.clear();
-  if (!viewer?.hidden && currentHash()) load(Boolean(panel && !panel.hidden));
+  if (!viewer?.hidden && currentHash()) refresh();
 });

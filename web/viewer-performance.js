@@ -13,9 +13,9 @@ const arrowKeys = new Set(['ArrowLeft','ArrowRight','ArrowDown','ArrowUp']);
 
 const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
 const mediaDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
-const nativeFetch = window.fetch.bind(window);
 const decoded = new Map();
 const preloads = new Map();
+const settleCallbacks = new Set();
 const MAX_DECODED = 4;
 const MAX_DECODED_PIXELS = 50_000_000;
 const MAX_PRELOADS = 2;
@@ -28,8 +28,6 @@ let rapidUntil = 0;
 let deferredCurrent = null;
 let deferredVideo = null;
 let deferredTimer = 0;
-let settlePromise = null;
-let settleResolve = null;
 let settleTimer = 0;
 
 function nativeSet(image, value) {
@@ -112,34 +110,6 @@ function rapidNavigation() {
   return performance.now() < rapidUntil;
 }
 
-window.mochimonoViewerPerformance = { rapid: rapidNavigation };
-
-function viewerSecondaryHash(input, init) {
-  const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
-  if (method !== 'GET') return '';
-
-  let url;
-  try { url = new URL(input instanceof Request ? input.url : String(input), location.href); }
-  catch { return ''; }
-
-  if (url.pathname === '/api/client/locations') {
-    const hash = String(url.searchParams.get('hash') || '');
-    return /^[a-f0-9]{64}$/.test(hash) ? hash : '';
-  }
-
-  for (const pattern of [
-    /^\/api\/provenance\/([a-f0-9]{64})$/,
-    /^\/api\/collections\/file\/([a-f0-9]{64})$/,
-    /^\/api\/files\/([a-f0-9]{64})\/details$/,
-    /^\/api\/protection\/objects\/([a-f0-9]{64})$/,
-    /^\/api\/drives\/[^/]+\/files\/([a-f0-9]{64})$/
-  ]) {
-    const match = url.pathname.match(pattern);
-    if (match) return match[1];
-  }
-  return '';
-}
-
 function settleCheck() {
   settleTimer = 0;
   const wait = rapidUntil - performance.now();
@@ -147,16 +117,16 @@ function settleCheck() {
     settleTimer = setTimeout(settleCheck, wait + 3);
     return;
   }
-  const resolve = settleResolve;
-  settlePromise = null;
-  settleResolve = null;
-  resolve?.();
+  const callbacks = [...settleCallbacks];
+  settleCallbacks.clear();
+  for (const callback of callbacks) callback();
 }
 
-function waitForRapidSettle() {
-  if (!settlePromise) settlePromise = new Promise(resolve => { settleResolve = resolve; });
+function deferUntilSettled(callback) {
+  if (typeof callback !== 'function' || !rapidNavigation()) return false;
+  settleCallbacks.add(callback);
   if (!settleTimer) settleTimer = setTimeout(settleCheck, Math.max(0, rapidUntil - performance.now()) + 3);
-  return settlePromise;
+  return true;
 }
 
 function accelerateRapidSettle(delay = 28) {
@@ -168,20 +138,10 @@ function accelerateRapidSettle(delay = 28) {
 function finishRapidSettle() {
   clearTimeout(settleTimer);
   settleTimer = 0;
-  const resolve = settleResolve;
-  settlePromise = null;
-  settleResolve = null;
-  resolve?.();
+  settleCallbacks.clear();
 }
 
-window.fetch = function(input, init) {
-  const hash = viewerSecondaryHash(input, init);
-  if (!hash || viewer?.hidden || !rapidNavigation()) return nativeFetch(input, init);
-  return waitForRapidSettle().then(() => {
-    if (!viewer.hidden && currentHash() === hash) return nativeFetch(input, init);
-    return new Response('{}', { status:200, headers:{ 'content-type':'application/json' } });
-  });
-};
+window.mochimonoViewerPerformance = { rapid: rapidNavigation, defer: deferUntilSettled };
 
 function scheduleDeferredFlush(delay = RAPID_SETTLE_MS + 4) {
   clearTimeout(deferredTimer);
@@ -331,9 +291,6 @@ function queueNavigation(direction) {
     navPending = 0;
     return;
   }
-  // Hold the rest of this display frame. Any repeated key events that arrive
-  // before the next paint collapse into the pending count instead of causing
-  // multiple viewer DOM rebuilds inside one frame.
   navFrame = requestAnimationFrame(flushNavigation);
 }
 

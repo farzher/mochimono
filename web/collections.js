@@ -22,7 +22,7 @@ let viewerGeneration = 0;
 let pickerHashes = [];
 
 function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+  return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 }
 
 async function json(path, options = {}) {
@@ -102,19 +102,19 @@ function renderStrip() {
   const buttons = recent.map(([key, item]) =>
     `<button type="button" data-recent-collection="${escapeHtml(key)}" class="${String(activeKey) === String(key) ? 'active' : ''} ${isSmartKey(key) ? 'smart' : ''}">${isSmartKey(key) ? '<span>✦</span>' : ''}${escapeHtml(item.name)}</button>`
   );
-  if (saveableView()) buttons.push('<button type="button" class="save-view" data-save-view>Save view</button>');
+  if (saveableView()) buttons.push('<button type="button" class="save-view" data-save-view>Save as smart group</button>');
   strip.innerHTML = buttons.join('');
   strip.hidden = !buttons.length;
 }
 
 function renderFilter() {
   const manual = collections.length
-    ? `<optgroup label="Collections">${collections.map(item => `<option value="${item.id}">${escapeHtml(item.name)}${item.count ? ` · ${Number(item.count).toLocaleString()}` : ''}</option>`).join('')}</optgroup>`
+    ? `<optgroup label="Groups">${collections.map(item => `<option value="${item.id}">${escapeHtml(item.name)}${item.count ? ` · ${Number(item.count).toLocaleString()}` : ''}</option>`).join('')}</optgroup>`
     : '';
   const smart = smartCollections.length
-    ? `<optgroup label="Smart">${smartCollections.map(item => `<option value="${smartKey(item.id)}">${escapeHtml(item.name)}</option>`).join('')}</optgroup>`
+    ? `<optgroup label="Smart groups">${smartCollections.map(item => `<option value="${smartKey(item.id)}">${escapeHtml(item.name)}</option>`).join('')}</optgroup>`
     : '';
-  filter.innerHTML = `<option value="">Collections</option>${manual}${smart}`;
+  filter.innerHTML = `<option value="">Groups</option>${manual}${smart}`;
   filter.value = itemForKey(activeKey) ? String(activeKey) : '';
   renderStrip();
 }
@@ -159,9 +159,6 @@ function applySmartSpec(spec = {}) {
   applyingSmart = true;
   window.mochimonoSetCollectionHashes?.(null);
   if (currentView() === 'folders') views.querySelector('[data-view="grid"]')?.click();
-
-  // Keep Smart Collection source rules inside the query. This makes them
-  // independent of when source dropdown options happen to finish loading.
   source.value = '';
   source.dispatchEvent(new Event('change', { bubbles: true }));
   typeFilter.value = ['', 'media', 'image', 'video', 'audio', 'application', 'other'].includes(spec.type) ? spec.type : '';
@@ -260,6 +257,7 @@ async function fileCollections(hash) {
 }
 
 async function renderViewerMemberships() {
+  if (!viewer.hidden && window.mochimonoViewerPerformance?.defer?.(renderViewerMemberships)) return;
   const hash = currentHash();
   const generation = ++viewerGeneration;
   if (!hash || viewer.hidden) {
@@ -278,7 +276,7 @@ async function renderViewerMemberships() {
       <span class="viewer-collection-chip smart">
         <button data-open-collection="${smartKey(item.id)}"><span>✦</span>${escapeHtml(item.name)}</button>
       </span>`).join('');
-    viewerCollections.innerHTML = manual + smart + '<button class="viewer-collection-add" data-add-collection>+ Collection</button>';
+    viewerCollections.innerHTML = manual + smart + '<button class="viewer-collection-add" data-add-collection>+ Group</button>';
   } catch (error) {
     console.warn(error);
   }
@@ -324,8 +322,8 @@ const picker = document.createElement('dialog');
 picker.className = 'collection-picker';
 picker.innerHTML = `
   <div class="collection-picker-card">
-    <div class="collection-picker-head"><strong>Add to collection</strong><button type="button" data-picker-close aria-label="Close">×</button></div>
-    <input data-picker-input type="text" maxlength="80" autocomplete="off" placeholder="Find or create a collection">
+    <div class="collection-picker-head"><strong>Add to group</strong><button type="button" data-picker-close aria-label="Close">×</button></div>
+    <input data-picker-input type="text" maxlength="80" autocomplete="off" placeholder="Find or create a group">
     <div class="collection-picker-options"></div>
     <button type="button" class="collection-create" data-create-collection hidden></button>
   </div>`;
@@ -410,10 +408,10 @@ const saveDialog = document.createElement('dialog');
 saveDialog.className = 'collection-picker save-view-dialog';
 saveDialog.innerHTML = `
   <form method="dialog" class="collection-picker-card" data-save-form>
-    <div class="collection-picker-head"><strong>Save view</strong><button type="button" data-save-close aria-label="Close">×</button></div>
-    <input data-save-name type="text" maxlength="80" autocomplete="off" placeholder="Collection name" required>
+    <div class="collection-picker-head"><strong>Save smart group</strong><button type="button" data-save-close aria-label="Close">×</button></div>
+    <input data-save-name type="text" maxlength="80" autocomplete="off" placeholder="Group name" required>
     <div class="save-view-summary" data-save-summary></div>
-    <button type="submit" class="collection-create">Save smart collection</button>
+    <button type="submit" class="collection-create">Save smart group</button>
   </form>`;
 document.body.append(saveDialog);
 const saveName = saveDialog.querySelector('[data-save-name]');
