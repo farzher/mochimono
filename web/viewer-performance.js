@@ -1,6 +1,8 @@
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
 const viewerClose = document.querySelector('#viewer-close');
+const viewerPrev = document.querySelector('#viewer-prev');
+const viewerNext = document.querySelector('#viewer-next');
 const viewerInfo = document.querySelector('#viewerInfo');
 const files = document.querySelector('#files');
 
@@ -43,7 +45,11 @@ window.mochimonoViewerPerformance = { rapid, defer };
 
 function navigateOne(direction) {
   if (viewer.hidden) return false;
-  return Boolean(window.mochimonoViewerNavigate?.(direction));
+  const button = direction < 0 ? viewerPrev : viewerNext;
+  if (!button || button.disabled) return false;
+  if (typeof button.onclick === 'function') button.onclick.call(button);
+  else button.click();
+  return true;
 }
 
 function flushNavigation() {
