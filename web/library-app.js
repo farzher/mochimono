@@ -244,9 +244,20 @@ function syncYearHeadings() {
 
 function currentAnchor() {
   if (scrollY <= 4 || !$('#viewer').hidden) return null;
-  const bottom = document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0;
-  const card = [...filesElement.querySelectorAll('[data-hash]')].find(item => item.getBoundingClientRect().bottom > bottom + 1);
-  return card ? { element: card, hash: card.dataset.hash, top: card.getBoundingClientRect().top } : null;
+  const barBottom = document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0;
+  const bounds = filesElement.getBoundingClientRect();
+  const xs = [bounds.left + 8, (bounds.left + bounds.right) / 2, bounds.right - 8]
+    .map(x => Math.max(1, Math.min(innerWidth - 2, x)));
+  for (const y of [barBottom + 2, barBottom + 40, barBottom + 80, barBottom + 120]) {
+    if (y >= innerHeight) break;
+    for (const x of xs) {
+      const card = document.elementFromPoint(x, y)?.closest?.('#files [data-hash]');
+      if (!card) continue;
+      const rect = card.getBoundingClientRect();
+      return { element: card, hash: card.dataset.hash, top: rect.top };
+    }
+  }
+  return null;
 }
 
 function restoreAnchor(anchor) {
@@ -420,16 +431,15 @@ function extendWindow(direction = 1) {
     if (excess) renderEnd -= trimRenderedEnd(excess);
   } else {
     if (renderEnd >= filtered.length) return false;
-    const anchor = currentAnchor();
     const nextEnd = Math.min(filtered.length, renderEnd + PAGE);
+    const excess = Math.max(0, nextEnd - renderOffset - JUMP_WINDOW);
+    const anchor = excess ? currentAnchor() : null;
     const items = filtered.slice(renderEnd, nextEnd);
     renderEnd = nextEnd;
     appendItems(items);
-    const excess = Math.max(0, renderEnd - renderOffset - JUMP_WINDOW);
     if (excess) renderOffset += trimRenderedStart(excess, anchor);
   }
   syncSentinels();
-  renderRail();
   return true;
 }
 
@@ -473,7 +483,7 @@ function setRailThumb(index) {
 }
 
 function visibleIndex() {
-  const visible = [...filesElement.querySelectorAll('[data-hash]')].find(item => item.getBoundingClientRect().bottom > 90);
+  const visible = currentAnchor()?.element;
   return visible ? filteredIndex.get(visible.dataset.hash) ?? renderOffset : renderOffset;
 }
 
