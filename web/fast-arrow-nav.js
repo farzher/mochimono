@@ -210,13 +210,12 @@ const afterLayout = callback => requestAnimationFrame(() => requestAnimationFram
 
 function rotateWindow(direction, current, after) {
   const hash = current.dataset.hash || '';
+  const anchorTop = current.getBoundingClientRect().top;
   const token = nextPagingToken++;
   pagingToken = token;
 
   let extended = false;
   try {
-    // The library owns scroll-anchor preservation when it appends/prepends/trims.
-    // Do not independently compensate here or the two scroll corrections race.
     extended = Boolean(window.mochimonoLibrary?.extend?.(direction));
   } catch (error) {
     console.error('Mochimono grid extension failed.', error);
@@ -224,6 +223,11 @@ function rotateWindow(direction, current, after) {
   if (!extended) {
     if (pagingToken === token) pagingToken = 0;
     return false;
+  }
+
+  if (current.isConnected) {
+    const delta = current.getBoundingClientRect().top - anchorTop;
+    if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
   }
 
   dirty = true;
@@ -312,8 +316,6 @@ function syncReturnedCursor(hash) {
 document.addEventListener('keydown', event => {
   if (!arrows.has(event.key) || !viewer?.hidden || !gridActive() || editingControl(event)) return;
 
-  // Grid navigation owns arrow keys completely. Never let the browser also scroll
-  // the document when the cursor reaches a hard edge or while a page is rotating.
   event.preventDefault();
   event.stopImmediatePropagation();
 
