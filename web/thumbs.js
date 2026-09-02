@@ -146,8 +146,8 @@ function paintCard(card, force = false) {
   image.alt = '';
   image.hidden = true;
   image.decoding = 'async';
-  image.loading = 'lazy';
-  try { image.fetchPriority = 'low'; } catch {}
+  image.loading = 'eager';
+  try { image.fetchPriority = nearby.has(card) ? 'high' : 'low'; } catch {}
   image.dataset.thumbHash = hash;
   image.onload = () => {
     if (!image.isConnected || image.dataset.thumbHash !== hash) return;
@@ -443,7 +443,6 @@ function observeTree(node) {
     indexCard(card);
     if (observed.has(card) || !kind(card)) continue;
     observed.add(card);
-    paintCard(card);
     observer.observe(card);
   }
 }
