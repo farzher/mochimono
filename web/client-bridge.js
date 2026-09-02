@@ -8,10 +8,14 @@ if (location.pathname.startsWith('/files')) {
     hash: viewer && !viewer.hidden ? viewerHash() : '',
     pending: document.documentElement.classList.contains('viewer-restore-pending')
   }, location.origin);
-  const reportScroll = () => window.parent.postMessage({
-    type: 'mochimono-library-scroll',
-    y: Math.max(0, window.scrollY || 0)
-  }, location.origin);
+  const shellScrollY = () => Math.min(96, Math.max(0, Math.round(window.scrollY || 0)));
+  let reportedScrollY = -1;
+  const reportScroll = () => {
+    const y = shellScrollY();
+    if (y === reportedScrollY) return;
+    reportedScrollY = y;
+    window.parent.postMessage({ type: 'mochimono-library-scroll', y }, location.origin);
+  };
 
   if (viewer) {
     new MutationObserver(reportViewer).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
@@ -29,7 +33,7 @@ if (location.pathname.startsWith('/files')) {
 
   let scrollFrame = 0;
   addEventListener('scroll', () => {
-    if (scrollFrame) return;
+    if (scrollFrame || shellScrollY() === reportedScrollY) return;
     scrollFrame = requestAnimationFrame(() => {
       scrollFrame = 0;
       reportScroll();
