@@ -1,5 +1,3 @@
-import './collection-delete.js';
-
 const files = document.querySelector('#files');
 const views = document.querySelector('#views');
 const viewer = document.querySelector('#viewer');
