@@ -108,7 +108,7 @@ function renderFolderPreview(row) {
     const media = mime.startsWith('image/') || mime.startsWith('video/');
     const ready = media && readyPreviews.has(hash);
     if (ready) {
-      cells.push(`<span class="storage-folder-sample ${mime.startsWith('video/') ? 'video' : ''}" title="${String(file.filename || '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[char]))}"><img src="/api/thumbs/${hash}" alt="" loading="lazy" decoding="async"></span>`);
+      cells.push(`<span class="storage-folder-sample ${mime.startsWith('video/') ? 'video' : ''}" title="${String(file.filename || '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))}"><img src="/api/thumbs/${hash}" alt="" loading="lazy" decoding="async"></span>`);
     } else {
       const filename = String(file.filename || '');
       const safe = filename.replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
