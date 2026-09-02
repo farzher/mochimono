@@ -475,7 +475,13 @@ function observeTree(node) {
     indexCard(card);
     if (observed.has(card) || !kind(card)) continue;
     observed.add(card);
-    pending(card);
+    const hash = String(card.dataset.hash || '');
+    const state = states.get(hash);
+    // A catalog refresh can replace card DOM even when the visible files did not
+    // change. Reuse the already-loaded object URL synchronously instead of
+    // waiting for IntersectionObserver to fire again and flashing a blank tile.
+    if (state?.ready && state.url) paint(hash);
+    else pending(card);
     observer.observe(card);
   }
 }
