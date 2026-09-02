@@ -21,9 +21,9 @@ if (location.pathname.startsWith('/files')) {
     <div class="client-drop-choice-card">
       <div class="client-drop-choice-head"><div><strong data-drop-title></strong><span data-drop-meta></span></div><button class="client-drop-choice-close" aria-label="Cancel">×</button></div>
       <div class="client-drop-actions">
-        <button class="client-drop-action primary" data-drop-copy><b>Copy to Mochimono</b><span>One-time Server copy · originals stay where they are · not watched</span></button>
-        <button class="client-drop-action" data-drop-browse><b>Browse local folder</b><span>Local only · nothing uploaded</span></button>
-        <button class="client-drop-action" data-drop-protect><b>Protect local folder</b><span>Keep the local folder + a Mochimono copy · watch for changes</span></button>
+        <button class="client-drop-action primary" data-drop-copy><b>Copy to Mochimono</b><span>Use this drop directly · one-time Server copy · originals stay where they are</span></button>
+        <button class="client-drop-action" data-drop-browse><b>Browse this folder…</b><span>Confirm it once in the native picker · local only · nothing uploaded</span></button>
+        <button class="client-drop-action" data-drop-protect><b>Protect this folder…</b><span>Confirm it once in the native picker · local + Mochimono copy · watched</span></button>
       </div>
       <div class="client-drop-choice-note" data-drop-note></div>
     </div>`;
@@ -117,17 +117,30 @@ if (location.pathname.startsWith('/files')) {
     return common.join('/');
   }
 
+  function droppedFolderHint(items) {
+    const roots = new Set();
+    let nested = false;
+    for (const item of items) {
+      const parts = normalizePath(item.path).split('/').filter(Boolean);
+      if (parts.length < 2) continue;
+      nested = true;
+      roots.add(parts[0]);
+      if (roots.size > 1) return '';
+    }
+    return nested ? [...roots][0] || '' : '';
+  }
+
   function chooseIntent(files) {
-    const directory = commonDirectory(files);
-    const local = Boolean(directory);
-    const title = directory ? directory.split('/').at(-1) : files.length === 1 ? files[0].file.name : `${files.length.toLocaleString()} files`;
+    const folder = droppedFolderHint(files);
+    const local = Boolean(folder);
+    const title = folder || (files.length === 1 ? files[0].file.name : `${files.length.toLocaleString()} files`);
     choice.querySelector('[data-drop-title]').textContent = title;
     choice.querySelector('[data-drop-meta]').textContent = `${files.length.toLocaleString()} file${files.length === 1 ? '' : 's'}`;
     choice.querySelector('[data-drop-browse]').hidden = !local;
     choice.querySelector('[data-drop-protect]').hidden = !local;
     choice.querySelector('[data-drop-note]').textContent = local
-      ? 'Local folder modes use the native folder chooser so Mochimono can keep access after this drop.'
-      : 'A loose file drop can only make a one-time Mochimono copy.';
+      ? 'Chrome gives Mochimono the dropped contents, but not the folder’s full disk path. Copy uses the drop directly; Local/Protect need one native folder confirmation.'
+      : 'Loose files can be copied directly. Persistent Local/Protect mode requires adding their folder instead.';
     choice.hidden = false;
 
     return new Promise(resolve => {
@@ -302,7 +315,11 @@ if (location.pathname.startsWith('/files')) {
       if (!files.length) return;
       const intent = await chooseIntent(files);
       if (intent === 'copy') await importDropped(files);
-      else if (intent === 'browse' || intent === 'protect') window.parent.postMessage({ type: 'mochimono-folder-intent', mode: intent }, location.origin);
+      else if (intent === 'browse' || intent === 'protect') window.parent.postMessage({
+        type: 'mochimono-folder-intent',
+        mode: intent,
+        hint: droppedFolderHint(files)
+      }, location.origin);
     } catch (error) {
       flushLive();
       result.hidden = false;
