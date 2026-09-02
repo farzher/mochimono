@@ -8,6 +8,9 @@ const frame = document.querySelector('#filesFrame');
 
 if (input && choose && browse && protect && addPanel) {
   let picked = [];
+  let browserSelection = new Set();
+  let browserPath = '';
+  let browserData = null;
 
   const style = document.createElement('style');
   style.textContent = `
@@ -19,6 +22,24 @@ if (input && choose && browse && protect && addPanel) {
     .multi-folder-selected code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#aaa29f;font:10px/1.35 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
     .multi-folder-selected button{width:26px;height:26px;display:grid;place-items:center;padding:0;border:0;border-radius:7px;background:transparent;color:#776f6d;font-size:15px}
     .multi-folder-selected button:hover{background:#242126;color:#fff}
+    .multi-folder-browser{width:min(700px,calc(100vw - 24px));max-width:700px;padding:0;overflow:hidden}
+    .multi-folder-browser .dialog-head{padding:14px 16px 10px}
+    .folder-browser-path{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:0 16px 10px}
+    .folder-browser-path input{min-width:0;font:11px ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+    .folder-browser-tools{display:flex;align-items:center;gap:6px;padding:0 16px 9px}
+    .folder-browser-current{margin-left:auto;display:flex;align-items:center;gap:6px;color:#aaa29f;font-size:10px;cursor:pointer}
+    .folder-browser-list{height:min(52vh,430px);min-height:220px;overflow:auto;border-top:1px solid #272329;border-bottom:1px solid #272329;background:#0d0c0e}
+    .folder-browser-row{display:grid;grid-template-columns:34px minmax(0,1fr);align-items:center;border-bottom:1px solid #1d1a1e}
+    .folder-browser-row:last-child{border-bottom:0}
+    .folder-browser-row:hover{background:#151316}
+    .folder-browser-row label{height:38px;display:grid;place-items:center;cursor:pointer}
+    .folder-browser-row input{margin:0}
+    .folder-browser-open{height:38px;min-width:0;padding:0 10px 0 0;border:0;background:transparent;color:#c9c1bd;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .folder-browser-open::before{content:'▸';display:inline-block;width:18px;color:#746d6a}
+    .folder-browser-empty{padding:24px 16px;color:#77706e;text-align:center;font-size:10px}
+    .folder-browser-footer{display:flex;align-items:center;gap:8px;padding:10px 16px 14px}
+    .folder-browser-count{color:#8f8784;font-size:10px}
+    .folder-browser-footer .spacer{flex:1}
   `;
   document.head.append(style);
 
@@ -27,6 +48,16 @@ if (input && choose && browse && protect && addPanel) {
   selected.hidden = true;
   selected.innerHTML = '<div class="multi-folder-selection-head"><span data-multi-folder-count></span><button type="button" class="action-link" data-clear-multi-folders>Clear</button></div><div class="multi-folder-selection-list"></div>';
   addPanel.querySelector('.folder-path-row')?.after(selected);
+
+  const browser = document.createElement('dialog');
+  browser.className = 'small-dialog multi-folder-browser';
+  browser.innerHTML = `
+    <div class="dialog-head"><h3>Choose folders</h3><button type="button" class="icon" data-browser-close>×</button></div>
+    <div class="folder-browser-path"><input data-browser-path aria-label="Folder path"><button type="button" class="secondary" data-browser-go>Go</button></div>
+    <div class="folder-browser-tools"><button type="button" class="action-link" data-browser-up>↑ Up</button><label class="folder-browser-current"><input type="checkbox" data-browser-current> Select this folder</label></div>
+    <div class="folder-browser-list" data-browser-list><div class="folder-browser-empty">Loading…</div></div>
+    <div class="folder-browser-footer"><span class="folder-browser-count" data-browser-count></span><span class="spacer"></span><button type="button" class="secondary" data-browser-cancel>Cancel</button><button type="button" class="primary" data-browser-confirm>Choose selected</button></div>`;
+  document.body.append(browser);
 
   const clean = value => String(value || '').trim().replace(/[\\/]+$/, '');
   const key = value => clean(value).toLowerCase();
@@ -39,16 +70,11 @@ if (input && choose && browse && protect && addPanel) {
     return unique([...picked, input.value.trim()]);
   }
 
-  function syncChooseLabel() {
-    choose.textContent = pathsToAdd().length ? 'Add another' : 'Choose';
-  }
-
   function render() {
     selected.hidden = picked.length < 2;
     if (picked.length < 2) {
       selected.querySelector('.multi-folder-selection-list').replaceChildren();
       selected.querySelector('[data-multi-folder-count]').textContent = '';
-      syncChooseLabel();
       return;
     }
     selected.querySelector('[data-multi-folder-count]').textContent = `${picked.length.toLocaleString()} folders selected`;
@@ -62,7 +88,6 @@ if (input && choose && browse && protect && addPanel) {
       row.querySelector('button').dataset.removeMultiFolder = String(index);
       return row;
     }));
-    syncChooseLabel();
   }
 
   function setPicked(paths) {
@@ -101,24 +126,87 @@ if (input && choose && browse && protect && addPanel) {
     element.timer = setTimeout(() => element.classList.remove('show'), 2800);
   }
 
-  async function pickFolders(event) {
+  const browserPathInput = browser.querySelector('[data-browser-path]');
+  const browserList = browser.querySelector('[data-browser-list]');
+  const browserCurrent = browser.querySelector('[data-browser-current]');
+  const browserCount = browser.querySelector('[data-browser-count]');
+  const browserUp = browser.querySelector('[data-browser-up]');
+
+  function selectedKeySet() {
+    return new Set([...browserSelection].map(key));
+  }
+
+  function updateBrowserCount() {
+    const count = browserSelection.size;
+    browserCount.textContent = count ? `${count.toLocaleString()} selected` : 'Select one or more folders';
+    browser.querySelector('[data-browser-confirm]').disabled = !count;
+  }
+
+  function toggleBrowserPath(path, checked) {
+    const wanted = key(path);
+    for (const existing of [...browserSelection]) if (key(existing) === wanted) browserSelection.delete(existing);
+    if (checked) browserSelection.add(clean(path));
+    updateBrowserCount();
+  }
+
+  function renderBrowser() {
+    if (!browserData) return;
+    browserPath = browserData.path;
+    browserPathInput.value = browserPath;
+    browserUp.disabled = !browserData.parent;
+    browserUp.dataset.path = browserData.parent || '';
+    const selectedKeys = selectedKeySet();
+    browserCurrent.checked = selectedKeys.has(key(browserPath));
+
+    if (!(browserData.directories || []).length) {
+      browserList.innerHTML = '<div class="folder-browser-empty">No folders here.</div>';
+      updateBrowserCount();
+      return;
+    }
+
+    browserList.replaceChildren(...browserData.directories.map(directory => {
+      const row = document.createElement('div');
+      row.className = 'folder-browser-row';
+      const label = document.createElement('label');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = selectedKeys.has(key(directory.path));
+      checkbox.dataset.selectPath = directory.path;
+      label.append(checkbox);
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'folder-browser-open';
+      open.dataset.openPath = directory.path;
+      open.textContent = directory.name;
+      open.title = directory.path;
+      row.append(label, open);
+      return row;
+    }));
+    updateBrowserCount();
+  }
+
+  async function loadBrowser(path = '') {
+    browserList.innerHTML = '<div class="folder-browser-empty">Loading…</div>';
+    try {
+      browserData = await request(`/api/client/folder-browser${path ? `?path=${encodeURIComponent(path)}` : ''}`);
+      renderBrowser();
+    } catch (error) {
+      browserList.innerHTML = '';
+      const empty = document.createElement('div');
+      empty.className = 'folder-browser-empty error';
+      empty.textContent = error.message;
+      browserList.append(empty);
+    }
+  }
+
+  async function openBrowser(event) {
     event?.preventDefault();
     event?.stopImmediatePropagation();
-    choose.disabled = true;
-    try {
-      // Windows' Common Item Dialog can expose multi-folder selection, but it is
-      // inconsistent across Windows builds and has repeatedly rejected valid
-      // Ctrl-selected folders as one quoted folder name. Use the reliable native
-      // single-folder picker and accumulate selections in Mochimono instead.
-      const result = await request('/api/pick-folder');
-      const path = String(result.path || '').trim();
-      if (path) setPicked([...pathsToAdd(), path]);
-    } catch (error) {
-      toast(error.message);
-    } finally {
-      choose.disabled = false;
-      syncChooseLabel();
-    }
+    browserSelection = new Set(pathsToAdd());
+    browserData = null;
+    updateBrowserCount();
+    browser.showModal();
+    await loadBrowser(browserPath || input.value.trim());
   }
 
   async function addFolders(mode, event) {
@@ -163,10 +251,33 @@ if (input && choose && browse && protect && addPanel) {
   }
 
   choose.onclick = null;
-  choose.addEventListener('click', pickFolders, true);
+  choose.addEventListener('click', openBrowser, true);
   browse.addEventListener('click', event => addFolders('browse', event), true);
   protect.addEventListener('click', event => addFolders('protect', event), true);
-  input.addEventListener('input', syncChooseLabel);
+
+  browser.addEventListener('change', event => {
+    const checkbox = event.target.closest('[data-select-path]');
+    if (checkbox) toggleBrowserPath(checkbox.dataset.selectPath, checkbox.checked);
+    if (event.target === browserCurrent && browserPath) toggleBrowserPath(browserPath, browserCurrent.checked);
+  });
+  browser.addEventListener('click', event => {
+    const open = event.target.closest('[data-open-path]');
+    if (open) return void loadBrowser(open.dataset.openPath);
+    if (event.target.closest('[data-browser-up]')) return void loadBrowser(browserUp.dataset.path);
+    if (event.target.closest('[data-browser-go]')) return void loadBrowser(browserPathInput.value.trim());
+    if (event.target.closest('[data-browser-close],[data-browser-cancel]')) return browser.close();
+    if (event.target.closest('[data-browser-confirm]')) {
+      setPicked([...browserSelection]);
+      browser.close();
+    }
+  });
+  browserPathInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      loadBrowser(browserPathInput.value.trim());
+    }
+  });
+  browser.addEventListener('cancel', () => { browserData = null; });
 
   selected.addEventListener('click', event => {
     if (event.target.closest('[data-clear-multi-folders]')) return clearPicked();
@@ -180,6 +291,4 @@ if (input && choose && browse && protect && addPanel) {
     }
     render();
   });
-
-  syncChooseLabel();
 }
