@@ -19,7 +19,6 @@ style.textContent = `
   #folderAdd{display:none!important}
   #folders>.empty-state,#folders>.muted,#backups>.empty-state,#backups>.muted{display:none!important}
 
-  /* Folder rows: visual first, one path line, two useful numbers. */
   #storagePane .folder-item{
     position:relative;grid-template-columns:260px minmax(0,1fr);gap:18px;align-items:center;
     min-height:164px;padding:12px 4px;border-bottom:1px solid #201e20;background:transparent
@@ -48,7 +47,6 @@ style.textContent = `
     padding:2px 6px;border-radius:999px;background:#302427;color:#d9a49e;font-size:9px;font-weight:720
   }
 
-  /* Actions exist, but they should not compete with the folder itself. */
   #storagePane .folder-item .item-actions{
     position:absolute;z-index:3;right:9px;top:50%;width:auto;min-width:0;padding:4px;
     display:flex;gap:1px;align-items:center;border-radius:9px;background:rgba(18,16,19,.88);
@@ -67,7 +65,6 @@ style.textContent = `
   #storagePane .folder-item .item-actions .icon:hover{background:#2b272b;color:#fff}
   #storagePane .folder-item .item-actions .primary-action{color:#e2aaa4}
 
-  /* Add folder is simply the next folder-sized row. */
   .storage-add-card{
     width:100%;border:0;border-radius:0;background:transparent;color:#847b79;text-align:left;font-weight:650
   }
@@ -84,7 +81,6 @@ style.textContent = `
   .storage-add-folder .storage-add-copy{font-size:14px;color:#817876}
   .storage-add-folder:hover .storage-add-copy{color:#d8cfcb}
 
-  /* Backups: compact drive rows. No path/free-space prose. */
   .storage-backups-section{margin-top:12px;padding-top:18px!important;border-top:1px solid #211e21}
   #storagePane .backup-item{
     position:relative;min-height:78px;padding:13px 4px 13px 58px;border-bottom:1px solid #201e20;background:transparent
@@ -97,15 +93,19 @@ style.textContent = `
   #storagePane .backup-item:hover{background:rgba(255,255,255,.016)}
   #storagePane .backup-item .storage-title strong{font-size:14px;color:#e6ddda}
   #storagePane .backup-item .storage-path{display:none!important}
+  #storagePane .backup-item .item-state{display:none}
+  #storagePane .backup-item .item-state.warning,
+  #storagePane .backup-item .item-state.bad,
+  #storagePane .backup-item .item-state.working{display:block}
   #storagePane .backup-item .storage-meta{margin-top:5px;font-size:10px;color:#8d8582}
   #storagePane .backup-item .storage-meta span:nth-child(1),
   #storagePane .backup-item .storage-meta span:nth-child(2),
   #storagePane .backup-item .storage-meta span:nth-child(6),
-  #storagePane .backup-item .storage-meta span:nth-child(7){display:none}
+  #storagePane .backup-item .storage-meta span:nth-child(7),
+  #storagePane .backup-item .storage-meta span:nth-child(8),
+  #storagePane .backup-item .storage-meta span:nth-child(9){display:none}
   #storagePane .backup-item .storage-meter{height:3px;margin-top:8px;background:#262326}
-  #storagePane .backup-item .item-actions{
-    opacity:0;pointer-events:none;transition:opacity .12s ease
-  }
+  #storagePane .backup-item .item-actions{opacity:0;pointer-events:none;transition:opacity .12s ease}
   #storagePane .backup-item:hover .item-actions,
   #storagePane .backup-item:focus-within .item-actions{opacity:1;pointer-events:auto}
 
@@ -154,7 +154,6 @@ function openProtectionSettings() {
     button.click();
     return;
   }
-  // protection.js loads asynchronously with the rest of the Storage modules.
   setTimeout(() => document.querySelector('#protectionSettings')?.click(), 150);
 }
 
