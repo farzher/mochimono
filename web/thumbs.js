@@ -12,6 +12,7 @@ const nearby = new Set();
 const pendingTrees = new Set();
 const fallbackQueue = [];
 const fallbackQueued = new Set();
+let observeFrame = 0;
 let checkTimer = 0;
 let checking = false;
 let fallbackActive = false;
@@ -105,16 +106,7 @@ function markLoaded(hash, card, image) {
   rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
 }
 
-function startThumbnailImage(image, canonical, allowDuringInteraction = false) {
-  if (interactionActive() && !allowDuringInteraction) {
-    image.dataset.pendingThumbSrc = canonical;
-    return;
-  }
-  delete image.dataset.pendingThumbSrc;
-  image.src = canonical;
-}
-
-function paintCard(card, allowDuringInteraction = false) {
+function paintCard(card) {
   if (!card?.isConnected || !kind(card)) return;
   const hash = String(card.dataset.hash || '');
   if (!hash) return;
@@ -128,12 +120,11 @@ function paintCard(card, allowDuringInteraction = false) {
       try { current.fetchPriority = 'high'; } catch {}
     }
     if (current.complete && current.naturalWidth) markLoaded(hash, card, current);
-    else if ((allowDuringInteraction || !interactionActive()) && current.dataset.pendingThumbSrc) startThumbnailImage(current, current.dataset.pendingThumbSrc, true);
     return;
   }
 
   const state = states.get(hash) || {};
-  if (allowDuringInteraction && interactionActive() && state.ready === false && performance.now() < (state.nextCheck || 0)) {
+  if (interactionActive() && state.ready === false && performance.now() < (state.nextCheck || 0)) {
     pending(card);
     return;
   }
@@ -157,20 +148,20 @@ function paintCard(card, allowDuringInteraction = false) {
     const failed = states.get(hash) || {};
     failed.ready = false;
     failed.missingSince ||= performance.now();
-    failed.nextCheck = performance.now() + (interactionActive() ? 1000 : 250);
+    failed.nextCheck = performance.now() + (interactionActive() ? 900 : 250);
     states.set(hash, failed);
     pending(card);
     if (nearby.has(card) && !interactionActive()) scheduleCheck(80);
   };
 
   box.prepend(image);
-  startThumbnailImage(image, canonical, allowDuringInteraction || Boolean(state.ready));
+  image.src = canonical;
 }
 
-function loadHash(hash, allowDuringInteraction = false) {
+function loadHash(hash) {
   hash = String(hash || '');
   if (!hash) return;
-  for (const card of cardsFor(hash)) paintCard(card, allowDuringInteraction);
+  for (const card of cardsFor(hash)) paintCard(card);
 }
 
 window.mochimonoThumbnails = {
@@ -178,7 +169,7 @@ window.mochimonoThumbnails = {
     for (const card of Array.isArray(cards) ? cards : [cards]) {
       if (!card?.isConnected || !kind(card)) continue;
       indexCard(card);
-      paintCard(card, true);
+      paintCard(card);
     }
   }
 };
@@ -426,9 +417,8 @@ const observer = files ? new IntersectionObserver(entries => {
       nearby.add(card);
       const image = card.querySelector('img.cached-thumb');
       if (image) image.fetchPriority = interactionActive() ? 'low' : 'high';
-      if (interactionActive()) continue;
       loadHash(card.dataset.hash);
-      if (!states.get(card.dataset.hash)?.ready) scheduleCheck(50);
+      if (!interactionActive() && !states.get(card.dataset.hash)?.ready) scheduleCheck(50);
     } else nearby.delete(card);
   }
 }, { rootMargin: '2200px 0px' }) : null;
@@ -451,10 +441,16 @@ function observeTree(node) {
   }
 }
 
+function flushObserveTrees() {
+  observeFrame = 0;
+  for (const node of pendingTrees) if (node.isConnected) observeTree(node);
+  pendingTrees.clear();
+}
+
 function queueObserveTree(node) {
   if (!(node instanceof Element)) return;
-  if (interactionActive()) pendingTrees.add(node);
-  else observeTree(node);
+  pendingTrees.add(node);
+  if (!observeFrame) observeFrame = requestAnimationFrame(flushObserveTrees);
 }
 
 function forgetTree(node) {
@@ -468,13 +464,7 @@ function forgetTree(node) {
 }
 
 function flushDeferredThumbnails() {
-  for (const node of pendingTrees) if (node.isConnected) observeTree(node);
-  pendingTrees.clear();
-  for (const image of files?.querySelectorAll('img.cached-thumb[data-pending-thumb-src]') || []) {
-    if (!image.isConnected) continue;
-    const canonical = image.dataset.pendingThumbSrc;
-    if (canonical) startThumbnailImage(image, canonical, false);
-  }
+  if (pendingTrees.size) flushObserveTrees();
   for (const card of nearby) {
     if (!card.isConnected) continue;
     const image = card.querySelector('img.cached-thumb');
@@ -498,10 +488,11 @@ if (files) {
 
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
-      if (interactionActive()) return;
       for (const card of nearby) loadHash(card.dataset.hash);
-      scheduleCheck(50);
-      pumpFallback();
+      if (!interactionActive()) {
+        scheduleCheck(50);
+        pumpFallback();
+      }
     }
   });
 
@@ -509,5 +500,8 @@ if (files) {
     if (!interactionActive()) scheduleCheck(50);
   });
 
-  addEventListener('beforeunload', () => clearTimeout(checkTimer), { once: true });
+  addEventListener('beforeunload', () => {
+    clearTimeout(checkTimer);
+    if (observeFrame) cancelAnimationFrame(observeFrame);
+  }, { once: true });
 }
