@@ -14,6 +14,7 @@ const hasLocalCopy = hash => Boolean(hash && (
 
 const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
 const mediaDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+const nativeFetch = window.fetch.bind(window);
 const decoded = new Map();
 const preloads = new Map();
 const hoverWarm = new Map();
@@ -92,6 +93,58 @@ function clearStalePreloads() {
 function rapidNavigation() {
   return performance.now() < rapidUntil;
 }
+
+function viewerSecondaryHash(input, init) {
+  const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+  if (method !== 'GET') return '';
+
+  let url;
+  try { url = new URL(input instanceof Request ? input.url : String(input), location.href); }
+  catch { return ''; }
+
+  if (url.pathname === '/api/client/locations') {
+    const hash = String(url.searchParams.get('hash') || '');
+    return /^[a-f0-9]{64}$/.test(hash) ? hash : '';
+  }
+
+  for (const pattern of [
+    /^\/api\/provenance\/([a-f0-9]{64})$/,
+    /^\/api\/collections\/file\/([a-f0-9]{64})$/,
+    /^\/api\/files\/([a-f0-9]{64})\/details$/,
+    /^\/api\/protection\/objects\/([a-f0-9]{64})$/,
+    /^\/api\/drives\/[^/]+\/files\/([a-f0-9]{64})$/
+  ]) {
+    const match = url.pathname.match(pattern);
+    if (match) return match[1];
+  }
+  return '';
+}
+
+function waitForRapidSettle() {
+  return new Promise(resolve => {
+    const check = () => {
+      const wait = rapidUntil - performance.now();
+      if (wait > 0) setTimeout(check, wait + 3);
+      else resolve();
+    };
+    check();
+  });
+}
+
+// Viewer chrome has several independent features that react to viewerOpen.href
+// (paths/provenance, local-copy reveal, collections, protection). During a held
+// arrow those requests are for files that may exist for only one frame. Hold
+// them until navigation settles and only let the final current hash reach the
+// Agent/server. Stale consumers already guard by generation/hash; a tiny empty
+// JSON response lets them finish quietly without console/network churn.
+window.fetch = function(input, init) {
+  const hash = viewerSecondaryHash(input, init);
+  if (!hash || viewer?.hidden || !rapidNavigation()) return nativeFetch(input, init);
+  return waitForRapidSettle().then(() => {
+    if (!viewer.hidden && currentHash() === hash) return nativeFetch(input, init);
+    return new Response('{}', { status:200, headers:{ 'content-type':'application/json' } });
+  });
+};
 
 function scheduleDeferredFlush(delay = RAPID_SETTLE_MS + 4) {
   clearTimeout(deferredTimer);
