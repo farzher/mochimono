@@ -96,12 +96,17 @@ function rememberRecent(key) {
   renderStrip();
 }
 
+function forgetRecent(key) {
+  localStorage.setItem(RECENT_KEY, JSON.stringify(readRecent().filter(item => item !== String(key))));
+}
+
 function renderStrip() {
   if (!strip) return;
   const recent = readRecent().map(key => [key, itemForKey(key)]).filter(([, item]) => item).slice(0, 5);
-  const buttons = recent.map(([key, item]) =>
-    `<button type="button" data-recent-collection="${escapeHtml(key)}" class="${String(activeKey) === String(key) ? 'active' : ''} ${isSmartKey(key) ? 'smart' : ''}">${isSmartKey(key) ? '<span>✦</span>' : ''}${escapeHtml(item.name)}</button>`
-  );
+  const buttons = recent.map(([key, item]) => {
+    const active = String(activeKey) === String(key);
+    return `<button type="button" data-recent-collection="${escapeHtml(key)}" class="${active ? 'active' : ''} ${isSmartKey(key) ? 'smart' : ''}">${isSmartKey(key) ? '<span>✦</span>' : ''}${escapeHtml(item.name)}</button>${active ? `<button type="button" class="delete-active-collection" data-delete-active-collection="${escapeHtml(key)}" title="Delete group" aria-label="Delete ${escapeHtml(item.name)}">×</button>` : ''}`;
+  });
   if (saveableView()) buttons.push('<button type="button" class="save-view" data-save-view>Save as smart group</button>');
   strip.innerHTML = buttons.join('');
   strip.hidden = !buttons.length;
@@ -212,6 +217,20 @@ async function setActiveCollection(key, updateUrl = true) {
   rememberRecent(next);
   if (updateUrl) updateCollectionUrl(next);
   renderStrip();
+}
+
+async function deleteCollection(key) {
+  key = String(key || '');
+  const item = itemForKey(key);
+  if (!item || key !== String(activeKey)) return;
+  if (!confirm(`Delete group “${item.name}”?\n\nThe files themselves will not be deleted.`)) return;
+  const id = isSmartKey(key) ? smartId(key) : key;
+  const path = isSmartKey(key) ? `/api/smart-collections/${encodeURIComponent(id)}` : `/api/collections/${encodeURIComponent(id)}`;
+  await json(path, { method: 'DELETE' });
+  forgetRecent(key);
+  const url = new URL(location.href);
+  url.searchParams.delete('collection');
+  location.replace(url);
 }
 
 async function switchFromViewer(key) {
@@ -460,6 +479,8 @@ saveDialog.querySelector('[data-save-form]').addEventListener('submit', async ev
 });
 
 strip?.addEventListener('click', event => {
+  const remove = event.target.closest('[data-delete-active-collection]');
+  if (remove) return deleteCollection(remove.dataset.deleteActiveCollection).catch(error => alert(error.message));
   const recent = event.target.closest('[data-recent-collection]');
   if (recent) return setActiveCollection(recent.dataset.recentCollection).catch(console.error);
   if (event.target.closest('[data-save-view]')) openSaveDialog();
