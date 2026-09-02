@@ -28,7 +28,7 @@ style.textContent = `
   .file-context-name{flex:1 1 auto}.file-context-badge.has-match .file-context-name{flex:0 1 44%;max-width:44%}
   .file-context-match{flex:1 1 auto;color:#c9c0bd;font-weight:600}.file-context-match mark{padding:0;background:transparent;color:#ff6f67;font-weight:800}
   .file-card.context-pointer-hover .file-context-badge,.file-card.context-keyboard-focus .file-context-badge,.file-card:focus-visible .file-context-badge{opacity:1;transform:none}
-  .file-card.context-keyboard-focus,.file-row.context-keyboard-focus{box-shadow:0 0 0 3px rgba(239,160,154,.9)!important;outline:none}
+  .file-row.context-keyboard-focus{box-shadow:0 0 0 3px rgba(239,160,154,.9)!important;outline:none}
   @media(max-width:700px){.file-context-badge{padding:24px 7px 6px;font-size:9px}.file-context-badge.has-match .file-context-name{max-width:38%}}
 `;
 document.head.append(style);
@@ -217,10 +217,10 @@ function visibleCards() {
 }
 
 function currentCard(items = visibleCards()) {
+  const cursor = currentView() === 'grid' ? files.querySelector('.keyboard-cursor[data-hash]') : null;
+  if (cursor && items.includes(cursor)) return cursor;
   const active = document.activeElement?.closest?.('#files [data-hash]');
   if (active && items.includes(active)) return active;
-  const cursor = files.querySelector('.keyboard-cursor[data-hash]');
-  if (cursor && items.includes(cursor)) return cursor;
   const remembered = focusedHash && items.find(card => card.dataset.hash === focusedHash);
   if (remembered) return remembered;
   return items.find(card => {
@@ -352,6 +352,7 @@ window.addEventListener('mochimono-viewer-return', event => {
   if (!hash) return;
   setPointerHash('');
   setFocusedHash(hash);
+  if (currentView() !== 'list') return;
   const card = cardForHash(hash);
   if (card) focusCard(card);
   else scheduleDecorate();

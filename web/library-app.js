@@ -124,10 +124,12 @@ function preview(file) {
   return `<div class="file-icon ${escapeHtml(value)}">${value === 'audio' ? '♪' : typeLabel(file) === 'document' ? '▤' : '·'}</div>`;
 }
 
-function viewerMedia(file) {
+function viewerMedia(file, rapid = false) {
   const url = objectUrl(file);
   if (kind(file) === 'image') return `<img src="${thumbUrl(file)}" data-full-src="${url}" alt="${escapeHtml(file.filename)}">`;
-  if (kind(file) === 'video') return `<video src="${url}" controls autoplay playsinline></video>`;
+  if (kind(file) === 'video') return rapid
+    ? `<video controls playsinline poster="${thumbUrl(file)}"></video>`
+    : `<video src="${url}" controls autoplay playsinline></video>`;
   return `<div class="viewer-file-icon">${preview(file)}</div>`;
 }
 
@@ -413,7 +415,7 @@ function applyFilters(reset = true, preserve = false, keepHash = '') {
   renderFiles(preserve);
   if (selected) {
     const current = catalogFile(selected.hash);
-    if (current) selected = normalizeFile(current);
+    if (current) selected = current;
     updateViewerNav();
   }
 }
@@ -613,6 +615,12 @@ async function syncCatalog(force = false) {
 }
 
 function currentFolderSource() { return imports.find(item => String(item.id) === String(folderImportId)); }
+function folderState() {
+  return { importId: String(folderImportId || ''), path: folderPath, sourceName: currentFolderSource()?.sourceName || '' };
+}
+function notifyFolderChanged() {
+  window.dispatchEvent(new CustomEvent('mochimono:folder-changed', { detail: folderState() }));
+}
 
 function folderBreadcrumb() {
   const bar = $('#folderbar');
@@ -643,8 +651,7 @@ function renderFolder() {
   renderFileCount(folderData.files.length);
   const rows = [];
   for (const folder of folderData.folders || []) rows.push(`<button class="folder-row" data-folder-name="${escapeHtml(folder.name)}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(folder.name)}</strong></span><span>${Number(folder.files || 0).toLocaleString()}</span><span>Folder</span></button>`);
-  for (const raw of folderData.files || []) {
-    const file = normalizeFile(raw);
+  for (const file of folderData.files || []) {
     rows.push(`<button class="folder-row file-folder-row" data-hash="${file.hash}" data-filename="${escapeHtml(file.filename)}"><span class="folder-name"><i class="document-icon"></i><strong>${escapeHtml(file.filename)}</strong></span><span>${formatBytes(file.size)}</span><span>${escapeHtml(typeLabel(file))}</span></button>`);
   }
   filesElement.innerHTML = rows.length ? `<div class="folder-list-head"><span>Name</span><span>Size</span><span>Type</span></div>${rows.join('')}` : '<div class="empty">Empty.</div>';
@@ -656,14 +663,25 @@ async function loadFolder() {
   if (view === 'folders') renderFolder();
   if (!folderImportId) {
     if (view !== 'folders') { $('#folderbar').hidden = true; $('#folderbar').replaceChildren(); applyFilters(true); }
-    return;
+    notifyFolderChanged();
+    return null;
   }
   const wantedImport = String(folderImportId);
   const wantedPath = folderPath;
   const data = await request(`/api/folders?import=${encodeURIComponent(wantedImport)}&path=${encodeURIComponent(wantedPath)}`);
-  if (generation !== folderLoadGeneration || String(folderImportId) !== wantedImport || folderPath !== wantedPath) return;
-  folderData = data;
+  if (generation !== folderLoadGeneration || String(folderImportId) !== wantedImport || folderPath !== wantedPath) return null;
+  folderData = { ...data, files: (data.files || []).map(normalizeFile) };
   if (view === 'folders') renderFolder(); else applyFilters(true);
+  notifyFolderChanged();
+  return folderData;
+}
+
+function openFolder(nextImportId = '', nextPath = '') {
+  folderImportId = String(nextImportId || '');
+  importId = folderImportId;
+  $('#source').value = importId;
+  folderPath = String(nextPath || '').split('/').filter(part => part && part !== '.' && part !== '..').join('/');
+  return loadFolder();
 }
 
 function setView(next) {
@@ -693,13 +711,14 @@ function setCollectionHashes(hashes) {
     $('#source').value = '';
     $('#folderbar').hidden = true;
     $('#folderbar').replaceChildren();
+    notifyFolderChanged();
     if (view === 'folders') { $('#views [data-view="grid"]')?.click(); return; }
   }
   applyFilters(true);
 }
 window.mochimonoSetCollectionHashes = setCollectionHashes;
 
-const viewerItems = () => view === 'folders' ? (folderData?.files || []).map(normalizeFile) : filtered;
+const viewerItems = () => view === 'folders' ? (folderData?.files || []) : filtered;
 function viewerIndex(items = viewerItems()) {
   if (view !== 'folders') return filteredIndex.get(selected?.hash) ?? -1;
   return items.findIndex(file => file.hash === selected?.hash);
@@ -747,22 +766,40 @@ function preloadAround() {
   }).filter(Boolean);
 }
 
+function settleViewerMedia(hash) {
+  if (!selected || selected.hash !== hash || $('#viewer').hidden) return;
+  const value = kind(selected);
+  if (value === 'image') loadFullViewerImage(selected);
+  else if (value === 'video') {
+    const video = $('#viewer-media video:not([src])');
+    if (video) {
+      video.src = objectUrl(selected);
+      video.autoplay = true;
+      video.play().catch(() => {});
+    }
+  }
+  preloadAround();
+}
+
 function renderViewerState() {
   if (!selected) return;
+  const hash = selected.hash;
+  const rapid = Boolean(window.mochimonoViewerPerformance?.rapid?.());
   viewerImageLoad = null;
+  viewerPreloads = [];
   $('#viewer-name').textContent = selected.filename;
-  $('#viewer-meta').textContent = `${formatBytes(selected.size)} · ${shortDate(normalizeFile(selected))}`;
+  $('#viewer-meta').textContent = `${formatBytes(selected.size)} · ${shortDate(selected)}`;
   $('#viewer-open').href = objectUrl(selected);
-  $('#viewer-media').innerHTML = viewerMedia(selected);
-  if (kind(selected) === 'image') loadFullViewerImage(selected);
+  $('#viewer-media').innerHTML = viewerMedia(selected, rapid);
   updateViewerNav();
-  preloadAround();
+  if (rapid && window.mochimonoViewerPerformance?.defer?.(() => settleViewerMedia(hash))) return;
+  settleViewerMedia(hash);
 }
 
 function openViewer(hash, fallback = null) {
   selected = catalogFile(hash) || folderData?.files?.find(file => file.hash === hash) || fallback;
   if (!selected) return false;
-  selected = normalizeFile(selected);
+  if (!catalogFile(selected.hash) && !folderData?.files?.includes(selected)) selected = normalizeFile(selected);
   if ($('#viewer').hidden) viewerScrollY = window.scrollY;
   $('#viewer').hidden = false;
   renderViewerState();
@@ -804,7 +841,7 @@ function navigateViewer(step) {
   const items = viewerItems();
   const index = viewerIndex(items);
   const next = items[index + step];
-  if (next) { selected = normalizeFile(next); renderViewerState(); }
+  if (next) { selected = next; renderViewerState(); }
 }
 
 async function refreshImports() {
@@ -836,26 +873,6 @@ async function loadDrives() {
     const missing = Math.max(0, drive.desiredBytes - drive.protectedBytes);
     return `<article class="drive"><div class="drive-head"><strong>${escapeHtml(drive.name)}</strong><span>${ratio.toFixed(0)}%</span></div><div class="meter"><i style="width:${ratio}%"></i></div><p>${formatBytes(drive.protectedBytes)} / ${formatBytes(drive.desiredBytes)}${missing ? ` · ${formatBytes(missing)} missing` : ''}</p></article>`;
   }).join('') || '<div class="empty">No backups.</div>';
-}
-
-function rememberDimensions(hash, width, height) {
-  hash = String(hash || '');
-  width = Number(width) || 0;
-  height = Number(height) || 0;
-  if (!hash || !width || !height) return;
-  const index = catalogIndex.get(hash);
-  if (Number.isInteger(index)) {
-    const file = catalog[index];
-    if (file.width !== width || file.height !== height) catalog[index] = { ...file, width, height };
-  }
-  const ratio = Math.max(.65, Math.min(2.1, width / height));
-  for (const card of filesElement.querySelectorAll(`[data-hash="${CSS.escape(hash)}"].media-card`)) {
-    card.dataset.width = String(width);
-    card.dataset.height = String(height);
-    if (Math.abs((Number(card.style.getPropertyValue('--ratio')) || 0) - ratio) >= .001) card.style.setProperty('--ratio', ratio);
-  }
-  window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height).catch(() => {});
-  window.dispatchEvent(new CustomEvent('mochimono:geometry', { detail: { hash, width, height, ratio } }));
 }
 
 window.mochimonoLibrary = {
@@ -895,8 +912,11 @@ window.mochimonoLibrary = {
   extend: extendWindow,
   refresh: () => syncCatalog(true),
   ensureIndex: ensureIndexRendered,
-  rememberDimensions,
   filteredHashes: () => filtered.map(file => file.hash),
+  sources: () => imports.map(item => ({ ...item })),
+  folderState,
+  folderContents: () => folderData,
+  openFolder,
   remove(hashes) {
     const removed = new Set(hashes || []);
     if (!removed.size) return;
@@ -939,8 +959,6 @@ async function boot() {
   $('#mediaSize').value = mediaSize;
   document.documentElement.style.setProperty('--media-size', `${mediaSize}px`);
 
-  // The Agent library is already a trusted local shell. Restore IndexedDB first
-  // so a warm reload can paint the grid before any server/Cloud health request.
   let restored = false;
   if (CLIENT && !catalog.length) {
     restored = await restoreLocalCatalog();
@@ -959,8 +977,6 @@ async function boot() {
     app.hidden = false;
     logout.hidden = false;
 
-    // Keep the standalone server UI's authentication gate: it restores cached
-    // private data only after health/auth succeeds. The Agent path above is local.
     if (!CLIENT && !catalog.length) {
       restored = await restoreLocalCatalog();
       if (generation !== bootGeneration) return;
@@ -1008,7 +1024,12 @@ $('#source').addEventListener('change', event => {
   folderPath = '';
   folderData = null;
   if (view === 'folders') { folderImportId = importId; loadFolder().catch(console.error); }
-  else { $('#folderbar').hidden = true; $('#folderbar').replaceChildren(); applyFilters(true); }
+  else {
+    $('#folderbar').hidden = true;
+    $('#folderbar').replaceChildren();
+    notifyFolderChanged();
+    applyFilters(true);
+  }
 });
 $('#typeFilter').addEventListener('change', event => { type = event.target.value; applyFilters(true); });
 $('#sort').addEventListener('change', event => { sort = event.target.value; applyFilters(true); });
@@ -1047,36 +1068,26 @@ rail.addEventListener('click', event => {
 
 $('#folderbar').addEventListener('click', event => {
   if (event.target.closest('[data-folder-home]')) {
-    folderLoadGeneration++;
-    folderImportId = '';
-    folderPath = '';
-    folderData = null;
-    importId = '';
-    $('#source').value = '';
-    if (view === 'folders') loadFolder().catch(console.error); else applyFilters(true);
+    openFolder('', '').catch(console.error);
     return;
   }
   const crumb = event.target.closest('[data-folder-depth]');
   if (!crumb) return;
   const depth = Number(crumb.dataset.folderDepth);
-  folderPath = depth ? folderPath.split('/').slice(0, depth).join('/') : '';
-  loadFolder().catch(console.error);
+  const path = depth ? folderPath.split('/').slice(0, depth).join('/') : '';
+  openFolder(folderImportId, path).catch(console.error);
 });
 
 filesElement.addEventListener('click', event => {
   const sourceRow = event.target.closest('[data-folder-source]');
   if (sourceRow) {
-    folderImportId = sourceRow.dataset.folderSource;
-    importId = folderImportId;
-    $('#source').value = importId;
-    folderPath = '';
-    loadFolder().catch(console.error);
+    openFolder(sourceRow.dataset.folderSource, '').catch(console.error);
     return;
   }
   const folderRow = event.target.closest('[data-folder-name]');
   if (folderRow) {
-    folderPath = folderPath ? `${folderPath}/${folderRow.dataset.folderName}` : folderRow.dataset.folderName;
-    loadFolder().catch(console.error);
+    const path = folderPath ? `${folderPath}/${folderRow.dataset.folderName}` : folderRow.dataset.folderName;
+    openFolder(folderImportId, path).catch(console.error);
     return;
   }
   const item = event.target.closest('[data-hash]');

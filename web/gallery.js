@@ -8,9 +8,7 @@ let frame = 0;
 let fullLayout = false;
 let lastFilesWidth = 0;
 
-function mediaSize() {
-  return Number(sizeInput.value) || 170;
-}
+const mediaSize = () => Number(sizeInput.value) || 170;
 
 function syncSizeButtons() {
   const size = mediaSize();
@@ -20,17 +18,13 @@ function syncSizeButtons() {
 function setMediaSize(size) {
   sizeInput.value = size;
   sizeInput.dispatchEvent(new Event('input', { bubbles: true }));
-  syncSizeButtons();
-  scheduleAll();
 }
 
 function cardRatio(card) {
   return Number(card.style.getPropertyValue('--ratio')) || 4 / 3;
 }
 
-function px(value) {
-  return `${Math.round(value * 100) / 100}px`;
-}
+const px = value => `${Math.round(value * 100) / 100}px`;
 
 function setPx(card, property, value) {
   const next = px(value);
@@ -38,9 +32,7 @@ function setPx(card, property, value) {
 }
 
 function clearSize(card) {
-  for (const property of ['width','height','flex-basis']) {
-    if (card.style.getPropertyValue(property)) card.style.removeProperty(property);
-  }
+  for (const property of ['width','height','flex-basis']) if (card.style.getPropertyValue(property)) card.style.removeProperty(property);
 }
 
 function setRow(cards, width, target, fill, gap) {
@@ -60,8 +52,7 @@ function setRow(cards, width, target, fill, gap) {
 function shouldFillLastRow(cards, width, target, gap) {
   if (cards.length < 2) return false;
   const ratioSum = cards.reduce((sum, card) => sum + cardRatio(card), 0);
-  const height = (width - gap * (cards.length - 1)) / ratioSum;
-  return height <= target * 1.42;
+  return (width - gap * (cards.length - 1)) / ratioSum <= target * 1.42;
 }
 
 function justifyRun(cards, width, target, gap, closedByNonMedia = false) {
@@ -91,8 +82,8 @@ function justifyRun(cards, width, target, gap, closedByNonMedia = false) {
     ratioSum += ratio;
   }
 
-  const fill = shouldFillLastRow(row, width, target, gap) || closedByNonMedia;
   if (!row.length) return;
+  const fill = shouldFillLastRow(row, width, target, gap) || closedByNonMedia;
   if (fill) {
     const ratios = row.reduce((sum, card) => sum + cardRatio(card), 0);
     const height = (width - gap * (row.length - 1)) / ratios;
@@ -105,10 +96,7 @@ function syncRunBreaks(container, cards) {
   for (let index = 1; index < cards.length; index++) {
     if (cards[index - 1].classList.contains('media-card') !== cards[index].classList.contains('media-card')) wanted.add(cards[index]);
   }
-
-  for (const marker of container.querySelectorAll(':scope > .gallery-row-break')) {
-    if (!wanted.has(marker.nextElementSibling)) marker.remove();
-  }
+  for (const marker of container.querySelectorAll(':scope > .gallery-row-break')) if (!wanted.has(marker.nextElementSibling)) marker.remove();
   for (const card of wanted) {
     if (card.previousElementSibling?.classList.contains('gallery-row-break')) continue;
     const marker = document.createElement('span');
@@ -229,12 +217,6 @@ function scheduleAll() {
   if (!frame) frame = requestAnimationFrame(layout);
 }
 
-function scheduleGeometry(grid) {
-  if (!grid?.isConnected) return;
-  if (window.mochimonoGridInteraction?.active?.()) deferredGeometryGrids.add(grid);
-  else schedule(grid);
-}
-
 function flushDeferredGeometry() {
   for (const grid of deferredGeometryGrids) if (grid.isConnected) schedule(grid);
   deferredGeometryGrids.clear();
@@ -258,26 +240,18 @@ function changedGrids(records) {
 }
 
 const style = document.createElement('style');
-style.textContent = `
-  .files.grid .date-grid>.gallery-row-break{
-    flex:0 0 100%;width:100%;height:0;margin:0;padding:0;pointer-events:none
-  }
-`;
+style.textContent = `.files.grid .date-grid>.gallery-row-break{flex:0 0 100%;width:100%;height:0;margin:0;padding:0;pointer-events:none}`;
 document.head.append(style);
 
 sizeButtons.forEach(button => button.addEventListener('click', () => setMediaSize(Number(button.dataset.mediaSize))));
-sizeInput.addEventListener('input', () => { syncSizeButtons(); scheduleAll(); });
-window.addEventListener('mochimono:media-size', scheduleAll);
-window.addEventListener('mochimono:geometry', event => {
-  const hash = event.detail?.hash;
-  if (!hash) return;
-  for (const card of files.querySelectorAll(`.media-card[data-hash="${CSS.escape(hash)}"]`)) scheduleGeometry(card.closest('.date-grid'));
+window.addEventListener('mochimono:media-size', () => {
+  syncSizeButtons();
+  scheduleAll();
 });
 window.addEventListener('mochimono:grid-interaction-end', flushDeferredGeometry);
 
 new MutationObserver(records => {
-  const grids = changedGrids(records);
-  for (const grid of grids) schedule(grid);
+  for (const grid of changedGrids(records)) schedule(grid);
 }).observe(files, { childList: true, subtree: true });
 new ResizeObserver(entries => {
   const width = Math.round(entries[0]?.contentRect?.width || 0);

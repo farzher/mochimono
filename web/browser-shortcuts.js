@@ -10,225 +10,125 @@ style.textContent = `
   .viewer{overscroll-behavior:none}
   .viewer:not([hidden]){inset:0!important;width:auto!important;height:auto!important}
   .viewer:not([hidden]) .viewer-stage{touch-action:none!important;overscroll-behavior:none!important}
-  .viewer:not(.viewer-controls-hidden) .viewer-bar,
-  .viewer:not(.viewer-controls-hidden) .viewer-collections{opacity:1!important}
+  .viewer:not(.viewer-controls-hidden) .viewer-bar,.viewer:not(.viewer-controls-hidden) .viewer-collections{opacity:1!important}
   .viewer:not(.viewer-controls-hidden) .viewer-nav:not(:disabled){opacity:.68!important;pointer-events:auto!important}
-  .viewer.viewer-controls-hidden .viewer-bar,
-  .viewer.viewer-controls-hidden .viewer-collections,
-  .viewer.viewer-controls-hidden .viewer-nav{opacity:0!important;pointer-events:none!important}
-  .viewer.viewer-controls-hidden .viewer-bar *,
-  .viewer.viewer-controls-hidden .viewer-collections *{pointer-events:none!important}
+  .viewer.viewer-controls-hidden .viewer-bar,.viewer.viewer-controls-hidden .viewer-collections,.viewer.viewer-controls-hidden .viewer-nav{opacity:0!important;pointer-events:none!important}
+  .viewer.viewer-controls-hidden .viewer-bar *,.viewer.viewer-controls-hidden .viewer-collections *{pointer-events:none!important}
   .viewer-collections{transition:opacity .18s ease}
   .viewer-stage.viewer-desktop-zoomed .viewer-media>img{cursor:grab;will-change:transform}
   .viewer-stage.viewer-desktop-panning .viewer-media>img{cursor:grabbing}
-  .viewer-stage.viewer-desktop-zoomed .viewer-nav,
-  .viewer-stage.viewer-touch-zoomed .viewer-nav{opacity:0!important;pointer-events:none!important}
-  @media(max-width:840px){
-    .viewer:not(.viewer-controls-hidden) .viewer-nav:not(:disabled){opacity:0!important;pointer-events:none!important}
-  }
-  @media(min-width:841px){
-    .viewer:not(.viewer-controls-hidden) .viewer-nav:not(:disabled){opacity:.68!important;pointer-events:auto!important}
-    .viewer:not(.viewer-controls-hidden) .viewer-nav:not(:disabled):hover{opacity:1!important}
-  }
+  .viewer-stage.viewer-desktop-zoomed .viewer-nav,.viewer-stage.viewer-touch-zoomed .viewer-nav{opacity:0!important;pointer-events:none!important}
+  @media(max-width:840px){.viewer:not(.viewer-controls-hidden) .viewer-nav:not(:disabled){opacity:0!important;pointer-events:none!important}}
+  @media(min-width:841px){.viewer:not(.viewer-controls-hidden) .viewer-nav:not(:disabled){opacity:.68!important;pointer-events:auto!important}.viewer:not(.viewer-controls-hidden) .viewer-nav:not(:disabled):hover{opacity:1!important}}
 `;
 document.head.append(style);
 
 function showControls() {
-  if (!viewer) return;
-  viewer.classList.remove('viewer-controls-hidden');
+  viewer?.classList.remove('viewer-controls-hidden');
 }
 
 function toggleControls() {
-  if (!viewer || viewer.hidden) return;
-  viewer.classList.toggle('viewer-controls-hidden');
+  if (viewer && !viewer.hidden) viewer.classList.toggle('viewer-controls-hidden');
 }
 
 window.mochimonoViewerControls = { show: showControls, toggle: toggleControls };
 
-let pageLocked = false;
-let lockedScrollY = 0;
-let savedBodyStyle = null;
+const zoom = { scale: 1, x: 0, y: 0 };
+let navState = null;
+let pan = null;
+let suppressClick = false;
+let clickTimer = 0;
 
-function lockPage() {
-  if (pageLocked) return;
-  pageLocked = true;
-  lockedScrollY = scrollY;
-  savedBodyStyle = {
-    position: document.body.style.position,
-    top: document.body.style.top,
-    left: document.body.style.left,
-    right: document.body.style.right,
-    width: document.body.style.width,
-    overflow: document.body.style.overflow,
-    overscrollBehavior: document.body.style.overscrollBehavior
-  };
-  document.documentElement.classList.add('viewer-open');
-  document.body.style.position = 'fixed';
-  document.body.style.top = `-${lockedScrollY}px`;
-  document.body.style.left = '0';
-  document.body.style.right = '0';
-  document.body.style.width = '100%';
-  document.body.style.overflow = 'hidden';
-  document.body.style.overscrollBehavior = 'none';
-}
+const image = () => viewerMedia?.querySelector('img') || null;
+const zoomed = () => zoom.scale > 1.01;
+const touchZoomed = () => stage?.classList.contains('viewer-touch-zoomed');
 
-function unlockPage() {
-  if (!pageLocked) return;
-  pageLocked = false;
-  document.documentElement.classList.remove('viewer-open');
-  if (savedBodyStyle) {
-    document.body.style.position = savedBodyStyle.position;
-    document.body.style.top = savedBodyStyle.top;
-    document.body.style.left = savedBodyStyle.left;
-    document.body.style.right = savedBodyStyle.right;
-    document.body.style.width = savedBodyStyle.width;
-    document.body.style.overflow = savedBodyStyle.overflow;
-    document.body.style.overscrollBehavior = savedBodyStyle.overscrollBehavior;
-  }
-  savedBodyStyle = null;
-  scrollTo(0, lockedScrollY);
-}
-
-function syncViewerOpen() {
-  if (!viewer) return;
-  if (viewer.hidden) unlockPage();
-  else {
-    lockPage();
-    showControls();
-  }
-}
-
-if (viewer) {
-  new MutationObserver(syncViewerOpen).observe(viewer, {
-    attributes: true,
-    attributeFilter: ['hidden']
-  });
-  syncViewerOpen();
-}
-
-const desktopZoom = { scale: 1, x: 0, y: 0 };
-let desktopNavState = null;
-let desktopPan = null;
-let suppressDesktopClick = false;
-let desktopClickTimer = 0;
-
-function desktopImage() {
-  return viewerMedia?.querySelector('img') || null;
-}
-
-function desktopZoomed() {
-  return desktopZoom.scale > 1.01;
-}
-
-function touchZoomed() {
-  return stage?.classList.contains('viewer-touch-zoomed');
-}
-
-function clampDesktopPan(scale = desktopZoom.scale, x = desktopZoom.x, y = desktopZoom.y) {
-  const image = desktopImage();
-  if (!image || scale <= 1) return { x: 0, y: 0 };
-  const maxX = Math.max(0, (image.clientWidth * scale - innerWidth) / 2);
-  const maxY = Math.max(0, (image.clientHeight * scale - innerHeight) / 2);
-  return {
-    x: Math.max(-maxX, Math.min(maxX, x)),
-    y: Math.max(-maxY, Math.min(maxY, y))
-  };
-}
-
-function lockDesktopNavigation(locked) {
+function lockNavigation(locked) {
   if (!viewerPrev || !viewerNext) return;
   if (locked) {
-    if (!desktopNavState) desktopNavState = {
-      prev: viewerPrev.disabled,
-      next: viewerNext.disabled
-    };
+    navState ||= { prev: viewerPrev.disabled, next: viewerNext.disabled };
     viewerPrev.disabled = true;
     viewerNext.disabled = true;
-    return;
+  } else if (navState) {
+    viewerPrev.disabled = navState.prev;
+    viewerNext.disabled = navState.next;
+    navState = null;
   }
-  if (!desktopNavState) return;
-  viewerPrev.disabled = desktopNavState.prev;
-  viewerNext.disabled = desktopNavState.next;
-  desktopNavState = null;
 }
 
-function applyDesktopZoom(animate = false) {
-  const image = desktopImage();
-  const active = desktopZoomed();
+function clampPan() {
+  const current = image();
+  if (!current || !zoomed()) return { x: 0, y: 0 };
+  const maxX = Math.max(0, (current.clientWidth * zoom.scale - innerWidth) / 2);
+  const maxY = Math.max(0, (current.clientHeight * zoom.scale - innerHeight) / 2);
+  return {
+    x: Math.max(-maxX, Math.min(maxX, zoom.x)),
+    y: Math.max(-maxY, Math.min(maxY, zoom.y))
+  };
+}
+
+function applyZoom(animate = false) {
+  const current = image();
+  const active = zoomed();
   stage?.classList.toggle('viewer-desktop-zoomed', active);
-  lockDesktopNavigation(active);
-  if (!image) return;
-  const clamped = clampDesktopPan();
-  desktopZoom.x = clamped.x;
-  desktopZoom.y = clamped.y;
-  image.style.transition = animate ? 'transform 160ms ease-out' : 'none';
-  image.style.transform = active
-    ? `translate3d(${desktopZoom.x}px,${desktopZoom.y}px,0) scale(${desktopZoom.scale})`
-    : '';
-  if (animate) setTimeout(() => {
-    if (image.isConnected) image.style.transition = '';
-  }, 180);
+  lockNavigation(active);
+  if (!current) return;
+  Object.assign(zoom, clampPan());
+  current.style.transition = animate ? 'transform 160ms ease-out' : 'none';
+  current.style.transform = active ? `translate3d(${zoom.x}px,${zoom.y}px,0) scale(${zoom.scale})` : '';
+  if (animate) setTimeout(() => { if (current.isConnected) current.style.transition = ''; }, 180);
 }
 
-function resetDesktopZoom(animate = false) {
-  desktopZoom.scale = 1;
-  desktopZoom.x = 0;
-  desktopZoom.y = 0;
-  desktopPan = null;
+function resetZoom(animate = false) {
+  if (!zoomed() && !zoom.x && !zoom.y && !pan && !navState && !stage?.classList.contains('viewer-desktop-panning')) return;
+  zoom.scale = 1;
+  zoom.x = 0;
+  zoom.y = 0;
+  pan = null;
   stage?.classList.remove('viewer-desktop-panning');
-  applyDesktopZoom(animate);
+  applyZoom(animate);
 }
 
-function resetDesktopState() {
-  if (!desktopZoomed() && !desktopZoom.x && !desktopZoom.y && !desktopPan && !desktopNavState && !stage?.classList.contains('viewer-desktop-panning')) return;
-  resetDesktopZoom();
-}
-
-function naturalZoom(image) {
+function naturalZoom(current) {
   const scale = Math.max(
-    Number(image.naturalWidth || 0) / Math.max(1, image.clientWidth),
-    Number(image.naturalHeight || 0) / Math.max(1, image.clientHeight)
+    Number(current.naturalWidth || 0) / Math.max(1, current.clientWidth),
+    Number(current.naturalHeight || 0) / Math.max(1, current.clientHeight)
   );
   return Math.max(2.25, Math.min(4, scale || 2.25));
 }
 
-function setDesktopScaleAt(nextScale, clientX, clientY, animate = false) {
-  const image = desktopImage();
-  if (!image) return;
-  const oldScale = desktopZoom.scale;
+function setScaleAt(nextScale, clientX, clientY, animate = false) {
+  const current = image();
+  if (!current) return;
+  const oldScale = zoom.scale;
   const scale = Math.max(1, Math.min(4, nextScale));
-  if (scale <= 1.01) {
-    resetDesktopZoom(animate);
-    return;
-  }
+  if (scale <= 1.01) return resetZoom(animate);
 
   const offsetX = clientX - innerWidth / 2;
   const offsetY = clientY - innerHeight / 2;
-  const anchorX = (offsetX - desktopZoom.x) / oldScale;
-  const anchorY = (offsetY - desktopZoom.y) / oldScale;
-  desktopZoom.scale = scale;
-  desktopZoom.x = offsetX - anchorX * scale;
-  desktopZoom.y = offsetY - anchorY * scale;
-  applyDesktopZoom(animate);
+  const anchorX = (offsetX - zoom.x) / oldScale;
+  const anchorY = (offsetY - zoom.y) / oldScale;
+  zoom.scale = scale;
+  zoom.x = offsetX - anchorX * scale;
+  zoom.y = offsetY - anchorY * scale;
+  applyZoom(animate);
 }
 
-function toggleDesktopZoom(clientX, clientY) {
-  const image = desktopImage();
-  if (!image) return;
-  if (desktopZoomed()) resetDesktopZoom(true);
-  else setDesktopScaleAt(naturalZoom(image), clientX, clientY, true);
+function toggleZoom(clientX, clientY) {
+  const current = image();
+  if (!current) return;
+  if (zoomed()) resetZoom(true);
+  else setScaleAt(naturalZoom(current), clientX, clientY, true);
 }
 
-function activeUi(target) {
-  return target?.closest?.('.viewer-nav,.viewer-bar,.viewer-collections,.viewer-info,dialog,video');
-}
+const activeUi = target => target?.closest?.('.viewer-nav,.viewer-bar,.viewer-collections,.viewer-info,dialog,video');
 
 document.addEventListener('keydown', event => {
   if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
     event.stopImmediatePropagation();
     return;
   }
-  if (!event.altKey && desktopZoomed() && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+  if (!event.altKey && zoomed() && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
     event.preventDefault();
     event.stopImmediatePropagation();
   }
@@ -236,88 +136,70 @@ document.addEventListener('keydown', event => {
 
 if (stage && viewer) {
   stage.addEventListener('dblclick', event => {
-    if (viewer.hidden || event.button > 0 || touchZoomed()) return;
-    if (!event.target.closest('#viewer-media img')) return;
-    clearTimeout(desktopClickTimer);
-    desktopClickTimer = 0;
+    if (viewer.hidden || event.button > 0 || touchZoomed() || !event.target.closest('#viewer-media img')) return;
+    clearTimeout(clickTimer);
+    clickTimer = 0;
     event.preventDefault();
     event.stopImmediatePropagation();
-    toggleDesktopZoom(event.clientX, event.clientY);
+    toggleZoom(event.clientX, event.clientY);
   }, true);
 
   stage.addEventListener('click', event => {
     if (viewer.hidden || event.button > 0 || activeUi(event.target)) return;
-    if (suppressDesktopClick) {
-      suppressDesktopClick = false;
+    if (suppressClick) {
+      suppressClick = false;
       event.preventDefault();
       event.stopImmediatePropagation();
       return;
     }
-    if (!event.target.closest('#viewer-media img')) {
-      toggleControls();
-      return;
-    }
-    clearTimeout(desktopClickTimer);
+    if (!event.target.closest('#viewer-media img')) return toggleControls();
+    clearTimeout(clickTimer);
     if (event.detail >= 2) return;
-    desktopClickTimer = setTimeout(() => {
-      desktopClickTimer = 0;
+    clickTimer = setTimeout(() => {
+      clickTimer = 0;
       if (!viewer.hidden) toggleControls();
     }, 300);
   }, true);
 
   stage.addEventListener('wheel', event => {
-    if (viewer.hidden || !desktopImage() || touchZoomed() || activeUi(event.target)) return;
+    if (viewer.hidden || !image() || touchZoomed() || activeUi(event.target)) return;
     const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1;
-    const delta = event.deltaY * multiplier;
-    const sensitivity = event.ctrlKey ? .006 : .0015;
-    setDesktopScaleAt(
-      desktopZoom.scale * Math.exp(-delta * sensitivity),
-      event.clientX,
-      event.clientY
-    );
-    clearTimeout(desktopClickTimer);
-    desktopClickTimer = 0;
+    setScaleAt(zoom.scale * Math.exp(-event.deltaY * multiplier * (event.ctrlKey ? .006 : .0015)), event.clientX, event.clientY);
+    clearTimeout(clickTimer);
+    clickTimer = 0;
     event.preventDefault();
     event.stopImmediatePropagation();
   }, { passive: false, capture: true });
 
   stage.addEventListener('pointerdown', event => {
-    if (event.pointerType !== 'mouse' || event.button !== 0 || !desktopZoomed()) return;
-    if (!event.target.closest('#viewer-media img')) return;
-    desktopPan = {
-      pointerId: event.pointerId,
-      x: event.clientX,
-      y: event.clientY,
-      startX: desktopZoom.x,
-      startY: desktopZoom.y,
-      moved: false
-    };
+    if (event.pointerType !== 'mouse' || event.button !== 0 || !zoomed() || !event.target.closest('#viewer-media img')) return;
+    pan = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, startX: zoom.x, startY: zoom.y, moved: false };
   });
 
   stage.addEventListener('pointermove', event => {
-    if (!desktopPan || event.pointerId !== desktopPan.pointerId) return;
-    const dx = event.clientX - desktopPan.x;
-    const dy = event.clientY - desktopPan.y;
-    if (!desktopPan.moved) {
+    if (!pan || event.pointerId !== pan.pointerId) return;
+    const dx = event.clientX - pan.x;
+    const dy = event.clientY - pan.y;
+    if (!pan.moved) {
       if (Math.hypot(dx, dy) <= 4) return;
-      desktopPan.moved = true;
+      pan.moved = true;
       stage.classList.add('viewer-desktop-panning');
-      clearTimeout(desktopClickTimer);
-      desktopClickTimer = 0;
+      clearTimeout(clickTimer);
+      clickTimer = 0;
       try { stage.setPointerCapture(event.pointerId); } catch {}
     }
-    desktopZoom.x = desktopPan.startX + dx;
-    desktopZoom.y = desktopPan.startY + dy;
-    applyDesktopZoom();
+    zoom.x = pan.startX + dx;
+    zoom.y = pan.startY + dy;
+    applyZoom();
     event.preventDefault();
     event.stopImmediatePropagation();
   });
 
   stage.addEventListener('pointerup', event => {
-    if (!desktopPan || event.pointerId !== desktopPan.pointerId) return;
-    const moved = desktopPan.moved;
-    suppressDesktopClick = moved;
-    desktopPan = null;
+    if (!pan || event.pointerId !== pan.pointerId) return;
+    suppressClick = pan.moved;
+    const moved = pan.moved;
+    pan = null;
     stage.classList.remove('viewer-desktop-panning');
     try { stage.releasePointerCapture(event.pointerId); } catch {}
     if (moved) {
@@ -327,18 +209,19 @@ if (stage && viewer) {
   });
 
   stage.addEventListener('pointercancel', event => {
-    if (!desktopPan || event.pointerId !== desktopPan.pointerId) return;
-    desktopPan = null;
+    if (!pan || event.pointerId !== pan.pointerId) return;
+    pan = null;
     stage.classList.remove('viewer-desktop-panning');
     event.stopImmediatePropagation();
   });
 
-  new MutationObserver(resetDesktopState).observe(viewerMedia, { childList: true });
+  new MutationObserver(resetZoom).observe(viewerMedia, { childList: true });
   new MutationObserver(() => {
-    if (viewer.hidden) resetDesktopState();
+    document.documentElement.classList.toggle('viewer-open', !viewer.hidden);
+    if (viewer.hidden) resetZoom();
+    else showControls();
   }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 
-  window.addEventListener('resize', () => {
-    if (desktopZoomed()) applyDesktopZoom();
-  }, { passive: true });
+  document.documentElement.classList.toggle('viewer-open', !viewer.hidden);
+  window.addEventListener('resize', () => { if (zoomed()) applyZoom(); }, { passive: true });
 }
