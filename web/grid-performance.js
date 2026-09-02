@@ -1,5 +1,4 @@
 const files = document.querySelector('#files');
-const viewer = document.querySelector('#viewer');
 
 if (files) {
   const style = document.createElement('style');
@@ -96,21 +95,6 @@ if (files) {
   window.addEventListener('resize', invalidateGeometry, { passive:true });
   window.addEventListener('mochimono:catalog-cache-restored', scheduleMeasure);
   window.addEventListener('mochimono:catalog-updated', scheduleMeasure);
-
-  // The hidden grid does not need to retain decoded images behind a full-screen
-  // viewer. This is especially useful after browsing hundreds of videos/photos.
-  if (viewer) new MutationObserver(() => {
-    if (viewer.hidden) return;
-    for (const card of observedCards) {
-      const box = card.querySelector('.media-thumb');
-      const image = box?.querySelector('img.cached-thumb');
-      if (!image) continue;
-      const pending = document.createElement('span');
-      pending.className = 'video-thumb-pending';
-      pending.dataset.videoThumb = card.dataset.hash || '';
-      image.replaceWith(pending);
-    }
-  }).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
 
   scheduleMeasure();
 }
