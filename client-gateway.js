@@ -106,12 +106,11 @@ async function checkThumbnails(req, res) {
   const failures = new Map();
   const locals = localCandidates(hashes);
 
-  const [providerEntries, remote] = await Promise.all([
-    Promise.all(hashes.map(async hash => [hash, await providerThumbnail(hash)])),
-    serverThumbnails(hashes)
-  ]);
-
+  const providerEntries = await Promise.all(hashes.map(async hash => [hash, await providerThumbnail(hash)]));
   for (const [hash, thumb] of providerEntries) if (thumb) ready.set(hash, thumb);
+
+  const remoteHashes = hashes.filter(hash => !ready.has(hash) && (!locals.has(hash) || providerThumbnailFailure(hash)));
+  const remote = await serverThumbnails(remoteHashes);
   for (const [hash, thumb] of remote.ready) if (!ready.has(hash)) ready.set(hash, thumb);
 
   const unresolved = [];
