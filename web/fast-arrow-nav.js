@@ -271,6 +271,21 @@ function preloadViewerThumb(hash) {
   image.src = thumbUrl(hash);
 }
 
+async function checkViewerThumbs(hashes, background = false) {
+  if (!hashes.length) return { ready: [], failed: [] };
+  const response = await fetch('/api/thumbs/check', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ hashes, background })
+  });
+  if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
+  const data = await response.json();
+  return {
+    ready: (data.thumbnails || []).map(item => String(item.hash || '')),
+    failed: (data.failures || []).map(item => String(item.hash || ''))
+  };
+}
+
 function scheduleViewerWarm(hash, delay = 0) {
   if (!hash || viewer?.hidden) return;
   if (viewerWarmHash !== hash) {
@@ -290,15 +305,13 @@ async function runViewerWarm() {
   viewerWarmRunning = true;
   let retry = false;
   try {
-    const response = await fetch('/api/thumbs/check', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ hashes, background: true })
-    });
-    if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
-    const data = await response.json();
-    const ready = new Set((data.thumbnails || []).map(item => String(item.hash || '')));
-    const failed = new Set((data.failures || []).map(item => String(item.hash || '')));
+    const background = hashes.filter(item => item !== hash);
+    const [current, nearby] = await Promise.all([
+      checkViewerThumbs([hash]),
+      checkViewerThumbs(background, true)
+    ]);
+    const ready = new Set([...current.ready, ...nearby.ready]);
+    const failed = new Set([...current.failed, ...nearby.failed]);
     for (const readyHash of ready) preloadViewerThumb(readyHash);
     retry = hashes.some(item => !ready.has(item) && !failed.has(item));
   } catch {
