@@ -1,5 +1,7 @@
 #dateRail.fast-keyboard-rail[hidden]{display:block!important}
 .date-rail::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:100vh;pointer-events:auto}
+.date-rail>.rail-track,.date-rail>.rail-tick{opacity:1!important}
+.date-rail>.rail-thumb span{display:block!important}
 .commandbar{background:rgba(24,22,25,.98)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
 .file-context-badge{transition:none!important}
 html.keyboard-navigation-active #files.grid .file-card.context-keyboard-focus:not(.keyboard-cursor){outline:none!important;box-shadow:none!important}
@@ -12,7 +14,6 @@ html.keyboard-navigation-active #files.grid .file-card:hover{background:#100f11!
 .files.grid>.date-group{contain:layout style}
 .files.grid .date-grid>.gallery-row-break{flex:0 0 100%;width:100%;height:0;margin:0;padding:0;pointer-events:none}
 .files.grid .timeline-group-select>span:last-child,.files.grid .timeline-check{will-change:auto!important}
-.rail-semantic-marker{transition:none!important}
 html.grid-interaction-active #files .file-context-badge{opacity:0!important;transform:none!important}
 
 .media-thumb{position:relative;overflow:hidden;background:#09080a}
