@@ -21,7 +21,9 @@ function setMediaSize(size) {
 }
 
 function cardRatio(card) {
-  return Number(card.style.getPropertyValue('--ratio')) || 4 / 3;
+  const width = Number(card.dataset.width) || 0;
+  const height = Number(card.dataset.height) || 0;
+  return width && height ? Math.max(.65, Math.min(2.1, width / height)) : 1;
 }
 
 const px = value => `${Math.round(value * 100) / 100}px`;
@@ -29,10 +31,6 @@ const px = value => `${Math.round(value * 100) / 100}px`;
 function setPx(card, property, value) {
   const next = px(value);
   if (card.style.getPropertyValue(property) !== next) card.style.setProperty(property, next);
-}
-
-function clearSize(card) {
-  for (const property of ['width','height','flex-basis']) if (card.style.getPropertyValue(property)) card.style.removeProperty(property);
 }
 
 function setRow(cards, width, target, fill, gap) {
@@ -55,7 +53,7 @@ function shouldFillLastRow(cards, width, target, gap) {
   return (width - gap * (cards.length - 1)) / ratioSum <= target * 1.42;
 }
 
-function justifyRun(cards, width, target, gap, closedByNonMedia = false) {
+function justifyRun(cards, width, target, gap) {
   if (!cards.length) return;
   let row = [];
   let ratioSum = 0;
@@ -83,27 +81,12 @@ function justifyRun(cards, width, target, gap, closedByNonMedia = false) {
   }
 
   if (!row.length) return;
-  const fill = shouldFillLastRow(row, width, target, gap) || closedByNonMedia;
+  const fill = shouldFillLastRow(row, width, target, gap);
   if (fill) {
     const ratios = row.reduce((sum, card) => sum + cardRatio(card), 0);
     const height = (width - gap * (row.length - 1)) / ratios;
     setRow(row, width, target, height <= target * 1.42, gap);
   } else setRow(row, width, target, false, gap);
-}
-
-function syncRunBreaks(container, cards) {
-  const wanted = new Set();
-  for (let index = 1; index < cards.length; index++) {
-    if (cards[index - 1].classList.contains('media-card') !== cards[index].classList.contains('media-card')) wanted.add(cards[index]);
-  }
-  for (const marker of container.querySelectorAll(':scope > .gallery-row-break')) if (!wanted.has(marker.nextElementSibling)) marker.remove();
-  for (const card of wanted) {
-    if (card.previousElementSibling?.classList.contains('gallery-row-break')) continue;
-    const marker = document.createElement('span');
-    marker.className = 'gallery-row-break';
-    marker.setAttribute('aria-hidden', 'true');
-    card.before(marker);
-  }
 }
 
 function justify(container) {
@@ -114,19 +97,7 @@ function justify(container) {
   const gap = parseFloat(getComputedStyle(container).columnGap) || 4;
   const target = mediaSize();
 
-  syncRunBreaks(container, cards);
-  cards.filter(card => !card.classList.contains('media-card')).forEach(clearSize);
-
-  let run = [];
-  for (const card of cards) {
-    if (card.classList.contains('media-card')) {
-      run.push(card);
-      continue;
-    }
-    justifyRun(run, width, target, gap, true);
-    run = [];
-  }
-  justifyRun(run, width, target, gap, false);
+  justifyRun(cards, width, target, gap);
   return cards;
 }
 
