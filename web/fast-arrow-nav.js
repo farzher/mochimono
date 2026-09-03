@@ -133,14 +133,25 @@ function verticalTarget(current, direction, anchorX) {
   return best;
 }
 
-function ensureAdjacentWindow(direction) {
+function restoreWindowAnchor(hash, top) {
+  const restore = () => {
+    const card = hash ? files.querySelector(`[data-hash="${CSS.escape(hash)}"]`) : null;
+    if (!card) return;
+    const delta = card.getBoundingClientRect().top - top;
+    if (Math.abs(delta) > .5) scrollBy(0, delta);
+  };
+  restore();
+  requestAnimationFrame(() => requestAnimationFrame(restore));
+}
+
+function ensureAdjacentWindow(current, direction) {
   const library = window.mochimonoLibrary;
-  const state = library?.state?.();
-  if (!state || !library.ensureIndex) return false;
-  const probe = direction < 0 ? state.offset - 1 : state.offset + state.loaded;
-  if (probe < 0 || probe >= state.filtered) return false;
-  library.ensureIndex(probe);
+  if (!current?.isConnected || !library?.extend) return false;
+  const hash = current.dataset.hash || '';
+  const top = current.getBoundingClientRect().top;
+  if (!library.extend(direction)) return false;
   window.mochimonoGallery?.layoutNow?.();
+  restoreWindowAnchor(hash, top);
   freezeSentinels();
   return true;
 }
@@ -150,7 +161,7 @@ function horizontalTarget(current, direction) {
   if (target) return target;
 
   const currentHash = current.dataset.hash || '';
-  if (!ensureAdjacentWindow(direction)) return null;
+  if (!ensureAdjacentWindow(current, direction)) return null;
   current = currentHash ? files.querySelector(`[data-hash="${CSS.escape(currentHash)}"]`) : null;
   return current ? adjacentCard(current, direction) : null;
 }
@@ -173,7 +184,7 @@ function navigate(key) {
   if (target) return selectCard(target);
 
   const currentHash = current.dataset.hash || '';
-  if (!ensureAdjacentWindow(direction)) return true;
+  if (!ensureAdjacentWindow(current, direction)) return true;
   current = currentHash ? files.querySelector(`[data-hash="${CSS.escape(currentHash)}"]`) : null;
   if (!current) return true;
   target = verticalTarget(current, direction, verticalAnchorX);
