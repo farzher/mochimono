@@ -116,7 +116,7 @@ function previewInfo(folder) {
   const key = pathKey(folder.path);
   const previous = previewMemory.get(key) || null;
   const phase = String(folder.previewPhase || '');
-  const failed = Number(folder.previewFailed) || previous?.failed || 0;
+  const failed = phase ? Number(folder.previewFailed) || 0 : previous?.failed || 0;
   let total = Number(folder.previewTotal) || 0;
   let processed = Number(folder.previewProcessed) || 0;
 
@@ -151,7 +151,7 @@ function previewInfo(folder) {
     total: total || previous?.total || 0,
     processed: Math.max(processed, previous?.processed || 0),
     failed,
-    done: Boolean(done || previous?.done)
+    done: Boolean(done)
   });
   return info;
 }
