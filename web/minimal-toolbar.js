@@ -41,13 +41,14 @@ function sync() {
 
 for (const control of controls) control.addEventListener('change', sync);
 search?.addEventListener('input', sync);
-if (mediaSizes) new MutationObserver(sync).observe(mediaSizes, { attributes: true, attributeFilter: ['hidden'] });
 
 mediaSizes?.addEventListener('click', event => {
   if (event.target.closest('[data-media-size]') && sizeMenu) sizeMenu.open = false;
 });
 views?.addEventListener('click', event => {
-  if (event.target.closest('[data-view]') && viewMenu) viewMenu.open = false;
+  if (!event.target.closest('[data-view]')) return;
+  if (viewMenu) viewMenu.open = false;
+  sync();
 });
 
 const menus = [filterMenu, sizeMenu, viewMenu].filter(Boolean);
