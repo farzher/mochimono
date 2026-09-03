@@ -5,6 +5,7 @@ const button = document.querySelector('#viewer-reveal-local');
 
 if (CLIENT && viewer && viewerOpen && button) {
   let stateTimer = 0;
+  let syncGeneration = 0;
   let hasLocalCopy = false;
   const hash = () => viewerOpen.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 
@@ -23,11 +24,21 @@ if (CLIENT && viewer && viewerOpen && button) {
     stateTimer = setTimeout(resetState, state === 'ok' ? 1400 : 3200);
   }
 
-  function sync() {
+  async function sync() {
+    const generation = ++syncGeneration;
     const current = hash();
     resetState();
     hasLocalCopy = Boolean(current && window.mochimonoLocations?.forHash?.(current)?.length);
     button.hidden = viewer.hidden || !hasLocalCopy;
+    if (viewer.hidden || !current || hasLocalCopy) return;
+
+    try {
+      const response = await fetch(`/api/client/locations?hash=${encodeURIComponent(current)}`, { cache: 'no-store' });
+      const data = response.ok ? await response.json() : null;
+      if (generation !== syncGeneration || viewer.hidden || hash() !== current) return;
+      hasLocalCopy = Boolean(data?.files?.some(item => item?.[0] === current));
+      button.hidden = !hasLocalCopy;
+    } catch {}
   }
 
   viewer.addEventListener('mousedown', event => {
