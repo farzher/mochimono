@@ -109,50 +109,51 @@ async function load() {
   return loadPromise;
 }
 
-async function save(files, options = {}) {
-  if (!Array.isArray(files)) return;
+function save(files, options = {}) {
+  return enqueueWrite(() => saveNow(files, options));
+}
+
+async function saveNow(files, options = {}) {
+  const db = await openDb();
+  if (!db || !Array.isArray(files)) return;
   const version = String(options.version || '');
   if (!version) return;
-  return enqueueWrite(async () => {
-    const db = await openDb();
-    if (!db) return;
 
-    const clean = files
-      .filter(file => /^[a-f0-9]{64}$/.test(String(file?.hash || '')))
-      .map(file => mergeGeometry(publicFile(file)));
+  const clean = files
+    .filter(file => /^[a-f0-9]{64}$/.test(String(file?.hash || '')))
+    .map(file => mergeGeometry(publicFile(file)));
 
-    for (let offset = 0; offset < clean.length; offset += WRITE_BATCH) {
-      const transaction = db.transaction('files', 'readwrite');
-      const store = transaction.objectStore('files');
-      for (const file of clean.slice(offset, offset + WRITE_BATCH)) {
-        store.put({ ...file, __snapshot: version });
-      }
-      await transactionDone(transaction);
-      await idle();
+  for (let offset = 0; offset < clean.length; offset += WRITE_BATCH) {
+    const transaction = db.transaction('files', 'readwrite');
+    const store = transaction.objectStore('files');
+    for (const file of clean.slice(offset, offset + WRITE_BATCH)) {
+      store.put({ ...file, __snapshot: version });
     }
+    await transactionDone(transaction);
+    await idle();
+  }
 
-    const nextMeta = {
-      key: META_KEY,
-      schema: SCHEMA,
-      version,
-      imports: Array.isArray(options.imports) ? options.imports : [],
-      count: clean.length,
-      savedAt: Date.now()
-    };
-    {
-      const transaction = db.transaction('meta', 'readwrite');
-      transaction.objectStore('meta').put(nextMeta);
-      await transactionDone(transaction);
-    }
+  const nextMeta = {
+    key: META_KEY,
+    schema: SCHEMA,
+    version,
+    imports: Array.isArray(options.imports) ? options.imports : [],
+    count: clean.length,
+    savedAt: Date.now()
+  };
+  {
+    const transaction = db.transaction('meta', 'readwrite');
+    transaction.objectStore('meta').put(nextMeta);
+    await transactionDone(transaction);
+  }
 
-    meta = nextMeta;
-    records = new Map(clean.map(file => [String(file.hash), file]));
-    for (const file of clean) {
-      const geometry = pendingGeometry.get(String(file.hash));
-      if (geometry && Number(file.width) === geometry.width && Number(file.height) === geometry.height) pendingGeometry.delete(String(file.hash));
-    }
-    idle().then(() => enqueueWrite(() => cleanupOldSnapshots(version))).catch(() => {});
-  });
+  meta = nextMeta;
+  records = new Map(clean.map(file => [String(file.hash), file]));
+  for (const file of clean) {
+    const geometry = pendingGeometry.get(String(file.hash));
+    if (geometry && Number(file.width) === geometry.width && Number(file.height) === geometry.height) pendingGeometry.delete(String(file.hash));
+  }
+  idle().then(() => enqueueWrite(() => cleanupOldSnapshots(version))).catch(() => {});
 }
 
 async function cleanupOldSnapshots(version) {
@@ -185,29 +186,29 @@ function scheduleGeometryWrite() {
 }
 
 function flushDimensions() {
-  if (!pendingGeometry.size) return Promise.resolve();
-  return enqueueWrite(async () => {
-    if (!pendingGeometry.size) return;
-    if (!records.size) await load().catch(() => null);
-    const version = String(meta?.version || '');
-    if (!version) return;
-    const db = await openDb();
-    if (!db) return;
+  return enqueueWrite(flushDimensionsNow);
+}
 
-    const batch = [...pendingGeometry];
-    pendingGeometry.clear();
-    const transaction = db.transaction('files', 'readwrite');
-    const store = transaction.objectStore('files');
-    for (const [hash, geometry] of batch) {
-      const previous = records.get(hash);
-      if (!previous) continue;
-      const next = { ...previous, width: geometry.width, height: geometry.height };
-      records.set(hash, next);
-      store.put({ ...next, __snapshot: version });
-    }
-    await transactionDone(transaction);
-    if (pendingGeometry.size) scheduleGeometryWrite();
-  });
+async function flushDimensionsNow() {
+  if (!pendingGeometry.size) return;
+  if (!records.size) await load().catch(() => null);
+
+  const batch = [...pendingGeometry];
+  pendingGeometry.clear();
+  const db = await openDb();
+  if (!db) return;
+
+  const transaction = db.transaction('files', 'readwrite');
+  const store = transaction.objectStore('files');
+  for (const [hash, geometry] of batch) {
+    const previous = records.get(hash);
+    if (!previous) continue;
+    const next = { ...previous, width: geometry.width, height: geometry.height };
+    records.set(hash, next);
+    store.put({ ...next, __snapshot: meta?.version || '' });
+  }
+  await transactionDone(transaction).catch(() => {});
+  if (pendingGeometry.size) scheduleGeometryWrite();
 }
 
 function rememberDimensions(hash, width, height) {
@@ -223,23 +224,25 @@ function rememberDimensions(hash, width, height) {
   scheduleGeometryWrite();
 }
 
-async function clear() {
+function clear() {
   if (geometryJob) {
     if ('cancelIdleCallback' in window) cancelIdleCallback(geometryJob);
     else clearTimeout(geometryJob);
     geometryJob = 0;
   }
   pendingGeometry.clear();
-  return enqueueWrite(async () => {
-    const db = await openDb();
-    if (!db) return;
-    const transaction = db.transaction(['files', 'meta'], 'readwrite');
-    transaction.objectStore('files').clear();
-    transaction.objectStore('meta').clear();
-    await transactionDone(transaction);
-    meta = null;
-    records.clear();
-  });
+  return enqueueWrite(clearNow);
+}
+
+async function clearNow() {
+  const db = await openDb();
+  if (!db) return;
+  const transaction = db.transaction(['files', 'meta'], 'readwrite');
+  transaction.objectStore('files').clear();
+  transaction.objectStore('meta').clear();
+  await transactionDone(transaction);
+  meta = null;
+  records.clear();
 }
 
 window.mochimonoCatalogCache = {
