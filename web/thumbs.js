@@ -124,9 +124,7 @@ function rememberDimensions(hash, width, height) {
   width = Number(width) || 0;
   height = Number(height) || 0;
   if (!width || !height) return;
-  try {
-    Promise.resolve(window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height)).catch(() => {});
-  } catch {}
+  try { window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height); } catch {}
 }
 
 function markLoaded(hash, card, image) {
@@ -275,7 +273,10 @@ async function checkNearby() {
     if (hashes.length >= CHECK_LIMIT) break;
     hashes.push(item.hash);
   }
-  if (!hashes.length) return;
+  if (!hashes.length) {
+    scheduleOutstanding();
+    return;
+  }
 
   checking = true;
   try {
@@ -338,11 +339,6 @@ async function checkNearby() {
   }
 }
 
-function nearViewport(card) {
-  const rect = card.getBoundingClientRect();
-  return rect.bottom > -PRELOAD_MARGIN && rect.top < innerHeight + PRELOAD_MARGIN;
-}
-
 const observer = files ? new IntersectionObserver(entries => {
   for (const entry of entries) {
     const card = entry.target;
@@ -358,19 +354,12 @@ const observer = files ? new IntersectionObserver(entries => {
 
 function observeTree(node) {
   if (!observer) return;
-  let prepainted = false;
   for (const card of cardsIn(node)) {
     indexCard(card);
     if (observed.has(card) || !kind(card)) continue;
     observed.add(card);
     observer.observe(card);
-    if (nearViewport(card)) {
-      nearby.add(card);
-      paintCard(card, true);
-      prepainted = true;
-    }
   }
-  if (prepainted) scheduleCheck(0);
 }
 
 function queueObserveTree(node) {
