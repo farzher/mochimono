@@ -44,5 +44,4 @@ function release() {
 window.mochimonoGridInteraction = { active: () => active, pulse, release };
 
 window.addEventListener('scroll', () => pulse(140), { passive: true });
-window.addEventListener('wheel', () => pulse(180), { passive: true });
 window.addEventListener('blur', release);
