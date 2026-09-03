@@ -41,15 +41,8 @@ function release() {
   schedule();
 }
 
-window.mochimonoGridInteraction = { active: () => active, pulse };
+window.mochimonoGridInteraction = { active: () => active, pulse, release };
 
-const arrows = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown']);
-const typing = target => Boolean(target?.closest?.('input,select,textarea,[contenteditable="true"]'));
-
-document.addEventListener('keydown', event => {
-  if (arrows.has(event.key) && !typing(event.target)) pulse(event.repeat ? 140 : 180);
-}, true);
-document.addEventListener('keyup', event => { if (arrows.has(event.key)) release(); }, true);
 window.addEventListener('scroll', () => pulse(140), { passive: true });
 window.addEventListener('wheel', () => pulse(180), { passive: true });
 window.addEventListener('blur', release);
