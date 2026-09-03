@@ -6,7 +6,7 @@ const dateRail = document.querySelector('#dateRail');
 const currentView = () => views.querySelector('[data-view].active')?.dataset.view || 'grid';
 const syncLayoutMode = () => document.documentElement.classList.toggle('library-grid-view', currentView() === 'grid');
 
-new MutationObserver(syncLayoutMode).observe(views, { subtree: true, attributes: true, attributeFilter: ['class'] });
+views.addEventListener('click', syncLayoutMode);
 syncLayoutMode();
 
 folderbar.addEventListener('click', event => {
@@ -109,7 +109,7 @@ railTopHit.addEventListener('pointercancel', event => {
   railTopPointer = null;
 });
 
-new MutationObserver(scheduleRailTopHit).observe(dateRail, { childList: true, attributes: true, attributeFilter: ['hidden', 'style', 'class'] });
+new MutationObserver(scheduleRailTopHit).observe(dateRail, { attributes: true, attributeFilter: ['hidden'] });
 window.addEventListener('resize', scheduleRailTopHit, { passive: true });
 scheduleRailTopHit();
 
