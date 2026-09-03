@@ -70,8 +70,9 @@ function visibleStart(cards = orderedCards()) {
 
 function selectCard(card, scroll = true) {
   if (!card) return false;
-  const previous = files.querySelector('.keyboard-cursor');
+  const previous = selectedCard();
   if (previous && previous !== card) previous.classList.remove('keyboard-cursor');
+  else if (!previous) files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
   card.classList.add('keyboard-cursor');
   document.documentElement.classList.add('keyboard-navigation-active');
   card.focus({ preventScroll: true });
