@@ -2,7 +2,6 @@ const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
 const commandbar = document.querySelector('.commandbar');
 const arrows = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
-const VERTICAL_NEIGHBORS = 128;
 const ROW_TOLERANCE = 3;
 
 let holding = false;
@@ -21,13 +20,18 @@ function orderedCards() {
   return [...files.querySelectorAll('[data-hash]')];
 }
 
-function adjacentCard(current, direction) {
+function cardWalker(current) {
   if (!current?.isConnected) return null;
   const walker = document.createTreeWalker(files, NodeFilter.SHOW_ELEMENT, {
     acceptNode: node => node.hasAttribute?.('data-hash') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP
   });
   walker.currentNode = current;
-  return direction < 0 ? walker.previousNode() : walker.nextNode();
+  return walker;
+}
+
+function adjacentCard(current, direction) {
+  const walker = cardWalker(current);
+  return walker ? direction < 0 ? walker.previousNode() : walker.nextNode() : null;
 }
 
 function viewportTop() {
@@ -66,8 +70,9 @@ function visibleStart(cards = orderedCards()) {
 
 function selectCard(card, scroll = true) {
   if (!card) return false;
-  const previous = files.querySelector('.keyboard-cursor');
+  const previous = selectedCard();
   if (previous && previous !== card) previous.classList.remove('keyboard-cursor');
+  else if (!previous) files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
   card.classList.add('keyboard-cursor');
   document.documentElement.classList.add('keyboard-navigation-active');
   card.focus({ preventScroll: true });
@@ -96,50 +101,36 @@ function releaseSentinels() {
   if (bottom) bottom.hidden = state ? !state.hasMore : true;
 }
 
-function nearestVertical(cards, current, direction, anchorX) {
-  const rect = current.getBoundingClientRect();
+function verticalTarget(current, direction, anchorX) {
+  const walker = cardWalker(current);
+  if (!walker) return null;
+  const currentTop = current.getBoundingClientRect().top;
+  const step = direction < 0 ? 'previousNode' : 'nextNode';
+  let rowTop = null;
   let best = null;
-  let bestRowDistance = Infinity;
   let bestHorizontalGap = Infinity;
   let bestCenterDistance = Infinity;
 
-  for (const card of cards) {
-    if (card === current) continue;
-    const next = card.getBoundingClientRect();
-    if (next.width <= 0 || next.height <= 0) continue;
-    const dy = next.top - rect.top;
+  for (let card = walker[step](); card; card = walker[step]()) {
+    const rect = card.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    const dy = rect.top - currentTop;
     if (direction < 0 ? dy >= -ROW_TOLERANCE : dy <= ROW_TOLERANCE) continue;
 
-    const rowDistance = Math.abs(dy);
-    const horizontalGap = anchorX < next.left ? next.left - anchorX : anchorX > next.right ? anchorX - next.right : 0;
-    const centerDistance = Math.abs(next.left + next.width / 2 - anchorX);
-    if (rowDistance < bestRowDistance - ROW_TOLERANCE ||
-        (Math.abs(rowDistance - bestRowDistance) <= ROW_TOLERANCE &&
-          (horizontalGap < bestHorizontalGap ||
-            (horizontalGap === bestHorizontalGap && centerDistance < bestCenterDistance)))) {
+    if (rowTop == null) rowTop = rect.top;
+    else if (Math.abs(rect.top - rowTop) > ROW_TOLERANCE) break;
+
+    if (anchorX >= rect.left && anchorX <= rect.right) return card;
+    const horizontalGap = anchorX < rect.left ? rect.left - anchorX : anchorX - rect.right;
+    const centerDistance = Math.abs(rect.left + rect.width / 2 - anchorX);
+    if (horizontalGap < bestHorizontalGap ||
+        (horizontalGap === bestHorizontalGap && centerDistance < bestCenterDistance)) {
       best = card;
-      bestRowDistance = rowDistance;
       bestHorizontalGap = horizontalGap;
       bestCenterDistance = centerDistance;
     }
   }
   return best;
-}
-
-function verticalTarget(current, direction, anchorX) {
-  const cards = orderedCards();
-  const index = cards.indexOf(current);
-  if (index < 0) return null;
-
-  const start = direction < 0 ? Math.max(0, index - VERTICAL_NEIGHBORS) : index + 1;
-  const end = direction < 0 ? index : Math.min(cards.length, index + 1 + VERTICAL_NEIGHBORS);
-  const nearby = nearestVertical(cards.slice(start, end), current, direction, anchorX);
-  if (nearby) return nearby;
-
-  // Extremely wide layouts can contain more than VERTICAL_NEIGHBORS cards per
-  // visual row. Keep correctness with a rare full-window fallback instead of
-  // maintaining a second cached geometry model.
-  return nearestVertical(cards, current, direction, anchorX);
 }
 
 function ensureAdjacentWindow(direction) {

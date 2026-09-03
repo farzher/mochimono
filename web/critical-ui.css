@@ -8,6 +8,7 @@ html.keyboard-navigation-active #files.grid .file-card.context-keyboard-focus:no
 html.grid-interaction-active .commandbar{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:rgba(24,22,25,.98)!important}
 html.grid-interaction-active #files .file-context-badge{opacity:0!important;transform:none!important;transition:none!important}
 html.grid-interaction-active #files .file-card:hover{background:var(--surface)!important;box-shadow:none!important}
+html.grid-interaction-active .video-thumb-pending::after{animation:none!important;will-change:auto!important}
 
 .media-thumb{position:relative;overflow:hidden;background:#09080a}
 .video-thumb-pending{position:absolute!important;inset:0!important;display:block!important;z-index:0!important;overflow:hidden!important;background:linear-gradient(135deg,#080709 0%,#0d0b0f 52%,#09080a 100%)!important;pointer-events:none}

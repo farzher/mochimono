@@ -148,13 +148,13 @@ function paintCard(card, urgent = false) {
   const box = hash && mediaBox(card);
   if (!hash || !box) return;
 
+  const state = states.get(hash) || {};
   const current = box.querySelector('img.cached-thumb');
   if (current?.dataset.thumbHash === hash) {
-    if (current.complete && current.naturalWidth) markLoaded(hash, card, current);
+    if (current.complete && current.naturalWidth && !state.ready) markLoaded(hash, card, current);
     return;
   }
 
-  const state = states.get(hash) || {};
   const now = performance.now();
   if (state.failed && now >= (state.nextTry || 0)) {
     state.failed = false;
@@ -405,12 +405,16 @@ function reuseImages(node, images) {
 
 window.mochimonoThumbnails = {
   prioritize(cards) {
+    let needsCheck = false;
+    const now = performance.now();
     for (const card of Array.isArray(cards) ? cards : [cards]) {
       if (!card?.isConnected || !kind(card)) continue;
       indexCard(card);
       paintCard(card, true);
+      const state = states.get(String(card.dataset.hash || ''));
+      if (!state?.ready && !state?.terminal && now >= (state?.nextCheck || 0)) needsCheck = true;
     }
-    scheduleCheck(30);
+    if (needsCheck) scheduleCheck(30);
   }
 };
 
