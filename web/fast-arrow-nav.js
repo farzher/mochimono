@@ -133,6 +133,7 @@ function ensureAdjacentWindow(direction) {
   const probe = direction < 0 ? state.offset - 1 : state.offset + state.loaded;
   if (probe < 0 || probe >= state.filtered) return false;
   library.ensureIndex(probe);
+  window.mochimonoGallery?.layoutNow?.();
   freezeSentinels();
   return true;
 }
@@ -175,6 +176,7 @@ function navigate(key) {
 
 function press(key) {
   if (!arrows.has(key) || !viewer?.hidden || !gridActive()) return false;
+  window.mochimonoGridInteraction?.pulse?.(180);
 
   if (!holding) {
     holding = true;
@@ -189,6 +191,7 @@ function press(key) {
 
 function release() {
   holding = false;
+  window.mochimonoGridInteraction?.release?.();
   releaseSentinels();
 }
 

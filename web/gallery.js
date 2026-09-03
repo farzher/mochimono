@@ -247,9 +247,24 @@ window.addEventListener('mochimono:media-size', () => {
 });
 window.addEventListener('mochimono:grid-interaction-end', flushDeferredGeometry);
 
-new MutationObserver(records => {
+const gridObserver = new MutationObserver(records => {
   for (const grid of changedGrids(records)) schedule(grid);
-}).observe(files, { childList: true, subtree: true });
+});
+gridObserver.observe(files, { childList: true, subtree: true });
+
+window.mochimonoGallery = {
+  layoutNow() {
+    for (const grid of changedGrids(gridObserver.takeRecords())) if (grid.isConnected) pendingGrids.add(grid);
+    if (!pendingGrids.size && !fullLayout) return false;
+    if (frame) {
+      cancelAnimationFrame(frame);
+      frame = 0;
+    }
+    layout();
+    return true;
+  }
+};
+
 new ResizeObserver(entries => {
   const width = Math.round(entries[0]?.contentRect?.width || 0);
   if (!width || width === lastFilesWidth) return;
