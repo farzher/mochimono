@@ -109,16 +109,11 @@ async function load() {
   const memory = memorySnapshot();
   if (memory) return memory;
   if (!loadPromise) {
-    // instant-grid.js is intentionally loaded first. Let its tiny metadata/quick
-    // read finish and give the browser a paint before issuing IndexedDB getAll()
-    // for a 50k–100k file catalog.
+    // Let instant-grid finish its tiny quick read and paint before a 50k–100k
+    // record IndexedDB getAll monopolizes the main thread.
     loadPromise = waitForInstantGrid().then(loadFromDb).finally(() => { loadPromise = null; });
   }
   return loadPromise;
-}
-
-function save(files, options = {}) {
-  return enqueueWrite(() => saveNow(files, options));
 }
 
 function quickFiles(files) {
@@ -130,6 +125,10 @@ function quickFiles(files) {
     })
     .slice(0, QUICK_FILES)
     .map(publicFile);
+}
+
+function save(files, options = {}) {
+  return enqueueWrite(() => saveNow(files, options));
 }
 
 async function saveNow(files, options = {}) {
@@ -145,9 +144,7 @@ async function saveNow(files, options = {}) {
   for (let offset = 0; offset < clean.length; offset += WRITE_BATCH) {
     const transaction = db.transaction('files', 'readwrite');
     const store = transaction.objectStore('files');
-    for (const file of clean.slice(offset, offset + WRITE_BATCH)) {
-      store.put({ ...file, __snapshot: version });
-    }
+    for (const file of clean.slice(offset, offset + WRITE_BATCH)) store.put({ ...file, __snapshot: version });
     await transactionDone(transaction);
     await idle();
   }
@@ -212,21 +209,37 @@ function flushDimensions() {
 async function flushDimensionsNow() {
   if (!pendingGeometry.size) return;
   if (!records.size) await load().catch(() => null);
+  if (!records.size) return;
 
   const batch = [...pendingGeometry];
   pendingGeometry.clear();
   const db = await openDb();
   if (!db) return;
 
-  const transaction = db.transaction('files', 'readwrite');
+  const transaction = db.transaction(['files', 'meta'], 'readwrite');
   const store = transaction.objectStore('files');
+  const changed = new Map();
   for (const [hash, geometry] of batch) {
     const previous = records.get(hash);
     if (!previous) continue;
     const next = { ...previous, width: geometry.width, height: geometry.height };
     records.set(hash, next);
+    changed.set(hash, geometry);
     store.put({ ...next, __snapshot: meta?.version || '' });
   }
+
+  // instant-grid reads meta.quickFiles before the full catalog. Keep geometry in
+  // that tiny snapshot current too, otherwise the fast first paint falls back to
+  // 4:3 on every reload even though the full cached records know the real ratio.
+  if (changed.size && meta?.version && Array.isArray(meta.quickFiles)) {
+    const nextQuick = meta.quickFiles.map(file => {
+      const geometry = changed.get(String(file.hash || ''));
+      return geometry ? { ...file, width: geometry.width, height: geometry.height } : file;
+    });
+    meta = { ...meta, quickFiles: nextQuick };
+    transaction.objectStore('meta').put(meta);
+  }
+
   await transactionDone(transaction).catch(() => {});
   if (pendingGeometry.size) scheduleGeometryWrite();
 }
