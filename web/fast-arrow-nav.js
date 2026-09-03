@@ -1,19 +1,34 @@
 const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
+const viewerMedia = document.querySelector('#viewer-media');
 const commandbar = document.querySelector('.commandbar');
 const arrows = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 const ROW_TOLERANCE = 3;
 const THUMB_NEIGHBORS = 8;
 const VIEWER_FALLBACK_STEP = 5;
+const VIEWER_THUMB_RADIUS = 8;
+const VIEWER_WARM_INTERVAL = 70;
+const VIEWER_WARM_RETRY = 120;
+const VIEWER_WARM_ATTEMPTS = 6;
+const VIEWER_MEDIA_SETTLE = 70;
+const THUMB_VERSION = 3;
 
 let holding = false;
 let verticalAnchorX = null;
 let viewerVerticalAnchorX = null;
 let viewerExpectedHash = '';
+let viewerWarmTimer = 0;
+let viewerWarmRunning = false;
+let viewerWarmGeneration = 0;
+let viewerWarmAttempt = 0;
+let viewerWarmWanted = [];
+let viewerMediaTimer = 0;
+const viewerThumbImages = new Map();
 
 const gridActive = () => Boolean(files?.classList.contains('grid'));
 const viewerHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
+const thumbUrl = hash => `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
 
 function editingControl(event) {
   const control = event.target?.closest?.('input,select,textarea,[contenteditable="true"]');
@@ -221,6 +236,136 @@ function resetViewerRowNavigation() {
   viewerExpectedHash = '';
 }
 
+function viewerNeighborhood(hash) {
+  const hashes = window.mochimonoLibrary?.filteredHashes?.();
+  if (!Array.isArray(hashes) || !hashes.length) return hash ? [hash] : [];
+  const index = hashes.indexOf(hash);
+  if (index < 0) return hash ? [hash] : [];
+  return hashes.slice(Math.max(0, index - VIEWER_THUMB_RADIUS), Math.min(hashes.length, index + VIEWER_THUMB_RADIUS + 1));
+}
+
+function refreshViewerPreview(hash) {
+  if (!hash || viewer?.hidden || viewerHash() !== hash) return;
+  const image = viewerMedia?.querySelector('img[data-full-src]');
+  if (image) {
+    try { image.fetchPriority = 'high'; } catch {}
+    image.src = thumbUrl(hash);
+  }
+  const video = viewerMedia?.querySelector('video');
+  if (video) {
+    video.poster = '';
+    video.poster = thumbUrl(hash);
+  }
+}
+
+function preloadViewerThumb(hash) {
+  if (!hash) return;
+  const current = viewerThumbImages.get(hash);
+  if (current?.complete && current.naturalWidth) return refreshViewerPreview(hash);
+  if (current) return;
+
+  const image = new Image();
+  image.decoding = 'async';
+  try { image.fetchPriority = 'high'; } catch {}
+  viewerThumbImages.set(hash, image);
+  while (viewerThumbImages.size > 64) viewerThumbImages.delete(viewerThumbImages.keys().next().value);
+  image.onload = () => refreshViewerPreview(hash);
+  image.onerror = () => viewerThumbImages.delete(hash);
+  image.src = thumbUrl(hash);
+}
+
+function scheduleViewerWarm(hash) {
+  if (!hash || viewer?.hidden) return;
+  viewerWarmWanted = viewerNeighborhood(hash);
+  viewerWarmGeneration++;
+  viewerWarmAttempt = 0;
+  if (viewerWarmRunning || viewerWarmTimer) return;
+  viewerWarmTimer = setTimeout(runViewerWarm, 0);
+}
+
+async function runViewerWarm() {
+  viewerWarmTimer = 0;
+  if (viewer?.hidden || viewerWarmRunning || !viewerWarmWanted.length) return;
+  const generation = viewerWarmGeneration;
+  const hashes = [...viewerWarmWanted];
+  viewerWarmRunning = true;
+  try {
+    const response = await fetch('/api/thumbs/check', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hashes })
+    });
+    if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
+    const data = await response.json();
+    const ready = new Set((data.thumbnails || []).map(item => String(item.hash || '')));
+    const failed = new Set((data.failures || []).map(item => String(item.hash || '')));
+    for (const hash of ready) preloadViewerThumb(hash);
+
+    if (generation === viewerWarmGeneration) {
+      const unresolved = hashes.filter(hash => !ready.has(hash) && !failed.has(hash));
+      if (unresolved.length && viewerWarmAttempt < VIEWER_WARM_ATTEMPTS) {
+        viewerWarmAttempt++;
+        viewerWarmWanted = unresolved;
+        viewerWarmTimer = setTimeout(runViewerWarm, VIEWER_WARM_RETRY);
+      }
+    }
+  } catch {
+    if (generation === viewerWarmGeneration && viewerWarmAttempt < VIEWER_WARM_ATTEMPTS) {
+      viewerWarmAttempt++;
+      viewerWarmTimer = setTimeout(runViewerWarm, VIEWER_WARM_RETRY * 2);
+    }
+  } finally {
+    viewerWarmRunning = false;
+    if (generation !== viewerWarmGeneration && !viewerWarmTimer && !viewer?.hidden) {
+      viewerWarmTimer = setTimeout(runViewerWarm, VIEWER_WARM_INTERVAL);
+    }
+  }
+}
+
+function prepareViewerMedia(hash) {
+  clearTimeout(viewerMediaTimer);
+  if (!hash || viewer?.hidden || !viewerMedia) return;
+
+  const image = viewerMedia.querySelector('img[data-full-src]');
+  if (image) {
+    try { image.fetchPriority = 'high'; } catch {}
+  }
+
+  const video = viewerMedia.querySelector('video');
+  if (!video) return;
+  video.poster = thumbUrl(hash);
+  video.autoplay = false;
+  video.controls = false;
+  video.preload = 'none';
+  try {
+    video.pause();
+    video.load();
+  } catch {}
+
+  viewerMediaTimer = setTimeout(() => {
+    if (viewer?.hidden || viewerHash() !== hash || !video.isConnected) return;
+    video.preload = 'auto';
+    video.autoplay = true;
+    const showControls = () => {
+      if (viewerHash() === hash && video.isConnected) video.controls = true;
+    };
+    if (video.readyState >= 1) showControls();
+    else video.addEventListener('loadedmetadata', showControls, { once: true });
+    try { video.load(); } catch {}
+    video.play().catch(showControls);
+  }, VIEWER_MEDIA_SETTLE);
+}
+
+function resetViewerReadiness() {
+  clearTimeout(viewerMediaTimer);
+  viewerMediaTimer = 0;
+  clearTimeout(viewerWarmTimer);
+  viewerWarmTimer = 0;
+  viewerWarmWanted = [];
+  viewerWarmGeneration++;
+  viewerWarmAttempt = 0;
+}
+
 function press(key) {
   if (!arrows.has(key) || !viewer?.hidden || !gridActive()) return false;
   window.mochimonoGridInteraction?.pulse?.(180);
@@ -254,6 +399,7 @@ function reset(clear = false) {
 
 function returnTo(hash) {
   resetViewerRowNavigation();
+  resetViewerReadiness();
   reset(true);
   const value = String(hash || '');
   const card = value ? files.querySelector(`[data-hash="${CSS.escape(value)}"]`) : null;
@@ -292,9 +438,14 @@ if (viewer && viewerOpen) {
   const viewerObserver = new MutationObserver(() => {
     if (viewer.hidden) {
       resetViewerRowNavigation();
+      resetViewerReadiness();
       return;
     }
+
     const hash = viewerHash();
+    prepareViewerMedia(hash);
+    scheduleViewerWarm(hash);
+
     if (viewerExpectedHash && hash === viewerExpectedHash) {
       viewerExpectedHash = '';
       return;
