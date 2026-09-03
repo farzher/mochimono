@@ -15,8 +15,6 @@ const selectionDelete = document.querySelector('#selectionDelete');
 const selectionIgnore = document.querySelector('#selectionIgnore');
 const selectionClear = document.querySelector('#selectionClear');
 
-document.querySelector('.commandbar')?.append(selectionBar);
-
 let selectionMode = false;
 let anchorHash = '';
 let selected = new Set();
