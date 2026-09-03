@@ -1,7 +1,7 @@
 const files = document.querySelector('#files');
 const CLIENT = document.documentElement.classList.contains('client-library');
 const THUMB_VERSION = 3;
-const CHECK_LIMIT = 320;
+const CHECK_LIMIT = 500;
 const RECHECK_DELAY = CLIENT ? 120 : 500;
 const PRELOAD_MARGIN = 360;
 
