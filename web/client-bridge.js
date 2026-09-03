@@ -17,11 +17,12 @@ if (location.pathname.startsWith('/files')) {
     window.parent.postMessage({ type: 'mochimono-library-scroll', y }, location.origin);
   };
 
-  if (viewer) {
-    new MutationObserver(reportViewer).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
+  if (viewer || viewerOpen) {
+    const viewerObserver = new MutationObserver(reportViewer);
+    if (viewer) viewerObserver.observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
+    if (viewerOpen) viewerObserver.observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
     reportViewer();
   }
-  if (viewerOpen) new MutationObserver(reportViewer).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
 
   if (document.documentElement.classList.contains('viewer-restore-pending')) {
     const restoreObserver = new MutationObserver(() => {
