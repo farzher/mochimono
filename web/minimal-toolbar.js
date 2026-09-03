@@ -123,7 +123,6 @@ if (commandbar && search) {
     #selectionIgnore{color:#c99a95!important}
     #selectionClear{font-size:20px!important;font-weight:400!important;line-height:1!important}
 
-    .files.grid .date-grid>.day-row-start{margin-top:0!important}
     .files.grid .day-group-control,
     .files.grid .day-group-control:hover,
     .files.grid .day-group-control:focus-visible{
