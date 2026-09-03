@@ -109,6 +109,15 @@ async function checkThumbnails(req, res) {
   const providerEntries = await Promise.all(hashes.map(async hash => [hash, await providerThumbnail(hash)]));
   for (const [hash, thumb] of providerEntries) if (thumb) ready.set(hash, thumb);
 
+  const queuedLocal = new Set();
+  for (const hash of hashes) {
+    if (ready.has(hash)) continue;
+    const candidate = locals.get(hash);
+    if (!candidate || providerThumbnailFailure(hash)) continue;
+    queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
+    queuedLocal.add(hash);
+  }
+
   const remoteHashes = hashes.filter(hash => !ready.has(hash) && (!locals.has(hash) || providerThumbnailFailure(hash)));
   const remote = await serverThumbnails(remoteHashes);
   for (const [hash, thumb] of remote.ready) if (!ready.has(hash)) ready.set(hash, thumb);
@@ -121,6 +130,7 @@ async function checkThumbnails(req, res) {
     const providerFailure = providerThumbnailFailure(hash);
     const remoteFailure = thumbnailFailure(hash);
 
+    if (queuedLocal.has(hash) && !providerFailure) continue;
     if (candidate && !providerFailure) {
       queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
       continue;
