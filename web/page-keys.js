@@ -5,10 +5,10 @@ const commandbar = document.querySelector('.commandbar');
 const pageKeys = new Set(['PageUp', 'PageDown', 'Home', 'End']);
 const EDGE_MARGIN = 240;
 
-// Keep loading thumbnails in the render tree instead of display:none. Chromium
-// can finish a hidden image request without scheduling the decode/paint that the
-// grid needs; a later :hover repaint then makes it appear. Hold the image at
-// opacity 0 until decode completes, then explicitly commit it on a frame.
+// Keep loading thumbnails in the render tree instead of display:none. Once the
+// image load completes, reveal it immediately; waiting for image.decode() made
+// cached thumbnails needlessly appear later even though the browser could paint
+// them already. The tiny opacity nudge still gives Chromium an explicit repaint.
 const thumbPaintStyle = document.createElement('style');
 thumbPaintStyle.textContent = `.media-thumb>img.cached-thumb:not([data-paint-ready="1"]){opacity:0!important}`;
 document.head.append(thumbPaintStyle);
@@ -16,29 +16,19 @@ const watchedThumbs = new WeakSet();
 
 function commitThumbPaint(image) {
   if (!image?.isConnected || !image.complete || !image.naturalWidth || image.dataset.paintReady === '1') return;
-  const commit = () => {
-    if (!image.isConnected || !image.complete || !image.naturalWidth || image.dataset.paintReady === '1') return;
-    image.dataset.paintReady = '1';
-    // The tiny opacity nudge gives Chromium an explicit compositor invalidation
-    // instead of relying on pointer hover or another unrelated repaint.
-    image.style.opacity = '.999';
-    requestAnimationFrame(() => {
-      if (!image.isConnected) return;
-      image.style.removeProperty('opacity');
-    });
-  };
-  try {
-    const decoded = image.decode?.();
-    if (decoded?.then) decoded.then(commit, commit);
-    else requestAnimationFrame(commit);
-  } catch { requestAnimationFrame(commit); }
+  image.dataset.paintReady = '1';
+  image.style.opacity = '.999';
+  requestAnimationFrame(() => {
+    if (!image.isConnected) return;
+    image.style.removeProperty('opacity');
+  });
 }
 
 function prepareThumb(image) {
   if (!(image instanceof HTMLImageElement)) return;
   if (image.loading === 'lazy') image.loading = 'eager';
-  // The opacity gate above keeps this visually hidden while allowing the browser
-  // to decode it as a normal rendered image rather than a display:none image.
+  // Opacity keeps this visually hidden while allowing normal image loading and
+  // painting; never leave a grid thumbnail at display:none while it loads.
   if (image.hidden) image.hidden = false;
   if (image.complete && image.naturalWidth) return commitThumbPaint(image);
   if (watchedThumbs.has(image)) return;
