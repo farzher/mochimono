@@ -10,6 +10,7 @@ let meta = null;
 let records = new Map();
 let pendingGeometry = new Map();
 let geometryJob = 0;
+let writeChain = Promise.resolve();
 
 const requestResult = request => new Promise((resolve, reject) => {
   request.onsuccess = () => resolve(request.result);
@@ -26,6 +27,13 @@ const idle = () => new Promise(resolve => {
   if ('requestIdleCallback' in window) requestIdleCallback(() => resolve(), { timeout: 500 });
   else setTimeout(resolve, 0);
 });
+
+function enqueueWrite(work) {
+  const run = () => work();
+  const result = writeChain.then(run, run);
+  writeChain = result.catch(() => {});
+  return result;
+}
 
 function openDb() {
   if (!('indexedDB' in window)) return Promise.resolve(null);
@@ -101,7 +109,11 @@ async function load() {
   return loadPromise;
 }
 
-async function save(files, options = {}) {
+function save(files, options = {}) {
+  return enqueueWrite(() => saveNow(files, options));
+}
+
+async function saveNow(files, options = {}) {
   const db = await openDb();
   if (!db || !Array.isArray(files)) return;
   const version = String(options.version || '');
@@ -137,13 +149,17 @@ async function save(files, options = {}) {
 
   meta = nextMeta;
   records = new Map(clean.map(file => [String(file.hash), file]));
-  cleanupOldSnapshots(version).catch(() => {});
+  for (const file of clean) {
+    const geometry = pendingGeometry.get(String(file.hash));
+    if (geometry && Number(file.width) === geometry.width && Number(file.height) === geometry.height) pendingGeometry.delete(String(file.hash));
+  }
+  idle().then(() => enqueueWrite(() => cleanupOldSnapshots(version))).catch(() => {});
 }
 
 async function cleanupOldSnapshots(version) {
-  await idle();
+  if (meta?.version !== version) return;
   const db = await openDb();
-  if (!db) return;
+  if (!db || meta?.version !== version) return;
   const transaction = db.transaction('files', 'readwrite');
   const store = transaction.objectStore('files');
   await new Promise((resolve, reject) => {
@@ -169,7 +185,11 @@ function scheduleGeometryWrite() {
   else geometryJob = setTimeout(run, 100);
 }
 
-async function flushDimensions() {
+function flushDimensions() {
+  return enqueueWrite(flushDimensionsNow);
+}
+
+async function flushDimensionsNow() {
   if (!pendingGeometry.size) return;
   if (!records.size) await load().catch(() => null);
 
@@ -204,13 +224,17 @@ function rememberDimensions(hash, width, height) {
   scheduleGeometryWrite();
 }
 
-async function clear() {
+function clear() {
   if (geometryJob) {
     if ('cancelIdleCallback' in window) cancelIdleCallback(geometryJob);
     else clearTimeout(geometryJob);
     geometryJob = 0;
   }
   pendingGeometry.clear();
+  return enqueueWrite(clearNow);
+}
+
+async function clearNow() {
   const db = await openDb();
   if (!db) return;
   const transaction = db.transaction(['files', 'meta'], 'readwrite');
