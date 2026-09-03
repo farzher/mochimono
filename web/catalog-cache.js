@@ -3,6 +3,7 @@ const DB_VERSION = 1;
 const SCHEMA = 1;
 const META_KEY = 'catalog';
 const WRITE_BATCH = 1500;
+const QUICK_FILES = 200;
 
 let dbPromise = null;
 let loadPromise = null;
@@ -91,26 +92,44 @@ async function loadFromDb() {
   ]);
   await done;
   if (!storedMeta || storedMeta.schema !== SCHEMA || !storedMeta.version) return null;
-
   const files = all.filter(file => file.__snapshot === storedMeta.version).map(publicFile);
   if (files.length !== Number(storedMeta.count || 0)) return null;
-
   meta = storedMeta;
   records = new Map(files.map(file => [String(file.hash), file]));
   return memorySnapshot();
+}
+
+async function waitForInstantGrid() {
+  const ready = window.mochimonoInstantGridReady;
+  if (!ready?.then) return;
+  try { await ready; } catch {}
 }
 
 async function load() {
   const memory = memorySnapshot();
   if (memory) return memory;
   if (!loadPromise) {
-    loadPromise = loadFromDb().finally(() => { loadPromise = null; });
+    // instant-grid.js is intentionally loaded first. Let its tiny metadata/quick
+    // read finish and give the browser a paint before issuing IndexedDB getAll()
+    // for a 50k–100k file catalog.
+    loadPromise = waitForInstantGrid().then(loadFromDb).finally(() => { loadPromise = null; });
   }
   return loadPromise;
 }
 
 function save(files, options = {}) {
   return enqueueWrite(() => saveNow(files, options));
+}
+
+function quickFiles(files) {
+  return [...files]
+    .sort((a, b) => {
+      const aDate = Number(a.dateMs) || Date.parse(a.fileDate || a.createdAt || 0) || 0;
+      const bDate = Number(b.dateMs) || Date.parse(b.fileDate || b.createdAt || 0) || 0;
+      return bDate - aDate || String(a.hash || '').localeCompare(String(b.hash || ''));
+    })
+    .slice(0, QUICK_FILES)
+    .map(publicFile);
 }
 
 async function saveNow(files, options = {}) {
@@ -139,6 +158,7 @@ async function saveNow(files, options = {}) {
     version,
     imports: Array.isArray(options.imports) ? options.imports : [],
     count: clean.length,
+    quickFiles: quickFiles(clean),
     savedAt: Date.now()
   };
   {
@@ -252,8 +272,3 @@ window.mochimonoCatalogCache = {
   clear,
   state: () => ({ version: meta?.version || '', count: records.size, savedAt: Number(meta?.savedAt) || 0 })
 };
-
-// Start the IndexedDB read immediately, before library-app waits on the server
-// health check. Normal reloads can then restore the cached grid from memory in
-// the same frame instead of briefly painting a Loading screen first.
-load().catch(() => {});
