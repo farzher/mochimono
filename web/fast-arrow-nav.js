@@ -9,7 +9,7 @@ const THUMB_NEIGHBORS = 8;
 const VIEWER_FALLBACK_STEP = 5;
 const VIEWER_THUMB_RADIUS = 8;
 const VIEWER_WARM_RETRY = 120;
-const VIEWER_MEDIA_SETTLE = 70;
+const VIEWER_RAPID_MS = 80;
 const THUMB_VERSION = 3;
 
 let holding = false;
@@ -20,12 +20,15 @@ let viewerWarmTimer = 0;
 let viewerWarmRunning = false;
 let viewerWarmHash = '';
 let viewerWarmPasses = 0;
-let viewerMediaTimer = 0;
+let viewerRapidUntil = 0;
+let viewerSettleTimer = 0;
+let viewerSettleCallback = null;
 const viewerThumbImages = new Map();
 
 const gridActive = () => Boolean(files?.classList.contains('grid'));
 const viewerHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 const thumbUrl = hash => `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
+const viewerRapid = () => performance.now() < viewerRapidUntil;
 
 function editingControl(event) {
   const control = event.target?.closest?.('input,select,textarea,[contenteditable="true"]');
@@ -324,48 +327,68 @@ async function runViewerWarm() {
   }
 }
 
-function prepareViewerMedia(hash) {
-  clearTimeout(viewerMediaTimer);
-  if (!hash || viewer?.hidden || !viewerMedia) return;
+function settleViewerRapid() {
+  viewerSettleTimer = 0;
+  const wait = viewerRapidUntil - performance.now();
+  if (wait > 0) {
+    viewerSettleTimer = setTimeout(settleViewerRapid, wait + 2);
+    return;
+  }
+  const callback = viewerSettleCallback;
+  viewerSettleCallback = null;
+  callback?.();
+  const video = viewerMedia?.querySelector('video');
+  if (video) video.controls = true;
+}
 
+function scheduleViewerSettle() {
+  clearTimeout(viewerSettleTimer);
+  viewerSettleTimer = setTimeout(settleViewerRapid, Math.max(0, viewerRapidUntil - performance.now()) + 2);
+}
+
+function markViewerRapid() {
+  viewerRapidUntil = performance.now() + VIEWER_RAPID_MS;
+  if (viewerSettleCallback) scheduleViewerSettle();
+}
+
+function releaseViewerRapid() {
+  if (!viewerRapidUntil) return;
+  viewerRapidUntil = Math.min(viewerRapidUntil, performance.now() + 24);
+  if (viewerSettleCallback) scheduleViewerSettle();
+}
+
+function deferViewerSettle(callback) {
+  if (typeof callback !== 'function' || !viewerRapid()) return false;
+  viewerSettleCallback = callback;
+  scheduleViewerSettle();
+  return true;
+}
+
+function prepareViewerMedia(hash) {
+  if (!hash || viewer?.hidden || !viewerMedia) return;
   const image = viewerMedia.querySelector('img[data-full-src]');
   if (image) {
     try { image.fetchPriority = 'high'; } catch {}
   }
-
   const video = viewerMedia.querySelector('video');
-  if (!video) return;
-  video.poster = thumbUrl(hash);
-  video.autoplay = false;
-  video.controls = false;
-  video.preload = 'none';
-  try {
-    video.pause();
-    video.load();
-  } catch {}
-
-  viewerMediaTimer = setTimeout(() => {
-    if (viewer?.hidden || viewerHash() !== hash || !video.isConnected) return;
-    video.preload = 'auto';
-    video.autoplay = true;
-    const showControls = () => {
-      if (viewerHash() === hash && video.isConnected) video.controls = true;
-    };
-    if (video.readyState >= 1) showControls();
-    else video.addEventListener('loadedmetadata', showControls, { once: true });
-    try { video.load(); } catch {}
-    video.play().catch(showControls);
-  }, VIEWER_MEDIA_SETTLE);
+  if (video) {
+    video.poster = thumbUrl(hash);
+    if (!video.getAttribute('src')) video.controls = false;
+  }
 }
 
 function resetViewerReadiness() {
-  clearTimeout(viewerMediaTimer);
-  viewerMediaTimer = 0;
   clearTimeout(viewerWarmTimer);
   viewerWarmTimer = 0;
   viewerWarmHash = '';
   viewerWarmPasses = 0;
+  clearTimeout(viewerSettleTimer);
+  viewerSettleTimer = 0;
+  viewerRapidUntil = 0;
+  viewerSettleCallback = null;
 }
+
+window.mochimonoViewerPerformance = { rapid: viewerRapid, defer: deferViewerSettle };
 
 function press(key) {
   if (!arrows.has(key) || !viewer?.hidden || !gridActive()) return false;
@@ -412,6 +435,7 @@ window.mochimonoGridKeyboard = { press, release, reset };
 document.addEventListener('keydown', event => {
   if (!arrows.has(event.key) || editingControl(event)) return;
   if (!viewer?.hidden) {
+    markViewerRapid();
     if (!gridActive() || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -425,10 +449,15 @@ document.addEventListener('keydown', event => {
 }, true);
 
 document.addEventListener('keyup', event => {
-  if (arrows.has(event.key) && viewer?.hidden) release();
+  if (!arrows.has(event.key)) return;
+  if (viewer?.hidden) release();
+  else releaseViewerRapid();
 }, true);
 
-window.addEventListener('blur', release);
+window.addEventListener('blur', () => {
+  release();
+  releaseViewerRapid();
+});
 window.addEventListener('mochimono-viewer-return', event => returnTo(event.detail?.hash));
 files?.addEventListener('pointermove', event => {
   if (event.pointerType !== 'touch' && document.documentElement.classList.contains('keyboard-navigation-active')) reset(true);
