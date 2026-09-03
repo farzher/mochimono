@@ -8,6 +8,7 @@ const app = $('#app');
 const logout = $('#logout');
 const filesElement = $('#files');
 const PAGE = 160;
+const SCROLL_PAGE = 64;
 const JUMP_WINDOW = PAGE * 3;
 const THUMB_VERSION = 3;
 
@@ -424,7 +425,7 @@ function extendWindow(direction = 1) {
   if (direction < 0) {
     if (renderOffset <= 0) return false;
     const anchor = currentAnchor();
-    const nextOffset = Math.max(0, renderOffset - PAGE);
+    const nextOffset = Math.max(0, renderOffset - SCROLL_PAGE);
     const items = filtered.slice(nextOffset, renderOffset);
     renderOffset = nextOffset;
     prependItems(items, anchor);
@@ -432,7 +433,7 @@ function extendWindow(direction = 1) {
     if (excess) renderEnd -= trimRenderedEnd(excess);
   } else {
     if (renderEnd >= filtered.length) return false;
-    const nextEnd = Math.min(filtered.length, renderEnd + PAGE);
+    const nextEnd = Math.min(filtered.length, renderEnd + SCROLL_PAGE);
     const excess = Math.max(0, nextEnd - renderOffset - JUMP_WINDOW);
     const anchor = excess ? currentAnchor() : null;
     const items = filtered.slice(renderEnd, nextEnd);
@@ -1096,12 +1097,19 @@ filesElement.addEventListener('click', event => {
   if (item) openViewer(item.dataset.hash);
 });
 
-new IntersectionObserver(entries => {
-  if (entries.some(entry => entry.isIntersecting)) extendWindow(-1);
-}, { rootMargin: '1400px 0px' }).observe(topScrollSentinel);
-new IntersectionObserver(entries => {
-  if (entries.some(entry => entry.isIntersecting)) extendWindow(1);
-}, { rootMargin: '1800px 0px' }).observe($('#scroll-sentinel'));
+function observeWindowEdge(target, direction, rootMargin) {
+  const observer = new IntersectionObserver(entries => {
+    if (!entries.some(entry => entry.isIntersecting) || !extendWindow(direction)) return;
+    observer.unobserve(target);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (target.isConnected) observer.observe(target);
+    }));
+  }, { rootMargin });
+  observer.observe(target);
+}
+
+observeWindowEdge(topScrollSentinel, -1, '1400px 0px');
+observeWindowEdge($('#scroll-sentinel'), 1, '1800px 0px');
 
 window.addEventListener('mochimono:grid-interaction-end', () => {
   if (!scrubbing) updateRailActive();
