@@ -3,6 +3,7 @@ const CLIENT = document.documentElement.classList.contains('client-library');
 const THUMB_VERSION = 3;
 const CHECK_LIMIT = 320;
 const RECHECK_DELAY = CLIENT ? 120 : 500;
+const PRELOAD_MARGIN = 360;
 
 const states = new Map();
 const cardsByHash = new Map();
@@ -326,6 +327,11 @@ async function checkNearby() {
   }
 }
 
+function nearViewport(card) {
+  const rect = card.getBoundingClientRect();
+  return rect.bottom > -PRELOAD_MARGIN && rect.top < innerHeight + PRELOAD_MARGIN;
+}
+
 const observer = files ? new IntersectionObserver(entries => {
   for (const entry of entries) {
     const card = entry.target;
@@ -337,16 +343,23 @@ const observer = files ? new IntersectionObserver(entries => {
     paintCard(card, true);
   }
   scheduleCheck(40);
-}) : null;
+}, { rootMargin: `${PRELOAD_MARGIN}px 0px` }) : null;
 
 function observeTree(node) {
   if (!observer) return;
+  let prepainted = false;
   for (const card of cardsIn(node)) {
     indexCard(card);
     if (observed.has(card) || !kind(card)) continue;
     observed.add(card);
     observer.observe(card);
+    if (nearViewport(card)) {
+      nearby.add(card);
+      paintCard(card, true);
+      prepainted = true;
+    }
   }
+  if (prepainted) scheduleCheck(0);
 }
 
 function queueObserveTree(node) {
