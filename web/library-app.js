@@ -1099,17 +1099,13 @@ filesElement.addEventListener('click', event => {
 
 function observeWindowEdge(target, direction, rootMargin) {
   const observer = new IntersectionObserver(entries => {
-    if (!entries.some(entry => entry.isIntersecting) || !extendWindow(direction)) return;
-    observer.unobserve(target);
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (target.isConnected) observer.observe(target);
-    }));
+    if (entries.some(entry => entry.isIntersecting)) extendWindow(direction);
   }, { rootMargin });
   observer.observe(target);
 }
 
-observeWindowEdge(topScrollSentinel, -1, '1400px 0px');
-observeWindowEdge($('#scroll-sentinel'), 1, '1800px 0px');
+observeWindowEdge(topScrollSentinel, -1, '240px 0px');
+observeWindowEdge($('#scroll-sentinel'), 1, '240px 0px');
 
 window.addEventListener('mochimono:grid-interaction-end', () => {
   if (!scrubbing) updateRailActive();
