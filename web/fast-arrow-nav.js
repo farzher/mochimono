@@ -7,6 +7,7 @@ const ROW_TOLERANCE = 3;
 
 let holding = false;
 let frozenSentinels = null;
+let verticalAnchorX = null;
 
 const gridActive = () => Boolean(files?.classList.contains('grid'));
 
@@ -95,12 +96,12 @@ function releaseSentinels() {
   if (bottom) bottom.hidden = state ? !state.hasMore : true;
 }
 
-function nearestVertical(cards, current, direction) {
+function nearestVertical(cards, current, direction, anchorX) {
   const rect = current.getBoundingClientRect();
-  const cx = rect.left + rect.width / 2;
   let best = null;
   let bestRowDistance = Infinity;
-  let bestHorizontalDistance = Infinity;
+  let bestHorizontalGap = Infinity;
+  let bestCenterDistance = Infinity;
 
   for (const card of cards) {
     if (card === current) continue;
@@ -110,31 +111,35 @@ function nearestVertical(cards, current, direction) {
     if (direction < 0 ? dy >= -ROW_TOLERANCE : dy <= ROW_TOLERANCE) continue;
 
     const rowDistance = Math.abs(dy);
-    const horizontalDistance = Math.abs(next.left + next.width / 2 - cx);
+    const horizontalGap = anchorX < next.left ? next.left - anchorX : anchorX > next.right ? anchorX - next.right : 0;
+    const centerDistance = Math.abs(next.left + next.width / 2 - anchorX);
     if (rowDistance < bestRowDistance - ROW_TOLERANCE ||
-        (Math.abs(rowDistance - bestRowDistance) <= ROW_TOLERANCE && horizontalDistance < bestHorizontalDistance)) {
+        (Math.abs(rowDistance - bestRowDistance) <= ROW_TOLERANCE &&
+          (horizontalGap < bestHorizontalGap ||
+            (horizontalGap === bestHorizontalGap && centerDistance < bestCenterDistance)))) {
       best = card;
       bestRowDistance = rowDistance;
-      bestHorizontalDistance = horizontalDistance;
+      bestHorizontalGap = horizontalGap;
+      bestCenterDistance = centerDistance;
     }
   }
   return best;
 }
 
-function verticalTarget(current, direction) {
+function verticalTarget(current, direction, anchorX) {
   const cards = orderedCards();
   const index = cards.indexOf(current);
   if (index < 0) return null;
 
   const start = direction < 0 ? Math.max(0, index - VERTICAL_NEIGHBORS) : index + 1;
   const end = direction < 0 ? index : Math.min(cards.length, index + 1 + VERTICAL_NEIGHBORS);
-  const nearby = nearestVertical(cards.slice(start, end), current, direction);
+  const nearby = nearestVertical(cards.slice(start, end), current, direction, anchorX);
   if (nearby) return nearby;
 
   // Extremely wide layouts can contain more than VERTICAL_NEIGHBORS cards per
   // visual row. Keep correctness with a rare full-window fallback instead of
   // maintaining a second cached geometry model.
-  return nearestVertical(cards, current, direction);
+  return nearestVertical(cards, current, direction, anchorX);
 }
 
 function ensureAdjacentWindow(direction) {
@@ -164,18 +169,23 @@ function navigate(key) {
   if (!current) return selectCard(visibleStart());
 
   if (key === 'ArrowLeft' || key === 'ArrowRight') {
+    verticalAnchorX = null;
     return selectCard(horizontalTarget(current, key === 'ArrowLeft' ? -1 : 1)) || true;
   }
 
   const direction = key === 'ArrowUp' ? -1 : 1;
-  let target = verticalTarget(current, direction);
+  if (!Number.isFinite(verticalAnchorX)) {
+    const rect = current.getBoundingClientRect();
+    verticalAnchorX = rect.left + rect.width / 2;
+  }
+  let target = verticalTarget(current, direction, verticalAnchorX);
   if (target) return selectCard(target);
 
   const currentHash = current.dataset.hash || '';
   if (!ensureAdjacentWindow(direction)) return true;
   current = currentHash ? files.querySelector(`[data-hash="${CSS.escape(currentHash)}"]`) : null;
   if (!current) return true;
-  target = verticalTarget(current, direction);
+  target = verticalTarget(current, direction, verticalAnchorX);
   return selectCard(target) || selectCard(current);
 }
 
@@ -187,7 +197,10 @@ function press(key) {
     holding = true;
     freezeSentinels();
     const current = selectedCard();
-    if (!visible(current)) return selectCard(visibleStart());
+    if (!visible(current)) {
+      verticalAnchorX = null;
+      return selectCard(visibleStart());
+    }
   }
 
   navigate(key);
@@ -203,6 +216,7 @@ function release() {
 function reset(clear = false) {
   release();
   if (!clear) return;
+  verticalAnchorX = null;
   files.querySelector('.keyboard-cursor')?.classList.remove('keyboard-cursor');
   document.documentElement.classList.remove('keyboard-navigation-active');
 }
