@@ -56,7 +56,7 @@ style.textContent = `
 document.head.append(style);
 
 // Folder-card samples are outside the library iframe. Merely requesting their
-// thumbnail URL cannot create a missing local preview, so explicitly run them
+// thumbnail URL cannot create a missing local thumbnail, so explicitly run them
 // through the same thumbnail check/queue path used by the grid.
 const pendingThumbs = new Set();
 let thumbTimer = 0;
@@ -161,7 +161,7 @@ function previewNode(row) {
   if (node) return node;
   node = document.createElement('div');
   node.dataset.previewProgress = '';
-  node.innerHTML = `<div class="preview-progress-head"><span class="preview-progress-title">Previews</span><span data-preview-progress-text></span><strong data-preview-percent></strong></div><div class="preview-progress-track"><i></i></div>`;
+  node.innerHTML = `<div class="preview-progress-head"><span class="preview-progress-title">Thumbnails</span><span data-preview-progress-text></span><strong data-preview-percent></strong></div><div class="preview-progress-track"><i></i></div>`;
   const copy = row.querySelector('.storage-copy');
   const meter = row.querySelector('.storage-meter');
   if (meter) meter.insertAdjacentElement('afterend', node);
@@ -189,7 +189,7 @@ function renderPreviewProgress(stats) {
     node.querySelector('[data-preview-progress-text]').textContent = info.text;
     node.querySelector('[data-preview-percent]').textContent = info.percent;
     node.style.setProperty('--preview-progress', String(info.ratio));
-    node.title = info.done ? 'Local previews ready' : previewMode() === 'off' ? 'Background preview generation is off; visible files still generate on demand' : 'Generating local previews in the background';
+    node.title = info.done ? 'Local thumbnails ready' : previewMode() === 'off' ? 'Background thumbnail generation is off; visible files still generate on demand' : 'Generating local thumbnails in the background';
   }
   return warming;
 }

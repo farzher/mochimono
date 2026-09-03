@@ -65,11 +65,11 @@ if (headActions) {
   modeControl = document.createElement('details');
   modeControl.className = 'preview-mode-row';
   modeControl.innerHTML = `
-    <summary title="Preview generation"><span>Previews</span><strong data-preview-mode-value>Idle</strong></summary>
-    <div class="preview-mode-popover" role="group" aria-label="Preview generation">
-      <button type="button" data-preview-mode="off" title="Only generate missing previews when files are viewed"><strong>On demand</strong><span>Generate only what you browse to</span></button>
-      <button type="button" data-preview-mode="idle" title="Generate in the background when Mochimono and your computer are idle"><strong>Idle</strong><span>Pause while Mochimono or your computer is busy</span></button>
-      <button type="button" data-preview-mode="max" title="Use available CPU and storage throughput to finish previews quickly"><strong>Max</strong><span>Finish the whole preview cache as fast as possible</span></button>
+    <summary title="Thumbnail generation"><span>Thumbnails</span><strong data-preview-mode-value>Idle</strong></summary>
+    <div class="preview-mode-popover" role="group" aria-label="Thumbnail generation">
+      <button type="button" data-preview-mode="off" title="Only generate missing thumbnails when files are viewed"><strong>On demand</strong><span>Generate only what you browse to</span></button>
+      <button type="button" data-preview-mode="idle" title="Generate thumbnails in the background when Mochimono and your computer are idle"><strong>Idle</strong><span>Pause while Mochimono or your computer is busy</span></button>
+      <button type="button" data-preview-mode="max" title="Use available CPU and storage throughput to finish thumbnails quickly"><strong>Max</strong><span>Finish the whole thumbnail cache as fast as possible</span></button>
     </div>`;
   modeValue = modeControl.querySelector('[data-preview-mode-value]');
   if (serverStorage) serverStorage.insertAdjacentElement('afterend', modeControl);
@@ -90,7 +90,7 @@ if (headActions) {
         headers:{ 'content-type':'application/json' },
         body:JSON.stringify({ thumbnailMode:mode })
       });
-      if (!response.ok) throw new Error('Could not change preview mode');
+      if (!response.ok) throw new Error('Could not change thumbnail mode');
     } catch {
       setMode(previous);
     } finally {
