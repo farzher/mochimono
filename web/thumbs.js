@@ -7,7 +7,6 @@ const PRELOAD_MARGIN = 360;
 
 const states = new Map();
 const cardsByHash = new Map();
-const observed = new Set();
 const nearby = new Set();
 const pendingTrees = new Set();
 const browserFallback = CLIENT ? null : import('./browser-thumbnail-fallback.js').catch(() => null);
@@ -356,8 +355,7 @@ function observeTree(node) {
   if (!observer) return;
   for (const card of cardsIn(node)) {
     indexCard(card);
-    if (observed.has(card) || !kind(card)) continue;
-    observed.add(card);
+    if (!kind(card)) continue;
     observer.observe(card);
   }
 }
@@ -377,7 +375,6 @@ function forgetTree(node) {
   if (!observer) return;
   for (const card of cardsIn(node)) {
     unindexCard(card);
-    if (!observed.delete(card)) continue;
     nearby.delete(card);
     observer.unobserve(card);
   }
