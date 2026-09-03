@@ -25,7 +25,6 @@ if (CLIENT && viewer && viewerOpen && button) {
 
   function sync() {
     const current = hash();
-    if (!viewer.hidden && window.mochimonoViewerPerformance?.defer?.(sync)) return;
     resetState();
     hasLocalCopy = Boolean(current && window.mochimonoLocations?.forHash?.(current)?.length);
     button.hidden = viewer.hidden || !hasLocalCopy;
