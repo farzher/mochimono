@@ -41,4 +41,60 @@ if (location.pathname.startsWith('/files')) {
     });
   }, { passive: true });
   reportScroll();
+
+  let localIndexTimer = 0;
+  let localIndexGeneration = 0;
+  const localIndexPaths = new Set();
+  const localIndexSeen = new Set();
+  const pathKey = value => String(value || '').replace(/[\\/]+$/, '').toLowerCase();
+
+  async function followLocalIndex(paths) {
+    for (const path of Array.isArray(paths) ? paths : [paths]) if (path) localIndexPaths.add(String(path));
+    if (!localIndexPaths.size) return;
+    const generation = ++localIndexGeneration;
+    clearTimeout(localIndexTimer);
+    let idleSince = 0;
+
+    const tick = async () => {
+      if (generation !== localIndexGeneration) return;
+      for (const path of localIndexPaths) {
+        try {
+          const response = await fetch(`/api/client/local-catalog?limit=720&path=${encodeURIComponent(path)}`, { cache: 'no-store' });
+          if (!response.ok) continue;
+          const data = await response.json();
+          const fresh = (data.files || []).filter(file => file?.hash && !localIndexSeen.has(file.hash));
+          for (const file of fresh) localIndexSeen.add(file.hash);
+          if (fresh.length) window.mochimonoLibrary?.upsertMany?.(fresh);
+        } catch {}
+      }
+
+      let indexing = false;
+      try {
+        const response = await fetch('/api/state', { cache: 'no-store' });
+        if (response.ok) {
+          const state = await response.json();
+          const progressPath = pathKey(state.job?.progress?.path);
+          indexing = state.job?.status === 'running' && state.job?.progress?.phase === 'Indexing' &&
+            [...localIndexPaths].some(path => pathKey(path) === progressPath);
+        }
+      } catch {}
+
+      if (indexing) idleSince = 0;
+      else idleSince ||= Date.now();
+      if (!idleSince || Date.now() - idleSince < 2200) {
+        localIndexTimer = setTimeout(tick, 700);
+        return;
+      }
+
+      localIndexPaths.clear();
+      localIndexSeen.clear();
+      await window.mochimonoLibrary?.refresh?.().catch?.(() => {});
+      await window.mochimonoLocations?.refresh?.().catch?.(() => {});
+    };
+
+    tick();
+  }
+
+  window.mochimonoClientBridge = { followLocalIndex };
+  addEventListener('beforeunload', () => clearTimeout(localIndexTimer), { once: true });
 }

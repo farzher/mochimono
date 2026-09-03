@@ -164,11 +164,12 @@ if (addToggle) {
     await loadBrowser(browserPath || clean(input?.value));
   }
 
-  function refreshNow() {
+  function refreshNow(paths = []) {
     // app.js refreshes folder state on any click inside #folders. Trigger that
     // path so a newly added folder appears immediately instead of waiting for
     // the normal two-second status poll.
     folders?.dispatchEvent(new MouseEvent('click', { bubbles:true }));
+    frame?.contentWindow?.mochimonoClientBridge?.followLocalIndex?.(paths);
     setTimeout(() => {
       frame?.contentWindow?.mochimonoLibrary?.refresh?.().catch?.(() => {});
       frame?.contentWindow?.mochimonoLocations?.refresh?.().catch?.(() => {});
@@ -183,6 +184,7 @@ if (addToggle) {
     adding = true;
     updateCount();
     const paths = [...browserSelection];
+    const addedPaths = [];
     const failed = [];
     let added = 0;
 
@@ -190,6 +192,7 @@ if (addToggle) {
       try {
         await request('/api/browse-folders', { method:'POST', body:JSON.stringify({ path }) });
         added++;
+        addedPaths.push(path);
       } catch (error) {
         failed.push({ path, error:error.message });
       }
@@ -201,13 +204,13 @@ if (addToggle) {
       updateCount();
       renderBrowser();
       toast(`${added ? `${added} added · ` : ''}${failed.length} failed: ${failed[0].error}`);
-      if (added) refreshNow();
+      if (added) refreshNow(addedPaths);
       return;
     }
 
     browser.close();
     if (input) input.value = '';
-    refreshNow();
+    refreshNow(addedPaths);
     toast(`${added.toLocaleString()} folder${added === 1 ? '' : 's'} added · Local`);
   }
 
