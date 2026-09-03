@@ -232,6 +232,15 @@ function visibleCards() {
   return [...files.querySelectorAll('[data-hash]')].filter(card => card.getClientRects().length);
 }
 
+function adjacentCard(current, direction) {
+  if (!current?.isConnected) return null;
+  const walker = document.createTreeWalker(files, NodeFilter.SHOW_ELEMENT, {
+    acceptNode: node => node.hasAttribute?.('data-hash') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP
+  });
+  walker.currentNode = current;
+  return direction < 0 ? walker.previousNode() : walker.nextNode();
+}
+
 function inViewport(card) {
   if (!card) return false;
   const rect = card.getBoundingClientRect();
@@ -269,21 +278,18 @@ const afterLayout = callback => requestAnimationFrame(() => requestAnimationFram
 function navigateList(key) {
   if (listPaging) { listQueuedKey = key; return true; }
   const direction = key === 'ArrowUp' || key === 'ArrowLeft' ? -1 : 1;
-  const items = visibleCards();
-  const current = currentCard(items);
+  let current = document.activeElement?.closest?.('#files [data-hash]');
+  if (!inViewport(current)) current = currentCard();
   if (!current) return false;
-  const index = items.indexOf(current);
-  const direct = items[index + direction];
+  const direct = adjacentCard(current, direction);
   if (direct) return focusCard(direct);
 
   const hash = current.dataset.hash;
   if (!window.mochimonoLibrary?.extend?.(direction)) return false;
   listPaging = true;
   afterLayout(() => {
-    const next = visibleCards();
-    const start = next.find(card => card.dataset.hash === hash);
-    const startIndex = start ? next.indexOf(start) : direction > 0 ? -1 : next.length;
-    focusCard(next[startIndex + direction]);
+    const start = cardForHash(hash);
+    focusCard(start && adjacentCard(start, direction));
     listPaging = false;
     const queued = listQueuedKey;
     listQueuedKey = '';
