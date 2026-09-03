@@ -3,10 +3,12 @@ const viewer = document.querySelector('#viewer');
 const commandbar = document.querySelector('.commandbar');
 const arrows = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 const ROW_TOLERANCE = 3;
+const THUMB_NEIGHBORS = 8;
 
 let holding = false;
-let frozenSentinels = null;
 let verticalAnchorX = null;
+let repeatFrame = 0;
+let pendingKey = '';
 
 const gridActive = () => Boolean(files?.classList.contains('grid'));
 
@@ -32,6 +34,16 @@ function cardWalker(current) {
 function adjacentCard(current, direction) {
   const walker = cardWalker(current);
   return walker ? direction < 0 ? walker.previousNode() : walker.nextNode() : null;
+}
+
+function thumbnailNeighborhood(card) {
+  const walker = cardWalker(card);
+  if (!walker) return [card];
+  const result = [card];
+  for (let index = 0, item; index < THUMB_NEIGHBORS && (item = walker.previousNode()); index++) result.push(item);
+  walker.currentNode = card;
+  for (let index = 0, item; index < THUMB_NEIGHBORS && (item = walker.nextNode()); index++) result.push(item);
+  return result;
 }
 
 function viewportTop() {
@@ -77,28 +89,8 @@ function selectCard(card, scroll = true) {
   document.documentElement.classList.add('keyboard-navigation-active');
   card.focus({ preventScroll: true });
   if (scroll) card.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
-  window.mochimonoThumbnails?.prioritize?.([card]);
+  window.mochimonoThumbnails?.prioritize?.(thumbnailNeighborhood(card));
   return true;
-}
-
-function freezeSentinels() {
-  if (!frozenSentinels) {
-    frozenSentinels = {
-      top: document.querySelector('#top-scroll-sentinel'),
-      bottom: document.querySelector('#scroll-sentinel')
-    };
-  }
-  if (frozenSentinels.top) frozenSentinels.top.hidden = true;
-  if (frozenSentinels.bottom) frozenSentinels.bottom.hidden = true;
-}
-
-function releaseSentinels() {
-  if (!frozenSentinels) return;
-  const { top, bottom } = frozenSentinels;
-  frozenSentinels = null;
-  const state = window.mochimonoLibrary?.state?.();
-  if (top) top.hidden = state ? !state.hasPrevious : true;
-  if (bottom) bottom.hidden = state ? !state.hasMore : true;
 }
 
 function verticalTarget(current, direction, anchorX) {
@@ -152,7 +144,6 @@ function ensureAdjacentWindow(current, direction) {
   if (!library.extend(direction)) return false;
   window.mochimonoGallery?.layoutNow?.();
   restoreWindowAnchor(hash, top);
-  freezeSentinels();
   return true;
 }
 
@@ -197,7 +188,6 @@ function press(key) {
 
   if (!holding) {
     holding = true;
-    freezeSentinels();
     const current = selectedCard();
     if (!visible(current)) {
       verticalAnchorX = null;
@@ -209,10 +199,24 @@ function press(key) {
   return true;
 }
 
+function queueRepeat(key) {
+  pendingKey = key;
+  if (repeatFrame) return;
+  repeatFrame = requestAnimationFrame(() => {
+    repeatFrame = 0;
+    const next = pendingKey;
+    pendingKey = '';
+    if (next && holding) press(next);
+  });
+}
+
 function release() {
   holding = false;
+  pendingKey = '';
+  if (repeatFrame) cancelAnimationFrame(repeatFrame);
+  repeatFrame = 0;
+  window.mochimonoThumbnails?.clearPriority?.();
   window.mochimonoGridInteraction?.release?.();
-  releaseSentinels();
 }
 
 function reset(clear = false) {
@@ -236,7 +240,8 @@ document.addEventListener('keydown', event => {
   if (!arrows.has(event.key) || !viewer?.hidden || !gridActive() || editingControl(event)) return;
   event.preventDefault();
   event.stopImmediatePropagation();
-  press(event.key);
+  if (event.repeat) queueRepeat(event.key);
+  else press(event.key);
 }, true);
 
 document.addEventListener('keyup', event => {

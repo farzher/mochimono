@@ -8,6 +8,7 @@ const PRELOAD_MARGIN = 360;
 const states = new Map();
 const cardsByHash = new Map();
 const nearby = new Set();
+const prioritized = new Set();
 const pendingTrees = new Set();
 const browserFallback = CLIENT ? null : import('./browser-thumbnail-fallback.js').catch(() => null);
 let observeFrame = 0;
@@ -21,6 +22,8 @@ const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mp
 const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
 const filename = card => card.dataset.filename || card.title || card.querySelector('strong')?.textContent || '';
 const thumbUrl = hash => `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
+const activeCard = card => nearby.has(card) || prioritized.has(card);
+const activeCards = () => prioritized.size ? new Set([...nearby, ...prioritized]) : nearby;
 
 function kind(card) {
   if (card.classList.contains('video-card')) return 'video';
@@ -48,6 +51,7 @@ function indexCard(card) {
 }
 
 function unindexCard(card) {
+  prioritized.delete(card);
   const hash = String(card?.dataset?.hash || '');
   const group = hash && cardsByHash.get(hash);
   if (!group) return;
@@ -188,14 +192,14 @@ function paintCard(card, urgent = false) {
     failed.nextCheck = Math.min(failed.nextCheck || Infinity, performance.now() + 80);
     states.set(hash, failed);
     pending(card);
-    if (nearby.has(card)) scheduleCheck(80);
+    if (activeCard(card)) scheduleCheck(80);
   };
   box.prepend(image);
   image.src = thumbUrl(hash);
 }
 
 function loadHash(hash) {
-  for (const card of cardsByHash.get(String(hash || '')) || []) paintCard(card, nearby.has(card));
+  for (const card of cardsByHash.get(String(hash || '')) || []) paintCard(card, activeCard(card));
 }
 
 function scheduleCheck(delay = 80) {
@@ -209,7 +213,7 @@ function scheduleCheck(delay = 80) {
 function scheduleOutstanding() {
   const now = performance.now();
   let next = Infinity;
-  for (const card of nearby) {
+  for (const card of activeCards()) {
     if (!kind(card)) continue;
     const state = states.get(card.dataset.hash || '');
     if (state?.ready) continue;
@@ -220,7 +224,7 @@ function scheduleOutstanding() {
 }
 
 function refreshVisible() {
-  for (const card of nearby) paintCard(card, true);
+  for (const card of activeCards()) paintCard(card, true);
   scheduleCheck(0);
 }
 
@@ -235,7 +239,7 @@ async function requestMissing(hashes) {
 
     const fallback = await browserFallback;
     for (const hash of hashes) {
-      const card = [...(cardsByHash.get(hash) || [])].find(item => item.isConnected && nearby.has(item));
+      const card = [...(cardsByHash.get(hash) || [])].find(item => item.isConnected && activeCard(item));
       if (card) fallback?.queueBrowserThumbnail?.({ hash, filename: filename(card), kind: kind(card) });
     }
   }
@@ -244,15 +248,16 @@ async function requestMissing(hashes) {
 async function checkNearby() {
   checkTimer = 0;
   checkAt = 0;
-  if (checking || document.hidden || !nearby.size) return;
+  const active = activeCards();
+  if (checking || document.hidden || !active.size) return;
 
   const now = performance.now();
   const cursor = files.querySelector('.keyboard-cursor[data-hash]');
-  const cursorHash = cursor && nearby.has(cursor) ? String(cursor.dataset.hash || '') : '';
+  const cursorHash = cursor && active.has(cursor) ? String(cursor.dataset.hash || '') : '';
   const candidates = [];
   const seen = new Set();
 
-  for (const card of nearby) {
+  for (const card of active) {
     if (!kind(card)) continue;
     const hash = String(card.dataset.hash || '');
     const state = states.get(hash) || {};
@@ -376,6 +381,7 @@ function forgetTree(node) {
   for (const card of cardsIn(node)) {
     unindexCard(card);
     nearby.delete(card);
+    prioritized.delete(card);
     observer.unobserve(card);
   }
 }
@@ -405,16 +411,21 @@ function reuseImages(node, images) {
 
 window.mochimonoThumbnails = {
   prioritize(cards) {
+    prioritized.clear();
     let needsCheck = false;
     const now = performance.now();
     for (const card of Array.isArray(cards) ? cards : [cards]) {
       if (!card?.isConnected || !kind(card)) continue;
+      prioritized.add(card);
       indexCard(card);
       paintCard(card, true);
       const state = states.get(String(card.dataset.hash || ''));
       if (!state?.ready && !state?.terminal && now >= (state?.nextCheck || 0)) needsCheck = true;
     }
-    if (needsCheck) scheduleCheck(30);
+    if (needsCheck) scheduleCheck(0);
+  },
+  clearPriority() {
+    prioritized.clear();
   }
 };
 
