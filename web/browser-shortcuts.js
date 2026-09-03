@@ -15,10 +15,12 @@ function toggleControls() {
 window.mochimonoViewerControls = { show: showControls, toggle: toggleControls };
 
 const zoom = { scale: 1, x: 0, y: 0 };
+const WHEEL_NAV_INTERVAL = 110;
 let navState = null;
 let pan = null;
 let suppressClick = false;
 let clickTimer = 0;
+let lastWheelNavigation = 0;
 
 const image = () => viewerMedia?.querySelector('img') || null;
 const zoomed = () => zoom.scale > 1.01;
@@ -103,6 +105,7 @@ function toggleZoom(clientX, clientY) {
 }
 
 const activeUi = target => target?.closest?.('.viewer-nav,.viewer-bar,.viewer-collections,.viewer-info,dialog,video');
+const wheelUi = target => target?.closest?.('.viewer-nav,.viewer-bar,.viewer-collections,.viewer-info,dialog');
 
 document.addEventListener('keydown', event => {
   if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
@@ -143,11 +146,25 @@ if (stage && viewer) {
   }, true);
 
   stage.addEventListener('wheel', event => {
-    if (viewer.hidden || !image() || touchZoomed() || activeUi(event.target)) return;
-    const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1;
-    setScaleAt(zoom.scale * Math.exp(-event.deltaY * multiplier * (event.ctrlKey ? .006 : .0015)), event.clientX, event.clientY);
+    if (viewer.hidden || touchZoomed() || wheelUi(event.target)) return;
+    if (!event.deltaY || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+
     clearTimeout(clickTimer);
     clickTimer = 0;
+
+    if (zoomed()) {
+      if (!image()) return;
+      const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1;
+      setScaleAt(zoom.scale * Math.exp(-event.deltaY * multiplier * (event.ctrlKey ? .006 : .0015)), event.clientX, event.clientY);
+    } else {
+      const now = performance.now();
+      if (now - lastWheelNavigation >= WHEEL_NAV_INTERVAL) {
+        lastWheelNavigation = now;
+        const button = event.deltaY < 0 ? viewerPrev : viewerNext;
+        if (button && !button.disabled) button.click();
+      }
+    }
+
     event.preventDefault();
     event.stopImmediatePropagation();
   }, { passive: false, capture: true });
