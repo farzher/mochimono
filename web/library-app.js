@@ -35,7 +35,6 @@ let folderImportId = '';
 let folderPath = '';
 let folderData = null;
 let folderLoadGeneration = 0;
-let railScrollTimer = 0;
 let viewerScrollY = 0;
 let viewerDirty = false;
 let viewerPreloads = [];
@@ -1104,14 +1103,9 @@ new IntersectionObserver(entries => {
   if (entries.some(entry => entry.isIntersecting)) extendWindow(1);
 }, { rootMargin: '1800px 0px' }).observe($('#scroll-sentinel'));
 
-window.addEventListener('scroll', () => {
-  if (scrubbing) return;
-  clearTimeout(railScrollTimer);
-  railScrollTimer = setTimeout(() => {
-    railScrollTimer = 0;
-    updateRailActive();
-  }, 72);
-}, { passive: true });
+window.addEventListener('mochimono:grid-interaction-end', () => {
+  if (!scrubbing) updateRailActive();
+});
 
 document.addEventListener('keydown', event => {
   if ($('#viewer').hidden) return;

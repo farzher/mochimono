@@ -204,7 +204,6 @@ if (rail && sort) {
   rail.addEventListener('pointerup', scheduleActive, { passive: true });
   rail.addEventListener('pointercancel', hideHover, { passive: true });
 
-  window.addEventListener('scroll', scheduleActive, { passive: true });
   window.addEventListener('mochimono:grid-interaction-end', scheduleActive);
   sort.addEventListener('change', scheduleDecorate);
 

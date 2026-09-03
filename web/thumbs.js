@@ -24,6 +24,7 @@ const filename = card => card.dataset.filename || card.title || card.querySelect
 const thumbUrl = hash => `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
 const activeCard = card => nearby.has(card) || prioritized.has(card);
 const activeCards = () => prioritized.size ? new Set([...nearby, ...prioritized]) : nearby;
+const interacting = () => Boolean(window.mochimonoGridInteraction?.active?.());
 
 function kind(card) {
   if (card.classList.contains('video-card')) return 'video';
@@ -144,6 +145,8 @@ function markLoaded(hash, card, image) {
   box?.querySelector('.video-thumb-pending')?.remove();
   image.hidden = false;
   rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
+  nearby.delete(card);
+  observer?.unobserve(card);
 }
 
 function paintCard(card, urgent = false) {
@@ -155,6 +158,7 @@ function paintCard(card, urgent = false) {
   const state = states.get(hash) || {};
   const current = box.querySelector('img.cached-thumb');
   if (current?.dataset.thumbHash === hash) {
+    if (urgent && !state.ready) try { current.fetchPriority = 'high'; } catch {}
     if (current.complete && current.naturalWidth && !state.ready) markLoaded(hash, card, current);
     return;
   }
@@ -179,7 +183,7 @@ function paintCard(card, urgent = false) {
   image.decoding = 'async';
   image.loading = 'eager';
   image.dataset.thumbHash = hash;
-  try { image.fetchPriority = urgent || card.classList.contains('keyboard-cursor') ? 'high' : 'low'; } catch {}
+  try { image.fetchPriority = urgent || card.classList.contains('keyboard-cursor') ? 'high' : 'auto'; } catch {}
   image.onload = () => {
     if (image.isConnected && image.dataset.thumbHash === hash) markLoaded(hash, card, image);
   };
@@ -203,11 +207,19 @@ function loadHash(hash) {
 }
 
 function scheduleCheck(delay = 80) {
+  if (interacting()) return;
   const at = performance.now() + delay;
   if (checkTimer && checkAt <= at) return;
   if (checkTimer) clearTimeout(checkTimer);
   checkAt = at;
   checkTimer = setTimeout(checkNearby, delay);
+}
+
+function pauseChecks() {
+  if (!checkTimer) return;
+  clearTimeout(checkTimer);
+  checkTimer = 0;
+  checkAt = 0;
 }
 
 function scheduleOutstanding() {
@@ -249,7 +261,7 @@ async function checkNearby() {
   checkTimer = 0;
   checkAt = 0;
   const active = activeCards();
-  if (checking || document.hidden || !active.size) return;
+  if (checking || document.hidden || interacting() || !active.size) return;
 
   const now = performance.now();
   const cursor = files.querySelector('.keyboard-cursor[data-hash]');
@@ -351,7 +363,8 @@ const observer = files ? new IntersectionObserver(entries => {
       continue;
     }
     nearby.add(card);
-    paintCard(card, true);
+    const visible = entry.boundingClientRect.bottom > 0 && entry.boundingClientRect.top < innerHeight;
+    paintCard(card, visible);
   }
   scheduleCheck(40);
 }, { rootMargin: `${PRELOAD_MARGIN}px 0px` }) : null;
@@ -361,6 +374,11 @@ function observeTree(node) {
   for (const card of cardsIn(node)) {
     indexCard(card);
     if (!kind(card)) continue;
+    const image = card.querySelector('img.cached-thumb:not([hidden])');
+    if (image?.complete && image.naturalWidth) {
+      markLoaded(String(card.dataset.hash || ''), card, image);
+      continue;
+    }
     observer.observe(card);
   }
 }
@@ -446,6 +464,8 @@ if (files) {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) refreshVisible();
   });
+  window.addEventListener('mochimono:grid-interaction-start', pauseChecks);
+  window.addEventListener('mochimono:grid-interaction-end', scheduleOutstanding);
   window.addEventListener('mochimono:catalog-updated', () => {
     resetFailures();
     refreshVisible();
