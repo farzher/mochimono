@@ -4,7 +4,7 @@ const storagePane = document.querySelector('#storagePane');
 const folders = document.querySelector('#folders');
 const menu = document.querySelector('.client-menu');
 const manageButton = document.querySelector('[data-client-tab="storage"]');
-const pageKeys = new Set(['PageUp', 'PageDown']);
+const pageKeys = new Set(['PageUp', 'PageDown', 'Home', 'End']);
 
 const pathKey = value => String(value || '').trim().replace(/[\\/]+$/, '').toLowerCase();
 
@@ -52,8 +52,6 @@ style.textContent = `
   .storage-shortcut .storage-shortcut-library{display:none}
   .storage-shortcut.active .storage-shortcut-storage{display:none}
   .storage-shortcut.active .storage-shortcut-library{display:block}
-  #storagePane [data-preview-progress]{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8e8683!important;font-weight:560!important}
-  #storagePane [data-preview-progress]:before{content:'·';margin-right:7px;color:#5f595a}
 `;
 document.head.append(style);
 
@@ -110,21 +108,65 @@ if (folders) new MutationObserver(records => {
 
 let progressTimer = 0;
 let progressBusy = false;
+const previewMemory = new Map();
 
-function previewLabel(folder) {
+const previewMode = () => window.mochimonoPreviewMode?.() || 'idle';
+
+function previewInfo(folder) {
+  const key = pathKey(folder.path);
+  const previous = previewMemory.get(key) || null;
   const phase = String(folder.previewPhase || '');
-  const total = Number(folder.previewTotal) || 0;
-  const processed = Math.min(total || Infinity, Number(folder.previewProcessed) || 0);
-  const ready = Math.min(total || Infinity, Number(folder.previewReady) || 0);
-  const failed = Number(folder.previewFailed) || 0;
-  if (phase === 'counting') return 'Finding media previews…';
-  if (folder.previewWarming && total) {
-    if (phase === 'finishing') return `Previews ${processed.toLocaleString()} / ${total.toLocaleString()} · finishing…`;
-    if (phase === 'checking') return `Previews ${ready.toLocaleString()} / ${total.toLocaleString()} · checking…`;
-    return `Previews ${processed.toLocaleString()} / ${total.toLocaleString()}`;
+  const failed = Number(folder.previewFailed) || previous?.failed || 0;
+  let total = Number(folder.previewTotal) || 0;
+  let processed = Number(folder.previewProcessed) || 0;
+
+  // Off intentionally drops the active discovery pass on the agent. Keep the
+  // last real folder progress visible while it is paused, and while a resumed
+  // pass recounts/checks the same on-disk thumbnail cache.
+  if (!total && previous?.total) total = previous.total;
+  if (total && previous?.processed) processed = Math.max(processed, Math.min(total, previous.processed));
+
+  if (!phase && !previous) return null;
+  if (phase === 'counting' && !previous?.total) {
+    return { key, phase, total: 0, processed: 0, failed: 0, text: 'Finding media…', percent: '', ratio: 0, indeterminate: true, working: true };
   }
-  if (!total) return '';
-  return `${ready.toLocaleString()} previews${failed ? ` · ${failed.toLocaleString()} unavailable` : ''}`;
+
+  const done = phase === 'done' || previous?.done && !phase;
+  if (done && total) processed = total;
+  let ratio = total ? Math.max(0, Math.min(1, processed / total)) : 0;
+  if (!done && ratio >= 1) ratio = .99;
+  const percent = total ? `${done ? 100 : Math.floor(ratio * 100)}%` : '';
+  const mode = previewMode();
+  const count = total ? `${Math.min(processed, total).toLocaleString()} / ${total.toLocaleString()}` : '';
+  let suffix = '';
+  if (done) suffix = failed ? `${failed.toLocaleString()} unavailable` : 'Ready';
+  else if (mode === 'off') suffix = 'On demand';
+  else if (phase === 'counting') suffix = 'Resuming…';
+  else if (phase === 'finishing' || phase === 'checking') suffix = 'Finishing…';
+  else suffix = mode === 'max' ? 'Max' : 'Background';
+  const text = [count, suffix].filter(Boolean).join(' · ');
+  const info = { key, phase, total, processed, failed, text, percent, ratio, indeterminate: false, done, working: Boolean(folder.previewWarming) };
+
+  if (total || previous) previewMemory.set(key, {
+    total: total || previous?.total || 0,
+    processed: Math.max(processed, previous?.processed || 0),
+    failed,
+    done: Boolean(done || previous?.done)
+  });
+  return info;
+}
+
+function previewNode(row) {
+  let node = row.querySelector('[data-preview-progress]');
+  if (node) return node;
+  node = document.createElement('div');
+  node.dataset.previewProgress = '';
+  node.innerHTML = `<div class="preview-progress-head"><span class="preview-progress-title">Previews</span><span data-preview-progress-text></span><strong data-preview-percent></strong></div><div class="preview-progress-track"><i></i></div>`;
+  const copy = row.querySelector('.storage-copy');
+  const meter = row.querySelector('.storage-meter');
+  if (meter) meter.insertAdjacentElement('afterend', node);
+  else copy?.append(node);
+  return node;
 }
 
 function renderPreviewProgress(stats) {
@@ -132,32 +174,32 @@ function renderPreviewProgress(stats) {
   let warming = false;
   for (const row of folders?.querySelectorAll(':scope > [data-folder-path]') || []) {
     const folder = byPath.get(pathKey(row.dataset.folderPath));
-    const meta = row.querySelector('.storage-meta');
-    if (!folder || !meta || folder.previewPhase == null) {
+    if (!folder) {
       row.querySelector('[data-preview-progress]')?.remove();
       continue;
     }
-    warming ||= Boolean(folder.previewWarming);
-    const text = previewLabel(folder);
-    let node = row.querySelector('[data-preview-progress]');
-    if (!text) {
-      node?.remove();
+    const info = previewInfo(folder);
+    if (!info) {
+      row.querySelector('[data-preview-progress]')?.remove();
       continue;
     }
-    if (!node) {
-      node = document.createElement('span');
-      node.dataset.previewProgress = '';
-      meta.append(node);
-    }
-    node.textContent = text;
-    node.title = folder.previewWarming ? 'Generating local previews in the background' : 'Local preview cache';
+    warming ||= Boolean(info.working);
+    const node = previewNode(row);
+    node.classList.toggle('preview-indeterminate', info.indeterminate);
+    node.querySelector('[data-preview-progress-text]').textContent = info.text;
+    node.querySelector('[data-preview-percent]').textContent = info.percent;
+    node.style.setProperty('--preview-progress', String(info.ratio));
+    node.title = info.done ? 'Local previews ready' : previewMode() === 'off' ? 'Background preview generation is off; visible files still generate on demand' : 'Generating local previews in the background';
   }
   return warming;
 }
 
 function schedulePreviewProgress(delay = 0) {
-  if (progressTimer) return;
-  progressTimer = setTimeout(refreshPreviewProgress, delay);
+  if (progressTimer) {
+    if (delay > 0) return;
+    clearTimeout(progressTimer);
+  }
+  progressTimer = setTimeout(refreshPreviewProgress, Math.max(0, delay));
 }
 
 async function refreshPreviewProgress() {
@@ -174,9 +216,10 @@ async function refreshPreviewProgress() {
   }
 }
 schedulePreviewProgress(120);
+window.addEventListener('mochimono:preview-mode', () => schedulePreviewProgress(0));
 
 // The outer desktop header can own focus while the scrollable library lives in
-// the iframe. Forward page keys so clicking the header never disables paging.
+// the iframe. Forward page/edge keys so clicking the header never disables them.
 addEventListener('keydown', event => {
   if (!pageKeys.has(event.key) || filesPane?.hidden || document.querySelector('dialog[open]')) return;
   if (event.target?.closest?.('input,select,textarea,[contenteditable="true"]')) return;
