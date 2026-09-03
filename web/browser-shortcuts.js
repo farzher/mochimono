@@ -144,13 +144,11 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (!viewer?.hidden && viewerPageKeys.has(event.key)) {
-    const handled = event.key === 'PageUp' ? navigateViewerBy(-1)
-      : event.key === 'PageDown' ? navigateViewerBy(1)
-      : jumpViewerEdge(event.key === 'Home');
-    if (handled) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (event.key === 'PageUp') navigateViewerBy(-1);
+    else if (event.key === 'PageDown') navigateViewerBy(1);
+    else jumpViewerEdge(event.key === 'Home');
     return;
   }
   if (!event.altKey && zoomed() && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
