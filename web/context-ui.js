@@ -210,7 +210,7 @@ function setFocusedHash(next) {
   const previous = focusedHash;
   focusedHash = next;
   detailGeneration++;
-  if (currentView() === 'grid' && window.mochimonoGridInteraction?.active?.()) {
+  if (files.classList.contains('grid') && window.mochimonoGridInteraction?.active?.()) {
     if (deferredFocusFrom === null) deferredFocusFrom = previous;
     return;
   }
