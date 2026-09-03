@@ -250,4 +250,7 @@ document.addEventListener('keyup', event => {
 
 window.addEventListener('blur', release);
 window.addEventListener('mochimono-viewer-return', event => returnTo(event.detail?.hash));
+files?.addEventListener('pointermove', event => {
+  if (event.pointerType !== 'touch' && document.documentElement.classList.contains('keyboard-navigation-active')) reset(true);
+}, true);
 files?.addEventListener('pointerdown', () => reset(true), true);
