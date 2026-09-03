@@ -22,8 +22,14 @@ export function fileKind(file) {
   return base || 'other';
 }
 
+const ASCII = /^[\x00-\x7f]*$/;
 export function normalizeText(text) {
-  return String(text || '')
+  const value = String(text || '');
+  // Most filesystem names/paths are ASCII. Avoid NFKD + Unicode property regexes
+  // for that overwhelmingly common case; this function runs hundreds of
+  // thousands of times while a large cached catalog is hydrated.
+  if (ASCII.test(value)) return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return value
     .normalize('NFKD')
     .replace(/\p{M}+/gu, '')
     .toLowerCase()
@@ -32,9 +38,11 @@ export function normalizeText(text) {
     .trim();
 }
 
-const words = text => normalizeText(text).split(' ').filter(Boolean);
+const normalizedWords = text => String(text || '').split(' ').filter(Boolean);
+const words = text => normalizedWords(normalizeText(text));
 const encoded = text => normalizeText(text).replaceAll(' ', '_');
 const fieldWords = (field, text) => words(text).map(word => `__${field}__${word}`);
+const fieldWordsNormalized = (field, text) => normalizedWords(text).map(word => `__${field}__${word}`);
 const typeAlias = value => TYPE_ALIASES.get(normalizeText(value)) || normalizeText(value);
 
 function pathQuery(text) {
@@ -58,32 +66,47 @@ function localLocations(file) {
   return Array.isArray(file?.localLocations) ? file.localLocations : [];
 }
 
+let cachedSourceNames = null;
+let cachedNormalizedSources = new Map();
+function normalizedSource(sourceNames, id) {
+  if (sourceNames !== cachedSourceNames) {
+    cachedSourceNames = sourceNames;
+    cachedNormalizedSources = new Map();
+  }
+  const key = Number(id);
+  if (!cachedNormalizedSources.has(key)) cachedNormalizedSources.set(key, normalizeText(sourceNames.get(key) || ''));
+  return cachedNormalizedSources.get(key) || '';
+}
+
 export function buildSearchText(file, sourceNames = new Map()) {
   const kind = fileKind(file);
   const year = new Date(file.fileDate || file.createdAt || 0).getFullYear();
   const local = localLocations(file);
+  const name = normalizeText(file.filename || '');
+  const path = normalizeText(`${file.originalPath || ''} ${file.searchText || ''}`);
+  const ext = extension(file.filename);
   const values = [
-    normalizeText(`${file.filename || ''} ${file.originalPath || ''} ${file.searchText || ''}`),
-    ...fieldWords('name', file.filename),
-    ...fieldWords('path', `${file.originalPath || ''} ${file.searchText || ''}`),
-    `__type__${encoded(kind)}`,
+    `${name} ${path}`.trim(),
+    ...fieldWordsNormalized('name', name),
+    ...fieldWordsNormalized('path', path),
+    `__type__${kind}`,
     ...(['image','video'].includes(kind) ? ['__type__media'] : []),
     ...(['application','text'].includes(kind) ? ['__type__application'] : []),
-    `__ext__${encoded(extension(file.filename))}`,
+    `__ext__${ext}`,
     ...(Number.isFinite(year) ? [`__year__${year}`] : []),
     '__location__server',
-    ...fieldWords('location', 'Mochimono Server'),
+    '__location__mochimono', '__location__server',
     ...(Number(file.backupCount) > 0 ? ['__location__backup'] : []),
     ...(local.length ? ['__location__local'] : [])
   ];
   for (const location of local) {
-    const text = `${location.name || ''} ${location.deviceName || ''} ${location.rootPath || ''}`;
-    values.push(...fieldWords('location', text));
-    values.push(normalizeText(text));
+    const text = normalizeText(`${location.name || ''} ${location.deviceName || ''} ${location.rootPath || ''}`);
+    values.push(...fieldWordsNormalized('location', text));
+    values.push(text);
   }
   for (const id of file.importIds || []) {
     values.push(`__sourceid__${id}`);
-    values.push(normalizeText(sourceNames.get(Number(id)) || ''));
+    values.push(normalizedSource(sourceNames, id));
   }
   return values.filter(Boolean).join(' ');
 }
