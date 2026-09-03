@@ -196,7 +196,7 @@ function paintCard(card, urgent = false) {
 }
 
 function loadHash(hash) {
-  for (const card of cardsByHash.get(String(hash || '')) || []) paintCard(card);
+  for (const card of cardsByHash.get(String(hash || '')) || []) paintCard(card, nearby.has(card));
 }
 
 function scheduleCheck(delay = 80) {
