@@ -10,8 +10,8 @@ import { json, pathKey, readJson, settings } from './lib/agent-context.js';
 import { backupThumbnailCandidates } from './lib/backup-thumb-candidates.js';
 import { handleClientProviderApi } from './lib/client-providers.js';
 import { localCandidate, localCandidates, localCatalog, localLocations } from './lib/local-locations.js';
-import { providerThumbnail, queueProviderThumbnail, serveProviderThumbnail } from './lib/provider-thumbs.js';
-import { queueRemoteThumbnail } from './lib/thumbnail-agent.js';
+import { providerThumbnail, providerThumbnailFailure, queueProviderThumbnail, serveProviderThumbnail } from './lib/provider-thumbs.js';
+import { queueRemoteThumbnail, thumbnailFailure } from './lib/thumbnail-agent.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'web');
@@ -103,6 +103,7 @@ async function checkThumbnails(req, res) {
   const background = body.background === true;
   const hashes = [...new Set(body.hashes.map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
   const ready = new Map();
+  const failures = new Map();
   const locals = localCandidates(hashes);
 
   const [providerEntries, remote] = await Promise.all([
@@ -117,20 +118,32 @@ async function checkThumbnails(req, res) {
   for (const hash of hashes) {
     if (ready.has(hash)) continue;
     const candidate = locals.get(hash);
-    if (candidate) {
+    const serverFile = remote.missing.get(hash);
+    const providerFailure = providerThumbnailFailure(hash);
+    const remoteFailure = thumbnailFailure(hash);
+
+    if (candidate && !providerFailure) {
       queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
       continue;
     }
-    const serverFile = remote.missing.get(hash);
-    if (serverFile) queueRemoteThumbnail(serverFile);
+    if (serverFile && !remoteFailure) {
+      queueRemoteThumbnail(serverFile);
+      continue;
+    }
+
+    const failure = serverFile ? (remoteFailure || providerFailure) : providerFailure;
+    if (failure) failures.set(hash, failure);
     else unresolved.push(hash);
   }
   queueBackupThumbnails(unresolved, background);
 
-  json(res, 200, { thumbnails: [...ready.values()].map(item => ({
-    hash: item.hash, width: Number(item.width) || 0, height: Number(item.height) || 0,
-    duration: item.duration == null ? null : Number(item.duration)
-  })) });
+  json(res, 200, {
+    thumbnails: [...ready.values()].map(item => ({
+      hash: item.hash, width: Number(item.width) || 0, height: Number(item.height) || 0,
+      duration: item.duration == null ? null : Number(item.duration)
+    })),
+    failures: [...failures.values()]
+  });
 }
 
 async function serveLocalObject(req, res, candidate) {
