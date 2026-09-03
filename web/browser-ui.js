@@ -1,3 +1,5 @@
+import './file-context-menu.js';
+
 const files = document.querySelector('#files');
 const views = document.querySelector('#views');
 const folderbar = document.querySelector('#folderbar');
