@@ -124,7 +124,9 @@ function rememberDimensions(hash, width, height) {
   width = Number(width) || 0;
   height = Number(height) || 0;
   if (!width || !height) return;
-  window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height).catch(() => {});
+  try {
+    Promise.resolve(window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height)).catch(() => {});
+  } catch {}
 }
 
 function markLoaded(hash, card, image) {
