@@ -4,6 +4,7 @@ html.keyboard-navigation-active #files.grid .file-card.context-keyboard-focus:no
 #files.grid .file-card.keyboard-cursor .file-context-badge{opacity:.86!important;transform:none!important;transition:none!important}
 
 .files.grid>.date-group{contain:layout style}
+.files.grid .date-grid>.gallery-row-break{flex:0 0 100%;width:100%;height:0;margin:0;padding:0;pointer-events:none}
 html.grid-interaction-active .commandbar{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:rgba(24,22,25,.98)!important}
 html.grid-interaction-active #files .file-context-badge{opacity:0!important;transform:none!important;transition:none!important}
 html.grid-interaction-active #files .file-card:hover{background:var(--surface)!important;box-shadow:none!important}
