@@ -19,6 +19,15 @@ function orderedCards() {
   return [...files.querySelectorAll('[data-hash]')];
 }
 
+function adjacentCard(current, direction) {
+  if (!current?.isConnected) return null;
+  const walker = document.createTreeWalker(files, NodeFilter.SHOW_ELEMENT, {
+    acceptNode: node => node.hasAttribute?.('data-hash') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP
+  });
+  walker.currentNode = current;
+  return direction < 0 ? walker.previousNode() : walker.nextNode();
+}
+
 function viewportTop() {
   return (commandbar?.getBoundingClientRect().bottom || 0) + 2;
 }
@@ -55,9 +64,8 @@ function visibleStart(cards = orderedCards()) {
 
 function selectCard(card, scroll = true) {
   if (!card) return false;
-  for (const previous of files.querySelectorAll('.keyboard-cursor')) {
-    if (previous !== card) previous.classList.remove('keyboard-cursor');
-  }
+  const previous = files.querySelector('.keyboard-cursor');
+  if (previous && previous !== card) previous.classList.remove('keyboard-cursor');
   card.classList.add('keyboard-cursor');
   document.documentElement.classList.add('keyboard-navigation-active');
   card.focus({ preventScroll: true });
@@ -139,19 +147,13 @@ function ensureAdjacentWindow(direction) {
 }
 
 function horizontalTarget(current, direction) {
-  let cards = orderedCards();
-  let index = cards.indexOf(current);
-  if (index < 0) return null;
-  let target = cards[index + direction];
+  const target = adjacentCard(current, direction);
   if (target) return target;
 
   const currentHash = current.dataset.hash || '';
   if (!ensureAdjacentWindow(direction)) return null;
   current = currentHash ? files.querySelector(`[data-hash="${CSS.escape(currentHash)}"]`) : null;
-  if (!current) return null;
-  cards = orderedCards();
-  index = cards.indexOf(current);
-  return index >= 0 ? cards[index + direction] || null : null;
+  return current ? adjacentCard(current, direction) : null;
 }
 
 function navigate(key) {
