@@ -8,9 +8,7 @@ const ROW_TOLERANCE = 3;
 const THUMB_NEIGHBORS = 8;
 const VIEWER_FALLBACK_STEP = 5;
 const VIEWER_THUMB_RADIUS = 8;
-const VIEWER_WARM_INTERVAL = 70;
 const VIEWER_WARM_RETRY = 120;
-const VIEWER_WARM_ATTEMPTS = 6;
 const VIEWER_MEDIA_SETTLE = 70;
 const THUMB_VERSION = 3;
 
@@ -20,9 +18,8 @@ let viewerVerticalAnchorX = null;
 let viewerExpectedHash = '';
 let viewerWarmTimer = 0;
 let viewerWarmRunning = false;
-let viewerWarmGeneration = 0;
-let viewerWarmAttempt = 0;
-let viewerWarmWanted = [];
+let viewerWarmHash = '';
+let viewerWarmPasses = 0;
 let viewerMediaTimer = 0;
 const viewerThumbImages = new Map();
 
@@ -274,51 +271,43 @@ function preloadViewerThumb(hash) {
   image.src = thumbUrl(hash);
 }
 
-function scheduleViewerWarm(hash) {
+function scheduleViewerWarm(hash, delay = 0) {
   if (!hash || viewer?.hidden) return;
-  viewerWarmWanted = viewerNeighborhood(hash);
-  viewerWarmGeneration++;
-  viewerWarmAttempt = 0;
+  if (viewerWarmHash !== hash) {
+    viewerWarmHash = hash;
+    viewerWarmPasses = 0;
+  }
   if (viewerWarmRunning || viewerWarmTimer) return;
-  viewerWarmTimer = setTimeout(runViewerWarm, 0);
+  viewerWarmTimer = setTimeout(runViewerWarm, delay);
 }
 
 async function runViewerWarm() {
   viewerWarmTimer = 0;
-  if (viewer?.hidden || viewerWarmRunning || !viewerWarmWanted.length) return;
-  const generation = viewerWarmGeneration;
-  const hashes = [...viewerWarmWanted];
+  const hash = viewerWarmHash;
+  const hashes = viewerNeighborhood(hash);
+  if (!hash || viewer?.hidden || viewerWarmRunning || !hashes.length) return;
+
   viewerWarmRunning = true;
+  let retry = false;
   try {
     const response = await fetch('/api/thumbs/check', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ hashes })
+      body: JSON.stringify({ hashes, background: true })
     });
     if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
     const data = await response.json();
     const ready = new Set((data.thumbnails || []).map(item => String(item.hash || '')));
     const failed = new Set((data.failures || []).map(item => String(item.hash || '')));
-    for (const hash of ready) preloadViewerThumb(hash);
-
-    if (generation === viewerWarmGeneration) {
-      const unresolved = hashes.filter(hash => !ready.has(hash) && !failed.has(hash));
-      if (unresolved.length && viewerWarmAttempt < VIEWER_WARM_ATTEMPTS) {
-        viewerWarmAttempt++;
-        viewerWarmWanted = unresolved;
-        viewerWarmTimer = setTimeout(runViewerWarm, VIEWER_WARM_RETRY);
-      }
-    }
+    for (const readyHash of ready) preloadViewerThumb(readyHash);
+    retry = hashes.some(item => !ready.has(item) && !failed.has(item));
   } catch {
-    if (generation === viewerWarmGeneration && viewerWarmAttempt < VIEWER_WARM_ATTEMPTS) {
-      viewerWarmAttempt++;
-      viewerWarmTimer = setTimeout(runViewerWarm, VIEWER_WARM_RETRY * 2);
-    }
+    retry = true;
   } finally {
     viewerWarmRunning = false;
-    if (generation !== viewerWarmGeneration && !viewerWarmTimer && !viewer?.hidden) {
-      viewerWarmTimer = setTimeout(runViewerWarm, VIEWER_WARM_INTERVAL);
-    }
+    const current = viewerHash();
+    if (!viewer?.hidden && current && current !== hash) scheduleViewerWarm(current, 70);
+    else if (retry && ++viewerWarmPasses <= 6) scheduleViewerWarm(hash, VIEWER_WARM_RETRY);
   }
 }
 
@@ -361,9 +350,8 @@ function resetViewerReadiness() {
   viewerMediaTimer = 0;
   clearTimeout(viewerWarmTimer);
   viewerWarmTimer = 0;
-  viewerWarmWanted = [];
-  viewerWarmGeneration++;
-  viewerWarmAttempt = 0;
+  viewerWarmHash = '';
+  viewerWarmPasses = 0;
 }
 
 function press(key) {
