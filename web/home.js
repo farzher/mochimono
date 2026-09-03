@@ -1,5 +1,3 @@
-import './grid-stability.js';
-
 const homeButton = document.querySelector('#homeButton');
 const headerBrand = document.querySelector('.topbar .app-brand');
 const search = document.querySelector('#search');
