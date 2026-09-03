@@ -1,14 +1,19 @@
 const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
+const viewerOpen = document.querySelector('#viewer-open');
 const commandbar = document.querySelector('.commandbar');
 const arrows = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 const ROW_TOLERANCE = 3;
 const THUMB_NEIGHBORS = 8;
+const VIEWER_FALLBACK_STEP = 5;
 
 let holding = false;
 let verticalAnchorX = null;
+let viewerVerticalAnchorX = null;
+let viewerExpectedHash = '';
 
 const gridActive = () => Boolean(files?.classList.contains('grid'));
+const viewerHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 
 function editingControl(event) {
   const control = event.target?.closest?.('input,select,textarea,[contenteditable="true"]');
@@ -180,6 +185,42 @@ function navigate(key) {
   return selectCard(target) || selectCard(current);
 }
 
+function viewerFallbackTarget(hash, direction) {
+  const hashes = window.mochimonoLibrary?.filteredHashes?.();
+  if (!Array.isArray(hashes) || !hashes.length) return '';
+  const index = hashes.indexOf(hash);
+  return index < 0 ? '' : hashes[index + direction * VIEWER_FALLBACK_STEP] || '';
+}
+
+function viewerRowTarget(direction) {
+  const hash = viewerHash();
+  if (!hash || !gridActive()) return '';
+  const current = files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
+  if (current?.isConnected) {
+    if (!Number.isFinite(viewerVerticalAnchorX)) {
+      const rect = current.getBoundingClientRect();
+      viewerVerticalAnchorX = rect.left + rect.width / 2;
+    }
+    const target = verticalTarget(current, direction, viewerVerticalAnchorX);
+    if (target?.dataset.hash) return target.dataset.hash;
+  }
+  return viewerFallbackTarget(hash, direction);
+}
+
+function navigateViewerRow(direction) {
+  const hash = viewerRowTarget(direction);
+  if (!hash) return false;
+  viewerExpectedHash = hash;
+  const opened = window.mochimonoOpenViewer?.(hash);
+  if (!opened) viewerExpectedHash = '';
+  return Boolean(opened);
+}
+
+function resetViewerRowNavigation() {
+  viewerVerticalAnchorX = null;
+  viewerExpectedHash = '';
+}
+
 function press(key) {
   if (!arrows.has(key) || !viewer?.hidden || !gridActive()) return false;
   window.mochimonoGridInteraction?.pulse?.(180);
@@ -212,6 +253,7 @@ function reset(clear = false) {
 }
 
 function returnTo(hash) {
+  resetViewerRowNavigation();
   reset(true);
   const value = String(hash || '');
   const card = value ? files.querySelector(`[data-hash="${CSS.escape(value)}"]`) : null;
@@ -221,14 +263,22 @@ function returnTo(hash) {
 window.mochimonoGridKeyboard = { press, release, reset };
 
 document.addEventListener('keydown', event => {
-  if (!arrows.has(event.key) || !viewer?.hidden || !gridActive() || editingControl(event)) return;
+  if (!arrows.has(event.key) || editingControl(event)) return;
+  if (!viewer?.hidden) {
+    if (!gridActive() || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    navigateViewerRow(event.key === 'ArrowUp' ? -1 : 1);
+    return;
+  }
+  if (!gridActive()) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   press(event.key);
 }, true);
 
 document.addEventListener('keyup', event => {
-  if (arrows.has(event.key)) release();
+  if (arrows.has(event.key) && viewer?.hidden) release();
 }, true);
 
 window.addEventListener('blur', release);
@@ -237,3 +287,20 @@ files?.addEventListener('pointermove', event => {
   if (event.pointerType !== 'touch' && document.documentElement.classList.contains('keyboard-navigation-active')) reset(true);
 }, true);
 files?.addEventListener('pointerdown', () => reset(true), true);
+
+if (viewer && viewerOpen) {
+  const viewerObserver = new MutationObserver(() => {
+    if (viewer.hidden) {
+      resetViewerRowNavigation();
+      return;
+    }
+    const hash = viewerHash();
+    if (viewerExpectedHash && hash === viewerExpectedHash) {
+      viewerExpectedHash = '';
+      return;
+    }
+    resetViewerRowNavigation();
+  });
+  viewerObserver.observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
+  viewerObserver.observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
+}
