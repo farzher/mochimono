@@ -13,7 +13,7 @@ html.grid-interaction-active #files .file-card:hover{background:var(--surface)!i
 .video-thumb-pending{position:absolute!important;inset:0!important;display:block!important;z-index:0!important;overflow:hidden!important;background:linear-gradient(135deg,#080709 0%,#0d0b0f 52%,#09080a 100%)!important;pointer-events:none}
 .video-thumb-pending::after{content:""!important;position:absolute!important;top:0!important;bottom:0!important;left:0!important;width:46%!important;background:linear-gradient(90deg,transparent 0,rgba(255,255,255,.025) 24%,rgba(239,160,154,.20) 50%,rgba(255,255,255,.025) 76%,transparent 100%)!important;transform:translate3d(-180%,0,0) skewX(-12deg);animation:mochimono-thumb-shimmer 1.45s linear infinite!important;will-change:transform}
 .media-thumb>img.cached-thumb{position:relative;z-index:1}.media-thumb>.play-badge{z-index:2}
-.thumb-failed .video-thumb-pending{background:repeating-linear-gradient(135deg,#0d0c0e 0,#0d0c0e 8px,#131115 8px,#131115 16px!important}
+.thumb-failed .video-thumb-pending{background:repeating-linear-gradient(135deg,#0d0c0e 0,#0d0c0e 8px,#131115 8px,#131115 16px)!important}
 .thumb-failed .video-thumb-pending::after{display:none!important;animation:none!important}
 @keyframes mochimono-thumb-shimmer{0%{transform:translate3d(-180%,0,0) skewX(-12deg)}100%{transform:translate3d(360%,0,0) skewX(-12deg)}}
 @media(prefers-reduced-motion:reduce){.video-thumb-pending::after{animation:none!important;opacity:.35;transform:translate3d(40%,0,0) skewX(-12deg)}}
