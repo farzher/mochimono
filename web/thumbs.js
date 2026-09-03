@@ -158,6 +158,7 @@ function paintCard(card, urgent = false) {
   const state = states.get(hash) || {};
   const current = box.querySelector('img.cached-thumb');
   if (current?.dataset.thumbHash === hash) {
+    if (urgent && !state.ready) try { current.fetchPriority = 'high'; } catch {}
     if (current.complete && current.naturalWidth && !state.ready) markLoaded(hash, card, current);
     return;
   }
@@ -182,7 +183,7 @@ function paintCard(card, urgent = false) {
   image.decoding = 'async';
   image.loading = 'eager';
   image.dataset.thumbHash = hash;
-  try { image.fetchPriority = urgent || card.classList.contains('keyboard-cursor') ? 'high' : 'low'; } catch {}
+  try { image.fetchPriority = urgent || card.classList.contains('keyboard-cursor') ? 'high' : 'auto'; } catch {}
   image.onload = () => {
     if (image.isConnected && image.dataset.thumbHash === hash) markLoaded(hash, card, image);
   };
