@@ -4,25 +4,6 @@ const viewerMedia = document.querySelector('#viewer-media');
 const viewerPrev = document.querySelector('#viewer-prev');
 const viewerNext = document.querySelector('#viewer-next');
 
-const style = document.createElement('style');
-style.textContent = `
-  html.viewer-open,html.viewer-open body{overflow:hidden!important;overscroll-behavior:none!important}
-  .viewer{overscroll-behavior:none}
-  .viewer:not([hidden]){inset:0!important;width:auto!important;height:auto!important}
-  .viewer:not([hidden]) .viewer-stage{touch-action:none!important;overscroll-behavior:none!important}
-  .viewer:not(.viewer-controls-hidden) .viewer-bar,.viewer:not(.viewer-controls-hidden) .viewer-collections{opacity:1!important}
-  .viewer:not(.viewer-controls-hidden) .viewer-nav:not(:disabled){opacity:.68!important;pointer-events:auto!important}
-  .viewer.viewer-controls-hidden .viewer-bar,.viewer.viewer-controls-hidden .viewer-collections,.viewer.viewer-controls-hidden .viewer-nav{opacity:0!important;pointer-events:none!important}
-  .viewer.viewer-controls-hidden .viewer-bar *,.viewer.viewer-controls-hidden .viewer-collections *{pointer-events:none!important}
-  .viewer-collections{transition:opacity .18s ease}
-  .viewer-stage.viewer-desktop-zoomed .viewer-media>img{cursor:grab;will-change:transform}
-  .viewer-stage.viewer-desktop-panning .viewer-media>img{cursor:grabbing}
-  .viewer-stage.viewer-desktop-zoomed .viewer-nav,.viewer-stage.viewer-touch-zoomed .viewer-nav{opacity:0!important;pointer-events:none!important}
-  @media(max-width:840px){.viewer:not(.viewer-controls-hidden) .viewer-nav:not(:disabled){opacity:0!important;pointer-events:none!important}}
-  @media(min-width:841px){.viewer:not(.viewer-controls-hidden) .viewer-nav:not(:disabled){opacity:.68!important;pointer-events:auto!important}.viewer:not(.viewer-controls-hidden) .viewer-nav:not(:disabled):hover{opacity:1!important}}
-`;
-document.head.append(style);
-
 function showControls() {
   viewer?.classList.remove('viewer-controls-hidden');
 }

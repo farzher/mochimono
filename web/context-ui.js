@@ -18,22 +18,6 @@ const pendingCards = new Set();
 const detailTimers = new Map();
 const detailsCache = new Map();
 
-const style = document.createElement('style');
-style.textContent = `
-  .files.grid .file-card{position:relative}
-  .files.grid .file-card:not(.media-card){flex:0 0 auto;width:calc(var(--media-size) * 1.333);height:var(--media-size);background:#100f11;border-radius:3px}
-  .files.grid .file-card:not(.media-card) .thumb{width:100%;height:100%;display:grid;place-items:center}
-  .files.grid .file-card:not(.media-card) .card-copy{display:none}
-  .file-context-badge{position:absolute;z-index:3;left:0;right:0;bottom:0;min-width:0;padding:28px 8px 7px;display:flex;align-items:baseline;gap:7px;background:linear-gradient(to bottom,transparent 0,rgba(5,5,6,.3) 35%,rgba(5,5,6,.9) 100%);color:#fff;font-size:10px;font-weight:720;line-height:1.2;pointer-events:none;text-shadow:0 1px 3px #000;opacity:0;transform:translateY(3px);transition:opacity .1s ease,transform .1s ease}
-  .file-context-name,.file-context-match{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .file-context-name{flex:1 1 auto}.file-context-badge.has-match .file-context-name{flex:0 1 44%;max-width:44%}
-  .file-context-match{flex:1 1 auto;color:#c9c0bd;font-weight:600}.file-context-match mark{padding:0;background:transparent;color:#ff6f67;font-weight:800}
-  .file-card.context-pointer-hover .file-context-badge,.file-card.context-keyboard-focus .file-context-badge,.file-card:focus-visible .file-context-badge{opacity:1;transform:none}
-  .file-row.context-keyboard-focus{box-shadow:0 0 0 3px rgba(239,160,154,.9)!important;outline:none}
-  @media(max-width:700px){.file-context-badge{padding:24px 7px 6px;font-size:9px}.file-context-badge.has-match .file-context-name{max-width:38%}}
-`;
-document.head.append(style);
-
 const normalize = text => window.mochimonoSearch?.normalize?.(text) || String(text || '').toLowerCase();
 const currentView = () => views.querySelector('[data-view].active')?.dataset.view || 'grid';
 const currentSearch = () => String(window.mochimonoSearch?.raw?.() ?? search?.value ?? '').trim();

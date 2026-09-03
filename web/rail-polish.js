@@ -2,32 +2,6 @@ const rail = document.querySelector('#dateRail');
 const sort = document.querySelector('#sort');
 
 if (rail && sort) {
-  const style = document.createElement('style');
-  style.textContent = `
-    .date-rail{width:104px;cursor:ns-resize}
-    .date-rail>.rail-track,.date-rail>.rail-tick{opacity:0!important}
-    .date-rail>.rail-thumb{width:104px;height:18px}
-    .date-rail>.rail-thumb span{display:none!important}
-    .date-rail>.rail-thumb i{right:4px;width:7px;height:3px;box-shadow:none;background:var(--pink)}
-    .rail-semantic{position:absolute;inset:0;pointer-events:none}
-    .rail-semantic-marker{position:absolute;right:15px;transform:translateY(-50%);max-width:82px;color:#786f6e;font-size:10px;font-weight:720;line-height:1;white-space:nowrap;text-align:right;text-shadow:0 1px 5px rgba(0,0,0,.7);transition:color .1s ease,opacity .1s ease,transform .1s ease;opacity:.82}
-    .rail-semantic-marker.active{color:#d9cfcb;opacity:1;transform:translateY(-50%) translateX(-2px)}
-    .date-rail:hover .rail-semantic-marker{color:#968c89;opacity:1}
-    .date-rail:hover .rail-semantic-marker.active{color:#eee5e1}
-    .rail-hover-label{position:absolute;z-index:5;right:2px;width:102px;height:24px;transform:translateY(-50%);pointer-events:none}
-    .rail-hover-label[hidden]{display:none}
-    .rail-hover-label span{position:absolute;right:16px;top:50%;transform:translateY(-50%);padding:4px 7px;border-radius:7px;background:#302a2e;color:#f5ece8;font-size:10px;font-weight:780;line-height:1.15;white-space:nowrap;box-shadow:0 5px 18px rgba(0,0,0,.32)}
-    .rail-hover-label i{position:absolute;right:3px;top:50%;width:7px;height:3px;border-radius:99px;background:var(--pink);transform:translateY(-50%)}
-    @media(max-width:980px){
-      .date-rail{width:82px}
-      .date-rail>.rail-thumb{width:82px}
-      .rail-semantic-marker{right:14px;max-width:62px;font-size:9px}
-      .rail-hover-label{right:1px;width:82px}
-      .rail-hover-label span{right:15px}
-    }
-  `;
-  document.head.append(style);
-
   let source = [];
   let sourceKey = '';
   let markerMode = '';
