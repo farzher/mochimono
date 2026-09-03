@@ -10,6 +10,8 @@ let meta = null;
 let records = new Map();
 let pendingGeometry = new Map();
 let geometryJob = 0;
+let saveGeneration = 0;
+let savesInProgress = 0;
 
 const requestResult = request => new Promise((resolve, reject) => {
   request.onsuccess = () => resolve(request.result);
@@ -102,48 +104,60 @@ async function load() {
 }
 
 async function save(files, options = {}) {
-  const db = await openDb();
-  if (!db || !Array.isArray(files)) return;
-  const version = String(options.version || '');
-  if (!version) return;
+  const generation = ++saveGeneration;
+  savesInProgress++;
+  try {
+    const db = await openDb();
+    if (!db || !Array.isArray(files) || generation !== saveGeneration) return;
+    const version = String(options.version || '');
+    if (!version) return;
 
-  const clean = files
-    .filter(file => /^[a-f0-9]{64}$/.test(String(file?.hash || '')))
-    .map(file => mergeGeometry(publicFile(file)));
+    const clean = files
+      .filter(file => /^[a-f0-9]{64}$/.test(String(file?.hash || '')))
+      .map(file => mergeGeometry(publicFile(file)));
 
-  for (let offset = 0; offset < clean.length; offset += WRITE_BATCH) {
-    const transaction = db.transaction('files', 'readwrite');
-    const store = transaction.objectStore('files');
-    for (const file of clean.slice(offset, offset + WRITE_BATCH)) {
-      store.put({ ...file, __snapshot: version });
+    for (let offset = 0; offset < clean.length; offset += WRITE_BATCH) {
+      if (generation !== saveGeneration) return;
+      const transaction = db.transaction('files', 'readwrite');
+      const store = transaction.objectStore('files');
+      for (const file of clean.slice(offset, offset + WRITE_BATCH)) {
+        store.put({ ...file, __snapshot: version });
+      }
+      await transactionDone(transaction);
+      if (generation !== saveGeneration) return;
+      await idle();
     }
-    await transactionDone(transaction);
-    await idle();
-  }
 
-  const nextMeta = {
-    key: META_KEY,
-    schema: SCHEMA,
-    version,
-    imports: Array.isArray(options.imports) ? options.imports : [],
-    count: clean.length,
-    savedAt: Date.now()
-  };
-  {
-    const transaction = db.transaction('meta', 'readwrite');
-    transaction.objectStore('meta').put(nextMeta);
-    await transactionDone(transaction);
-  }
+    if (generation !== saveGeneration) return;
+    const nextMeta = {
+      key: META_KEY,
+      schema: SCHEMA,
+      version,
+      imports: Array.isArray(options.imports) ? options.imports : [],
+      count: clean.length,
+      savedAt: Date.now()
+    };
+    {
+      const transaction = db.transaction('meta', 'readwrite');
+      transaction.objectStore('meta').put(nextMeta);
+      await transactionDone(transaction);
+    }
+    if (generation !== saveGeneration) return;
 
-  meta = nextMeta;
-  records = new Map(clean.map(file => [String(file.hash), file]));
-  cleanupOldSnapshots(version).catch(() => {});
+    meta = nextMeta;
+    records = new Map(clean.map(file => [String(file.hash), file]));
+    cleanupOldSnapshots(version, generation).catch(() => {});
+  } finally {
+    savesInProgress--;
+    if (!savesInProgress && pendingGeometry.size) scheduleGeometryWrite();
+  }
 }
 
-async function cleanupOldSnapshots(version) {
+async function cleanupOldSnapshots(version, generation) {
   await idle();
+  if (generation !== saveGeneration || meta?.version !== version) return;
   const db = await openDb();
-  if (!db) return;
+  if (!db || generation !== saveGeneration || meta?.version !== version) return;
   const transaction = db.transaction('files', 'readwrite');
   const store = transaction.objectStore('files');
   await new Promise((resolve, reject) => {
@@ -171,13 +185,27 @@ function scheduleGeometryWrite() {
 
 async function flushDimensions() {
   if (!pendingGeometry.size) return;
+  if (savesInProgress) {
+    scheduleGeometryWrite();
+    return;
+  }
   if (!records.size) await load().catch(() => null);
+  if (savesInProgress) {
+    scheduleGeometryWrite();
+    return;
+  }
+
+  const version = String(meta?.version || '');
+  if (!version) return;
+  const db = await openDb();
+  if (!db) return;
+  if (savesInProgress) {
+    scheduleGeometryWrite();
+    return;
+  }
 
   const batch = [...pendingGeometry];
   pendingGeometry.clear();
-  const db = await openDb();
-  if (!db) return;
-
   const transaction = db.transaction('files', 'readwrite');
   const store = transaction.objectStore('files');
   for (const [hash, geometry] of batch) {
@@ -185,7 +213,7 @@ async function flushDimensions() {
     if (!previous) continue;
     const next = { ...previous, width: geometry.width, height: geometry.height };
     records.set(hash, next);
-    store.put({ ...next, __snapshot: meta?.version || '' });
+    store.put({ ...next, __snapshot: version });
   }
   await transactionDone(transaction).catch(() => {});
   if (pendingGeometry.size) scheduleGeometryWrite();
@@ -205,6 +233,7 @@ function rememberDimensions(hash, width, height) {
 }
 
 async function clear() {
+  saveGeneration++;
   if (geometryJob) {
     if ('cancelIdleCallback' in window) cancelIdleCallback(geometryJob);
     else clearTimeout(geometryJob);
