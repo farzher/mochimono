@@ -1,7 +1,6 @@
 const files = document.querySelector('#files');
 const views = document.querySelector('#views');
 const folderbar = document.querySelector('#folderbar');
-const dateRail = document.querySelector('#dateRail');
 
 const currentView = () => views.querySelector('[data-view].active')?.dataset.view || 'grid';
 const syncLayoutMode = () => document.documentElement.classList.toggle('library-grid-view', currentView() === 'grid');
@@ -20,98 +19,6 @@ folderbar.addEventListener('click', event => {
     folderbar.replaceChildren();
   });
 });
-
-const railTopHit = document.createElement('div');
-railTopHit.hidden = true;
-railTopHit.setAttribute('aria-hidden', 'true');
-Object.assign(railTopHit.style, {
-  position: 'fixed', top: '0', width: '0', height: '0', zIndex: '6', background: 'transparent',
-  cursor: 'ns-resize', touchAction: 'none', userSelect: 'none'
-});
-document.body.append(railTopHit);
-
-function syncRailTopHit() {
-  if (dateRail.hidden) {
-    railTopHit.hidden = true;
-    return;
-  }
-  const rect = dateRail.getBoundingClientRect();
-  if (rect.top <= 0 || rect.width <= 0) {
-    railTopHit.hidden = true;
-    return;
-  }
-  railTopHit.hidden = false;
-  railTopHit.style.right = `${Math.max(0, innerWidth - rect.right)}px`;
-  railTopHit.style.width = `${rect.width}px`;
-  railTopHit.style.height = `${rect.top}px`;
-}
-
-let railTopFrame = 0;
-function scheduleRailTopHit() {
-  if (railTopFrame) return;
-  railTopFrame = requestAnimationFrame(() => {
-    railTopFrame = 0;
-    syncRailTopHit();
-  });
-}
-
-function forwardRailPointer(type, event, forceTop = false) {
-  if (dateRail.hidden) return;
-  const rect = dateRail.getBoundingClientRect();
-  const clientY = forceTop ? rect.top : Math.max(rect.top, Math.min(rect.bottom, event.clientY));
-  const capture = dateRail.setPointerCapture;
-  const release = dateRail.releasePointerCapture;
-  dateRail.setPointerCapture = () => {};
-  dateRail.releasePointerCapture = () => {};
-  try {
-    dateRail.dispatchEvent(new PointerEvent(type, {
-      bubbles: true,
-      cancelable: true,
-      pointerId: 1,
-      pointerType: event.pointerType || 'mouse',
-      isPrimary: true,
-      button: 0,
-      buttons: type === 'pointerup' || type === 'pointercancel' ? 0 : 1,
-      clientX: Math.max(rect.left, rect.right - 1),
-      clientY
-    }));
-  } finally {
-    if (capture) dateRail.setPointerCapture = capture;
-    else delete dateRail.setPointerCapture;
-    if (release) dateRail.releasePointerCapture = release;
-    else delete dateRail.releasePointerCapture;
-  }
-}
-
-let railTopPointer = null;
-railTopHit.addEventListener('pointerdown', event => {
-  if (dateRail.hidden) return;
-  railTopPointer = event.pointerId;
-  try { railTopHit.setPointerCapture(event.pointerId); } catch {}
-  forwardRailPointer('pointerdown', event, true);
-  event.preventDefault();
-});
-railTopHit.addEventListener('pointermove', event => {
-  if (event.pointerId !== railTopPointer) return;
-  forwardRailPointer('pointermove', event);
-  event.preventDefault();
-});
-railTopHit.addEventListener('pointerup', event => {
-  if (event.pointerId !== railTopPointer) return;
-  forwardRailPointer('pointerup', event);
-  try { railTopHit.releasePointerCapture(event.pointerId); } catch {}
-  railTopPointer = null;
-  event.preventDefault();
-});
-railTopHit.addEventListener('pointercancel', event => {
-  if (event.pointerId !== railTopPointer) return;
-  forwardRailPointer('pointercancel', event);
-  railTopPointer = null;
-});
-
-new MutationObserver(scheduleRailTopHit).observe(dateRail, { attributes: true, attributeFilter: ['hidden'] });
-window.addEventListener('resize', scheduleRailTopHit, { passive: true });
-scheduleRailTopHit();
 
 // Escape closes the top-most dialog before the viewer/application sees it.
 document.addEventListener('keydown', event => {
