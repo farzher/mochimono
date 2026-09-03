@@ -7,14 +7,13 @@ const bottomSentinel = document.querySelector('#scroll-sentinel');
 const PAGE_KEYS = new Set(['PageUp', 'PageDown']);
 const EDGE_MARGIN = 240;
 
-// thumbs.js already decides which cards are close enough to load with its own
-// IntersectionObserver. Native lazy-loading on the image itself adds a second,
-// independent gate: a card can enter Mochimono's preload margin without ever
-// crossing another observer threshold when it reaches the viewport. Once our
-// observer has chosen a card, let that image load immediately.
+// Mochimono already chooses a bounded set of nearby cards with an
+// IntersectionObserver. Do not put a second native lazy-load gate behind it.
 function promoteThumbs(root = files) {
   if (!root) return;
-  const images = root.matches?.('img.cached-thumb') ? [root] : [...root.querySelectorAll?.('img.cached-thumb') || []];
+  const images = root.matches?.('img.cached-thumb')
+    ? [root]
+    : [...(root.querySelectorAll?.('img.cached-thumb') || [])];
   for (const image of images) if (image.loading === 'lazy') image.loading = 'eager';
 }
 
@@ -28,10 +27,8 @@ if (files) {
   window.addEventListener('mochimono:grid-interaction-end', () => promoteThumbs(), { passive: true });
 }
 
-// Preserve the exact grid position when closing the viewer. The library's
-// normal return path still makes sure a viewer-navigated file is rendered; after
-// that settles, restore the pre-viewer scroll position and only move enough to
-// reveal the returned card if it would otherwise be completely off screen.
+// Preserve the pre-viewer grid position. If viewer navigation changed to a file
+// outside that viewport, move only enough to make the returned file visible.
 let viewerWasOpen = Boolean(viewer && !viewer.hidden);
 let viewerScrollY = window.scrollY;
 let lastViewerHash = '';
@@ -72,11 +69,9 @@ if (viewer && viewerOpen) {
   }).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
 }
 
-// Page keys can jump completely across a 1px infinite-scroll sentinel between
-// animation frames. Pre-extend the virtual window when the next page would cross
-// an edge, then wait for its anchor restoration before performing the page
-// scroll. This avoids both missed loads and delayed anchor callbacks fighting a
-// held Page Up/Page Down key.
+// A one-viewport Page Up/Down can skip across a 1px virtualization sentinel
+// between IntersectionObserver samples. Extend before crossing an edge and wait
+// for prepend anchor restoration before applying the page movement.
 let pageBusy = false;
 let queuedDirection = 0;
 let releaseTimer = 0;
@@ -112,6 +107,10 @@ function extend(direction) {
   return changed;
 }
 
+function afterAnchorRestore(callback) {
+  requestAnimationFrame(() => requestAnimationFrame(callback));
+}
+
 function armRelease() {
   clearTimeout(releaseTimer);
   releaseTimer = setTimeout(releasePageKeys, 220);
@@ -129,9 +128,14 @@ function doScroll(direction, distance) {
   window.scrollBy({ top: direction * distance, left: 0, behavior: 'auto' });
   requestAnimationFrame(() => {
     const moved = Math.abs(window.scrollY - before);
-    // Correctness fallback for unusual layouts: if the browser clamped the page
-    // before an edge observer could run, expose another virtual page now.
-    if (moved < distance * .65 && canExtend(direction)) extend(direction);
+    if (moved < distance * .65 && canExtend(direction) && extend(direction)) {
+      const remaining = Math.max(0, distance - moved);
+      afterAnchorRestore(() => {
+        if (remaining) window.scrollBy({ top: direction * remaining, left: 0, behavior: 'auto' });
+        requestAnimationFrame(finishPage);
+      });
+      return;
+    }
     finishPage();
   });
 }
@@ -144,21 +148,17 @@ function runPage(direction) {
   pageBusy = true;
   const distance = pageDistance();
   window.mochimonoGridInteraction?.pulse?.(220);
-  armRelease();
 
   if (!shouldPreExtend(direction, distance) || !extend(direction)) {
     doScroll(direction, distance);
     return;
   }
-
-  // library-app restores the prepend/trim anchor over two animation frames.
-  // Scroll only after that restoration has completed so repeated Page Up/Down
-  // cannot be undone by an older delayed callback.
-  requestAnimationFrame(() => requestAnimationFrame(() => doScroll(direction, distance)));
+  afterAnchorRestore(() => doScroll(direction, distance));
 }
 
 function pressPageKey(key) {
   if (!PAGE_KEYS.has(key) || (viewer && !viewer.hidden)) return false;
+  armRelease();
   runPage(key === 'PageUp' ? -1 : 1);
   return true;
 }
