@@ -140,7 +140,9 @@ function filterQuick(items) {
 }
 
 async function paintInstantGrid() {
-  const response = await fetch(`/api/client/local-catalog?limit=${QUICK_LIMIT}&offset=0`, { cache:'no-store' });
+  // Omit pagination here so the Agent may include rows that are still in the
+  // in-memory staging window during a first-time local index.
+  const response = await fetch(`/api/client/local-catalog?limit=${QUICK_LIMIT}`, { cache:'no-store' });
   if (!response.ok) return;
   const data = await response.json();
   if (window.mochimonoLibrary || files.childElementCount) return;
