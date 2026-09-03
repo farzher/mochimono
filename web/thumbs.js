@@ -25,6 +25,7 @@ const thumbUrl = hash => `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
 const activeCard = card => nearby.has(card) || prioritized.has(card);
 const activeCards = () => prioritized.size ? new Set([...nearby, ...prioritized]) : nearby;
 const interacting = () => Boolean(window.mochimonoGridInteraction?.active?.());
+const checkCards = () => interacting() ? prioritized : activeCards();
 
 function kind(card) {
   if (card.classList.contains('video-card')) return 'video';
@@ -210,7 +211,7 @@ function loadHash(hash) {
 }
 
 function scheduleCheck(delay = 80) {
-  if (interacting()) return;
+  if (interacting() && !prioritized.size) return;
   const at = performance.now() + delay;
   if (checkTimer && checkAt <= at) return;
   if (checkTimer) clearTimeout(checkTimer);
@@ -228,7 +229,7 @@ function pauseChecks() {
 function scheduleOutstanding() {
   const now = performance.now();
   let next = Infinity;
-  for (const card of activeCards()) {
+  for (const card of checkCards()) {
     if (!kind(card)) continue;
     const state = states.get(card.dataset.hash || '');
     if (state?.ready) continue;
@@ -263,8 +264,8 @@ async function requestMissing(hashes) {
 async function checkNearby() {
   checkTimer = 0;
   checkAt = 0;
-  const active = activeCards();
-  if (checking || document.hidden || interacting() || !active.size) return;
+  const active = checkCards();
+  if (checking || document.hidden || !active.size) return;
 
   const now = performance.now();
   const cursor = files.querySelector('.keyboard-cursor[data-hash]');
