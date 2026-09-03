@@ -1,18 +1,26 @@
 const folders = document.querySelector('#folders');
-const folderSection = document.querySelector('.storage-folders-section');
+const headActions = document.querySelector('.client-head-actions');
+const serverStorage = document.querySelector('#serverStorage');
 
 const style = document.createElement('style');
 style.textContent = `
-  .preview-mode-row{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin:9px 2px 13px;padding:0 2px;color:#847d7d}
-  .preview-mode-copy{display:flex;align-items:center;gap:7px;min-width:0}
-  .preview-mode-copy strong{color:#aaa19f;font-size:10px;line-height:1;font-weight:650}
-  .preview-mode-copy span{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#6f696a;font-size:9px;line-height:1}
-  .preview-mode-options{display:flex;flex:0 0 auto;padding:2px;border:1px solid #2b272b;border-radius:9px;background:#0b0a0c}
-  .preview-mode-options button{height:25px;padding:0 9px;border:0;border-radius:7px;background:transparent;color:#777072;font:650 9px/1 system-ui;cursor:pointer;transition:background .14s ease,color .14s ease,box-shadow .14s ease}
-  .preview-mode-options button:hover{color:#d9cfcc}
-  .preview-mode-options button.active{background:#272328;color:#eee6e2;box-shadow:0 1px 3px #0008}
-  .preview-mode-options button[data-preview-mode="max"].active{background:#39282a;color:#ffd7d1}
-  .preview-mode-options button:disabled{cursor:default;opacity:.55}
+  .preview-mode-row{position:relative;flex:0 0 auto}
+  .preview-mode-row>summary{height:31px;display:flex;align-items:center;gap:6px;padding:0 9px;border:1px solid transparent;border-radius:8px;color:#8d8584;cursor:pointer;list-style:none;white-space:nowrap;font-size:10px;font-weight:650;transition:background .14s ease,border-color .14s ease,color .14s ease}
+  .preview-mode-row>summary::-webkit-details-marker{display:none}
+  .preview-mode-row>summary:hover,.preview-mode-row[open]>summary{border-color:#2d292d;background:#211e22;color:#eee7e3}
+  .preview-mode-row>summary span{color:#777072;font-weight:580}
+  .preview-mode-row>summary strong{color:inherit;font-size:10px;font-weight:730}
+  .preview-mode-row>summary:after{content:'⌄';margin-left:1px;color:#686164;font-size:10px;line-height:1;transform:translateY(-1px)}
+  .preview-mode-row[open]>summary:after{transform:rotate(180deg) translateY(1px)}
+  .preview-mode-popover{position:absolute;right:0;top:38px;z-index:45;width:244px;padding:6px;border:1px solid #302b30;border-radius:11px;background:#171518;box-shadow:0 16px 46px rgba(0,0,0,.46)}
+  .preview-mode-popover button{position:relative;width:100%;min-height:43px;display:grid;gap:2px;padding:8px 31px 8px 9px;border:0;border-radius:7px;background:transparent;color:#c8bfbc;text-align:left;cursor:pointer}
+  .preview-mode-popover button:hover{background:#252126;color:#fff}
+  .preview-mode-popover button.active{background:#252126;color:#fff}
+  .preview-mode-popover button.active:after{content:'✓';position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#efa09a;font-size:12px;font-weight:800}
+  .preview-mode-popover button strong{font-size:11px;font-weight:700;color:inherit}
+  .preview-mode-popover button span{font-size:9px;font-weight:550;line-height:1.25;color:#817978}
+  .preview-mode-popover button:hover span,.preview-mode-popover button.active span{color:#aaa19e}
+  .preview-mode-popover button:disabled{cursor:default;opacity:.55}
 
   #storagePane [data-preview-progress]{display:block;margin-top:10px;padding-top:8px;border-top:1px solid #211e21}
   #storagePane .preview-progress-head{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:9px;line-height:1.2}
@@ -24,10 +32,10 @@ style.textContent = `
   #storagePane [data-preview-progress].preview-indeterminate .preview-progress-track>i{width:34%;transform:none;animation:preview-progress-slide 1.35s ease-in-out infinite}
   @keyframes preview-progress-slide{0%{transform:translateX(-110%)}50%{transform:translateX(100%)}100%{transform:translateX(310%)}}
 
-  @media(max-width:600px){
-    .preview-mode-row{align-items:flex-end;flex-direction:column;gap:7px;margin-top:8px}
-    .preview-mode-copy span{display:none}
-    .preview-mode-options{width:100%}.preview-mode-options button{flex:1}
+  @media(max-width:700px){
+    .preview-mode-row>summary{padding:0 7px}
+    .preview-mode-row>summary span{display:none}
+    .preview-mode-popover{right:-2px;width:226px}
   }
   @media(prefers-reduced-motion:reduce){
     #storagePane .preview-progress-track>i{transition:none!important;animation:none!important}
@@ -35,36 +43,37 @@ style.textContent = `
 `;
 document.head.append(style);
 
-const modeCopy = {
-  off: 'Only while browsing',
-  idle: 'Runs when the computer is idle',
-  max: 'Finish as fast as possible'
+const modeLabel = {
+  off: 'On demand',
+  idle: 'Idle',
+  max: 'Max'
 };
 let modeControl = null;
-let modeDescription = null;
+let modeValue = null;
 let currentMode = 'idle';
 
 function setMode(mode) {
   mode = ['off','idle','max'].includes(mode) ? mode : 'idle';
   currentMode = mode;
   modeControl?.querySelectorAll('[data-preview-mode]').forEach(button => button.classList.toggle('active', button.dataset.previewMode === mode));
-  if (modeDescription) modeDescription.textContent = modeCopy[mode];
+  if (modeValue) modeValue.textContent = modeLabel[mode];
   window.dispatchEvent(new CustomEvent('mochimono:preview-mode', { detail: { mode } }));
 }
 window.mochimonoPreviewMode = () => currentMode;
 
-if (folderSection && folders) {
-  modeControl = document.createElement('div');
+if (headActions) {
+  modeControl = document.createElement('details');
   modeControl.className = 'preview-mode-row';
   modeControl.innerHTML = `
-    <div class="preview-mode-copy"><strong>Preview generation</strong><span data-preview-mode-description>Runs when the computer is idle</span></div>
-    <div class="preview-mode-options" role="group" aria-label="Preview generation">
-      <button type="button" data-preview-mode="off" title="Only generate missing previews when files are viewed">On demand</button>
-      <button type="button" data-preview-mode="idle" title="Generate in the background when Mochimono and your computer are idle">Idle</button>
-      <button type="button" data-preview-mode="max" title="Use available CPU and storage throughput to finish previews quickly">Max</button>
+    <summary title="Preview generation"><span>Previews</span><strong data-preview-mode-value>Idle</strong></summary>
+    <div class="preview-mode-popover" role="group" aria-label="Preview generation">
+      <button type="button" data-preview-mode="off" title="Only generate missing previews when files are viewed"><strong>On demand</strong><span>Generate only what you browse to</span></button>
+      <button type="button" data-preview-mode="idle" title="Generate in the background when Mochimono and your computer are idle"><strong>Idle</strong><span>Pause while Mochimono or your computer is busy</span></button>
+      <button type="button" data-preview-mode="max" title="Use available CPU and storage throughput to finish previews quickly"><strong>Max</strong><span>Finish the whole preview cache as fast as possible</span></button>
     </div>`;
-  modeDescription = modeControl.querySelector('[data-preview-mode-description]');
-  folders.insertAdjacentElement('afterend', modeControl);
+  modeValue = modeControl.querySelector('[data-preview-mode-value]');
+  if (serverStorage) serverStorage.insertAdjacentElement('afterend', modeControl);
+  else headActions.prepend(modeControl);
 
   modeControl.addEventListener('click', async event => {
     const button = event.target.closest('[data-preview-mode]');
@@ -74,6 +83,7 @@ if (folderSection && folders) {
     const buttons = [...modeControl.querySelectorAll('button')];
     buttons.forEach(item => item.disabled = true);
     setMode(mode);
+    modeControl.open = false;
     try {
       const response = await fetch('/api/settings', {
         method:'POST',
@@ -86,6 +96,10 @@ if (folderSection && folders) {
     } finally {
       buttons.forEach(item => item.disabled = false);
     }
+  });
+
+  document.addEventListener('pointerdown', event => {
+    if (modeControl.open && !modeControl.contains(event.target)) modeControl.open = false;
   });
 
   fetch('/api/state').then(response => response.json()).then(state => setMode(state?.settings?.thumbnailMode || 'idle')).catch(() => setMode('idle'));
