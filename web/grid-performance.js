@@ -1,4 +1,3 @@
-const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
 
 let active = false;
@@ -54,20 +53,3 @@ document.addEventListener('keyup', event => { if (arrows.has(event.key)) release
 window.addEventListener('scroll', () => pulse(140), { passive: true });
 window.addEventListener('wheel', () => pulse(180), { passive: true });
 window.addEventListener('blur', release);
-
-if (files) {
-  const style = document.createElement('style');
-  style.textContent = `
-    .files.grid>.date-group{contain:layout style}
-    html.grid-interaction-active .commandbar{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:rgba(24,22,25,.98)!important}
-    html.grid-interaction-active #files .file-context-badge{opacity:0!important;transform:none!important;transition:none!important}
-    html.grid-interaction-active #files .file-card:hover{background:var(--surface)!important;box-shadow:none!important}
-  `;
-  document.head.append(style);
-
-  const removeLoading = () => {
-    for (const node of files.querySelectorAll(':scope > .empty')) if (node.textContent.trim() === 'Loading…') node.remove();
-  };
-  removeLoading();
-  new MutationObserver(removeLoading).observe(files, { childList: true });
-}

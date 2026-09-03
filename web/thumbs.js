@@ -414,7 +414,6 @@ if (files) {
     resetFailures();
     refreshVisible();
   });
-  window.addEventListener('mochimono:grid-interaction-end', refreshVisible);
   window.addEventListener('mochimono:browser-thumbnail-ready', event => {
     const hash = String(event.detail?.hash || '');
     if (!hash) return;
