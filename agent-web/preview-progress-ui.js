@@ -43,7 +43,9 @@ function decorate(node) {
   if (match) {
     const done = number(match[1]);
     const total = number(match[2]);
-    const ratio = total ? Math.max(0, Math.min(1, done / total)) : 0;
+    let ratio = total ? Math.max(0, Math.min(1, done / total)) : 0;
+    // Do not claim completion while the worker is still draining/checking.
+    if (/finishing|checking/i.test(text) && ratio >= 1) ratio = .99;
     node.classList.remove('preview-indeterminate');
     node.dataset.previewPercent = `${Math.floor(ratio * 100)}%`;
     node.style.setProperty('--preview-progress', String(ratio));
@@ -80,8 +82,12 @@ decorateAll();
 if (folders) new MutationObserver(records => {
   const touched = new Set();
   for (const record of records) {
-    if (record.target instanceof Element) touched.add(record.target.closest?.('[data-preview-progress]') || record.target);
-    for (const node of record.addedNodes) if (node instanceof Element) touched.add(node);
+    const target = record.target instanceof Element ? record.target : record.target?.parentElement;
+    if (target) touched.add(target.closest?.('[data-preview-progress]') || target);
+    for (const node of record.addedNodes) {
+      const element = node instanceof Element ? node : node.parentElement;
+      if (element) touched.add(element);
+    }
   }
   for (const node of touched) decorateAll(node);
 }).observe(folders, { childList:true, subtree:true, characterData:true });
