@@ -15,7 +15,7 @@ let serverHashes = new Set();
 let damagedServer = new Set();
 let backed = new Set();
 let verifiedBacked = new Set();
-let locationSearch = new Map();
+let locationSearch = null;
 let locationSearchGeneration = 0;
 let appliedLocationSearchGeneration = 0;
 let lastRefresh = 0;
@@ -148,6 +148,9 @@ function installLocationSearch() {
   if (appliedLocationSearchGeneration === locationSearchGeneration) return;
   const target = library();
   if (!target?.setLocationSearch) return;
+  // Building path/location search tokens for every local file was a large
+  // synchronous startup task. It is only needed once the user actually searches.
+  if (!locationSearch) locationSearch = new Map([...copies].map(([hash, locations]) => [hash, locationTokens(locations)]));
   target.setLocationSearch(locationSearch);
   appliedLocationSearchGeneration = locationSearchGeneration;
 }
@@ -181,7 +184,7 @@ export async function refreshLocations(force = false) {
   await rebuildBackupSets();
   lastVersion = version || lastVersion;
 
-  locationSearch = new Map([...copies].map(([hash, locations]) => [hash, locationTokens(locations)]));
+  locationSearch = null;
   locationSearchGeneration++;
   if (String(window.mochimonoSearch?.raw?.() || '').trim()) installLocationSearch();
 
@@ -233,6 +236,13 @@ window.addEventListener('mochimono:catalog-cache-restored', syncOrganizationLabe
 window.addEventListener('mochimono:catalog-updated', syncOrganizationLabels);
 window.addEventListener('mochimono:folder-changed', syncOrganizationLabels);
 syncOrganizationLabels();
-refreshLocations(true).catch(console.error);
+
+// Location inventory is useful but not required to paint or interact with the
+// first grid. In the trace this path downloaded ~19 MB and then synchronously
+// tokenized tens of thousands of paths, so keep it off the startup critical path.
+const startLocationRefresh = () => refreshLocations(true).catch(console.error);
+if ('requestIdleCallback' in window) requestIdleCallback(startLocationRefresh, { timeout: 1500 });
+else setTimeout(startLocationRefresh, 500);
+
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshIfStale(); });
 window.addEventListener('focus', refreshIfStale, { passive: true });
