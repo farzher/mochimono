@@ -7,8 +7,6 @@ const THUMB_NEIGHBORS = 8;
 
 let holding = false;
 let verticalAnchorX = null;
-let repeatFrame = 0;
-let pendingKey = '';
 
 const gridActive = () => Boolean(files?.classList.contains('grid'));
 
@@ -199,22 +197,8 @@ function press(key) {
   return true;
 }
 
-function queueRepeat(key) {
-  pendingKey = key;
-  if (repeatFrame) return;
-  repeatFrame = requestAnimationFrame(() => {
-    repeatFrame = 0;
-    const next = pendingKey;
-    pendingKey = '';
-    if (next && holding) press(next);
-  });
-}
-
 function release() {
   holding = false;
-  pendingKey = '';
-  if (repeatFrame) cancelAnimationFrame(repeatFrame);
-  repeatFrame = 0;
   window.mochimonoThumbnails?.clearPriority?.();
   window.mochimonoGridInteraction?.release?.();
 }
@@ -240,8 +224,7 @@ document.addEventListener('keydown', event => {
   if (!arrows.has(event.key) || !viewer?.hidden || !gridActive() || editingControl(event)) return;
   event.preventDefault();
   event.stopImmediatePropagation();
-  if (event.repeat) queueRepeat(event.key);
-  else press(event.key);
+  press(event.key);
 }, true);
 
 document.addEventListener('keyup', event => {
