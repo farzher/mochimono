@@ -8,7 +8,7 @@ let rapidUntil = 0;
 let settleTimer = 0;
 let queuedDirection = 0;
 let navFrame = 0;
-const settleCallbacks = new Set();
+let settleCallback = null;
 
 const rapid = () => performance.now() < rapidUntil;
 
@@ -24,14 +24,14 @@ function settle() {
     settleTimer = setTimeout(settle, wait + 3);
     return;
   }
-  const callbacks = [...settleCallbacks];
-  settleCallbacks.clear();
-  for (const callback of callbacks) callback();
+  const callback = settleCallback;
+  settleCallback = null;
+  callback?.();
 }
 
 function defer(callback) {
   if (typeof callback !== 'function' || !rapid()) return false;
-  settleCallbacks.add(callback);
+  settleCallback = callback;
   scheduleSettle();
   return true;
 }
@@ -93,5 +93,5 @@ if (viewer) new MutationObserver(() => {
   rapidUntil = 0;
   clearTimeout(settleTimer);
   settleTimer = 0;
-  settleCallbacks.clear();
+  settleCallback = null;
 }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
