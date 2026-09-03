@@ -163,7 +163,7 @@ function paintCard(card, urgent = false) {
       current.loading = 'eager';
       try { current.fetchPriority = 'high'; } catch {}
     }
-    if (current.complete && current.naturalWidth && !state.ready) markLoaded(hash, card, current);
+    if (current.complete && current.naturalWidth) markLoaded(hash, card, current);
     return;
   }
 
@@ -183,9 +183,12 @@ function paintCard(card, urgent = false) {
   const image = document.createElement('img');
   image.className = 'cached-thumb';
   image.alt = '';
-  image.hidden = true;
+  image.hidden = false;
   image.decoding = 'async';
-  image.loading = urgent ? 'eager' : 'lazy';
+  // Mochimono's IntersectionObserver already bounds image creation to the nearby
+  // viewport window. Native lazy loading adds a second gate and can leave a card
+  // black until an unrelated pointer/scroll event wakes it up.
+  image.loading = 'eager';
   image.dataset.thumbHash = hash;
   try { image.fetchPriority = urgent || card.classList.contains('keyboard-cursor') ? 'high' : 'auto'; } catch {}
   image.onload = () => {
@@ -241,6 +244,19 @@ function scheduleOutstanding() {
 
 function refreshVisible() {
   for (const card of activeCards()) paintCard(card, true);
+  scheduleCheck(0);
+}
+
+function repairViewport() {
+  if (!files || document.hidden) return;
+  for (const card of files.querySelectorAll('[data-hash]')) {
+    if (!kind(card)) continue;
+    const rect = card.getBoundingClientRect();
+    if (rect.bottom <= 0 || rect.top >= innerHeight || rect.right <= 0 || rect.left >= innerWidth) continue;
+    indexCard(card);
+    nearby.add(card);
+    paintCard(card, true);
+  }
   scheduleCheck(0);
 }
 
@@ -378,7 +394,7 @@ function observeTree(node) {
   for (const card of cardsIn(node)) {
     indexCard(card);
     if (!kind(card)) continue;
-    const image = card.querySelector('img.cached-thumb:not([hidden])');
+    const image = card.querySelector('img.cached-thumb');
     if (image?.complete && image.naturalWidth) {
       markLoaded(String(card.dataset.hash || ''), card, image);
       continue;
@@ -413,7 +429,7 @@ function reusableImages(records) {
   for (const record of records) {
     for (const node of record.removedNodes) {
       for (const card of cardsIn(node)) {
-        const image = card.querySelector('img.cached-thumb:not([hidden])');
+        const image = card.querySelector('img.cached-thumb');
         if (image?.complete && image.naturalWidth) images.set(String(card.dataset.hash || ''), image);
       }
     }
@@ -453,6 +469,7 @@ window.mochimonoThumbnails = {
 
 if (files) {
   observeTree(files);
+  requestAnimationFrame(repairViewport);
   new MutationObserver(records => {
     const reusable = reusableImages(records);
     for (const record of records) for (const node of record.removedNodes) forgetTree(node);
@@ -466,13 +483,20 @@ if (files) {
   }).observe(files, { childList: true, subtree: true });
 
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) refreshVisible();
+    if (!document.hidden) {
+      refreshVisible();
+      requestAnimationFrame(repairViewport);
+    }
   });
   window.addEventListener('mochimono:grid-interaction-start', pauseChecks);
-  window.addEventListener('mochimono:grid-interaction-end', scheduleOutstanding);
+  window.addEventListener('mochimono:grid-interaction-end', () => {
+    repairViewport();
+    scheduleOutstanding();
+  });
   window.addEventListener('mochimono:catalog-updated', () => {
     resetFailures();
     refreshVisible();
+    requestAnimationFrame(repairViewport);
   });
   window.addEventListener('mochimono:browser-thumbnail-ready', event => {
     const hash = String(event.detail?.hash || '');
