@@ -1,23 +1,11 @@
 const views = document.querySelector('#views');
-const mediaSizeControl = document.querySelector('#mediaSizeControl');
+const gridFolderToggle = document.querySelector('#gridFolderToggle');
+const gridFolderStrip = document.querySelector('#gridFolderStrip');
 const GRID_FOLDERS_KEY = 'mochimono-grid-folders';
 
 let restoring = false;
 let restoreComplete = false;
 let gridFoldersEnabled = localStorage.getItem(GRID_FOLDERS_KEY) !== '0';
-
-const gridFolderToggle = document.createElement('button');
-gridFolderToggle.type = 'button';
-gridFolderToggle.className = 'grid-folders-toggle';
-gridFolderToggle.title = 'Show folders in grid';
-gridFolderToggle.setAttribute('aria-label', 'Show folders in grid');
-gridFolderToggle.innerHTML = '<span class="grid-folder-toggle-icon" aria-hidden="true"></span>';
-mediaSizeControl.after(gridFolderToggle);
-
-const gridFolderStrip = document.createElement('section');
-gridFolderStrip.className = 'grid-folder-strip';
-gridFolderStrip.hidden = true;
-document.querySelector('#folderbar').after(gridFolderStrip);
 
 const library = () => window.mochimonoLibrary;
 const currentView = () => views.querySelector('[data-view].active')?.dataset.view || 'grid';
@@ -146,7 +134,7 @@ window.addEventListener('mochimono:folder-changed', () => {
 });
 window.addEventListener('mochimono:catalog-cache-restored', catalogChanged);
 window.addEventListener('mochimono:catalog-updated', catalogChanged);
-new MutationObserver(refresh).observe(views, { subtree: true, attributes: true, attributeFilter: ['class'] });
+views.addEventListener('click', refresh);
 
 refresh();
 restoreFolder().catch(console.warn);
