@@ -244,6 +244,24 @@ function viewerNeighborhood(hash) {
   return hashes.slice(Math.max(0, index - VIEWER_THUMB_RADIUS), Math.min(hashes.length, index + VIEWER_THUMB_RADIUS + 1));
 }
 
+function viewerVideoBox(hash) {
+  const card = hash ? files?.querySelector(`[data-hash="${CSS.escape(hash)}"]`) : null;
+  const width = Number(card?.dataset.width) || 0;
+  const height = Number(card?.dataset.height) || 0;
+  if (!width || !height) return null;
+  const scale = Math.min(1, innerWidth / width, innerHeight / height);
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale))
+  };
+}
+
+function applyViewerVideoBox(element, box) {
+  if (!element || !box?.width || !box?.height) return;
+  element.style.width = `${box.width}px`;
+  element.style.height = `${box.height}px`;
+}
+
 function refreshViewerPreview(hash) {
   if (!hash || viewer?.hidden || viewerHash() !== hash) return;
   const image = viewerMedia?.querySelector('img[data-full-src],img[data-video-preview]');
@@ -332,23 +350,36 @@ function activateViewerVideo() {
 
   const video = document.createElement('video');
   video.dataset.viewerVideoLoad = hash;
-  video.src = viewerOpen.getAttribute('href') || `/api/objects/${hash}`;
   video.poster = thumbUrl(hash);
   video.preload = 'auto';
   video.controls = true;
   video.autoplay = true;
   video.playsInline = true;
   video.style.visibility = 'hidden';
+  video.style.width = preview.style.width;
+  video.style.height = preview.style.height;
   viewerMedia.append(video);
 
+  const syncGeometry = () => {
+    if (preview.style.width && preview.style.height) return;
+    const rect = video.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const box = { width: Math.round(rect.width), height: Math.round(rect.height) };
+    applyViewerVideoBox(preview, box);
+    applyViewerVideoBox(video, box);
+  };
   const reveal = () => {
     if (!video.isConnected || !preview.isConnected || viewerHash() !== hash) return;
+    syncGeometry();
     preview.remove();
     video.style.visibility = '';
     video.play().catch(() => {});
   };
-  if (video.readyState >= 1) reveal();
-  else video.addEventListener('loadedmetadata', reveal, { once: true });
+
+  video.addEventListener('loadedmetadata', syncGeometry, { once: true });
+  video.src = viewerOpen.getAttribute('href') || `/api/objects/${hash}`;
+  if (video.readyState >= 2) reveal();
+  else video.addEventListener('loadeddata', reveal, { once: true });
   video.addEventListener('error', () => {
     if (video.isConnected) video.remove();
   }, { once: true });
@@ -403,6 +434,7 @@ function prepareViewerMedia(hash) {
   preview.dataset.videoPreview = hash;
   preview.alt = '';
   preview.decoding = 'async';
+  applyViewerVideoBox(preview, viewerVideoBox(hash));
   try { preview.fetchPriority = 'high'; } catch {}
   preview.src = thumbUrl(hash);
   video.replaceWith(preview);
@@ -437,7 +469,6 @@ function press(key) {
   navigate(key);
   return true;
 }
-
 function release() {
   holding = false;
   window.mochimonoThumbnails?.clearPriority?.();
