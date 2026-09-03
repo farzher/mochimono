@@ -1,19 +1,34 @@
 const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
+const viewerMedia = document.querySelector('#viewer-media');
 const commandbar = document.querySelector('.commandbar');
 const arrows = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 const ROW_TOLERANCE = 3;
 const THUMB_NEIGHBORS = 8;
 const VIEWER_FALLBACK_STEP = 5;
+const VIEWER_THUMB_RADIUS = 8;
+const VIEWER_WARM_RETRY = 120;
+const VIEWER_RAPID_MS = 80;
+const THUMB_VERSION = 3;
 
 let holding = false;
 let verticalAnchorX = null;
 let viewerVerticalAnchorX = null;
 let viewerExpectedHash = '';
+let viewerWarmTimer = 0;
+let viewerWarmRunning = false;
+let viewerWarmHash = '';
+let viewerWarmPasses = 0;
+let viewerRapidUntil = 0;
+let viewerSettleTimer = 0;
+let viewerSettleCallback = null;
+const viewerThumbImages = new Map();
 
 const gridActive = () => Boolean(files?.classList.contains('grid'));
 const viewerHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
+const thumbUrl = hash => `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
+const viewerRapid = () => performance.now() < viewerRapidUntil;
 
 function editingControl(event) {
   const control = event.target?.closest?.('input,select,textarea,[contenteditable="true"]');
@@ -221,6 +236,160 @@ function resetViewerRowNavigation() {
   viewerExpectedHash = '';
 }
 
+function viewerNeighborhood(hash) {
+  const hashes = window.mochimonoLibrary?.filteredHashes?.();
+  if (!Array.isArray(hashes) || !hashes.length) return hash ? [hash] : [];
+  const index = hashes.indexOf(hash);
+  if (index < 0) return hash ? [hash] : [];
+  return hashes.slice(Math.max(0, index - VIEWER_THUMB_RADIUS), Math.min(hashes.length, index + VIEWER_THUMB_RADIUS + 1));
+}
+
+function refreshViewerPreview(hash) {
+  if (!hash || viewer?.hidden || viewerHash() !== hash) return;
+  const image = viewerMedia?.querySelector('img[data-full-src]');
+  if (image) {
+    try { image.fetchPriority = 'high'; } catch {}
+    image.src = thumbUrl(hash);
+  }
+  const video = viewerMedia?.querySelector('video');
+  if (video) {
+    video.poster = '';
+    video.poster = thumbUrl(hash);
+  }
+}
+
+function preloadViewerThumb(hash) {
+  if (!hash) return;
+  const current = viewerThumbImages.get(hash);
+  if (current?.complete && current.naturalWidth) return refreshViewerPreview(hash);
+  if (current) return;
+
+  const image = new Image();
+  image.decoding = 'async';
+  try { image.fetchPriority = 'high'; } catch {}
+  viewerThumbImages.set(hash, image);
+  while (viewerThumbImages.size > 64) viewerThumbImages.delete(viewerThumbImages.keys().next().value);
+  image.onload = () => refreshViewerPreview(hash);
+  image.onerror = () => viewerThumbImages.delete(hash);
+  image.src = thumbUrl(hash);
+}
+
+async function checkViewerThumbs(hashes, background = false) {
+  if (!hashes.length) return { ready: [], failed: [] };
+  const response = await fetch('/api/thumbs/check', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ hashes, background })
+  });
+  if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
+  const data = await response.json();
+  return {
+    ready: (data.thumbnails || []).map(item => String(item.hash || '')),
+    failed: (data.failures || []).map(item => String(item.hash || ''))
+  };
+}
+
+function scheduleViewerWarm(hash, delay = 0) {
+  if (!hash || viewer?.hidden) return;
+  if (viewerWarmHash !== hash) {
+    viewerWarmHash = hash;
+    viewerWarmPasses = 0;
+  }
+  if (viewerWarmRunning || viewerWarmTimer) return;
+  viewerWarmTimer = setTimeout(runViewerWarm, delay);
+}
+
+async function runViewerWarm() {
+  viewerWarmTimer = 0;
+  const hash = viewerWarmHash;
+  const hashes = viewerNeighborhood(hash);
+  if (!hash || viewer?.hidden || viewerWarmRunning || !hashes.length) return;
+
+  viewerWarmRunning = true;
+  let retry = false;
+  try {
+    const background = hashes.filter(item => item !== hash);
+    const [current, nearby] = await Promise.all([
+      checkViewerThumbs([hash]),
+      checkViewerThumbs(background, true)
+    ]);
+    const ready = new Set([...current.ready, ...nearby.ready]);
+    const failed = new Set([...current.failed, ...nearby.failed]);
+    for (const readyHash of ready) preloadViewerThumb(readyHash);
+    retry = hashes.some(item => !ready.has(item) && !failed.has(item));
+  } catch {
+    retry = true;
+  } finally {
+    viewerWarmRunning = false;
+    const current = viewerHash();
+    if (!viewer?.hidden && current && current !== hash) scheduleViewerWarm(current, 70);
+    else if (retry && ++viewerWarmPasses <= 6) scheduleViewerWarm(hash, VIEWER_WARM_RETRY);
+  }
+}
+
+function settleViewerRapid() {
+  viewerSettleTimer = 0;
+  const wait = viewerRapidUntil - performance.now();
+  if (wait > 0) {
+    viewerSettleTimer = setTimeout(settleViewerRapid, wait + 2);
+    return;
+  }
+  const callback = viewerSettleCallback;
+  viewerSettleCallback = null;
+  callback?.();
+  const video = viewerMedia?.querySelector('video');
+  if (video) video.controls = true;
+}
+
+function scheduleViewerSettle() {
+  clearTimeout(viewerSettleTimer);
+  viewerSettleTimer = setTimeout(settleViewerRapid, Math.max(0, viewerRapidUntil - performance.now()) + 2);
+}
+
+function markViewerRapid() {
+  viewerRapidUntil = performance.now() + VIEWER_RAPID_MS;
+  if (viewerSettleCallback) scheduleViewerSettle();
+}
+
+function releaseViewerRapid() {
+  if (!viewerRapidUntil) return;
+  viewerRapidUntil = Math.min(viewerRapidUntil, performance.now() + 24);
+  if (viewerSettleCallback) scheduleViewerSettle();
+}
+
+function deferViewerSettle(callback) {
+  if (typeof callback !== 'function' || !viewerRapid()) return false;
+  viewerSettleCallback = callback;
+  scheduleViewerSettle();
+  return true;
+}
+
+function prepareViewerMedia(hash) {
+  if (!hash || viewer?.hidden || !viewerMedia) return;
+  const image = viewerMedia.querySelector('img[data-full-src]');
+  if (image) {
+    try { image.fetchPriority = 'high'; } catch {}
+  }
+  const video = viewerMedia.querySelector('video');
+  if (video) {
+    video.poster = thumbUrl(hash);
+    if (!video.getAttribute('src')) video.controls = false;
+  }
+}
+
+function resetViewerReadiness() {
+  clearTimeout(viewerWarmTimer);
+  viewerWarmTimer = 0;
+  viewerWarmHash = '';
+  viewerWarmPasses = 0;
+  clearTimeout(viewerSettleTimer);
+  viewerSettleTimer = 0;
+  viewerRapidUntil = 0;
+  viewerSettleCallback = null;
+}
+
+window.mochimonoViewerPerformance = { rapid: viewerRapid, defer: deferViewerSettle };
+
 function press(key) {
   if (!arrows.has(key) || !viewer?.hidden || !gridActive()) return false;
   window.mochimonoGridInteraction?.pulse?.(180);
@@ -254,6 +423,7 @@ function reset(clear = false) {
 
 function returnTo(hash) {
   resetViewerRowNavigation();
+  resetViewerReadiness();
   reset(true);
   const value = String(hash || '');
   const card = value ? files.querySelector(`[data-hash="${CSS.escape(value)}"]`) : null;
@@ -265,6 +435,7 @@ window.mochimonoGridKeyboard = { press, release, reset };
 document.addEventListener('keydown', event => {
   if (!arrows.has(event.key) || editingControl(event)) return;
   if (!viewer?.hidden) {
+    markViewerRapid();
     if (!gridActive() || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -278,10 +449,15 @@ document.addEventListener('keydown', event => {
 }, true);
 
 document.addEventListener('keyup', event => {
-  if (arrows.has(event.key) && viewer?.hidden) release();
+  if (!arrows.has(event.key)) return;
+  if (viewer?.hidden) release();
+  else releaseViewerRapid();
 }, true);
 
-window.addEventListener('blur', release);
+window.addEventListener('blur', () => {
+  release();
+  releaseViewerRapid();
+});
 window.addEventListener('mochimono-viewer-return', event => returnTo(event.detail?.hash));
 files?.addEventListener('pointermove', event => {
   if (event.pointerType !== 'touch' && document.documentElement.classList.contains('keyboard-navigation-active')) reset(true);
@@ -292,9 +468,14 @@ if (viewer && viewerOpen) {
   const viewerObserver = new MutationObserver(() => {
     if (viewer.hidden) {
       resetViewerRowNavigation();
+      resetViewerReadiness();
       return;
     }
+
     const hash = viewerHash();
+    prepareViewerMedia(hash);
+    scheduleViewerWarm(hash);
+
     if (viewerExpectedHash && hash === viewerExpectedHash) {
       viewerExpectedHash = '';
       return;
