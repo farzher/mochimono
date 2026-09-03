@@ -52,7 +52,10 @@ function unindexCard(card) {
   const group = hash && cardsByHash.get(hash);
   if (!group) return;
   group.delete(card);
-  if (!group.size) cardsByHash.delete(hash);
+  if (!group.size) {
+    cardsByHash.delete(hash);
+    states.delete(hash);
+  }
 }
 
 function mediaBox(card, mediaKind = kind(card)) {
@@ -276,6 +279,10 @@ async function checkNearby() {
     const missing = [];
 
     for (const hash of hashes) {
+      if (!cardsByHash.has(hash)) {
+        states.delete(hash);
+        continue;
+      }
       const state = states.get(hash) || {};
       const item = ready.get(hash);
       const failure = failures.get(hash);
@@ -305,6 +312,10 @@ async function checkNearby() {
   } catch {
     const retry = performance.now() + 1200;
     for (const hash of hashes) {
+      if (!cardsByHash.has(hash)) {
+        states.delete(hash);
+        continue;
+      }
       const state = states.get(hash) || {};
       state.nextCheck = retry;
       states.set(hash, state);
