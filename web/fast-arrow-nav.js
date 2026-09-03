@@ -3,10 +3,13 @@ const viewer = document.querySelector('#viewer');
 const commandbar = document.querySelector('.commandbar');
 const arrows = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 const ROW_TOLERANCE = 3;
+const THUMB_NEIGHBORS = 8;
 
 let holding = false;
 let frozenSentinels = null;
 let verticalAnchorX = null;
+let repeatFrame = 0;
+let pendingKey = '';
 
 const gridActive = () => Boolean(files?.classList.contains('grid'));
 
@@ -32,6 +35,16 @@ function cardWalker(current) {
 function adjacentCard(current, direction) {
   const walker = cardWalker(current);
   return walker ? direction < 0 ? walker.previousNode() : walker.nextNode() : null;
+}
+
+function thumbnailNeighborhood(card) {
+  const walker = cardWalker(card);
+  if (!walker) return [card];
+  const result = [card];
+  for (let index = 0, item; index < THUMB_NEIGHBORS && (item = walker.previousNode()); index++) result.push(item);
+  walker.currentNode = card;
+  for (let index = 0, item; index < THUMB_NEIGHBORS && (item = walker.nextNode()); index++) result.push(item);
+  return result;
 }
 
 function viewportTop() {
@@ -77,7 +90,7 @@ function selectCard(card, scroll = true) {
   document.documentElement.classList.add('keyboard-navigation-active');
   card.focus({ preventScroll: true });
   if (scroll) card.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
-  window.mochimonoThumbnails?.prioritize?.([card]);
+  window.mochimonoThumbnails?.prioritize?.(thumbnailNeighborhood(card));
   return true;
 }
 
@@ -209,8 +222,23 @@ function press(key) {
   return true;
 }
 
+function queueRepeat(key) {
+  pendingKey = key;
+  if (repeatFrame) return;
+  repeatFrame = requestAnimationFrame(() => {
+    repeatFrame = 0;
+    const next = pendingKey;
+    pendingKey = '';
+    if (next && holding) press(next);
+  });
+}
+
 function release() {
   holding = false;
+  pendingKey = '';
+  if (repeatFrame) cancelAnimationFrame(repeatFrame);
+  repeatFrame = 0;
+  window.mochimonoThumbnails?.clearPriority?.();
   window.mochimonoGridInteraction?.release?.();
   releaseSentinels();
 }
@@ -236,7 +264,8 @@ document.addEventListener('keydown', event => {
   if (!arrows.has(event.key) || !viewer?.hidden || !gridActive() || editingControl(event)) return;
   event.preventDefault();
   event.stopImmediatePropagation();
-  press(event.key);
+  if (event.repeat) queueRepeat(event.key);
+  else press(event.key);
 }, true);
 
 document.addEventListener('keyup', event => {
