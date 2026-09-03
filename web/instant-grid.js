@@ -28,8 +28,6 @@ if (CLIENT) {
   noteActivity();
 }
 
-if (CLIENT && files && app && !new URL(location.href).searchParams.has('file')) paintInstantGrid().catch(() => {});
-
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
 const mediaKind = file => String(file?.mime || '').startsWith('image/') ? 'image' : String(file?.mime || '').startsWith('video/') ? 'video' : '';
 
@@ -146,7 +144,13 @@ async function cachedQuickFiles() {
       metaRequest.onsuccess = () => {
         const meta = metaRequest.result;
         if (!meta?.version) return finish([]);
+        if (Array.isArray(meta.quickFiles) && meta.quickFiles.length) {
+          return finish(meta.quickFiles.filter(file => matchesQuickType(file, wanted)).slice(0, QUICK_LIMIT));
+        }
 
+        // Compatibility for an existing cache written before quickFiles existed.
+        // It is intentionally bounded; the next normal cache save persists a
+        // direct first-page snapshot and future reloads avoid this cursor walk.
         const result = [];
         let scanned = 0;
         const cursorRequest = transaction.objectStore('files').openCursor();
@@ -238,12 +242,11 @@ function installReadyThumbs() {
     const image = document.createElement('img');
     image.className = 'cached-thumb';
     image.alt = '';
-    image.hidden = true;
+    image.hidden = false;
     image.decoding = 'async';
     image.loading = 'eager';
     image.onload = () => {
       if (!image.isConnected) return;
-      image.hidden = false;
       box?.querySelector('.video-thumb-pending')?.remove();
     };
     image.onerror = () => image.remove();
@@ -272,10 +275,27 @@ function paint(items) {
   return true;
 }
 
+const afterPaint = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
 async function paintInstantGrid() {
   const cached = await cachedQuickFiles();
-  if (paint(cached)) return;
-  paint(await serverQuickFiles());
+  if (paint(cached)) {
+    // Do not let catalog-cache.js immediately monopolize the same frame with its
+    // full IndexedDB getAll + 90k-file hydration. Give this useful grid a paint.
+    await afterPaint();
+    return true;
+  }
+
+  // A cold/legacy cache should not hold up the real library on a network request.
+  // Let the server quick page race independently while normal hydration starts.
+  serverQuickFiles().then(items => paint(items)).catch(() => {});
+  return false;
+}
+
+if (CLIENT && files && app && !new URL(location.href).searchParams.has('file')) {
+  window.mochimonoInstantGridReady = paintInstantGrid().catch(() => false);
+} else {
+  window.mochimonoInstantGridReady = Promise.resolve(false);
 }
 
 const style = document.createElement('style');
