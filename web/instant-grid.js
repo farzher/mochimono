@@ -15,6 +15,19 @@ if (typeFilter) typeFilter.addEventListener('change', () => {
   try { localStorage.setItem(QUICK_TYPE_KEY, String(typeFilter.value || '')); } catch {}
 });
 
+if (CLIENT) {
+  let lastActivity = 0;
+  const noteActivity = () => {
+    const now = Date.now();
+    if (now - lastActivity < 1400) return;
+    lastActivity = now;
+    fetch('/api/thumbnail-activity', { method:'POST', keepalive:true }).catch(() => {});
+  };
+  for (const type of ['pointerdown','keydown','wheel','touchstart']) addEventListener(type, noteActivity, { passive:true, capture:true });
+  addEventListener('scroll', noteActivity, { passive:true });
+  noteActivity();
+}
+
 if (CLIENT && files && app && !new URL(location.href).searchParams.has('file')) paintInstantGrid().catch(() => {});
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
@@ -101,8 +114,6 @@ function openQuickCache() {
     try { request = indexedDB.open(CACHE_DB); }
     catch { return resolve(null); }
     request.onupgradeneeded = () => {
-      // A missing cache must be created by catalog-cache.js so its schema is
-      // installed correctly. Abort this read-only probe instead of creating it.
       try { request.transaction?.abort(); } catch {}
     };
     request.onsuccess = () => resolve(request.result);
@@ -156,9 +167,6 @@ async function cachedQuickFiles() {
 }
 
 async function serverQuickFiles() {
-  // Normal reloads use the paged form: it skips folder-sample work and asks
-  // SQLite for only one tiny page. During a brand-new index the canonical table
-  // may still be empty, so fall back once to the staging-aware form.
   try {
     let response = await fetch(`/api/client/local-catalog?limit=${QUICK_LIMIT}&offset=0`, { cache:'no-store' });
     if (!response.ok) return [];
@@ -265,13 +273,8 @@ function paint(items) {
 }
 
 async function paintInstantGrid() {
-  // Warm reload path: read at most a few thousand IndexedDB cursor entries, not
-  // the complete 100k+ cached catalog. This runs before catalog-cache.js starts
-  // its full restore, so the browser has something useful to paint immediately.
   const cached = await cachedQuickFiles();
   if (paint(cached)) return;
-
-  // First run / empty browser cache fallback.
   paint(await serverQuickFiles());
 }
 

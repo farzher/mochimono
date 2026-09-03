@@ -7,10 +7,11 @@ import { spawn } from 'node:child_process';
 import http from 'node:http';
 import { api, cancelJob, currentJob, DEVICE, json, persistSettings, readJson, serverState, settings, startJob } from './lib/agent-context.js';
 import { addFolder, folderFor, folderStats, queueFolderSync, removeFolder, startSyncService } from './lib/agent-sync.js';
-import { addBrowseFolder, browseFolderFor, browseFolderStats, indexBrowseFolder, protectBrowseFolder, removeBrowseFolder, startBrowseService } from './lib/browse-folders.js';
+import { addBrowseFolder, browseFolderFor, browseFolderStats, indexBrowseFolder, protectBrowseFolder, refreshBrowsePreviewPolicy, removeBrowseFolder, startBrowseService } from './lib/browse-folders.js';
 import { backupCollections, backupContents, backupInit, backupLocations, backupRestore, backupStatus, backupUpdate, backupVerify, setBackupPolicy } from './lib/agent-backups.js';
 import { invalidateClientProviders } from './lib/client-providers.js';
 import { pickFolder } from './lib/folder-picker.js';
+import { noteProviderThumbnailActivity, refreshProviderThumbnailPolicy } from './lib/provider-thumbs.js';
 import { thumbnailAgentStatus } from './lib/thumbnail-agent.js';
 import { handleClientImport } from './client-import.js';
 import { handleClientGateway } from './client-gateway.js';
@@ -80,9 +81,6 @@ async function openNativePath(path, selectFile = false) {
   let args;
   if (platform() === 'win32') {
     command = 'explorer.exe';
-    // Explorer's /select option is one comma-delimited argument. Passing the
-    // option and path as separate argv entries can start Explorer successfully
-    // while silently doing nothing with the requested file.
     args = selectFile ? [`/select,${target}`] : [target];
   } else if (platform() === 'darwin') {
     command = 'open';
@@ -103,12 +101,18 @@ async function openNativePath(path, selectFile = false) {
 }
 
 async function handleLocalApi(req, res, url) {
+  if (req.method === 'POST' && url.pathname === '/api/thumbnail-activity') {
+    noteProviderThumbnailActivity();
+    json(res, 200, { ok: true });
+    return true;
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/state') {
     await reconcileDeviceIdentity();
     json(res, 200, {
       settings: {
         server: settings.server, hasToken: Boolean(settings.token), device: settings.device,
-        uploadWorkers: settings.uploadWorkers, folders: visibleFolders()
+        uploadWorkers: settings.uploadWorkers, thumbnailMode: settings.thumbnailMode, folders: visibleFolders()
       },
       server: await serverState(),
       previews: thumbnailAgentStatus(),
@@ -122,6 +126,7 @@ async function handleLocalApi(req, res, url) {
     const previousDevice = settings.device;
     const previousServer = settings.server;
     const previousToken = settings.token;
+    const previousThumbnailMode = settings.thumbnailMode;
     if (body.server !== undefined) settings.server = String(body.server || 'http://127.0.0.1:8642').trim().replace(/\/$/, '');
     if (body.token !== undefined) settings.token = String(body.token || '');
     if (body.device !== undefined) {
@@ -136,18 +141,30 @@ async function handleLocalApi(req, res, url) {
       if (![1, 2, 4].includes(workers)) return json(res, 400, { error: 'Upload concurrency must be 1, 2, or 4' });
       settings.uploadWorkers = workers;
     }
+    if (body.thumbnailMode !== undefined) {
+      const mode = String(body.thumbnailMode || '');
+      if (!['off', 'idle', 'max'].includes(mode)) return json(res, 400, { error: 'Preview mode must be off, idle, or max' });
+      settings.thumbnailMode = mode;
+    }
     await persistSettings();
 
-    if (settings.server !== previousServer || settings.token !== previousToken || settings.device !== previousDevice) deviceIdentityReconciled = false;
+    const connectionChanged = settings.server !== previousServer || settings.token !== previousToken;
+    const deviceChanged = settings.device !== previousDevice;
+    const previewModeChanged = settings.thumbnailMode !== previousThumbnailMode;
+    if (connectionChanged || deviceChanged) deviceIdentityReconciled = false;
     await reconcileDeviceIdentity();
 
-    if (settings.token && settings.device !== previousDevice) {
+    if (settings.token && deviceChanged) {
       const ids = [...new Set(settings.folders.map(folder => folder.importId).filter(Boolean))];
       await Promise.allSettled(ids.map(id => api(`/api/imports/${id}`, { method: 'POST', body: { sourceName: settings.device } })));
     }
-    if (settings.token) settings.folders.forEach(folder => queueFolderSync(folder.path, undefined, 0));
-    invalidateClientProviders();
-    json(res, 200, { ok: true });
+    if (settings.token && (connectionChanged || deviceChanged)) settings.folders.forEach(folder => queueFolderSync(folder.path, undefined, 0));
+    if (previewModeChanged) {
+      refreshProviderThumbnailPolicy();
+      refreshBrowsePreviewPolicy(previousThumbnailMode);
+    }
+    if (connectionChanged || deviceChanged) invalidateClientProviders();
+    json(res, 200, { ok: true, thumbnailMode: settings.thumbnailMode });
     return true;
   }
 
