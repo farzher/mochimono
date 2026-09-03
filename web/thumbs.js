@@ -158,7 +158,10 @@ function paintCard(card, urgent = false) {
   const state = states.get(hash) || {};
   const current = box.querySelector('img.cached-thumb');
   if (current?.dataset.thumbHash === hash) {
-    if (urgent && !state.ready) try { current.fetchPriority = 'high'; } catch {}
+    if (urgent && !state.ready) {
+      current.loading = 'eager';
+      try { current.fetchPriority = 'high'; } catch {}
+    }
     if (current.complete && current.naturalWidth && !state.ready) markLoaded(hash, card, current);
     return;
   }
@@ -181,7 +184,7 @@ function paintCard(card, urgent = false) {
   image.alt = '';
   image.hidden = true;
   image.decoding = 'async';
-  image.loading = 'eager';
+  image.loading = urgent ? 'eager' : 'lazy';
   image.dataset.thumbHash = hash;
   try { image.fetchPriority = urgent || card.classList.contains('keyboard-cursor') ? 'high' : 'auto'; } catch {}
   image.onload = () => {
