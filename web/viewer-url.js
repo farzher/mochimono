@@ -93,6 +93,15 @@ async function restoreViewer() {
     finishRestore();
     return;
   }
+
+  // Back/Forward normally refers to a file already present in the in-memory
+  // catalog. Reopen that immediately instead of making history navigation depend
+  // on a server details request (which can fail for local-only files).
+  if (window.mochimonoOpenViewer?.(hash)) {
+    finishRestore();
+    return;
+  }
+
   try {
     const fallback = await directFile(hash);
     if (fileParam() !== hash) return;
