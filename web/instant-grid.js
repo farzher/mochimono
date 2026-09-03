@@ -6,6 +6,14 @@ const fileCount = document.querySelector('#fileCount');
 const typeFilter = document.querySelector('#typeFilter');
 const THUMB_VERSION = 3;
 const QUICK_LIMIT = 160;
+const QUICK_SCAN_LIMIT = 5000;
+const CACHE_DB = 'mochimono-library';
+const CACHE_META_KEY = 'catalog';
+const QUICK_TYPE_KEY = 'mochimono-quick-type';
+
+if (typeFilter) typeFilter.addEventListener('change', () => {
+  try { localStorage.setItem(QUICK_TYPE_KEY, String(typeFilter.value || '')); } catch {}
+});
 
 if (CLIENT && files && app && !new URL(location.href).searchParams.has('file')) paintInstantGrid().catch(() => {});
 
@@ -60,6 +68,110 @@ function markup(items) {
     previousYear = group.year;
     return `<section class="date-group instant-grid-group" data-date-group="${group.key}" data-year="${group.year}">${year}<h3 class="date-heading">${escapeHtml(group.month)}</h3><div class="date-grid">${group.files.map(card).join('')}</div></section>`;
   }).join('');
+}
+
+function currentQuickType() {
+  const query = String(new URL(location.href).searchParams.get('type') || '');
+  if (query) return query;
+  try { return String(localStorage.getItem(QUICK_TYPE_KEY) || typeFilter?.value || ''); }
+  catch { return String(typeFilter?.value || ''); }
+}
+
+function matchesQuickType(file, wanted = currentQuickType()) {
+  if (!wanted) return true;
+  const kind = mediaKind(file);
+  if (wanted === 'media') return Boolean(kind);
+  if (wanted === 'image' || wanted === 'video') return kind === wanted;
+  const mime = String(file?.mime || '');
+  if (wanted === 'audio') return mime.startsWith('audio/');
+  if (wanted === 'application') return mime.startsWith('application/') || mime.startsWith('text/');
+  if (wanted === 'other') return !/^(?:image|video|audio|application|text)\//.test(mime);
+  return true;
+}
+
+function filterQuick(items) {
+  const wanted = currentQuickType();
+  return wanted ? items.filter(file => matchesQuickType(file, wanted)) : items;
+}
+
+function openQuickCache() {
+  if (!('indexedDB' in window)) return Promise.resolve(null);
+  return new Promise(resolve => {
+    let request;
+    try { request = indexedDB.open(CACHE_DB); }
+    catch { return resolve(null); }
+    request.onupgradeneeded = () => {
+      // A missing cache must be created by catalog-cache.js so its schema is
+      // installed correctly. Abort this read-only probe instead of creating it.
+      try { request.transaction?.abort(); } catch {}
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => resolve(null);
+    request.onblocked = () => resolve(null);
+  });
+}
+
+async function cachedQuickFiles() {
+  const db = await openQuickCache();
+  if (!db) return [];
+  try {
+    if (!db.objectStoreNames.contains('meta') || !db.objectStoreNames.contains('files')) return [];
+    const wanted = currentQuickType();
+    return await new Promise(resolve => {
+      let settled = false;
+      const finish = value => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      let transaction;
+      try { transaction = db.transaction(['meta','files'], 'readonly'); }
+      catch { return finish([]); }
+      transaction.onerror = () => finish([]);
+      transaction.onabort = () => finish([]);
+
+      const metaRequest = transaction.objectStore('meta').get(CACHE_META_KEY);
+      metaRequest.onerror = () => finish([]);
+      metaRequest.onsuccess = () => {
+        const meta = metaRequest.result;
+        if (!meta?.version) return finish([]);
+
+        const result = [];
+        let scanned = 0;
+        const cursorRequest = transaction.objectStore('files').openCursor();
+        cursorRequest.onerror = () => finish(result);
+        cursorRequest.onsuccess = () => {
+          const cursor = cursorRequest.result;
+          if (!cursor || result.length >= QUICK_LIMIT || scanned >= QUICK_SCAN_LIMIT) return finish(result);
+          scanned++;
+          const file = cursor.value;
+          if (file?.__snapshot === meta.version && /^[a-f0-9]{64}$/.test(String(file.hash || '')) && matchesQuickType(file, wanted)) result.push(file);
+          cursor.continue();
+        };
+      };
+    });
+  } finally {
+    try { db.close(); } catch {}
+  }
+}
+
+async function serverQuickFiles() {
+  // Normal reloads use the paged form: it skips folder-sample work and asks
+  // SQLite for only one tiny page. During a brand-new index the canonical table
+  // may still be empty, so fall back once to the staging-aware form.
+  try {
+    let response = await fetch(`/api/client/local-catalog?limit=${QUICK_LIMIT}&offset=0`, { cache:'no-store' });
+    if (!response.ok) return [];
+    let data = await response.json();
+    if (Array.isArray(data.files) && data.files.length) return filterQuick(data.files).slice(0, QUICK_LIMIT);
+
+    response = await fetch(`/api/client/local-catalog?limit=${QUICK_LIMIT}`, { cache:'no-store' });
+    if (!response.ok) return [];
+    data = await response.json();
+    return filterQuick(Array.isArray(data.files) ? data.files : []).slice(0, QUICK_LIMIT);
+  } catch {
+    return [];
+  }
 }
 
 function installThumbnailHandoff() {
@@ -138,36 +250,29 @@ function installReadyThumbs() {
   }).catch(() => {});
 }
 
-function filterQuick(items) {
-  const type = String(typeFilter?.value || '');
-  if (!type) return items;
-  if (type === 'media') return items.filter(file => mediaKind(file));
-  if (type === 'image') return items.filter(file => mediaKind(file) === 'image');
-  if (type === 'video') return items.filter(file => mediaKind(file) === 'video');
-  return items;
-}
-
-async function paintInstantGrid() {
-  // Omit pagination so the Agent may include rows still in its progressive
-  // in-memory staging window during a first-time local index.
-  const response = await fetch(`/api/client/local-catalog?limit=${QUICK_LIMIT}`, { cache:'no-store' });
-  if (!response.ok) return;
-  const data = await response.json();
-
-  // library-app publishes its API before its expensive catalog restore finishes,
-  // so detect real rendered cards rather than the existence of that API.
-  if (files.querySelector('[data-hash]')) return;
-  const items = filterQuick(Array.isArray(data.files) ? data.files : []).slice(0, QUICK_LIMIT);
-  if (!items.length) return;
-
+function paint(items) {
+  if (files.querySelector('[data-hash]') || !items.length) return false;
+  items.sort((a, b) => fileDate(b).getTime() - fileDate(a).getTime());
   document.documentElement.classList.add('instant-grid-preview');
   files.className = 'files grid';
-  files.innerHTML = markup(items);
+  files.innerHTML = markup(items.slice(0, QUICK_LIMIT));
   login.hidden = true;
   app.hidden = false;
   if (fileCount) fileCount.textContent = 'Loading library…';
   installThumbnailHandoff();
   installReadyThumbs();
+  return true;
+}
+
+async function paintInstantGrid() {
+  // Warm reload path: read at most a few thousand IndexedDB cursor entries, not
+  // the complete 100k+ cached catalog. This runs before catalog-cache.js starts
+  // its full restore, so the browser has something useful to paint immediately.
+  const cached = await cachedQuickFiles();
+  if (paint(cached)) return;
+
+  // First run / empty browser cache fallback.
+  paint(await serverQuickFiles());
 }
 
 const style = document.createElement('style');
