@@ -62,6 +62,42 @@ function markup(items) {
   }).join('');
 }
 
+function installThumbnailHandoff() {
+  const observer = new MutationObserver(records => {
+    const ready = new Map();
+    for (const record of records) {
+      for (const node of record.removedNodes) {
+        if (!(node instanceof Element)) continue;
+        const cards = [];
+        if (node.matches('[data-instant-hash]')) cards.push(node);
+        cards.push(...node.querySelectorAll('[data-instant-hash]'));
+        for (const card of cards) {
+          const image = card.querySelector('img.cached-thumb:not([hidden])');
+          if (image?.complete && image.naturalWidth) ready.set(String(card.dataset.instantHash || ''), image);
+        }
+      }
+    }
+    if (!ready.size) return;
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue;
+        const cards = [];
+        if (node.matches('[data-hash]')) cards.push(node);
+        cards.push(...node.querySelectorAll('[data-hash]'));
+        for (const card of cards) {
+          const image = ready.get(String(card.dataset.hash || ''));
+          const box = image && card.querySelector('.media-thumb');
+          if (!box || box.querySelector('img.cached-thumb')) continue;
+          box.querySelector('.video-thumb-pending')?.remove();
+          box.prepend(image);
+        }
+      }
+    }
+  });
+  observer.observe(files, { childList:true, subtree:true });
+  setTimeout(() => observer.disconnect(), 8000);
+}
+
 function installReadyThumbs() {
   const hashes = [];
   for (const card of files.querySelectorAll('[data-instant-hash]')) {
@@ -117,6 +153,7 @@ async function paintInstantGrid() {
   login.hidden = true;
   app.hidden = false;
   if (fileCount) fileCount.textContent = 'Loading library…';
+  installThumbnailHandoff();
   installReadyThumbs();
 
   const clear = () => document.documentElement.classList.remove('instant-grid-preview');
