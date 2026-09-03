@@ -2,8 +2,9 @@ const folders = document.querySelector('#folders');
 
 const style = document.createElement('style');
 style.textContent = `
+  #storagePane .storage-meta:has([data-preview-progress]){flex-wrap:wrap}
   #storagePane [data-preview-progress]{
-    position:relative;display:block;min-width:0;margin-top:9px;padding:0 44px 10px 0;
+    position:relative;display:block;flex:0 0 100%;width:100%;min-width:0;margin-top:9px;padding:0 44px 10px 0;
     overflow:visible!important;text-overflow:clip!important;white-space:nowrap;
     background:linear-gradient(#292429,#292429) left bottom/100% 5px no-repeat;
     color:#8e8683!important;font-size:10px;font-weight:580!important;line-height:1.2
