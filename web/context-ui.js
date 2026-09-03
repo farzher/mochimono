@@ -9,6 +9,7 @@ const search = document.querySelector('#search');
 let decorateFrame = 0;
 let fullDecorate = true;
 let focusedHash = '';
+let deferredFocusFrom = null;
 let pointerHash = '';
 let detailGeneration = 0;
 let listPaging = false;
@@ -209,7 +210,22 @@ function setFocusedHash(next) {
   const previous = focusedHash;
   focusedHash = next;
   detailGeneration++;
-  refreshHashes(previous, next);
+  if (currentView() === 'grid' && window.mochimonoGridInteraction?.active?.()) {
+    if (deferredFocusFrom === null) deferredFocusFrom = previous;
+    return;
+  }
+  const from = deferredFocusFrom === null ? previous : deferredFocusFrom;
+  deferredFocusFrom = null;
+  refreshHashes(from, next);
+}
+
+function resumeGridDecoration() {
+  if (deferredFocusFrom !== null) {
+    const previous = deferredFocusFrom;
+    deferredFocusFrom = null;
+    refreshHashes(previous, focusedHash);
+  }
+  resumeDecorate();
 }
 
 function visibleCards() {
@@ -350,7 +366,7 @@ views.addEventListener('click', () => {
   detailGeneration++;
   scheduleDecorate();
 });
-window.addEventListener('mochimono:grid-interaction-end', resumeDecorate);
+window.addEventListener('mochimono:grid-interaction-end', resumeGridDecoration);
 window.addEventListener('mochimono-viewer-return', event => {
   const hash = String(event.detail?.hash || '');
   if (!hash) return;
