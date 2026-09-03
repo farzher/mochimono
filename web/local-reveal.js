@@ -1,28 +1,9 @@
 const CLIENT = document.documentElement.classList.contains('client-library');
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
-const actions = viewer?.querySelector('.viewer-actions');
+const button = document.querySelector('#viewer-reveal-local');
 
-if (CLIENT && viewer && viewerOpen && actions) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'viewer-action viewer-reveal-local';
-  button.hidden = true;
-  button.title = 'Show in Explorer';
-  button.setAttribute('aria-label', 'Show in Explorer');
-  button.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.7 5.8h5l1.5-1.9h2.5l1.3 1.9h4.3v9.3H2.7z"/><path d="M7.2 10h5.6M10.9 7.7l2.3 2.3-2.3 2.3"/></svg>';
-  actions.insertBefore(button, viewerOpen);
-
-  const style = document.createElement('style');
-  style.textContent = `
-    .viewer-reveal-local{width:34px!important;padding:0!important;display:grid!important;place-items:center!important}
-    .viewer-reveal-local[hidden]{display:none!important}
-    .viewer-reveal-local svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.35;stroke-linecap:round;stroke-linejoin:round}
-    .viewer-reveal-local[data-state="ok"]{color:#9bd7aa!important}
-    .viewer-reveal-local[data-state="error"]{color:#ff9d96!important}
-  `;
-  document.head.append(style);
-
+if (CLIENT && viewer && viewerOpen && button) {
   let stateTimer = 0;
   let hasLocalCopy = false;
   const hash = () => viewerOpen.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
@@ -77,8 +58,9 @@ if (CLIENT && viewer && viewerOpen && actions) {
     }
   });
 
-  new MutationObserver(sync).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
-  new MutationObserver(sync).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
+  const viewerObserver = new MutationObserver(sync);
+  viewerObserver.observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
+  viewerObserver.observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
   window.addEventListener('mochimono:locations-updated', sync);
   addEventListener('beforeunload', () => clearTimeout(stateTimer), { once: true });
   sync();
