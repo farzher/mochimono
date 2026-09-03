@@ -9,27 +9,6 @@ const panel = document.querySelector('#viewerInfo');
 const summaryCache = new Map();
 let generation = 0;
 
-const style = document.createElement('style');
-style.textContent = `
-  .viewer-title{max-width:min(68vw,900px)}
-  .viewer-title-sub{display:flex;align-items:center;gap:7px;min-width:0;height:18px}
-  .viewer-context{display:flex;align-items:center;gap:4px;min-width:0;max-width:min(46vw,620px);overflow:hidden}
-  .viewer-context:empty{display:none}
-  .viewer-context-chip{display:block;min-width:0;max-width:220px;height:17px;padding:1px 6px;border:1px solid rgba(255,255,255,.11);border-radius:5px;background:rgba(16,16,16,.48);color:#d3ccca;font-size:9px;font-weight:650;line-height:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 3px #000;cursor:pointer}
-  .viewer-context-chip:hover{background:rgba(255,255,255,.12);color:#fff}
-  .viewer-context-chip.origin{color:#bcb3b1}
-  .viewer-context-more{flex:0 0 auto;color:#aaa19f;font-size:9px;font-weight:700;white-space:nowrap}
-  .viewer-title-sub>#viewer-meta{flex:0 0 auto;white-space:nowrap}
-  @media(max-width:700px){
-    .viewer-title{max-width:58vw}
-    .viewer-context{max-width:38vw}
-    .viewer-context-chip{max-width:130px}
-    .viewer-context .viewer-context-chip:nth-of-type(n+2){display:none}
-    .viewer-context-more{display:none}
-  }
-`;
-document.head.append(style);
-
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
 }
