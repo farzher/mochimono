@@ -3,6 +3,7 @@ const viewer = document.querySelector('#viewer');
 const commandbar = document.querySelector('.commandbar');
 const arrows = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']);
 const VERTICAL_NEIGHBORS = 128;
+const ROW_TOLERANCE = 3;
 
 let holding = false;
 let frozenSentinels = null;
@@ -97,22 +98,24 @@ function releaseSentinels() {
 function nearestVertical(cards, current, direction) {
   const rect = current.getBoundingClientRect();
   const cx = rect.left + rect.width / 2;
-  const cy = rect.top + rect.height / 2;
   let best = null;
-  let bestScore = Infinity;
+  let bestRowDistance = Infinity;
+  let bestHorizontalDistance = Infinity;
 
   for (const card of cards) {
     if (card === current) continue;
     const next = card.getBoundingClientRect();
     if (next.width <= 0 || next.height <= 0) continue;
-    const nx = next.left + next.width / 2;
-    const ny = next.top + next.height / 2;
-    const dy = ny - cy;
-    if (direction < 0 ? dy >= -3 : dy <= 3) continue;
-    const score = Math.abs(dy) * 4 + Math.abs(nx - cx);
-    if (score < bestScore) {
+    const dy = next.top - rect.top;
+    if (direction < 0 ? dy >= -ROW_TOLERANCE : dy <= ROW_TOLERANCE) continue;
+
+    const rowDistance = Math.abs(dy);
+    const horizontalDistance = Math.abs(next.left + next.width / 2 - cx);
+    if (rowDistance < bestRowDistance - ROW_TOLERANCE ||
+        (Math.abs(rowDistance - bestRowDistance) <= ROW_TOLERANCE && horizontalDistance < bestHorizontalDistance)) {
       best = card;
-      bestScore = score;
+      bestRowDistance = rowDistance;
+      bestHorizontalDistance = horizontalDistance;
     }
   }
   return best;
