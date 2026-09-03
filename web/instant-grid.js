@@ -148,9 +148,6 @@ async function cachedQuickFiles() {
           return finish(meta.quickFiles.filter(file => matchesQuickType(file, wanted)).slice(0, QUICK_LIMIT));
         }
 
-        // Compatibility for an existing cache written before quickFiles existed.
-        // It is intentionally bounded; the next normal cache save persists a
-        // direct first-page snapshot and future reloads avoid this cursor walk.
         const result = [];
         let scanned = 0;
         const cursorRequest = transaction.objectStore('files').openCursor();
@@ -245,13 +242,27 @@ function installReadyThumbs() {
     image.hidden = false;
     image.decoding = 'async';
     image.loading = 'eager';
+    image.style.objectFit = 'cover';
+    const applyGeometry = () => {
+      if (!image.naturalWidth || !image.naturalHeight) return;
+      card.dataset.width = String(image.naturalWidth);
+      card.dataset.height = String(image.naturalHeight);
+      card.style.setProperty('--ratio', String(image.naturalWidth / image.naturalHeight));
+    };
     image.onload = () => {
       if (!image.isConnected) return;
+      applyGeometry();
       box?.querySelector('.video-thumb-pending')?.remove();
     };
     image.onerror = () => image.remove();
     box?.prepend(image);
     image.src = `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
+    image.decode?.().then(() => {
+      if (!image.isConnected) return;
+      applyGeometry();
+      image.style.transform = 'translateZ(0)';
+      requestAnimationFrame(() => image.isConnected && image.style.removeProperty('transform'));
+    }).catch(() => {});
   }
 
   if (hashes.length) fetch('/api/thumbs/check', {
@@ -280,14 +291,10 @@ const afterPaint = () => new Promise(resolve => requestAnimationFrame(() => requ
 async function paintInstantGrid() {
   const cached = await cachedQuickFiles();
   if (paint(cached)) {
-    // Do not let catalog-cache.js immediately monopolize the same frame with its
-    // full IndexedDB getAll + 90k-file hydration. Give this useful grid a paint.
     await afterPaint();
     return true;
   }
 
-  // A cold/legacy cache should not hold up the real library on a network request.
-  // Let the server quick page race independently while normal hydration starts.
   serverQuickFiles().then(items => paint(items)).catch(() => {});
   return false;
 }
