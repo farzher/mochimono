@@ -1,6 +1,7 @@
 const viewer = document.querySelector('#viewer');
 const stage = document.querySelector('#viewer-stage');
 const viewerMedia = document.querySelector('#viewer-media');
+const viewerOpen = document.querySelector('#viewer-open');
 const viewerPrev = document.querySelector('#viewer-prev');
 const viewerNext = document.querySelector('#viewer-next');
 
@@ -15,16 +16,45 @@ function toggleControls() {
 window.mochimonoViewerControls = { show: showControls, toggle: toggleControls };
 
 const zoom = { scale: 1, x: 0, y: 0 };
-const WHEEL_NAV_INTERVAL = 110;
+const WHEEL_NAV_STEP = 100;
+const viewerPageKeys = new Set(['PageUp', 'PageDown', 'Home', 'End']);
 let navState = null;
 let pan = null;
 let suppressClick = false;
 let clickTimer = 0;
-let lastWheelNavigation = 0;
+let wheelNavigationDelta = 0;
 
 const image = () => viewerMedia?.querySelector('img') || null;
 const zoomed = () => zoom.scale > 1.01;
 const touchZoomed = () => stage?.classList.contains('viewer-touch-zoomed');
+const currentViewerHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
+
+function viewerHashes() {
+  const library = window.mochimonoLibrary;
+  if (!library) return [];
+  if (library.state?.().view === 'folders') {
+    return (library.folderContents?.()?.files || []).map(file => String(file?.hash || '')).filter(Boolean);
+  }
+  return library.filteredHashes?.() || [];
+}
+
+function navigateViewerBy(step) {
+  const hashes = viewerHashes();
+  const index = hashes.indexOf(currentViewerHash());
+  if (index < 0) return false;
+  const hash = hashes[index + step];
+  if (!hash) return false;
+  wheelNavigationDelta = 0;
+  return Boolean(window.mochimonoOpenViewer?.(hash));
+}
+
+function jumpViewerEdge(first) {
+  const hashes = viewerHashes();
+  const hash = first ? hashes[0] : hashes.at(-1);
+  if (!hash) return false;
+  wheelNavigationDelta = 0;
+  return Boolean(window.mochimonoOpenViewer?.(hash));
+}
 
 function lockNavigation(locked) {
   if (!viewerPrev || !viewerNext) return;
@@ -100,6 +130,7 @@ function setScaleAt(nextScale, clientX, clientY, animate = false) {
 function toggleZoom(clientX, clientY) {
   const current = image();
   if (!current) return;
+  wheelNavigationDelta = 0;
   if (zoomed()) resetZoom(true);
   else setScaleAt(naturalZoom(current), clientX, clientY, true);
 }
@@ -110,6 +141,16 @@ const wheelUi = target => target?.closest?.('.viewer-nav,.viewer-bar,.viewer-col
 document.addEventListener('keydown', event => {
   if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
     event.stopImmediatePropagation();
+    return;
+  }
+  if (!viewer?.hidden && viewerPageKeys.has(event.key)) {
+    const handled = event.key === 'PageUp' ? navigateViewerBy(-1)
+      : event.key === 'PageDown' ? navigateViewerBy(1)
+      : jumpViewerEdge(event.key === 'Home');
+    if (handled) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
     return;
   }
   if (!event.altKey && zoomed() && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
@@ -153,15 +194,22 @@ if (stage && viewer) {
     clickTimer = 0;
 
     if (zoomed()) {
+      wheelNavigationDelta = 0;
       if (!image()) return;
       const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1;
       setScaleAt(zoom.scale * Math.exp(-event.deltaY * multiplier * (event.ctrlKey ? .006 : .0015)), event.clientX, event.clientY);
     } else {
-      const now = performance.now();
-      if (now - lastWheelNavigation >= WHEEL_NAV_INTERVAL) {
-        lastWheelNavigation = now;
-        const button = event.deltaY < 0 ? viewerPrev : viewerNext;
+      // Browser pixel-wheel events are commonly about 100px per mouse-wheel notch;
+      // line-mode wheels are commonly three lines. Normalize both into the same
+      // accumulator so every event contributes and no timer/debounce can discard
+      // fast scrolling or high-resolution trackpad deltas.
+      const multiplier = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? innerHeight : 1;
+      wheelNavigationDelta += event.deltaY * multiplier;
+      while (Math.abs(wheelNavigationDelta) >= WHEEL_NAV_STEP) {
+        const direction = wheelNavigationDelta > 0 ? 1 : -1;
+        const button = direction > 0 ? viewerNext : viewerPrev;
         if (button && !button.disabled) button.click();
+        wheelNavigationDelta += direction > 0 ? -WHEEL_NAV_STEP : WHEEL_NAV_STEP;
       }
     }
 
@@ -216,6 +264,7 @@ if (stage && viewer) {
   new MutationObserver(resetZoom).observe(viewerMedia, { childList: true });
   new MutationObserver(() => {
     document.documentElement.classList.toggle('viewer-open', !viewer.hidden);
+    wheelNavigationDelta = 0;
     if (viewer.hidden) resetZoom();
     else showControls();
   }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
