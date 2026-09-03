@@ -214,7 +214,7 @@ function scheduleOutstanding() {
     if (!kind(card)) continue;
     const state = states.get(card.dataset.hash || '');
     if (state?.ready) continue;
-    const at = state?.nextCheck || now + RECHECK_DELAY;
+    const at = state?.nextCheck || now;
     if (at < next) next = at;
   }
   if (Number.isFinite(next)) scheduleCheck(Math.max(0, next - now));
@@ -249,20 +249,29 @@ async function checkNearby() {
 
   const now = performance.now();
   const cursor = files.querySelector('.keyboard-cursor[data-hash]');
-  const hashes = [];
+  const cursorHash = cursor && nearby.has(cursor) ? String(cursor.dataset.hash || '') : '';
+  const candidates = [];
   const seen = new Set();
-  const add = hash => {
-    const state = states.get(hash) || {};
-    if (!hash || seen.has(hash) || state.ready || now < (state.nextCheck || 0) || hashes.length >= CHECK_LIMIT) return;
-    seen.add(hash);
-    hashes.push(hash);
-  };
-  if (cursor && nearby.has(cursor)) add(cursor.dataset.hash || '');
 
   for (const card of nearby) {
-    if (card === cursor || !kind(card)) continue;
-    add(card.dataset.hash || '');
+    if (!kind(card)) continue;
+    const hash = String(card.dataset.hash || '');
+    const state = states.get(hash) || {};
+    const due = state.nextCheck || 0;
+    if (!hash || seen.has(hash) || state.ready || now < due) continue;
+    seen.add(hash);
+    candidates.push({ hash, due });
+  }
+  candidates.sort((a, b) => a.due - b.due);
+
+  const hashes = [];
+  if (cursorHash) {
+    const index = candidates.findIndex(item => item.hash === cursorHash);
+    if (index >= 0) hashes.push(candidates.splice(index, 1)[0].hash);
+  }
+  for (const item of candidates) {
     if (hashes.length >= CHECK_LIMIT) break;
+    hashes.push(item.hash);
   }
   if (!hashes.length) return;
 
