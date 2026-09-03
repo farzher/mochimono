@@ -6,7 +6,6 @@ const ROW_TOLERANCE = 3;
 const THUMB_NEIGHBORS = 8;
 
 let holding = false;
-let frozenSentinels = null;
 let verticalAnchorX = null;
 let repeatFrame = 0;
 let pendingKey = '';
@@ -94,26 +93,6 @@ function selectCard(card, scroll = true) {
   return true;
 }
 
-function freezeSentinels() {
-  if (!frozenSentinels) {
-    frozenSentinels = {
-      top: document.querySelector('#top-scroll-sentinel'),
-      bottom: document.querySelector('#scroll-sentinel')
-    };
-  }
-  if (frozenSentinels.top) frozenSentinels.top.hidden = true;
-  if (frozenSentinels.bottom) frozenSentinels.bottom.hidden = true;
-}
-
-function releaseSentinels() {
-  if (!frozenSentinels) return;
-  const { top, bottom } = frozenSentinels;
-  frozenSentinels = null;
-  const state = window.mochimonoLibrary?.state?.();
-  if (top) top.hidden = state ? !state.hasPrevious : true;
-  if (bottom) bottom.hidden = state ? !state.hasMore : true;
-}
-
 function verticalTarget(current, direction, anchorX) {
   const walker = cardWalker(current);
   if (!walker) return null;
@@ -165,7 +144,6 @@ function ensureAdjacentWindow(current, direction) {
   if (!library.extend(direction)) return false;
   window.mochimonoGallery?.layoutNow?.();
   restoreWindowAnchor(hash, top);
-  freezeSentinels();
   return true;
 }
 
@@ -210,7 +188,6 @@ function press(key) {
 
   if (!holding) {
     holding = true;
-    freezeSentinels();
     const current = selectedCard();
     if (!visible(current)) {
       verticalAnchorX = null;
@@ -240,7 +217,6 @@ function release() {
   repeatFrame = 0;
   window.mochimonoThumbnails?.clearPriority?.();
   window.mochimonoGridInteraction?.release?.();
-  releaseSentinels();
 }
 
 function reset(clear = false) {
