@@ -170,27 +170,6 @@ function interceptDelete(event) {
   trash(hashes, target.id === 'delete-ignore' || target.id === 'selectionIgnore', viewerDelete ? 'viewer' : 'selection');
 }
 
-function relabelDeleteActions() {
-  const names = new Map([
-    ['delete','Trash'], ['delete-ignore','Trash + Ignore'],
-    ['selectionDelete','Trash'], ['selectionIgnore','Trash + Ignore']
-  ]);
-  for (const [id,text] of names) {
-    const element = document.getElementById(id);
-    if (element && element.textContent !== text) element.textContent = text;
-  }
-}
-
-const style = document.createElement('style');
-style.textContent = `
-  .protection-state{margin-left:auto;font-size:9px;font-weight:750;color:#9b938f}.protection-state.good{color:#96b79f}.protection-state.warn{color:#c9aa7d}
-  .protection-detail-summary{display:grid;gap:3px;margin:2px 0 10px}.protection-detail-summary strong{font-size:12px}.protection-detail-summary span{font-size:10px;color:#99918e}
-  .protection-level-field{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 10px;font-size:10px;color:#aaa19e}.protection-level-field select{max-width:150px}
-  .protection-copy-list{display:grid;gap:5px;margin:7px 0}.protection-copy-row{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px}.protection-copy-row small{color:#8f8784;text-align:right}
-  .protection-action-status{min-height:14px;margin-top:5px;font-size:9px;color:#aaa19e}
-`;
-document.head.append(style);
-
 panel?.addEventListener('change', event => {
   const select = event.target.closest('[data-file-protection]');
   if (select) updateLevel(select);
@@ -199,4 +178,3 @@ document.addEventListener('click', interceptDelete, true);
 if (panel) new MutationObserver(() => queueMicrotask(decorateDetails)).observe(panel, { childList:true, subtree:true });
 window.addEventListener('mochimono:viewer-opened', () => { generation++; queueMicrotask(decorateDetails); });
 viewerOpen?.addEventListener('click', () => setTimeout(decorateDetails));
-relabelDeleteActions();
