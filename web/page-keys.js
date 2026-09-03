@@ -5,6 +5,31 @@ const commandbar = document.querySelector('.commandbar');
 const pageKeys = new Set(['PageUp', 'PageDown', 'Home', 'End']);
 const EDGE_MARGIN = 240;
 
+// thumbs.js already limits image creation to the nearby viewport window. Once a
+// cached thumbnail exists, do not add the browser's independent lazy-load gate;
+// it can otherwise remain pending until a later pointer/scroll interaction.
+function promoteThumbs(root = files) {
+  if (!root) return;
+  const images = root.matches?.('img.cached-thumb')
+    ? [root]
+    : [...(root.querySelectorAll?.('img.cached-thumb') || [])];
+  for (const image of images) {
+    if (image.loading === 'lazy') image.loading = 'eager';
+    if (image.hidden) image.hidden = false;
+  }
+}
+
+promoteThumbs();
+if (files) {
+  new MutationObserver(records => {
+    for (const record of records) {
+      for (const node of record.addedNodes) if (node instanceof Element) promoteThumbs(node);
+    }
+  }).observe(files, { childList: true, subtree: true });
+  window.addEventListener('mochimono:grid-interaction-end', () => promoteThumbs(), { passive: true });
+  window.addEventListener('mochimono:catalog-updated', () => requestAnimationFrame(() => promoteThumbs()), { passive: true });
+}
+
 // Keep the exact pre-viewer grid position unless viewer navigation moved to a
 // file that would otherwise be entirely offscreen.
 let viewerWasOpen = Boolean(viewer && !viewer.hidden);
