@@ -2,7 +2,7 @@ const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
 const commandbar = document.querySelector('.commandbar');
-const pageKeys = new Set(['PageUp', 'PageDown']);
+const pageKeys = new Set(['PageUp', 'PageDown', 'Home', 'End']);
 const EDGE_MARGIN = 240;
 
 // thumbs.js already bounds loading to cards near the viewport. Once it creates
@@ -72,6 +72,7 @@ if (viewer && viewerOpen) {
 let pageBusy = false;
 let queuedDirection = 0;
 let releaseTimer = 0;
+let motionGeneration = 0;
 
 function editingControl(target) {
   return Boolean(target?.closest?.('input,select,textarea,[contenteditable="true"]'));
@@ -120,27 +121,31 @@ function armRelease() {
   releaseTimer = setTimeout(release, 220);
 }
 
-function finishPage() {
+function finishPage(generation) {
+  if (generation !== motionGeneration) return;
   pageBusy = false;
   const next = queuedDirection;
   queuedDirection = 0;
   if (next) runPage(next);
 }
 
-function doScroll(direction, distance) {
+function doScroll(direction, distance, generation) {
+  if (generation !== motionGeneration) return;
   const before = window.scrollY;
   window.scrollBy({ top: direction * distance, left: 0, behavior: 'auto' });
   requestAnimationFrame(() => {
+    if (generation !== motionGeneration) return;
     const moved = Math.abs(window.scrollY - before);
     if (moved < distance * .65 && canExtend(direction) && extend(direction)) {
       const remaining = Math.max(0, distance - moved);
       afterAnchorRestore(() => {
+        if (generation !== motionGeneration) return;
         if (remaining) window.scrollBy({ top: direction * remaining, left: 0, behavior: 'auto' });
-        requestAnimationFrame(finishPage);
+        requestAnimationFrame(() => finishPage(generation));
       });
       return;
     }
-    finishPage();
+    finishPage(generation);
   });
 }
 
@@ -150,18 +155,53 @@ function runPage(direction) {
     return;
   }
   pageBusy = true;
+  const generation = motionGeneration;
   const distance = pageDistance();
   window.mochimonoGridInteraction?.pulse?.(220);
 
   if (!shouldPreExtend(direction, distance) || !extend(direction)) {
-    doScroll(direction, distance);
+    doScroll(direction, distance, generation);
     return;
   }
-  afterAnchorRestore(() => doScroll(direction, distance));
+  afterAnchorRestore(() => doScroll(direction, distance, generation));
+}
+
+function jumpEdge(key) {
+  const library = window.mochimonoLibrary;
+  const hashes = library?.filteredHashes?.();
+  if (!Array.isArray(hashes) || !hashes.length) return false;
+
+  motionGeneration++;
+  pageBusy = false;
+  queuedDirection = 0;
+  clearTimeout(releaseTimer);
+  releaseTimer = 0;
+  const generation = motionGeneration;
+  const first = key === 'Home';
+  const index = first ? 0 : hashes.length - 1;
+  const hash = hashes[index];
+  library.ensureIndex?.(index);
+  window.mochimonoGallery?.layoutNow?.();
+  window.mochimonoGridInteraction?.pulse?.(220);
+
+  afterAnchorRestore(() => {
+    if (generation !== motionGeneration) return;
+    const card = files?.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
+    if (card) {
+      if (first) window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      else card.scrollIntoView({ behavior: 'auto', block: 'end', inline: 'nearest' });
+      window.mochimonoThumbnails?.prioritize?.([card]);
+    }
+    setTimeout(() => {
+      if (generation === motionGeneration) window.mochimonoGridInteraction?.release?.();
+    }, 70);
+  });
+  return true;
 }
 
 function press(key) {
   if (!pageKeys.has(key) || (viewer && !viewer.hidden)) return false;
+  if (key === 'Home' || key === 'End') return jumpEdge(key);
   armRelease();
   runPage(key === 'PageUp' ? -1 : 1);
   return true;
