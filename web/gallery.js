@@ -225,23 +225,20 @@ function flushDeferredGeometry() {
 function changedGrids(records) {
   const result = new Set();
   for (const record of records) {
-    if (record.target instanceof Element && record.target.matches('.date-grid')) result.add(record.target);
+    const targetGrid = record.target instanceof Element && record.target.matches('.date-grid') ? record.target : null;
     for (const node of [...record.addedNodes, ...record.removedNodes]) {
       if (!(node instanceof Element)) continue;
       if (node.matches('.file-card')) {
-        const grid = record.target instanceof Element && record.target.matches('.date-grid') ? record.target : null;
-        if (grid) result.add(grid);
+        if (targetGrid) result.add(targetGrid);
+        continue;
       }
       if (node.matches('.date-grid')) result.add(node);
       node.querySelectorAll?.('.date-grid').forEach(grid => result.add(grid));
+      if (targetGrid && node.querySelector?.('.file-card')) result.add(targetGrid);
     }
   }
   return result;
 }
-
-const style = document.createElement('style');
-style.textContent = `.files.grid .date-grid>.gallery-row-break{flex:0 0 100%;width:100%;height:0;margin:0;padding:0;pointer-events:none}`;
-document.head.append(style);
 
 sizeButtons.forEach(button => button.addEventListener('click', () => setMediaSize(Number(button.dataset.mediaSize))));
 window.addEventListener('mochimono:media-size', () => {
