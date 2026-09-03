@@ -7,9 +7,11 @@ const PRELOAD_MARGIN = 360;
 
 const states = new Map();
 const cardsByHash = new Map();
+const dimensions = new Map();
 const nearby = new Set();
 const prioritized = new Set();
 const pendingTrees = new Set();
+const decodePrimed = new WeakSet();
 const browserFallback = CLIENT ? null : import('./browser-thumbnail-fallback.js').catch(() => null);
 let observeFrame = 0;
 let checkTimer = 0;
@@ -44,16 +46,38 @@ function cardsIn(node) {
   return cards;
 }
 
+function applyDimensions(card, width, height) {
+  width = Number(width) || 0;
+  height = Number(height) || 0;
+  if (!card || !width || !height) return;
+  card.dataset.width = String(width);
+  card.dataset.height = String(height);
+  if (card.classList.contains('media-card')) card.style.setProperty('--ratio', String(width / height));
+}
+
+function rememberDimensions(hash, width, height) {
+  hash = String(hash || '');
+  width = Number(width) || 0;
+  height = Number(height) || 0;
+  if (!hash || !width || !height) return;
+  dimensions.set(hash, { width, height });
+  for (const card of cardsByHash.get(hash) || []) applyDimensions(card, width, height);
+  try { window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height); } catch {}
+}
+
 function indexCard(card) {
   const hash = String(card?.dataset?.hash || '');
   if (!hash) return;
   let group = cardsByHash.get(hash);
   if (!group) cardsByHash.set(hash, group = new Set());
   group.add(card);
+  const known = dimensions.get(hash);
+  if (known) applyDimensions(card, known.width, known.height);
 }
 
 function unindexCard(card) {
   prioritized.delete(card);
+  nearby.delete(card);
   const hash = String(card?.dataset?.hash || '');
   const group = hash && cardsByHash.get(hash);
   if (!group) return;
@@ -91,7 +115,7 @@ function setFailedVisual(hash, failed, terminal = false) {
     if (failed) {
       pending(card);
       box.classList.add('thumb-failed');
-      box.title = terminal ? 'Preview unavailable' : 'Preview generation failed; retrying later';
+      box.title = terminal ? 'Thumbnail unavailable' : 'Thumbnail generation failed; retrying later';
     } else {
       box.classList.remove('thumb-failed');
       box.removeAttribute('title');
@@ -125,11 +149,21 @@ function resetFailures() {
   }
 }
 
-function rememberDimensions(hash, width, height) {
-  width = Number(width) || 0;
-  height = Number(height) || 0;
-  if (!width || !height) return;
-  try { window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height); } catch {}
+// Chromium can have a complete <img> with a valid naturalWidth while postponing
+// pixel decode/upload until an unrelated hover causes a style/paint invalidation.
+// Explicitly start decode, but never gate visibility on it. When decode finishes,
+// a one-frame no-op transform guarantees a paint invalidation without the old
+// opacity/hidden lifecycle that made thumbnails visibly slower.
+function primePaint(image) {
+  if (!image?.decode || decodePrimed.has(image)) return;
+  decodePrimed.add(image);
+  image.decode().then(() => {
+    if (!image.isConnected) return;
+    image.style.transform = 'translateZ(0)';
+    requestAnimationFrame(() => {
+      if (image.isConnected) image.style.removeProperty('transform');
+    });
+  }).catch(() => {});
 }
 
 function markLoaded(hash, card, image) {
@@ -145,9 +179,12 @@ function markLoaded(hash, card, image) {
   box?.removeAttribute('title');
   box?.querySelector('.video-thumb-pending')?.remove();
   image.hidden = false;
+  image.style.objectFit = 'cover';
   rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
-  nearby.delete(card);
-  observer?.unobserve(card);
+  primePaint(image);
+  // Keep loaded cards observed. Previously we unobserved them immediately after
+  // load, which meant a card could be visibly black with no future viewport
+  // callback capable of repairing it until pointer interaction repainted it.
 }
 
 function paintCard(card, urgent = false) {
@@ -159,11 +196,13 @@ function paintCard(card, urgent = false) {
   const state = states.get(hash) || {};
   const current = box.querySelector('img.cached-thumb');
   if (current?.dataset.thumbHash === hash) {
+    current.style.objectFit = 'cover';
     if (urgent && !state.ready) {
       current.loading = 'eager';
       try { current.fetchPriority = 'high'; } catch {}
     }
     if (current.complete && current.naturalWidth) markLoaded(hash, card, current);
+    else if (urgent) primePaint(current);
     return;
   }
 
@@ -185,10 +224,8 @@ function paintCard(card, urgent = false) {
   image.alt = '';
   image.hidden = false;
   image.decoding = 'async';
-  // Mochimono's IntersectionObserver already bounds image creation to the nearby
-  // viewport window. Native lazy loading adds a second gate and can leave a card
-  // black until an unrelated pointer/scroll event wakes it up.
   image.loading = 'eager';
+  image.style.objectFit = 'cover';
   image.dataset.thumbHash = hash;
   try { image.fetchPriority = urgent || card.classList.contains('keyboard-cursor') ? 'high' : 'auto'; } catch {}
   image.onload = () => {
@@ -207,6 +244,9 @@ function paintCard(card, urgent = false) {
   };
   box.prepend(image);
   image.src = thumbUrl(hash);
+  // Starting decode here also covers memory/disk-cache hits where load can happen
+  // before the browser chooses to raster the image.
+  primePaint(image);
 }
 
 function loadHash(hash) {
@@ -261,19 +301,17 @@ function repairViewport() {
 }
 
 async function requestMissing(hashes) {
-  if (!hashes.length) return;
-  if (!CLIENT) {
-    fetch('/api/thumbs/request', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ hashes })
-    }).catch(() => {});
+  if (!hashes.length || CLIENT) return;
+  fetch('/api/thumbs/request', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ hashes })
+  }).catch(() => {});
 
-    const fallback = await browserFallback;
-    for (const hash of hashes) {
-      const card = [...(cardsByHash.get(hash) || [])].find(item => item.isConnected && activeCard(item));
-      if (card) fallback?.queueBrowserThumbnail?.({ hash, filename: filename(card), kind: kind(card) });
-    }
+  const fallback = await browserFallback;
+  for (const hash of hashes) {
+    const card = [...(cardsByHash.get(hash) || [])].find(item => item.isConnected && activeCard(item));
+    if (card) fallback?.queueBrowserThumbnail?.({ hash, filename: filename(card), kind: kind(card) });
   }
 }
 
@@ -395,10 +433,7 @@ function observeTree(node) {
     indexCard(card);
     if (!kind(card)) continue;
     const image = card.querySelector('img.cached-thumb');
-    if (image?.complete && image.naturalWidth) {
-      markLoaded(String(card.dataset.hash || ''), card, image);
-      continue;
-    }
+    if (image?.complete && image.naturalWidth) markLoaded(String(card.dataset.hash || ''), card, image);
     observer.observe(card);
   }
 }
@@ -411,6 +446,7 @@ function queueObserveTree(node) {
     observeFrame = 0;
     for (const tree of pendingTrees) if (tree.isConnected) observeTree(tree);
     pendingTrees.clear();
+    repairViewport();
   });
 }
 
@@ -418,8 +454,6 @@ function forgetTree(node) {
   if (!observer) return;
   for (const card of cardsIn(node)) {
     unindexCard(card);
-    nearby.delete(card);
-    prioritized.delete(card);
     observer.unobserve(card);
   }
 }
@@ -444,6 +478,8 @@ function reuseImages(node, images) {
     if (!box || box.querySelector('img.cached-thumb')) continue;
     box.querySelector('.video-thumb-pending')?.remove();
     box.prepend(image);
+    image.style.objectFit = 'cover';
+    markLoaded(String(card.dataset.hash || ''), card, image);
   }
 }
 
