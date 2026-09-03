@@ -4,16 +4,6 @@ const pending = new Set();
 let decorateFrame = 0;
 let fullPending = false;
 
-const style = document.createElement('style');
-style.textContent = `
-  .file-card{position:relative}
-  .protection-badge{pointer-events:none;white-space:nowrap;font-weight:750;letter-spacing:.01em}
-  .file-card .protection-badge{position:absolute;z-index:4;right:6px;bottom:6px;padding:3px 6px;border-radius:6px;background:rgba(54,27,28,.9);box-shadow:0 1px 5px rgba(0,0,0,.35);backdrop-filter:blur(6px);font-size:8px;color:#efaaa3}
-  .file-row.protection-decorated{grid-template-columns:66px minmax(0,1fr) 120px 84px 116px}
-  .file-row .protection-badge{justify-self:end;max-width:116px;overflow:hidden;text-overflow:ellipsis;padding:4px 7px;border-radius:7px;background:rgba(155,77,72,.08);color:#d99690;font-size:9px;text-align:right}
-`;
-document.head.append(style);
-
 function decorateItem(item) {
   const hash = item.dataset.hash;
   if (!hash) return;
