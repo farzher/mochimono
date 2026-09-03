@@ -61,7 +61,9 @@ function syncUrl() {
   wasOpen = open;
 }
 
-new MutationObserver(syncUrl).observe(viewer, { subtree: true, attributes: true, attributeFilter: ['hidden', 'href'] });
+const viewerObserver = new MutationObserver(syncUrl);
+viewerObserver.observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
+viewerObserver.observe(openLink, { attributes: true, attributeFilter: ['href'] });
 
 viewerContext?.addEventListener('click', event => {
   if (viewer.hidden || !event.target.closest('[data-context-kind]') || !history.state?.[VIEWER_STATE]) return;
