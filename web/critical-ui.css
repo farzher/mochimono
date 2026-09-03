@@ -12,7 +12,9 @@ html.keyboard-navigation-active #files.grid .file-card.media-card:after{transiti
 html.keyboard-navigation-active #files.grid .file-card:hover{background:#100f11!important;box-shadow:none!important}
 
 .files.grid>.date-group{contain:layout style}
-.files.grid .date-grid>.gallery-row-break{flex:0 0 100%;width:100%;height:0;margin:0;padding:0;pointer-events:none}
+.files.grid .file-card:not(.media-card)>.thumb{height:calc(100% - 42px)}
+.files.grid .file-card:not(.media-card)>.card-copy{height:42px;padding:7px 9px}
+.files.grid .file-card:not(.media-card) .file-icon{max-width:70%;max-height:72%}
 .files.grid .timeline-group-select>span:last-child,.files.grid .timeline-check{will-change:auto!important}
 html.grid-interaction-active #files .file-context-badge{opacity:0!important;transform:none!important}
 
