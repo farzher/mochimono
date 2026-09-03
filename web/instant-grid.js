@@ -77,25 +77,35 @@ function installThumbnailHandoff() {
         }
       }
     }
-    if (!ready.size) return;
-    for (const record of records) {
-      for (const node of record.addedNodes) {
-        if (!(node instanceof Element)) continue;
-        const cards = [];
-        if (node.matches('[data-hash]')) cards.push(node);
-        cards.push(...node.querySelectorAll('[data-hash]'));
-        for (const card of cards) {
-          const image = ready.get(String(card.dataset.hash || ''));
-          const box = image && card.querySelector('.media-thumb');
-          if (!box || box.querySelector('img.cached-thumb')) continue;
-          box.querySelector('.video-thumb-pending')?.remove();
-          box.prepend(image);
+
+    if (ready.size) {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          const cards = [];
+          if (node.matches('[data-hash]')) cards.push(node);
+          cards.push(...node.querySelectorAll('[data-hash]'));
+          for (const card of cards) {
+            const image = ready.get(String(card.dataset.hash || ''));
+            const box = image && card.querySelector('.media-thumb');
+            if (!box || box.querySelector('img.cached-thumb')) continue;
+            box.querySelector('.video-thumb-pending')?.remove();
+            box.prepend(image);
+          }
         }
       }
     }
+
+    if (files.querySelector('[data-hash]')) {
+      document.documentElement.classList.remove('instant-grid-preview');
+      observer.disconnect();
+    }
   });
   observer.observe(files, { childList:true, subtree:true });
-  setTimeout(() => observer.disconnect(), 8000);
+  setTimeout(() => {
+    observer.disconnect();
+    document.documentElement.classList.remove('instant-grid-preview');
+  }, 30_000);
 }
 
 function installReadyThumbs() {
@@ -121,8 +131,6 @@ function installReadyThumbs() {
     image.src = `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
   }
 
-  // Also starts generation for missing local previews. Existing thumbnails paint
-  // immediately; missing ones continue in the normal urgent/background pipeline.
   if (hashes.length) fetch('/api/thumbs/check', {
     method: 'POST',
     headers: { 'content-type':'application/json' },
@@ -140,12 +148,15 @@ function filterQuick(items) {
 }
 
 async function paintInstantGrid() {
-  // Omit pagination here so the Agent may include rows that are still in the
+  // Omit pagination so the Agent may include rows still in its progressive
   // in-memory staging window during a first-time local index.
   const response = await fetch(`/api/client/local-catalog?limit=${QUICK_LIMIT}`, { cache:'no-store' });
   if (!response.ok) return;
   const data = await response.json();
-  if (window.mochimonoLibrary || files.childElementCount) return;
+
+  // library-app publishes its API before its expensive catalog restore finishes,
+  // so detect real rendered cards rather than the existence of that API.
+  if (files.querySelector('[data-hash]')) return;
   const items = filterQuick(Array.isArray(data.files) ? data.files : []).slice(0, QUICK_LIMIT);
   if (!items.length) return;
 
@@ -157,12 +168,6 @@ async function paintInstantGrid() {
   if (fileCount) fileCount.textContent = 'Loading library…';
   installThumbnailHandoff();
   installReadyThumbs();
-
-  const clear = () => document.documentElement.classList.remove('instant-grid-preview');
-  addEventListener('mochimono:grid-laid-out', () => {
-    if (window.mochimonoLibrary) clear();
-  }, { once:true });
-  setTimeout(() => { if (window.mochimonoLibrary) clear(); }, 2500);
 }
 
 const style = document.createElement('style');
