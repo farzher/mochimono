@@ -144,7 +144,7 @@ function dayButton(key, label) {
 
 function syncDayLabels(grid, cards) {
   if (!cards.length) return;
-  for (const card of cards) card.classList.remove('day-start', 'day-row-start');
+  for (const card of cards) card.classList.remove('day-start');
 
   const starts = [];
   let previousDay = '';
@@ -155,13 +155,6 @@ function syncDayLabels(grid, cards) {
       starts.push(card);
     }
     previousDay = day;
-  }
-
-  const rowTop = new Map(cards.map(card => [card, Math.round(card.offsetTop)]));
-  const startRows = new Set(starts.map(card => rowTop.get(card)));
-  for (const card of cards) {
-    const row = rowTop.get(card) ?? 0;
-    if (startRows.has(row) || startRows.has(row - 1) || startRows.has(row + 1)) card.classList.add('day-row-start');
   }
 
   const existing = new Map([...grid.querySelectorAll(':scope > .day-group-control')].map(button => [button.dataset.periodKey, button]));
