@@ -75,6 +75,47 @@ function pending(card) {
   box.prepend(item);
 }
 
+function setFailedVisual(hash, failed, terminal = false) {
+  for (const card of cardsByHash.get(String(hash || '')) || []) {
+    const box = mediaBox(card);
+    if (!box) continue;
+    if (failed) {
+      pending(card);
+      box.classList.add('thumb-failed');
+      box.title = terminal ? 'Preview unavailable' : 'Preview generation failed; retrying later';
+    } else {
+      box.classList.remove('thumb-failed');
+      box.removeAttribute('title');
+    }
+  }
+}
+
+function markFailed(hash, failure) {
+  const now = performance.now();
+  const terminal = failure?.terminal === true;
+  const retryAt = terminal ? Infinity : now + Math.max(RECHECK_DELAY, Number(failure?.retryAfterMs) || RECHECK_DELAY);
+  const state = states.get(hash) || {};
+  state.ready = false;
+  state.failed = true;
+  state.terminal = terminal;
+  state.nextTry = retryAt;
+  state.nextCheck = retryAt;
+  states.set(hash, state);
+  setFailedVisual(hash, true, terminal);
+}
+
+function resetFailures() {
+  for (const [hash, state] of states) {
+    if (!state.failed) continue;
+    state.failed = false;
+    state.terminal = false;
+    state.nextCheck = 0;
+    state.nextTry = 0;
+    states.set(hash, state);
+    setFailedVisual(hash, false);
+  }
+}
+
 function rememberDimensions(hash, width, height) {
   width = Number(width) || 0;
   height = Number(height) || 0;
@@ -85,6 +126,8 @@ function rememberDimensions(hash, width, height) {
 function markLoaded(hash, card, image) {
   const state = states.get(hash) || {};
   state.ready = true;
+  state.failed = false;
+  state.terminal = false;
   state.nextCheck = 0;
   state.nextTry = 0;
   states.set(hash, state);
@@ -109,7 +152,14 @@ function paintCard(card, urgent = false) {
   }
 
   const state = states.get(hash) || {};
-  if (performance.now() < (state.nextTry || 0)) {
+  const now = performance.now();
+  if (state.failed && now >= (state.nextTry || 0)) {
+    state.failed = false;
+    state.terminal = false;
+    states.set(hash, state);
+    setFailedVisual(hash, false);
+  }
+  if (now < (state.nextTry || 0)) {
     pending(card);
     return;
   }
@@ -151,6 +201,19 @@ function scheduleCheck(delay = 80) {
   if (checkTimer) clearTimeout(checkTimer);
   checkAt = at;
   checkTimer = setTimeout(checkNearby, delay);
+}
+
+function scheduleOutstanding() {
+  const now = performance.now();
+  let next = Infinity;
+  for (const card of nearby) {
+    if (!kind(card)) continue;
+    const state = states.get(card.dataset.hash || '');
+    if (state?.ready) continue;
+    const at = state?.nextCheck || now + RECHECK_DELAY;
+    if (at < next) next = at;
+  }
+  if (Number.isFinite(next)) scheduleCheck(Math.max(0, next - now));
 }
 
 function refreshVisible() {
@@ -209,22 +272,32 @@ async function checkNearby() {
     if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
     const data = await response.json();
     const ready = new Map((data.thumbnails || []).map(item => [String(item.hash), item]));
+    const failures = new Map((data.failures || []).map(item => [String(item.hash), item]));
     const missing = [];
 
     for (const hash of hashes) {
       const state = states.get(hash) || {};
       const item = ready.get(hash);
+      const failure = failures.get(hash);
       if (item) {
         state.ready = true;
+        state.failed = false;
+        state.terminal = false;
         state.nextCheck = 0;
         state.nextTry = 0;
         states.set(hash, state);
+        setFailedVisual(hash, false);
         rememberDimensions(hash, item.width, item.height);
         loadHash(hash);
+      } else if (failure) {
+        markFailed(hash, failure);
       } else {
         state.ready = false;
+        state.failed = false;
+        state.terminal = false;
         state.nextCheck = performance.now() + RECHECK_DELAY;
         states.set(hash, state);
+        setFailedVisual(hash, false);
         missing.push(hash);
       }
     }
@@ -238,7 +311,7 @@ async function checkNearby() {
     }
   } finally {
     checking = false;
-    if ([...nearby].some(card => kind(card) && !states.get(card.dataset.hash)?.ready)) scheduleCheck(RECHECK_DELAY);
+    scheduleOutstanding();
   }
 }
 
@@ -337,16 +410,22 @@ if (files) {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) refreshVisible();
   });
-  window.addEventListener('mochimono:catalog-updated', refreshVisible);
+  window.addEventListener('mochimono:catalog-updated', () => {
+    resetFailures();
+    refreshVisible();
+  });
   window.addEventListener('mochimono:grid-interaction-end', refreshVisible);
   window.addEventListener('mochimono:browser-thumbnail-ready', event => {
     const hash = String(event.detail?.hash || '');
     if (!hash) return;
     const state = states.get(hash) || {};
     state.ready = false;
+    state.failed = false;
+    state.terminal = false;
     state.nextCheck = 0;
     state.nextTry = 0;
     states.set(hash, state);
+    setFailedVisual(hash, false);
     loadHash(hash);
     scheduleCheck(50);
   });
