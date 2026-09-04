@@ -4,6 +4,7 @@ const viewerOpen = document.querySelector('#viewer-open');
 const commandbar = document.querySelector('.commandbar');
 const pageKeys = new Set(['PageUp', 'PageDown', 'Home', 'End']);
 const EDGE_MARGIN = 240;
+const MAX_PREPARE_PASSES = 8;
 
 // Keep the exact pre-viewer grid position unless viewer navigation moved to a
 // file that would otherwise be entirely offscreen.
@@ -45,9 +46,9 @@ if (viewer && viewerOpen) {
   }).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
 }
 
-// A full Page Up/Down can skip across the 1px virtualization sentinel between
-// IntersectionObserver samples. Extend before crossing an edge and wait for the
-// library's prepend anchor restoration before applying the page movement.
+// Page movement is measured only after the virtual window is fully prepared.
+// That keeps a page press equal to one viewport step even when older/newer rows
+// have to be inserted before the movement can happen.
 let pageBusy = false;
 let queuedDirection = 0;
 let releaseTimer = 0;
@@ -104,10 +105,6 @@ function restoreAnchorNow(anchor) {
 }
 
 function extend(direction) {
-  // library-app restores its own anchor two animation frames later. That is safe,
-  // but it used to expose the newly prepended rough geometry for one paint first.
-  // Stabilize the visible row synchronously after the justified layout so there
-  // is no intermediate frame for Page Up/Down to visibly jump through.
   const anchor = visibleAnchor();
   const changed = Boolean(window.mochimonoLibrary?.extend?.(direction));
   if (!changed) return false;
@@ -118,6 +115,18 @@ function extend(direction) {
 
 function afterAnchorRestore(callback) {
   requestAnimationFrame(() => requestAnimationFrame(callback));
+}
+
+function preparePage(direction, distance, generation, callback, pass = 0) {
+  if (generation !== motionGeneration) return;
+  if (pass >= MAX_PREPARE_PASSES || !shouldPreExtend(direction, distance) || !extend(direction)) {
+    callback();
+    return;
+  }
+  // library-app has a defensive two-frame anchor restore. Let it finish before
+  // deciding whether another virtual batch is needed. No intentional page motion
+  // happens until every anchor correction is complete.
+  afterAnchorRestore(() => preparePage(direction, distance, generation, callback, pass + 1));
 }
 
 function release() {
@@ -140,24 +149,11 @@ function finishPage(generation) {
   if (next) runPage(next);
 }
 
-function doScroll(direction, distance, generation) {
+function doExactScroll(direction, distance, generation) {
   if (generation !== motionGeneration) return;
-  const before = window.scrollY;
-  window.scrollBy({ top: direction * distance, left: 0, behavior: 'auto' });
-  requestAnimationFrame(() => {
-    if (generation !== motionGeneration) return;
-    const moved = Math.abs(window.scrollY - before);
-    if (moved < distance * .65 && canExtend(direction) && extend(direction)) {
-      const remaining = Math.max(0, distance - moved);
-      afterAnchorRestore(() => {
-        if (generation !== motionGeneration) return;
-        if (remaining) window.scrollBy({ top: direction * remaining, left: 0, behavior: 'auto' });
-        requestAnimationFrame(() => finishPage(generation));
-      });
-      return;
-    }
-    finishPage(generation);
-  });
+  const start = window.scrollY;
+  window.scrollTo({ top: start + direction * distance, left: 0, behavior: 'auto' });
+  requestAnimationFrame(() => finishPage(generation));
 }
 
 function runPage(direction) {
@@ -170,11 +166,7 @@ function runPage(direction) {
   const distance = pageDistance();
   window.mochimonoGridInteraction?.pulse?.(220);
 
-  if (!shouldPreExtend(direction, distance) || !extend(direction)) {
-    doScroll(direction, distance, generation);
-    return;
-  }
-  afterAnchorRestore(() => doScroll(direction, distance, generation));
+  preparePage(direction, distance, generation, () => doExactScroll(direction, distance, generation));
 }
 
 function jumpEdge(key) {
