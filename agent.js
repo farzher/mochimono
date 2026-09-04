@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { platform } from 'node:os';
+import { networkInterfaces, platform } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -19,9 +19,23 @@ import { handleClientGateway } from './client-gateway.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'agent-web');
-const HOST = '127.0.0.1';
+const HOST_OVERRIDE = String(process.env.MOCHIMONO_AGENT_HOST || '').trim();
 const PORT = Number(process.env.MOCHIMONO_AGENT_PORT || 8643);
+const desiredHost = () => HOST_OVERRIDE || (settings.lanAccess ? '0.0.0.0' : '127.0.0.1');
+let activeHost = desiredHost();
 let deviceIdentityReconciled = false;
+
+function lanUrls() {
+  if (activeHost === '127.0.0.1' || activeHost === 'localhost') return [];
+  const urls = [];
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries || []) {
+      if (entry.internal || entry.family !== 'IPv4') continue;
+      urls.push(`http://${entry.address}:${PORT}`);
+    }
+  }
+  return [...new Set(urls)];
+}
 
 function staticType(path) {
   if (path.endsWith('.html')) return 'text/html; charset=utf-8';
@@ -136,7 +150,10 @@ async function handleLocalApi(req, res, url) {
     json(res, 200, {
       settings: {
         server: settings.server, hasToken: Boolean(settings.token), device: settings.device,
-        uploadWorkers: settings.uploadWorkers, thumbnailMode: settings.thumbnailMode, folders: visibleFolders()
+        uploadWorkers: settings.uploadWorkers, thumbnailMode: settings.thumbnailMode, folders: visibleFolders(),
+        lanAccess: activeHost !== '127.0.0.1' && activeHost !== 'localhost',
+        lanAccessLocked: Boolean(HOST_OVERRIDE),
+        lanUrls: lanUrls()
       },
       server: await serverState(),
       background: backgroundWorkStatus(),
@@ -152,6 +169,7 @@ async function handleLocalApi(req, res, url) {
     const previousServer = settings.server;
     const previousToken = settings.token;
     const previousThumbnailMode = settings.thumbnailMode;
+    const previousLanAccess = settings.lanAccess;
     if (body.server !== undefined) settings.server = String(body.server || 'http://127.0.0.1:8642').trim().replace(/\/$/, '');
     if (body.token !== undefined) settings.token = String(body.token || '');
     if (body.device !== undefined) {
@@ -171,11 +189,13 @@ async function handleLocalApi(req, res, url) {
       if (!['off', 'idle', 'max'].includes(mode)) return json(res, 400, { error: 'Background mode must be off, idle, or max' });
       settings.thumbnailMode = mode;
     }
+    if (body.lanAccess !== undefined && !HOST_OVERRIDE) settings.lanAccess = body.lanAccess === true;
     await persistSettings();
 
     const connectionChanged = settings.server !== previousServer || settings.token !== previousToken;
     const deviceChanged = settings.device !== previousDevice;
     const previewModeChanged = settings.thumbnailMode !== previousThumbnailMode;
+    const lanChanged = !HOST_OVERRIDE && settings.lanAccess !== previousLanAccess;
     if (connectionChanged || deviceChanged) deviceIdentityReconciled = false;
     await reconcileDeviceIdentity();
 
@@ -189,7 +209,8 @@ async function handleLocalApi(req, res, url) {
       refreshBrowsePreviewPolicy(previousThumbnailMode);
     }
     if (connectionChanged || deviceChanged) invalidateClientProviders();
-    json(res, 200, { ok: true, thumbnailMode: settings.thumbnailMode });
+    json(res, 200, { ok: true, thumbnailMode: settings.thumbnailMode, lanAccess: settings.lanAccess });
+    if (lanChanged) setTimeout(() => rebindServer(desiredHost()).catch(error => console.error('Could not change LAN access:', error)), 40);
     return true;
   }
 
@@ -418,6 +439,40 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+function listenServer(host) {
+  return new Promise((resolvePromise, reject) => {
+    const onError = error => {
+      server.off('listening', onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      resolvePromise();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(PORT, host);
+  });
+}
+
+async function rebindServer(host) {
+  if (host === activeHost) return;
+  const previousHost = activeHost;
+  await new Promise((resolvePromise, reject) => server.close(error => error ? reject(error) : resolvePromise()));
+  try {
+    await listenServer(host);
+    activeHost = host;
+  } catch (error) {
+    try {
+      await listenServer(previousHost);
+      activeHost = previousHost;
+    } catch {}
+    throw error;
+  }
+  console.log(`Mochimono Agent listening on ${activeHost}:${PORT}`);
+  for (const url of lanUrls()) console.log(`LAN: ${url}`);
+}
+
 function openBrowser(url) {
   if (process.env.MOCHIMONO_NO_OPEN === '1') return;
   try {
@@ -432,9 +487,14 @@ function openBrowser(url) {
 
 startSyncService();
 startBrowseService(invalidateClientProviders);
-server.listen(PORT, HOST, () => {
-  const url = `http://${HOST}:${PORT}`;
+listenServer(activeHost).then(() => {
+  const browserHost = activeHost === '0.0.0.0' ? '127.0.0.1' : activeHost;
+  const url = `http://${browserHost}:${PORT}`;
   console.log(`Mochimono Agent: ${url}`);
+  for (const lanUrl of lanUrls()) console.log(`LAN: ${lanUrl}`);
   console.log(`Server: ${settings.server}`);
   openBrowser(url);
+}).catch(error => {
+  console.error(`Could not start Mochimono Agent on ${activeHost}:${PORT}:`, error);
+  process.exitCode = 1;
 });
