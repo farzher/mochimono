@@ -172,7 +172,7 @@ async function serveLocalObject(req, res, candidate) {
   const range = String(req.headers.range || '');
   if (!range) {
     res.writeHead(200, { ...headers, 'content-length': info.size });
-    if (req.method === 'HEAD') return void res.end();
+    if (req.method === 'HEAD') { res.end(); return true; }
     const source = createReadStream(candidate.path);
     try { await pipeline(source, res); } catch {}
     return true;
@@ -201,7 +201,7 @@ async function serveLocalObject(req, res, candidate) {
     'content-range': `bytes ${start}-${end}/${info.size}`,
     'content-length': end - start + 1
   });
-  if (req.method === 'HEAD') return void res.end();
+  if (req.method === 'HEAD') { res.end(); return true; }
   const source = createReadStream(candidate.path, { start, end });
   try { await pipeline(source, res); } catch {}
   return true;
