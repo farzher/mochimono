@@ -1,3 +1,5 @@
+import './stable-grid-adapter.js';
+
 const viewer = document.querySelector('#viewer');
 
 let active = false;
