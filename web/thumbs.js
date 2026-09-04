@@ -3,7 +3,7 @@ const CLIENT = document.documentElement.classList.contains('client-library');
 const THUMB_VERSION = 3;
 const CHECK_LIMIT = 320;
 const RECHECK_DELAY = CLIENT ? 120 : 500;
-const PRELOAD_MARGIN = 360;
+const PRELOAD_MARGIN = Math.max(720, Math.min(1600, Math.round(window.innerHeight * 1.1)));
 
 const states = new Map();
 const cardsByHash = new Map();
