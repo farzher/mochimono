@@ -2,8 +2,6 @@ import { createStableMediaGrid } from './stable-media-grid.js';
 
 const files = document.querySelector('#files');
 const rail = document.querySelector('#dateRail');
-const topSentinel = document.querySelector('#top-scroll-sentinel');
-const bottomSentinel = document.querySelector('#scroll-sentinel');
 const mediaSizeInput = document.querySelector('#mediaSize');
 const cache = window.mochimonoCatalogCache;
 const metadata = new Map();
@@ -16,6 +14,7 @@ let syncFrame = 0;
 let railScrubbing = false;
 let lastRailJump = 0;
 let libraryWrapped = false;
+let edgeObserver = null;
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
 const px = value => `${Math.round(value * 100) / 100}px`;
@@ -150,7 +149,7 @@ const stableGrid = createStableMediaGrid({
 });
 
 function captureVisibleAnchor() {
-  if (!stableGrid.active() || !files) return null;
+  if (!files?.isConnected) return null;
   const top = Math.max(0, document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0);
   const bounds = files.getBoundingClientRect();
   const xs = [bounds.left + 8, (bounds.left + bounds.right) / 2, bounds.right - 8]
@@ -165,9 +164,22 @@ function captureVisibleAnchor() {
   return null;
 }
 
+function legacyEdges() {
+  return [document.querySelector('#top-scroll-sentinel'), document.querySelector('#scroll-sentinel')].filter(Boolean);
+}
+
 function hideLegacyEdges() {
-  if (topSentinel) topSentinel.hidden = true;
-  if (bottomSentinel) bottomSentinel.hidden = true;
+  if (!stableGrid.active()) return;
+  for (const sentinel of legacyEdges()) sentinel.hidden = true;
+}
+
+function watchLegacyEdges() {
+  edgeObserver?.disconnect();
+  edgeObserver = new MutationObserver(() => hideLegacyEdges());
+  for (const sentinel of legacyEdges()) {
+    edgeObserver.observe(sentinel, { attributes: true, attributeFilter: ['hidden'] });
+  }
+  hideLegacyEdges();
 }
 
 function stableItems() {
@@ -214,7 +226,7 @@ function syncStableGrid() {
     return;
   }
 
-  const anchor = stableGrid.active() ? (captureVisibleAnchor() || lastAnchor) : lastAnchor;
+  const anchor = captureVisibleAnchor() || lastAnchor;
   activeSort = data.state.sort;
   stableGrid.render(data.items, { sort: activeSort, anchor });
   lastSignature = signature;
@@ -246,6 +258,7 @@ function wrapLibrary() {
     const virtual = stableGrid.state();
     return virtual ? { ...base, ...virtual } : base;
   };
+  watchLegacyEdges();
   scheduleSync();
   return true;
 }
@@ -257,7 +270,7 @@ function waitForLibrary() {
 waitForLibrary();
 
 if (files) new MutationObserver(() => {
-  if (stableGrid.active()) lastAnchor ||= captureVisibleAnchor();
+  lastAnchor = captureVisibleAnchor() || lastAnchor;
   scheduleSync();
 }).observe(files, { childList: true, subtree: false, attributes: true, attributeFilter: ['class'] });
 
