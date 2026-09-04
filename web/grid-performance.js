@@ -129,6 +129,14 @@ function editingControl(target) {
   return Boolean(control && control.id !== 'search');
 }
 
+function runBoundaryArrow(key) {
+  window.mochimonoGridKeyboard?.press?.(key);
+  // The real keydown was intercepted before fast-arrow-nav saw it. Release the
+  // synthetic press here so a very quick tap cannot leave its internal hold state
+  // latched after the physical keyup has already happened.
+  window.mochimonoGridKeyboard?.release?.();
+}
+
 function finishKeyboardBoundary(key, current, top) {
   // library-app keeps a delayed defensive anchor too. Let that settle while the
   // old cursor remains visually fixed, then make exactly one normal arrow move.
@@ -137,7 +145,7 @@ function finishKeyboardBoundary(key, current, top) {
     keyboardBoundaryPending = false;
     const next = queuedBoundaryKey || key;
     queuedBoundaryKey = '';
-    window.mochimonoGridKeyboard?.press?.(next);
+    runBoundaryArrow(next);
   }));
 }
 
@@ -161,7 +169,7 @@ function interceptKeyboardBoundary(event) {
   const changed = window.mochimonoLibrary?.extend?.(direction);
   if (!changed) {
     keyboardBoundaryPending = false;
-    window.mochimonoGridKeyboard?.press?.(event.key);
+    runBoundaryArrow(event.key);
     return;
   }
   window.mochimonoGallery?.layoutNow?.();
