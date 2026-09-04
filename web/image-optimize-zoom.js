@@ -26,6 +26,7 @@ if (viewer && compare && original && optimized) {
   let zoom = { scale: 1, x: 0, y: 0 };
   let pan = null;
   let pinch = null;
+  let reportedScale = 0;
 
   const active = () => viewer.classList.contains('image-optimize-active');
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -33,9 +34,6 @@ if (viewer && compare && original && optimized) {
   function clampPan() {
     const rect = compare.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    // Optimize is a workspace rather than a constrained photo viewer. Keep the
-    // image movable at fitted size and below, only preventing it from becoming
-    // completely lost offscreen.
     const extraX = rect.width * Math.max(0, zoom.scale - 1) / 2;
     const extraY = rect.height * Math.max(0, zoom.scale - 1) / 2;
     const maxX = rect.width * .9 + extraX;
@@ -44,12 +42,19 @@ if (viewer && compare && original && optimized) {
     zoom.y = clamp(zoom.y, -maxY, maxY);
   }
 
-  function applyZoom() {
+  function reportZoom(force = false) {
+    if (!force && Math.abs(reportedScale - zoom.scale) < .0005) return;
+    reportedScale = zoom.scale;
+    window.dispatchEvent(new CustomEvent('mochimono:optimize-zoom', { detail:{ ...zoom } }));
+  }
+
+  function applyZoom(forceReport = false) {
     zoom.scale = clamp(Number(zoom.scale) || 1, MIN_SCALE, MAX_SCALE);
     clampPan();
     const transform = `translate3d(${zoom.x}px,${zoom.y}px,0) scale(${zoom.scale})`;
     original.style.transform = transform;
     optimized.style.transform = transform;
+    if (active()) reportZoom(forceReport);
   }
 
   function setView(view = {}) {
@@ -62,10 +67,11 @@ if (viewer && compare && original && optimized) {
       x: Number(view.x) || 0,
       y: Number(view.y) || 0
     };
-    applyZoom();
+    applyZoom(true);
   }
 
   function resetZoom() {
+    reportedScale = 0;
     setView({ scale:1, x:0, y:0 });
   }
 
@@ -205,7 +211,7 @@ if (viewer && compare && original && optimized) {
   }).observe(viewer, { attributes:true, attributeFilter:['class','hidden'] });
 
   window.addEventListener('resize', () => {
-    if (active()) applyZoom();
+    if (active()) applyZoom(true);
   }, { passive:true });
 
   window.mochimonoImageOptimizeZoom = {
