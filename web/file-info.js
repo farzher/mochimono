@@ -114,20 +114,10 @@ function renderHeaderContext(data, local) {
   const origins = unique((data.sources || []).map(source => source.sourceName || source.deviceName || ''));
 
   const entries = [
-    ...folders.slice(0, 2).map(value => ({ kind: 'path', value, label: compactPath(value) })),
-    ...origins.slice(0, 2).map(value => ({ kind: 'origin', value, label: value }))
+    ...folders.map(value => ({ kind: 'path', value, label: compactPath(value) })),
+    ...origins.map(value => ({ kind: 'origin', value, label: value }))
   ];
-  const shown = entries.slice(0, 3);
-  for (const entry of shown) addContextChip(entry.kind, entry.value, entry.label);
-
-  const total = folders.length + origins.length;
-  if (total > shown.length) {
-    const more = document.createElement('span');
-    more.className = 'viewer-context-more';
-    more.textContent = `+${total - shown.length}`;
-    more.title = `${total - shown.length} more paths/origins`;
-    viewerContext.append(more);
-  }
+  for (const entry of entries) addContextChip(entry.kind, entry.value, entry.label);
 }
 
 function copyCard(title, kind, detail = '', paths = []) {
