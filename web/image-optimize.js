@@ -13,27 +13,25 @@ const currentImage = () => CLIENT && Boolean(viewerMedia?.querySelector(':scope 
 
 const style = document.createElement('style');
 style.textContent = `
-.viewer-optimize-trigger{display:inline-flex;align-items:center;margin-left:7px;padding:0;border:0;background:transparent;color:#ddd5d1;font-size:10px;font-weight:720;line-height:1;text-shadow:0 1px 4px rgba(0,0,0,.9)}
+.viewer-optimize-trigger{display:inline-flex;align-items:center;margin-left:7px;padding:0;border:0;background:transparent;color:#ddd5d1;font-size:10px;font-weight:700;line-height:1;text-shadow:0 1px 4px rgba(0,0,0,.9)}
 .viewer-optimize-trigger:hover{background:transparent;color:#fff}.viewer-optimize-trigger[hidden]{display:none!important}
 .image-optimize-layer[hidden]{display:none!important}.image-optimize-layer{position:absolute;z-index:102;inset:0;background:#050505;overflow:hidden;color:#eee}
 .viewer.image-optimize-active .viewer-nav{display:none!important}
 .image-optimize-compare{--split:50%;position:absolute;inset:0;overflow:hidden;touch-action:none;background:#050505}
 .image-optimize-compare img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;user-select:none;-webkit-user-drag:none;pointer-events:none;transform-origin:50% 50%}
 .image-optimize-after{clip-path:inset(0 0 0 var(--split))}
-.image-optimize-divider{position:absolute;z-index:3;left:var(--split);top:0;bottom:0;width:1px;background:rgba(255,255,255,.86);pointer-events:none;box-shadow:0 0 8px rgba(0,0,0,.4)}
-.image-optimize-divider:after{content:'↔';position:absolute;left:0;top:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:rgba(16,16,16,.82);border:1px solid rgba(255,255,255,.38);color:#fff;font-size:11px;box-shadow:0 3px 12px rgba(0,0,0,.35)}
-.image-optimize-label{position:absolute;z-index:4;top:70px;color:rgba(255,255,255,.68);font-size:10px;font-weight:700;pointer-events:none;text-shadow:0 1px 4px #000}.image-optimize-label.original{left:14px}.image-optimize-label.optimized{right:14px}
-.image-optimize-loading{position:absolute;z-index:7;left:50%;top:50%;transform:translate(-50%,-50%);max-width:min(80vw,420px);padding:8px 11px;border-radius:8px;background:rgba(18,18,18,.8);color:#c2b9b5;font-size:11px;box-shadow:0 4px 20px rgba(0,0,0,.28);backdrop-filter:blur(8px);pointer-events:none}.image-optimize-loading[hidden]{display:none}
-.image-optimize-controls{position:absolute;z-index:6;left:50%;bottom:max(12px,env(safe-area-inset-bottom));transform:translateX(-50%);width:min(760px,calc(100% - 24px));padding:10px;border:1px solid rgba(255,255,255,.07);border-radius:13px;background:rgba(18,17,19,.91);box-shadow:0 12px 38px rgba(0,0,0,.4);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
-.image-optimize-main{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:11px;min-width:0}.image-optimize-mode{flex:0 0 auto;padding:8px 9px;border-radius:7px;background:transparent;color:#c8bfbc;font-size:10px}.image-optimize-mode:hover,.image-optimize-mode.open{background:rgba(255,255,255,.07);color:#fff}
-.image-optimize-result{min-width:0;display:grid;gap:2px;overflow:hidden}.image-optimize-result-head{display:flex;align-items:baseline;gap:10px;min-width:0}.image-optimize-result strong{font-size:19px;line-height:1.05;letter-spacing:-.035em;white-space:nowrap}.image-optimize-result b{font-size:14px;font-weight:720;white-space:nowrap}.image-optimize-result b.good{color:#a6c9af}.image-optimize-result b.quiet{color:#918987}.image-optimize-result small{min-width:0;color:#8d8582;font-size:10px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.image-optimize-actions{display:flex;gap:5px;flex:0 0 auto}.image-optimize-actions button{padding:8px 10px;border-radius:7px;font-size:10px}.image-optimize-keep{background:transparent;color:#bdb5b2}.image-optimize-keep:hover{background:rgba(255,255,255,.07);color:#fff}.image-optimize-replace{background:#eee8e4;color:#171316}.image-optimize-replace:hover{background:#fff}
-.image-optimize-panel{margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,.06)}.image-optimize-panel[hidden]{display:none!important}.image-optimize-setting{display:grid;grid-template-columns:54px minmax(0,1fr);align-items:center;gap:8px;min-height:30px}.image-optimize-setting+.image-optimize-setting{margin-top:5px}.image-optimize-setting>span{color:#746d6b;font-size:9px;font-weight:700}
-.image-optimize-modes{display:flex;gap:3px}.image-optimize-modes button{padding:5px 8px;border-radius:6px;background:transparent;color:#827a78;font-size:10px}.image-optimize-modes button:hover{background:rgba(255,255,255,.05);color:#d8d0cc}.image-optimize-modes button.active{background:rgba(255,255,255,.08);color:#fff}
-.image-optimize-resize{width:max-content;max-width:100%;padding:6px 26px 6px 8px;border:0;border-radius:6px;background:#242124;color:#d8d0cc;font-size:10px}
-.image-optimize-manual{display:grid;grid-template-columns:minmax(190px,1fr) auto auto;gap:9px;align-items:end;margin-top:8px;padding-left:62px}.image-optimize-manual[hidden]{display:none!important}.image-optimize-manual label{display:grid;gap:4px;color:#827a78;font-size:9px}.image-optimize-manual input[type=range]{width:100%;accent-color:#dba19b}.image-optimize-lossless{display:flex!important;align-items:center;gap:5px!important;padding-bottom:6px;white-space:nowrap}.image-optimize-lossless input{width:auto}.image-optimize-preview{padding:6px 8px;border-radius:6px;background:#2a2729;color:#ddd;font-size:10px}.image-optimize-final-note{margin:8px 0 0 62px;color:#68615f;font-size:9px}
-.image-optimize-actions button:disabled,.image-optimize-controls button:disabled,.image-optimize-controls input:disabled,.image-optimize-controls select:disabled{opacity:.35;cursor:default}
-@media(max-width:700px){.viewer-optimize-trigger{margin-left:6px}.image-optimize-label{top:60px}.image-optimize-label.original{left:9px}.image-optimize-label.optimized{right:9px}.image-optimize-controls{width:calc(100% - 16px);bottom:max(8px,env(safe-area-inset-bottom));padding:9px}.image-optimize-main{grid-template-columns:auto minmax(0,1fr);gap:7px}.image-optimize-result{grid-column:1/-1;grid-row:1}.image-optimize-mode{grid-column:1;grid-row:2;justify-self:start}.image-optimize-actions{grid-column:2;grid-row:2;justify-self:end}.image-optimize-result strong{font-size:18px}.image-optimize-result b{font-size:13px}.image-optimize-result small{font-size:9.5px}.image-optimize-setting{grid-template-columns:48px minmax(0,1fr)}.image-optimize-manual{grid-template-columns:minmax(0,1fr) auto;padding-left:56px}.image-optimize-lossless,.image-optimize-preview{grid-column:1/-1}.image-optimize-final-note{margin-left:56px}.image-optimize-divider:after{width:28px;height:28px}}
+.image-optimize-divider{position:absolute;z-index:3;left:var(--split);top:0;bottom:0;width:1px;background:rgba(255,255,255,.88);pointer-events:none;box-shadow:0 0 8px rgba(0,0,0,.4)}
+.image-optimize-divider:after{content:'↔';position:absolute;left:0;top:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:rgba(14,14,14,.86);border:1px solid rgba(255,255,255,.35);color:#fff;font-size:12px;box-shadow:0 3px 14px rgba(0,0,0,.42)}
+.image-optimize-label{position:absolute;z-index:4;top:70px;color:rgba(255,255,255,.72);font-size:11px;font-weight:700;pointer-events:none;text-shadow:0 1px 5px #000}.image-optimize-label.original{left:16px}.image-optimize-label.optimized{right:16px}
+.image-optimize-controls{position:absolute;z-index:6;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));width:min(350px,calc(100% - 28px));padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(20,19,20,.92);box-shadow:0 16px 48px rgba(0,0,0,.46);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.image-optimize-drawer{position:absolute;right:0;bottom:calc(100% + 9px);width:100%;padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:13px;background:rgba(20,19,20,.95);box-shadow:0 12px 34px rgba(0,0,0,.42);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.image-optimize-drawer[hidden],.image-optimize-pane[hidden]{display:none!important}
+.image-optimize-result{display:grid;gap:5px}.image-optimize-result-line{display:flex;align-items:baseline;justify-content:space-between;gap:12px}.image-optimize-result strong{font-size:23px;line-height:1;letter-spacing:-.04em;white-space:nowrap}.image-optimize-result b{font-size:17px;line-height:1;font-weight:720;white-space:nowrap}.image-optimize-result b.good{color:#a9ceb1}.image-optimize-result b.quiet{color:#aaa19e}.image-optimize-status{min-height:15px;color:#968e8a;font-size:11px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.image-optimize-quick{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:12px}.image-optimize-quick button,.image-optimize-choice{min-height:36px;border:0;border-radius:9px;background:#2a2829;color:#ddd7d3;font-size:12px;font-weight:650}.image-optimize-quick button:hover,.image-optimize-choice:hover{background:#343132;color:#fff}.image-optimize-quick button.open{background:#3a3638;color:#fff}
+.image-optimize-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}.image-optimize-actions button{min-height:38px;border-radius:9px;font-size:12px;font-weight:700}.image-optimize-keep{background:#2a2829;color:#d2cbc7}.image-optimize-keep:hover{background:#343132;color:#fff}.image-optimize-replace{background:#eee9e5;color:#171416}.image-optimize-replace:hover{background:#fff}.image-optimize-actions button:disabled{opacity:.36;cursor:default}
+.image-optimize-pane-title{margin:0 0 9px;color:#8d8581;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}.image-optimize-choice-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.image-optimize-choice-grid.size{grid-template-columns:repeat(3,1fr)}.image-optimize-choice.active{background:#eee9e5;color:#171416}.image-optimize-choice.wide{grid-column:span 3}
+.image-optimize-quality{display:grid;gap:8px}.image-optimize-quality-head{display:flex;justify-content:space-between;align-items:center;color:#d6cfcb;font-size:12px;font-weight:650}.image-optimize-quality output{font-variant-numeric:tabular-nums}.image-optimize-quality input[type=range]{width:100%;accent-color:#eee9e5}.image-optimize-lossless{display:flex;align-items:center;gap:8px;margin-top:11px;color:#cfc7c3;font-size:12px}.image-optimize-lossless[hidden]{display:none!important}.image-optimize-more-empty{color:#8f8784;font-size:11px;line-height:1.4}
+@media(max-width:700px){.viewer-optimize-trigger{margin-left:6px}.image-optimize-label{top:60px;font-size:10px}.image-optimize-label.original{left:10px}.image-optimize-label.optimized{right:10px}.image-optimize-controls{right:max(8px,env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));width:min(340px,calc(100% - 16px));padding:12px}.image-optimize-result-line{align-items:flex-end}.image-optimize-result strong{font-size:21px}.image-optimize-result b{font-size:16px}.image-optimize-status{font-size:10.5px}.image-optimize-quick button,.image-optimize-actions button,.image-optimize-choice{font-size:11px}.image-optimize-divider:after{width:30px;height:30px}}
 `;
 document.head.append(style);
 
@@ -54,23 +52,52 @@ layer.innerHTML = `
     <span class="image-optimize-label original">Original</span>
     <span class="image-optimize-label optimized">Optimized</span>
     <i class="image-optimize-divider"></i>
-    <div class="image-optimize-loading" data-opt-loading>Preparing…</div>
   </div>
-  <div class="image-optimize-controls">
-    <div class="image-optimize-main">
-      <button class="image-optimize-mode" data-opt-mode type="button" title="Auto chooses a high-quality format and caps very large images at 3072 px. Previews are fast; saving does the final max-effort encode.">Auto · ≤3072 ▾</button>
-      <div class="image-optimize-result" data-opt-result><div class="image-optimize-result-head"><strong>—</strong></div></div>
-      <div class="image-optimize-actions"><button class="image-optimize-keep" data-opt-keep type="button" disabled>Keep both</button><button class="image-optimize-replace" data-opt-replace type="button" disabled title="Replace the original after max-effort encoding and verification">Replace</button></div>
-    </div>
-    <div class="image-optimize-panel" data-opt-panel hidden>
-      <div class="image-optimize-setting"><span>Format</span><div class="image-optimize-modes" data-opt-modes><button type="button" data-opt-format="auto" class="active">Auto</button><button type="button" data-opt-format="webp">WebP</button><button type="button" data-opt-format="avif">AVIF</button></div></div>
-      <div class="image-optimize-setting"><span>Size</span><select class="image-optimize-resize" data-opt-resize aria-label="Maximum image edge"><option value="3072">Auto · 3072 px max</option><option value="0">Original dimensions</option><option value="3840">3840 px max</option><option value="2560">2560 px max</option><option value="1920">1920 px max</option></select></div>
-      <div class="image-optimize-manual" data-opt-manual hidden>
-        <label>Quality <span><input data-opt-quality type="range" min="50" max="100" value="94"> <output data-opt-quality-label>94</output></span></label>
-        <label class="image-optimize-lossless" data-opt-lossless-row hidden><input data-opt-lossless type="checkbox"> Lossless</label>
-        <button class="image-optimize-preview" data-opt-update type="button">Preview</button>
+  <div class="image-optimize-controls" data-opt-controls>
+    <div class="image-optimize-drawer" data-opt-drawer hidden>
+      <div class="image-optimize-pane" data-opt-pane="format" hidden>
+        <div class="image-optimize-pane-title">Format</div>
+        <div class="image-optimize-choice-grid" data-opt-formats>
+          <button class="image-optimize-choice" type="button" data-format="auto">Auto</button>
+          <button class="image-optimize-choice" type="button" data-format="webp">WebP</button>
+          <button class="image-optimize-choice" type="button" data-format="avif">AVIF</button>
+        </div>
       </div>
-      <div class="image-optimize-final-note">Preview uses normal effort · saving re-encodes once at max effort</div>
+      <div class="image-optimize-pane" data-opt-pane="size" hidden>
+        <div class="image-optimize-pane-title">Size</div>
+        <div class="image-optimize-choice-grid size" data-opt-sizes>
+          <button class="image-optimize-choice" type="button" data-size-kind="auto" data-size-value="3072">Auto</button>
+          <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="100">100%</button>
+          <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="75">75%</button>
+          <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="50">50%</button>
+          <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="25">25%</button>
+          <button class="image-optimize-choice" type="button" data-size-kind="max" data-size-value="3840">3840 px</button>
+          <button class="image-optimize-choice" type="button" data-size-kind="max" data-size-value="3072">3072 px</button>
+          <button class="image-optimize-choice" type="button" data-size-kind="max" data-size-value="2560">2560 px</button>
+          <button class="image-optimize-choice" type="button" data-size-kind="max" data-size-value="1920">1920 px</button>
+        </div>
+      </div>
+      <div class="image-optimize-pane" data-opt-pane="more" hidden>
+        <div class="image-optimize-more-empty" data-opt-auto-more>Choose WebP or AVIF to set quality manually.</div>
+        <div class="image-optimize-quality" data-opt-quality-wrap hidden>
+          <div class="image-optimize-quality-head"><span>Quality</span><output data-opt-quality-label>94</output></div>
+          <input data-opt-quality type="range" min="50" max="100" value="94">
+        </div>
+        <label class="image-optimize-lossless" data-opt-lossless-row hidden><input data-opt-lossless type="checkbox"> Lossless WebP</label>
+      </div>
+    </div>
+    <div class="image-optimize-result" data-opt-result>
+      <div class="image-optimize-result-line"><strong>Preparing…</strong><b></b></div>
+      <div class="image-optimize-status" data-opt-status>Starting preview…</div>
+    </div>
+    <div class="image-optimize-quick">
+      <button type="button" data-opt-format-button>Auto</button>
+      <button type="button" data-opt-size-button>Size · Auto</button>
+      <button type="button" data-opt-more-button>More</button>
+    </div>
+    <div class="image-optimize-actions">
+      <button class="image-optimize-keep" data-opt-keep type="button" disabled>Keep both</button>
+      <button class="image-optimize-replace" data-opt-replace type="button" disabled>Replace</button>
     </div>
   </div>`;
 viewer?.append(layer);
@@ -78,27 +105,38 @@ viewer?.append(layer);
 const compare = layer.querySelector('[data-opt-compare]');
 const original = layer.querySelector('[data-opt-original]');
 const optimized = layer.querySelector('[data-opt-after]');
-const loading = layer.querySelector('[data-opt-loading]');
+const controls = layer.querySelector('[data-opt-controls]');
+const drawer = layer.querySelector('[data-opt-drawer]');
+const panes = [...layer.querySelectorAll('[data-opt-pane]')];
+const formats = layer.querySelector('[data-opt-formats]');
+const sizes = layer.querySelector('[data-opt-sizes]');
+const formatButton = layer.querySelector('[data-opt-format-button]');
+const sizeButton = layer.querySelector('[data-opt-size-button]');
+const moreButton = layer.querySelector('[data-opt-more-button]');
 const result = layer.querySelector('[data-opt-result]');
-const modeButton = layer.querySelector('[data-opt-mode]');
-const panel = layer.querySelector('[data-opt-panel]');
-const modes = layer.querySelector('[data-opt-modes]');
-const manual = layer.querySelector('[data-opt-manual]');
-const resize = layer.querySelector('[data-opt-resize]');
+const status = layer.querySelector('[data-opt-status]');
 const quality = layer.querySelector('[data-opt-quality]');
 const qualityLabel = layer.querySelector('[data-opt-quality-label]');
+const qualityWrap = layer.querySelector('[data-opt-quality-wrap]');
+const autoMore = layer.querySelector('[data-opt-auto-more]');
 const lossless = layer.querySelector('[data-opt-lossless]');
 const losslessRow = layer.querySelector('[data-opt-lossless-row]');
 const keep = layer.querySelector('[data-opt-keep]');
 const replace = layer.querySelector('[data-opt-replace]');
-const updateButton = layer.querySelector('[data-opt-update]');
+
 let activeId = '';
 let activeHash = '';
 let session = null;
 let pollTimer = 0;
+let requestSerial = 0;
+let renderSerial = 0;
 let format = 'auto';
+let sizeMode = { kind:'auto', value:AUTO_MAX_EDGE };
 let split = 50;
 let splitPointer = null;
+let openPane = '';
+let displayedCandidate = '';
+let committing = false;
 
 const active = () => Boolean(viewer?.classList.contains('image-optimize-active'));
 const bytes = number => {
@@ -142,8 +180,8 @@ function dividerX() {
 }
 
 compare.addEventListener('pointerdown', event => {
-  if (!active() || !loading.hidden) return;
-  const grab = event.pointerType === 'touch' ? 42 : 30;
+  if (!active()) return;
+  const grab = event.pointerType === 'touch' ? 44 : 30;
   if (Math.abs(event.clientX - dividerX()) > grab) return;
   splitPointer = event.pointerId;
   try { compare.setPointerCapture(event.pointerId); } catch {}
@@ -172,47 +210,41 @@ function syncTrigger() {
   trigger.textContent = active() ? 'Done' : 'Optimize';
 }
 
-function resizeLabel() {
-  const value = Number(resize.value) || 0;
-  return value ? `≤${value}` : 'Original';
+function sizeLabel() {
+  if (sizeMode.kind === 'percent') return `${sizeMode.value}%`;
+  if (sizeMode.kind === 'max') return `${sizeMode.value} px`;
+  return 'Auto';
 }
 
-function setControlsDisabled(disabled) {
-  for (const control of [...modes.querySelectorAll('button'), resize, quality, lossless, updateButton]) control.disabled = disabled;
-}
-
-function setBusy(text) {
-  setControlsDisabled(true);
-  loading.hidden = false;
-  loading.textContent = text || 'Preparing…';
-  keep.disabled = true;
-  replace.disabled = true;
-  result.innerHTML = '<div class="image-optimize-result-head"><strong>—</strong></div>';
-}
-
-function showError(message) {
-  setControlsDisabled(false);
-  loading.hidden = false;
-  loading.textContent = message || 'Could not optimize this image';
-  keep.disabled = true;
-  replace.disabled = true;
-}
-
-function syncModeUi() {
-  const label = format === 'avif' ? 'AVIF' : format === 'webp' ? 'WebP' : 'Auto';
-  modeButton.textContent = `${label} · ${resizeLabel()} ▾`;
-  for (const item of modes.querySelectorAll('[data-opt-format]')) item.classList.toggle('active', item.dataset.optFormat === format);
-  manual.hidden = format === 'auto';
+function syncControls() {
+  formatButton.textContent = format === 'avif' ? 'AVIF' : format === 'webp' ? 'WebP' : 'Auto';
+  sizeButton.textContent = `Size · ${sizeLabel()}`;
+  for (const button of formats.querySelectorAll('[data-format]')) button.classList.toggle('active', button.dataset.format === format);
+  for (const button of sizes.querySelectorAll('[data-size-kind]')) {
+    const kind = button.dataset.sizeKind;
+    const value = Number(button.dataset.sizeValue);
+    button.classList.toggle('active', kind === sizeMode.kind && value === sizeMode.value);
+  }
+  const manual = format !== 'auto';
+  autoMore.hidden = manual;
+  qualityWrap.hidden = !manual;
   losslessRow.hidden = format !== 'webp';
+  qualityLabel.textContent = quality.value;
 }
 
-function setFormat(next, regenerate = true) {
-  format = next;
-  if (format === 'webp' && quality.dataset.userChanged !== '1') quality.value = '94';
-  if (format === 'avif' && quality.dataset.userChanged !== '1') quality.value = '92';
-  qualityLabel.textContent = quality.value;
-  syncModeUi();
-  if (regenerate && active()) startPreview();
+function closeDrawer() {
+  openPane = '';
+  drawer.hidden = true;
+  for (const pane of panes) pane.hidden = true;
+  for (const button of [formatButton, sizeButton, moreButton]) button.classList.remove('open');
+}
+
+function togglePane(name, button) {
+  if (openPane === name) return closeDrawer();
+  openPane = name;
+  drawer.hidden = false;
+  for (const pane of panes) pane.hidden = pane.dataset.optPane !== name;
+  for (const item of [formatButton, sizeButton, moreButton]) item.classList.toggle('open', item === button);
 }
 
 function options() {
@@ -221,7 +253,8 @@ function options() {
     quality: Number(quality.value) || (format === 'avif' ? 92 : 94),
     effort: 'normal',
     lossless: format === 'webp' && lossless.checked,
-    resizeMax: Number(resize.value) || 0
+    resizeMax: sizeMode.kind === 'auto' || sizeMode.kind === 'max' ? sizeMode.value : 0,
+    resizePercent: sizeMode.kind === 'percent' ? sizeMode.value : 0
   };
 }
 
@@ -232,91 +265,178 @@ async function api(path, options = {}) {
   return data;
 }
 
-function progressText(data) {
-  const progress = data?.progress;
-  if (!progress) return 'Encoding preview…';
-  const suffix = progress.total > 1 ? ` · ${Math.min(progress.total, Number(progress.done) + 1)}/${progress.total}` : '';
-  return `${progress.label || 'Encoding preview…'}${suffix}`;
+function progressLabel(data) {
+  if (data.status === 'queued') return 'Waiting for encoder…';
+  const label = String(data.progress?.label || '').trim();
+  if (!label) return data.status === 'encoding' ? 'Encoding…' : '';
+  return label === 'Reading image' ? 'Reading image…' : `${label.replace(/^Encoding\s+/,'')}…`;
 }
 
-function poll(id) {
-  clearTimeout(pollTimer);
-  pollTimer = setTimeout(async () => {
-    if (!active() || id !== activeId) return;
-    try {
-      const data = await api(`/api/image-optimize/status?id=${encodeURIComponent(id)}`);
-      if (id !== activeId) return;
-      session = data;
-      if (data.status === 'ready') return renderReady(data);
-      if (data.status === 'error') return showError(data.error);
-      loading.textContent = progressText(data);
-      poll(id);
-    } catch (error) { showError(error.message); }
-  }, 300);
+function dimensionsText(data, selected) {
+  if (!data.width || !data.height) return '';
+  const sourceDims = `${Number(data.width).toLocaleString()}×${Number(data.height).toLocaleString()}`;
+  const outWidth = Number(selected?.width || data.targetWidth || data.width);
+  const outHeight = Number(selected?.height || data.targetHeight || data.height);
+  const outputDims = `${outWidth.toLocaleString()}×${outHeight.toLocaleString()}`;
+  return sourceDims === outputDims ? sourceDims : `${sourceDims} → ${outputDims}`;
 }
 
-async function startPreview() {
-  const hash = activeHash || currentHash();
-  if (!hash || !active()) return;
-  clearTimeout(pollTimer);
-  session = null;
-  setBusy('Preparing preview…');
-  try {
-    const data = await api('/api/image-optimize/start', { method:'POST', body:JSON.stringify({ hash, options:options() }) });
-    activeId = data.id;
-    loading.textContent = progressText(data);
-    poll(activeId);
-  } catch (error) { showError(error.message); }
-}
-
-async function decodeImage(image, src) {
-  image.src = `${src}${src.includes('?') ? '&' : '?'}t=${Date.now()}`;
-  if (image.decode) {
-    try { await image.decode(); return; } catch {}
+function updateResult(data) {
+  const selected = data.selected;
+  if (!selected) {
+    const source = data.sourceSize ? bytes(data.sourceSize) : 'Preparing…';
+    result.querySelector('strong').textContent = source;
+    result.querySelector('b').textContent = '';
+    status.textContent = progressLabel(data) || 'Preparing preview…';
+    return;
   }
-  if (image.complete && image.naturalWidth) return;
+
+  const percent = Math.max(0, Number(selected.percent) || 0);
+  result.querySelector('strong').textContent = `${bytes(data.sourceSize)} → ${bytes(selected.size)}`;
+  const verdict = result.querySelector('b');
+  verdict.textContent = data.worthwhile ? `${percent.toFixed(0)}% smaller` : 'Already efficient';
+  verdict.className = data.worthwhile ? 'good' : 'quiet';
+
+  const dims = dimensionsText(data, selected);
+  if (data.status === 'encoding' || data.status === 'queued') {
+    const work = progressLabel(data);
+    status.textContent = `Showing ${selected.label}${work ? ` · ${work}` : ''}`;
+  } else {
+    status.textContent = `${selected.label}${dims ? ` · ${dims}` : ''}`;
+  }
+}
+
+async function preload(src) {
+  const image = new Image();
+  image.src = `${src}${src.includes('?') ? '&' : '?'}v=${Date.now()}`;
+  if (image.decode) {
+    try { await image.decode(); return image.src; } catch {}
+  }
+  if (image.complete && image.naturalWidth) return image.src;
   await new Promise((resolve, reject) => {
     image.addEventListener('load', resolve, { once:true });
     image.addEventListener('error', reject, { once:true });
   });
+  return image.src;
 }
 
-async function renderReady(data) {
+async function renderCandidate(data) {
   const selected = data.selected;
-  if (!selected) return showError('No optimized preview was produced');
-  loading.hidden = false;
-  loading.textContent = 'Loading comparison…';
+  if (!selected) return;
+  const key = `${data.id}:${selected.id}`;
+  if (displayedCandidate === key) return;
+  const serial = ++renderSerial;
   try {
-    await Promise.all([decodeImage(original, data.originalUrl), decodeImage(optimized, selected.url)]);
+    const optimizedSrc = await preload(selected.url);
+    if (!active() || data.id !== activeId || serial !== renderSerial) return;
+    optimized.src = optimizedSrc;
+    displayedCandidate = key;
+
+    if (data.originalUrl && original.dataset.sourceUrl !== data.originalUrl) {
+      original.dataset.sourceUrl = data.originalUrl;
+      preload(data.originalUrl).then(src => {
+        if (active() && data.id === activeId && original.dataset.sourceUrl === data.originalUrl) original.src = src;
+      }).catch(() => {});
+    }
   } catch {
-    return showError('Could not display the comparison');
+    // Keep the previous visible preview. Polling can still recover if a later
+    // candidate completes successfully.
   }
-  if (!active() || data.id !== activeId) return;
-  loading.hidden = true;
-  setControlsDisabled(false);
-  const percent = Math.max(0, Number(selected.percent) || 0);
-  const verdict = data.worthwhile
-    ? `<b class="good">${percent.toFixed(0)}% smaller</b>`
-    : '<b class="quiet">Already efficient</b>';
-  const sourceDims = `${Number(data.width).toLocaleString()}×${Number(data.height).toLocaleString()}`;
-  const outputDims = `${Number(selected.width || data.targetWidth).toLocaleString()}×${Number(selected.height || data.targetHeight).toLocaleString()}`;
-  const dimensions = sourceDims === outputDims ? sourceDims : `${sourceDims} → ${outputDims}`;
-  result.innerHTML = `<div class="image-optimize-result-head"><strong>${bytes(data.sourceSize)} → ${bytes(selected.size)}</strong>${verdict}</div><small>${selected.label} · ${dimensions}</small>`;
-  keep.disabled = false;
-  replace.disabled = false;
+}
+
+function setSaveState(data) {
+  const ready = !committing && data?.status === 'ready' && Boolean(data.selected);
+  keep.disabled = !ready;
+  replace.disabled = !ready;
+}
+
+function showError(message) {
+  status.textContent = message || 'Could not optimize this image';
+  keep.disabled = true;
+  replace.disabled = true;
+}
+
+function consume(data, serial) {
+  if (!active() || serial !== requestSerial || data.id !== activeId) return;
+  session = data;
+  updateResult(data);
+  if (data.selected) renderCandidate(data);
+  setSaveState(data);
+  if (data.status === 'error') return showError(data.error);
+  if (data.status === 'ready') return;
+  poll(data.id, serial);
+}
+
+function poll(id, serial) {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(async () => {
+    if (!active() || serial !== requestSerial || id !== activeId) return;
+    try {
+      const data = await api(`/api/image-optimize/status?id=${encodeURIComponent(id)}`);
+      consume(data, serial);
+    } catch (error) {
+      if (serial === requestSerial) showError(error.message);
+    }
+  }, 240);
+}
+
+async function startPreview() {
+  const hash = activeHash || currentHash();
+  if (!hash || !active() || committing) return;
+  const serial = ++requestSerial;
+  clearTimeout(pollTimer);
+  session = null;
+  keep.disabled = true;
+  replace.disabled = true;
+  status.textContent = 'Starting preview…';
+  try {
+    const data = await api('/api/image-optimize/start', {
+      method:'POST',
+      body:JSON.stringify({ hash, options:options() })
+    });
+    if (!active() || serial !== requestSerial) return;
+    activeId = data.id;
+    consume(data, serial);
+  } catch (error) {
+    if (serial === requestSerial) showError(error.message);
+  }
+}
+
+function setFormat(next) {
+  if (!['auto','webp','avif'].includes(next) || next === format) return closeDrawer();
+  format = next;
+  if (format === 'webp' && quality.dataset.userChanged !== '1') quality.value = '94';
+  if (format === 'avif' && quality.dataset.userChanged !== '1') quality.value = '92';
+  if (format !== 'webp') lossless.checked = false;
+  syncControls();
+  closeDrawer();
+  startPreview();
+}
+
+function setSize(kind, value) {
+  if (!['auto','percent','max'].includes(kind)) return;
+  value = Number(value) || 0;
+  if (!value || (kind === sizeMode.kind && value === sizeMode.value)) return closeDrawer();
+  sizeMode = { kind, value };
+  syncControls();
+  closeDrawer();
+  startPreview();
 }
 
 function resetState() {
   clearTimeout(pollTimer);
+  requestSerial++;
+  renderSerial++;
   activeId = '';
   activeHash = '';
   session = null;
   splitPointer = null;
-  setControlsDisabled(false);
+  displayedCandidate = '';
+  committing = false;
   original.removeAttribute('src');
+  original.removeAttribute('data-source-url');
   optimized.removeAttribute('src');
-  panel.hidden = true;
-  modeButton.classList.remove('open');
+  closeDrawer();
 }
 
 function closeOptimizer() {
@@ -329,20 +449,19 @@ function closeOptimizer() {
 }
 
 async function commit(mode) {
-  if (!session?.selected || session.status !== 'ready') return;
-  if (mode === 'replace' && !confirm(`Replace ${session.filename} with the optimized ${session.selected.format.toUpperCase()}?\n\nMochimono will do one max-effort final encode, verify it, then replace the original.`)) return;
-  setControlsDisabled(true);
+  if (committing || !session?.selected || session.status !== 'ready') return;
+  if (mode === 'replace' && !confirm(`Replace ${session.filename} with the optimized ${session.selected.format.toUpperCase()}?\n\nMochimono will make a max-effort final encode, verify it, then replace the original.`)) return;
+  committing = true;
   keep.disabled = true;
   replace.disabled = true;
-  loading.hidden = false;
-  loading.textContent = 'Finalizing at max effort…';
+  status.textContent = 'Finalizing at max effort…';
   try {
     const data = await api('/api/image-optimize/commit', {
       method:'POST',
       body:JSON.stringify({ id:session.id, candidate:session.selected.id, mode })
     });
     const saved = Number(data.result?.saved) || 0;
-    loading.textContent = `${data.result?.filename || 'Saved'}${saved > 0 ? ` · saved ${bytes(saved)}` : ''}`;
+    status.textContent = `${data.result?.filename || 'Saved'}${saved > 0 ? ` · saved ${bytes(saved)}` : ''}`;
     setTimeout(() => {
       closeOptimizer();
       if (mode === 'replace') document.querySelector('#viewer-close')?.click();
@@ -354,8 +473,9 @@ async function commit(mode) {
       setTimeout(() => window.mochimonoLibrary?.refresh?.(), 1600);
     }, 650);
   } catch (error) {
+    committing = false;
     showError(error.message);
-    if (session?.status === 'ready') { keep.disabled = false; replace.disabled = false; }
+    setSaveState(session);
   }
 }
 
@@ -367,14 +487,15 @@ function openOptimizer(hash = currentHash()) {
   activeId = '';
   session = null;
   format = 'auto';
-  resize.value = String(AUTO_MAX_EDGE);
+  sizeMode = { kind:'auto', value:AUTO_MAX_EDGE };
   quality.dataset.userChanged = '';
   quality.value = '94';
-  qualityLabel.textContent = '94';
   lossless.checked = false;
-  syncModeUi();
-  panel.hidden = true;
-  modeButton.classList.remove('open');
+  displayedCandidate = '';
+  committing = false;
+  setSplit(50);
+  syncControls();
+  closeDrawer();
   const placeholder = shown?.currentSrc || shown?.src || viewerOpen?.href || '';
   if (placeholder) {
     original.src = placeholder;
@@ -388,35 +509,35 @@ function openOptimizer(hash = currentHash()) {
 }
 
 trigger.addEventListener('click', () => active() ? closeOptimizer() : openOptimizer());
-modeButton.addEventListener('click', () => {
-  panel.hidden = !panel.hidden;
-  modeButton.classList.toggle('open', !panel.hidden);
+formatButton.addEventListener('click', () => togglePane('format', formatButton));
+sizeButton.addEventListener('click', () => togglePane('size', sizeButton));
+moreButton.addEventListener('click', () => togglePane('more', moreButton));
+formats.addEventListener('click', event => {
+  const button = event.target.closest('[data-format]');
+  if (button) setFormat(button.dataset.format);
 });
-modes.addEventListener('click', event => {
-  const item = event.target.closest('[data-opt-format]');
-  if (item) setFormat(item.dataset.optFormat);
-});
-resize.addEventListener('change', () => {
-  syncModeUi();
-  if (active()) startPreview();
+sizes.addEventListener('click', event => {
+  const button = event.target.closest('[data-size-kind]');
+  if (button) setSize(button.dataset.sizeKind, button.dataset.sizeValue);
 });
 quality.addEventListener('input', () => {
   quality.dataset.userChanged = '1';
   qualityLabel.textContent = quality.value;
 });
-updateButton.addEventListener('click', startPreview);
+quality.addEventListener('change', startPreview);
+lossless.addEventListener('change', startPreview);
 keep.addEventListener('click', () => commit('keep'));
 replace.addEventListener('click', () => commit('replace'));
+
+controls.addEventListener('pointerdown', event => event.stopPropagation());
 
 document.addEventListener('keydown', event => {
   if (!active()) return;
   if (event.key === 'Escape') {
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (!panel.hidden) {
-      panel.hidden = true;
-      modeButton.classList.remove('open');
-    } else closeOptimizer();
+    if (openPane) closeDrawer();
+    else closeOptimizer();
   } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
     event.preventDefault();
     event.stopImmediatePropagation();
