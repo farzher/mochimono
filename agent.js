@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
 import { api, cancelJob, currentJob, DEVICE, json, persistSettings, readJson, serverState, settings, startJob } from './lib/agent-context.js';
+import { backgroundWorkStatus } from './lib/background-work.js';
 import { addFolder, folderFor, folderStats, queueFolderSync, removeFolder, startSyncService } from './lib/agent-sync.js';
 import { addBrowseFolder, browseFolderFor, browseFolderStats, indexBrowseFolder, protectBrowseFolder, refreshBrowsePreviewPolicy, removeBrowseFolder, startBrowseService } from './lib/browse-folders.js';
 import { backupCollections, backupContents, backupInit, backupLocations, backupRestore, backupStatus, backupUpdate, backupVerify, setBackupPolicy } from './lib/agent-backups.js';
@@ -115,6 +116,7 @@ async function handleLocalApi(req, res, url) {
         uploadWorkers: settings.uploadWorkers, thumbnailMode: settings.thumbnailMode, folders: visibleFolders()
       },
       server: await serverState(),
+      background: backgroundWorkStatus(),
       previews: thumbnailAgentStatus(),
       job: currentJob()
     });
@@ -143,7 +145,7 @@ async function handleLocalApi(req, res, url) {
     }
     if (body.thumbnailMode !== undefined) {
       const mode = String(body.thumbnailMode || '');
-      if (!['off', 'idle', 'max'].includes(mode)) return json(res, 400, { error: 'Preview mode must be off, idle, or max' });
+      if (!['off', 'idle', 'max'].includes(mode)) return json(res, 400, { error: 'Background mode must be off, idle, or max' });
       settings.thumbnailMode = mode;
     }
     await persistSettings();
@@ -229,7 +231,8 @@ async function handleLocalApi(req, res, url) {
     const protectedFolder = body.path ? folderFor(body.path) : null;
     const browseFolder = body.path ? browseFolderFor(body.path) : null;
     if (protectedFolder) {
-      queueFolderSync(protectedFolder.path, undefined, 0);
+      // Manual Sync is foreground work: it intentionally overrides Idle/On demand.
+      queueFolderSync(protectedFolder.path, undefined, 0, true);
       json(res, 200, { ok: true });
     } else if (browseFolder) {
       startJob(res, 'sync', `Sync ${browseFolder}`, async update => {
