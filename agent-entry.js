@@ -5,11 +5,12 @@ const cpus = Math.max(1, availableParallelism());
 process.env.MOCHIMONO_THUMBNAIL_WORKERS ||= String(Math.max(2, Math.min(8, Math.ceil(cpus / 2))));
 process.env.MOCHIMONO_THUMBNAIL_VIDEO_WORKERS ||= String(Math.max(1, Math.min(2, Math.ceil(cpus / 4))));
 // Local-provider thumbnails are already gated by the user's Off / Idle / Max
-// policy. Give Max enough workers to actually use a modern desktop CPU instead
-// of silently bottlenecking video generation at the provider's conservative
-// default of four concurrent ffmpeg jobs.
+// policy. In Max, keep the provider and its crash-isolated Sharp pool at the
+// same concurrency so "active" jobs are real decoders rather than another
+// hidden queue behind the provider.
 process.env.MOCHIMONO_PROVIDER_THUMBNAIL_WORKERS ||= String(cpus);
 process.env.MOCHIMONO_PROVIDER_THUMBNAIL_VIDEO_WORKERS ||= String(cpus);
+process.env.MOCHIMONO_PROVIDER_SHARP_WORKERS ||= process.env.MOCHIMONO_PROVIDER_THUMBNAIL_WORKERS;
 
 // provider-thumbs decodes arbitrary files from local folders. Redirect only its
 // Sharp import through a child-process proxy, so a malformed image can kill one
