@@ -149,6 +149,11 @@ function resetFailures() {
   }
 }
 
+// Chromium can have a complete <img> with a valid naturalWidth while postponing
+// pixel decode/upload until an unrelated hover causes a style/paint invalidation.
+// Explicitly start decode, but never gate visibility on it. When decode finishes,
+// a one-frame no-op transform guarantees a paint invalidation without the old
+// opacity/hidden lifecycle that made thumbnails visibly slower.
 function primePaint(image) {
   if (!image?.decode || decodePrimed.has(image)) return;
   decodePrimed.add(image);
@@ -177,6 +182,9 @@ function markLoaded(hash, card, image) {
   image.style.objectFit = 'cover';
   rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
   primePaint(image);
+  // Keep loaded cards observed. Previously we unobserved them immediately after
+  // load, which meant a card could be visibly black with no future viewport
+  // callback capable of repairing it until pointer interaction repainted it.
 }
 
 function paintCard(card, urgent = false) {
@@ -236,6 +244,8 @@ function paintCard(card, urgent = false) {
   };
   box.prepend(image);
   image.src = thumbUrl(hash);
+  // Starting decode here also covers memory/disk-cache hits where load can happen
+  // before the browser chooses to raster the image.
   primePaint(image);
 }
 
