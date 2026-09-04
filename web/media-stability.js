@@ -23,17 +23,17 @@ function finishDecode(image, box) {
 function stabilizeImage(image) {
   if (!(image instanceof HTMLImageElement) || !image.classList.contains('cached-thumb')) return;
   const box = image.closest('.media-thumb');
-  if (!box || box.dataset.stabilityWatching === image.dataset.thumbHash) return;
+  if (!box || image.dataset.stabilityWatching === '1') return;
   if (image.complete && image.naturalWidth) return;
 
-  box.dataset.stabilityWatching = image.dataset.thumbHash || '1';
+  image.dataset.stabilityWatching = '1';
   box.classList.add('thumb-decoding');
   image.addEventListener('load', () => {
-    delete box.dataset.stabilityWatching;
+    delete image.dataset.stabilityWatching;
     finishDecode(image, box);
   }, { once:true });
   image.addEventListener('error', () => {
-    delete box.dataset.stabilityWatching;
+    delete image.dataset.stabilityWatching;
     box.classList.remove('thumb-decoding');
   }, { once:true });
 }
