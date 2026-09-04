@@ -66,9 +66,11 @@ function repairUpwardWheelEdge(expectedOffset) {
   // At the physical document top library-app normally has no anchor. If this is
   // only the top of the current virtual window, preserve the visible card here so
   // prepending creates real upward scroll headroom instead of leaving the sentinel
-  // intersecting forever.
+  // intersecting forever. Force justified-row geometry before measuring the
+  // correction so the rough pre-layout rows never become a visible intermediate.
   const anchor = scrollY <= 4 ? visibleTopAnchor() : null;
   if (!library.extend(-1)) return;
+  window.mochimonoGallery?.layoutNow?.();
   if (anchor?.card.isConnected) {
     const delta = anchor.card.getBoundingClientRect().top - anchor.top;
     if (Math.abs(delta) > .5) scrollBy({ top: delta, left: 0, behavior: 'auto' });
