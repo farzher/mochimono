@@ -3,6 +3,7 @@ const DB_VERSION = 1;
 const SCHEMA = 1;
 const META_KEY = 'catalog';
 const WRITE_BATCH = 1500;
+const QUICK_FILES = 200;
 
 let dbPromise = null;
 let loadPromise = null;
@@ -91,22 +92,39 @@ async function loadFromDb() {
   ]);
   await done;
   if (!storedMeta || storedMeta.schema !== SCHEMA || !storedMeta.version) return null;
-
   const files = all.filter(file => file.__snapshot === storedMeta.version).map(publicFile);
   if (files.length !== Number(storedMeta.count || 0)) return null;
-
   meta = storedMeta;
   records = new Map(files.map(file => [String(file.hash), file]));
   return memorySnapshot();
+}
+
+async function waitForInstantGrid() {
+  const ready = window.mochimonoInstantGridReady;
+  if (!ready?.then) return;
+  try { await ready; } catch {}
 }
 
 async function load() {
   const memory = memorySnapshot();
   if (memory) return memory;
   if (!loadPromise) {
-    loadPromise = loadFromDb().finally(() => { loadPromise = null; });
+    // Let instant-grid finish its tiny quick read and paint before a 50k–100k
+    // record IndexedDB getAll monopolizes the main thread.
+    loadPromise = waitForInstantGrid().then(loadFromDb).finally(() => { loadPromise = null; });
   }
   return loadPromise;
+}
+
+function quickFiles(files) {
+  return [...files]
+    .sort((a, b) => {
+      const aDate = Number(a.dateMs) || Date.parse(a.fileDate || a.createdAt || 0) || 0;
+      const bDate = Number(b.dateMs) || Date.parse(b.fileDate || b.createdAt || 0) || 0;
+      return bDate - aDate || String(a.hash || '').localeCompare(String(b.hash || ''));
+    })
+    .slice(0, QUICK_FILES)
+    .map(publicFile);
 }
 
 function save(files, options = {}) {
@@ -126,9 +144,7 @@ async function saveNow(files, options = {}) {
   for (let offset = 0; offset < clean.length; offset += WRITE_BATCH) {
     const transaction = db.transaction('files', 'readwrite');
     const store = transaction.objectStore('files');
-    for (const file of clean.slice(offset, offset + WRITE_BATCH)) {
-      store.put({ ...file, __snapshot: version });
-    }
+    for (const file of clean.slice(offset, offset + WRITE_BATCH)) store.put({ ...file, __snapshot: version });
     await transactionDone(transaction);
     await idle();
   }
@@ -139,6 +155,7 @@ async function saveNow(files, options = {}) {
     version,
     imports: Array.isArray(options.imports) ? options.imports : [],
     count: clean.length,
+    quickFiles: quickFiles(clean),
     savedAt: Date.now()
   };
   {
@@ -192,21 +209,37 @@ function flushDimensions() {
 async function flushDimensionsNow() {
   if (!pendingGeometry.size) return;
   if (!records.size) await load().catch(() => null);
+  if (!records.size) return;
 
   const batch = [...pendingGeometry];
   pendingGeometry.clear();
   const db = await openDb();
   if (!db) return;
 
-  const transaction = db.transaction('files', 'readwrite');
+  const transaction = db.transaction(['files', 'meta'], 'readwrite');
   const store = transaction.objectStore('files');
+  const changed = new Map();
   for (const [hash, geometry] of batch) {
     const previous = records.get(hash);
     if (!previous) continue;
     const next = { ...previous, width: geometry.width, height: geometry.height };
     records.set(hash, next);
+    changed.set(hash, geometry);
     store.put({ ...next, __snapshot: meta?.version || '' });
   }
+
+  // instant-grid reads meta.quickFiles before the full catalog. Keep geometry in
+  // that tiny snapshot current too, otherwise the fast first paint falls back to
+  // 4:3 on every reload even though the full cached records know the real ratio.
+  if (changed.size && meta?.version && Array.isArray(meta.quickFiles)) {
+    const nextQuick = meta.quickFiles.map(file => {
+      const geometry = changed.get(String(file.hash || ''));
+      return geometry ? { ...file, width: geometry.width, height: geometry.height } : file;
+    });
+    meta = { ...meta, quickFiles: nextQuick };
+    transaction.objectStore('meta').put(meta);
+  }
+
   await transactionDone(transaction).catch(() => {});
   if (pendingGeometry.size) scheduleGeometryWrite();
 }
@@ -252,8 +285,3 @@ window.mochimonoCatalogCache = {
   clear,
   state: () => ({ version: meta?.version || '', count: records.size, savedAt: Number(meta?.savedAt) || 0 })
 };
-
-// Start the IndexedDB read immediately, before library-app waits on the server
-// health check. Normal reloads can then restore the cached grid from memory in
-// the same frame instead of briefly painting a Loading screen first.
-load().catch(() => {});

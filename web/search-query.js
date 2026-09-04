@@ -22,8 +22,14 @@ export function fileKind(file) {
   return base || 'other';
 }
 
+const ASCII = /^[\x00-\x7f]*$/;
 export function normalizeText(text) {
-  return String(text || '')
+  const value = String(text || '');
+  // Most filesystem names/paths are ASCII. One ASCII replacement already
+  // collapses punctuation and whitespace runs, avoiding the expensive Unicode
+  // normalization/property-regex path for the common case.
+  if (ASCII.test(value)) return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return value
     .normalize('NFKD')
     .replace(/\p{M}+/gu, '')
     .toLowerCase()
@@ -35,7 +41,16 @@ export function normalizeText(text) {
 const words = text => normalizeText(text).split(' ').filter(Boolean);
 const encoded = text => normalizeText(text).replaceAll(' ', '_');
 const fieldWords = (field, text) => words(text).map(word => `__${field}__${word}`);
-const typeAlias = value => TYPE_ALIASES.get(normalizeText(value)) || normalizeText(value);
+const typeAlias = value => {
+  const normalized = normalizeText(value);
+  return TYPE_ALIASES.get(normalized) || normalized;
+};
+
+function appendField(result, field, normalized) {
+  if (!normalized) return result;
+  for (const word of normalized.split(' ')) if (word) result += ` __${field}__${word}`;
+  return result;
+}
 
 function pathQuery(text) {
   const raw = String(text || '').trim();
@@ -58,34 +73,53 @@ function localLocations(file) {
   return Array.isArray(file?.localLocations) ? file.localLocations : [];
 }
 
+let cachedSourceNames = null;
+let cachedNormalizedSources = new Map();
+function normalizedSource(sourceNames, id) {
+  if (sourceNames !== cachedSourceNames) {
+    cachedSourceNames = sourceNames;
+    cachedNormalizedSources = new Map();
+  }
+  const key = Number(id);
+  if (!cachedNormalizedSources.has(key)) cachedNormalizedSources.set(key, normalizeText(sourceNames.get(key) || ''));
+  return cachedNormalizedSources.get(key) || '';
+}
+
 export function buildSearchText(file, sourceNames = new Map()) {
   const kind = fileKind(file);
-  const year = new Date(file.fileDate || file.createdAt || 0).getFullYear();
+  const dateMs = Number(file.dateMs) || Date.parse(file.fileDate || file.createdAt || 0) || 0;
+  const year = dateMs ? new Date(dateMs).getFullYear() : NaN;
   const local = localLocations(file);
-  const values = [
-    normalizeText(`${file.filename || ''} ${file.originalPath || ''} ${file.searchText || ''}`),
-    ...fieldWords('name', file.filename),
-    ...fieldWords('path', `${file.originalPath || ''} ${file.searchText || ''}`),
-    `__type__${encoded(kind)}`,
-    ...(['image','video'].includes(kind) ? ['__type__media'] : []),
-    ...(['application','text'].includes(kind) ? ['__type__application'] : []),
-    `__ext__${encoded(extension(file.filename))}`,
-    ...(Number.isFinite(year) ? [`__year__${year}`] : []),
-    '__location__server',
-    ...fieldWords('location', 'Mochimono Server'),
-    ...(Number(file.backupCount) > 0 ? ['__location__backup'] : []),
-    ...(local.length ? ['__location__local'] : [])
-  ];
+  const name = normalizeText(file.filename || '');
+  const path = normalizeText(`${file.originalPath || ''} ${file.searchText || ''}`);
+  const ext = extension(file.filename);
+
+  // This function runs once per catalog file during hydration. Build the string
+  // directly instead of allocating several arrays/spreads for every file.
+  let result = name;
+  if (path) result += `${result ? ' ' : ''}${path}`;
+  result = appendField(result, 'name', name);
+  result = appendField(result, 'path', path);
+  result += ` __type__${kind}`;
+  if (kind === 'image' || kind === 'video') result += ' __type__media';
+  if (kind === 'application' || kind === 'text') result += ' __type__application';
+  result += ` __ext__${ext}`;
+  if (Number.isFinite(year)) result += ` __year__${year}`;
+  result += ' __location__server __location__mochimono';
+  if (Number(file.backupCount) > 0) result += ' __location__backup';
+  if (local.length) result += ' __location__local';
+
   for (const location of local) {
-    const text = `${location.name || ''} ${location.deviceName || ''} ${location.rootPath || ''}`;
-    values.push(...fieldWords('location', text));
-    values.push(normalizeText(text));
+    const text = normalizeText(`${location.name || ''} ${location.deviceName || ''} ${location.rootPath || ''}`);
+    result = appendField(result, 'location', text);
+    if (text) result += ` ${text}`;
   }
   for (const id of file.importIds || []) {
-    values.push(`__sourceid__${id}`);
-    values.push(normalizeText(sourceNames.get(Number(id)) || ''));
+    result += ` __sourceid__${id}`;
+    const source = normalizedSource(sourceNames, id);
+    if (source) result += ` ${source}`;
   }
-  return values.filter(Boolean).join(' ');
+  return result.trim();
 }
 
 export function queryTerms(raw, sourceOptions = []) {

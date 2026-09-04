@@ -28,8 +28,6 @@ if (CLIENT) {
   noteActivity();
 }
 
-if (CLIENT && files && app && !new URL(location.href).searchParams.has('file')) paintInstantGrid().catch(() => {});
-
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
 const mediaKind = file => String(file?.mime || '').startsWith('image/') ? 'image' : String(file?.mime || '').startsWith('video/') ? 'video' : '';
 
@@ -146,6 +144,9 @@ async function cachedQuickFiles() {
       metaRequest.onsuccess = () => {
         const meta = metaRequest.result;
         if (!meta?.version) return finish([]);
+        if (Array.isArray(meta.quickFiles) && meta.quickFiles.length) {
+          return finish(meta.quickFiles.filter(file => matchesQuickType(file, wanted)).slice(0, QUICK_LIMIT));
+        }
 
         const result = [];
         let scanned = 0;
@@ -238,17 +239,30 @@ function installReadyThumbs() {
     const image = document.createElement('img');
     image.className = 'cached-thumb';
     image.alt = '';
-    image.hidden = true;
+    image.hidden = false;
     image.decoding = 'async';
     image.loading = 'eager';
+    image.style.objectFit = 'cover';
+    const applyGeometry = () => {
+      if (!image.naturalWidth || !image.naturalHeight) return;
+      card.dataset.width = String(image.naturalWidth);
+      card.dataset.height = String(image.naturalHeight);
+      card.style.setProperty('--ratio', String(image.naturalWidth / image.naturalHeight));
+    };
     image.onload = () => {
       if (!image.isConnected) return;
-      image.hidden = false;
+      applyGeometry();
       box?.querySelector('.video-thumb-pending')?.remove();
     };
     image.onerror = () => image.remove();
     box?.prepend(image);
     image.src = `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
+    image.decode?.().then(() => {
+      if (!image.isConnected) return;
+      applyGeometry();
+      image.style.transform = 'translateZ(0)';
+      requestAnimationFrame(() => image.isConnected && image.style.removeProperty('transform'));
+    }).catch(() => {});
   }
 
   if (hashes.length) fetch('/api/thumbs/check', {
@@ -272,10 +286,23 @@ function paint(items) {
   return true;
 }
 
+const afterPaint = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
 async function paintInstantGrid() {
   const cached = await cachedQuickFiles();
-  if (paint(cached)) return;
-  paint(await serverQuickFiles());
+  if (paint(cached)) {
+    await afterPaint();
+    return true;
+  }
+
+  serverQuickFiles().then(items => paint(items)).catch(() => {});
+  return false;
+}
+
+if (CLIENT && files && app && !new URL(location.href).searchParams.has('file')) {
+  window.mochimonoInstantGridReady = paintInstantGrid().catch(() => false);
+} else {
+  window.mochimonoInstantGridReady = Promise.resolve(false);
 }
 
 const style = document.createElement('style');

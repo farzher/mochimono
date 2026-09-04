@@ -19,9 +19,6 @@ async function request(path, options = {}) {
   return data;
 }
 
-// Storage is important enough to deserve one visible affordance, but not a full
-// text tab in the header. Keep the existing menu entry as the implementation and
-// make this compact icon toggle invoke it.
 let storageShortcut = null;
 if (menu && manageButton) {
   storageShortcut = document.createElement('button');
@@ -55,9 +52,6 @@ style.textContent = `
 `;
 document.head.append(style);
 
-// Folder-card samples are outside the library iframe. Merely requesting their
-// thumbnail URL cannot create a missing local thumbnail, so explicitly run them
-// through the same thumbnail check/queue path used by the grid.
 const pendingThumbs = new Set();
 let thumbTimer = 0;
 let checkingThumbs = false;
@@ -92,8 +86,6 @@ async function flushSampleThumbs() {
       await request('/api/thumbs/check', { method: 'POST', body: { hashes } });
     }
   } catch {
-    // The sample image's existing retry loop remains the visual fallback. A
-    // later folder mutation/refresh will enqueue another check if needed.
   } finally {
     checkingThumbs = false;
     if (pendingThumbs.size && !thumbTimer) thumbTimer = setTimeout(flushSampleThumbs, 250);
@@ -116,43 +108,75 @@ function previewInfo(folder) {
   const key = pathKey(folder.path);
   const previous = previewMemory.get(key) || null;
   const phase = String(folder.previewPhase || '');
-  const failed = phase ? Number(folder.previewFailed) || 0 : previous?.failed || 0;
+  const mode = previewMode();
   let total = Number(folder.previewTotal) || 0;
   let processed = Number(folder.previewProcessed) || 0;
+  let ready = Number(folder.previewReady) || 0;
+  const failed = Number(folder.previewFailed) || 0;
+  const queued = Number(folder.previewQueued) || 0;
 
-  // Off intentionally drops the active discovery pass on the agent. Keep the
-  // last real folder progress visible while it is paused, and while a resumed
-  // pass recounts/checks the same on-disk thumbnail cache.
-  if (!total && previous?.total) total = previous.total;
-  if (total && previous?.processed) processed = Math.max(processed, Math.min(total, previous.processed));
-
-  if (!phase && !previous) return null;
-  if (phase === 'counting' && !previous?.total) {
-    return { key, phase, total: 0, processed: 0, failed: 0, text: 'Finding media…', percent: '', ratio: 0, indeterminate: true, working: true };
+  if (!phase) {
+    if (!previous) return null;
+    total = previous.total;
+    processed = previous.processed;
+    ready = previous.ready;
+    const done = previous.done;
+    return {
+      key, phase:'', total, processed, failed:previous.failed || 0, queued:0,
+      text:done ? 'Ready' : mode === 'off' ? 'Paused' : 'Waiting…',
+      percent:total ? `${done ? 100 : Math.floor(Math.min(1, ready / total) * 100)}%` : '',
+      ratio:total ? Math.min(1, done ? 1 : ready / total) : 0,
+      indeterminate:!total, done, working:!done && mode !== 'off'
+    };
   }
 
-  const done = phase === 'done' || previous?.done && !phase;
-  if (done && total) processed = total;
-  let ratio = total ? Math.max(0, Math.min(1, processed / total)) : 0;
-  if (!done && ratio >= 1) ratio = .99;
-  const percent = total ? `${done ? 100 : Math.floor(ratio * 100)}%` : '';
-  const mode = previewMode();
-  const count = total ? `${Math.min(processed, total).toLocaleString()} / ${total.toLocaleString()}` : '';
-  let suffix = '';
-  if (done) suffix = failed ? `${failed.toLocaleString()} unavailable` : 'Ready';
-  else if (mode === 'off') suffix = 'On demand';
-  else if (phase === 'counting') suffix = 'Resuming…';
-  else if (phase === 'finishing' || phase === 'checking') suffix = 'Finishing…';
-  else suffix = mode === 'max' ? 'Max' : 'Background';
-  const text = [count, suffix].filter(Boolean).join(' · ');
-  const info = { key, phase, total, processed, failed, text, percent, ratio, indeterminate: false, done, working: Boolean(folder.previewWarming) };
+  const done = phase === 'done';
+  let ratio = 0;
+  let percent = '';
+  let text = '';
+  let indeterminate = false;
 
-  if (total || previous) previewMemory.set(key, {
-    total: total || previous?.total || 0,
-    processed: Math.max(processed, previous?.processed || 0),
-    failed,
-    done: Boolean(done)
-  });
+  if (done) {
+    if (total) processed = ready = total;
+    ratio = 1;
+    percent = total ? '100%' : '';
+    text = failed ? `Ready · ${failed.toLocaleString()} unavailable` : 'Ready';
+  } else if (mode === 'off') {
+    const count = total ? `${Math.min(ready, total).toLocaleString()} / ${total.toLocaleString()}` : processed ? `${processed.toLocaleString()} checked` : '';
+    text = [count, 'Paused'].filter(Boolean).join(' · ');
+    ratio = total ? Math.min(.99, ready / total) : 0;
+    percent = total ? `${Math.floor(ratio * 100)}%` : '';
+    indeterminate = !total;
+  } else if (phase === 'checking') {
+    if (total) {
+      ratio = Math.min(.99, processed / total);
+      percent = `${Math.floor(ratio * 100)}%`;
+      text = `${Math.min(processed,total).toLocaleString()} / ${total.toLocaleString()} · Checking cache…`;
+    } else {
+      text = `${processed ? `${processed.toLocaleString()} checked · ` : ''}Checking cache…`;
+      indeterminate = true;
+    }
+  } else if (phase === 'generating') {
+    ratio = total ? Math.min(.99, ready / total) : 0;
+    percent = total ? `${Math.floor(ratio * 100)}%` : '';
+    text = queued
+      ? `Generating ${queued.toLocaleString()} missing…`
+      : 'Generating missing thumbnails…';
+    indeterminate = !total;
+  } else if (phase === 'verifying') {
+    ratio = total ? Math.min(.99, processed / total) : 0;
+    percent = total ? `${Math.floor(ratio * 100)}%` : '';
+    text = total
+      ? `${Math.min(processed,total).toLocaleString()} / ${total.toLocaleString()} · Verifying…`
+      : 'Verifying thumbnails…';
+    indeterminate = !total;
+  } else {
+    text = 'Checking cache…';
+    indeterminate = true;
+  }
+
+  const info = { key, phase, total, processed, ready, failed, queued, text, percent, ratio, indeterminate, done, working: Boolean(folder.previewWarming) };
+  previewMemory.set(key, { total, processed, ready, failed, done });
   return info;
 }
 
@@ -189,7 +213,11 @@ function renderPreviewProgress(stats) {
     node.querySelector('[data-preview-progress-text]').textContent = info.text;
     node.querySelector('[data-preview-percent]').textContent = info.percent;
     node.style.setProperty('--preview-progress', String(info.ratio));
-    node.title = info.done ? 'Local thumbnails ready' : previewMode() === 'off' ? 'Background thumbnail generation is off; visible files still generate on demand' : 'Generating local thumbnails in the background';
+    node.title = info.done ? 'Local thumbnails ready'
+      : previewMode() === 'off' ? 'Background thumbnail generation is paused; visible files still generate on demand'
+        : info.phase === 'checking' ? 'Checking the existing local thumbnail cache'
+          : info.phase === 'verifying' ? 'Verifying generated thumbnails'
+            : 'Generating missing local thumbnails';
   }
   return warming;
 }
@@ -218,8 +246,6 @@ async function refreshPreviewProgress() {
 schedulePreviewProgress(120);
 window.addEventListener('mochimono:preview-mode', () => schedulePreviewProgress(0));
 
-// The outer desktop header can own focus while the scrollable library lives in
-// the iframe. Forward page/edge keys so clicking the header never disables them.
 addEventListener('keydown', event => {
   if (!pageKeys.has(event.key) || filesPane?.hidden || document.querySelector('dialog[open]')) return;
   if (event.target?.closest?.('input,select,textarea,[contenteditable="true"]')) return;
