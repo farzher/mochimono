@@ -9,6 +9,13 @@ const devData = join(root, 'dev-data');
 const devConfigDir = join(devData, '.agent');
 const children = [];
 
+function exitDescription(code, signal) {
+  if (signal) return `signal ${signal}`;
+  if (!Number.isInteger(code)) return String(code);
+  if (process.platform !== 'win32') return String(code);
+  return `${code} (0x${(code >>> 0).toString(16).padStart(8, '0')})`;
+}
+
 function run(file, env) {
   const child = spawn(process.execPath, [join(root, file)], {
     cwd: root,
@@ -16,10 +23,10 @@ function run(file, env) {
     stdio: 'inherit'
   });
   children.push(child);
-  child.on('exit', code => {
-    if (code && !stopping) {
-      console.error(`${file} exited with code ${code}`);
-      stop(code);
+  child.on('exit', (code, signal) => {
+    if ((code || signal) && !stopping) {
+      console.error(`${file} exited with ${exitDescription(code, signal)}`);
+      stop(code || 1);
     }
   });
   return child;
