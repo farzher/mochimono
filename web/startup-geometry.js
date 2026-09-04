@@ -2,7 +2,10 @@ const files = document.querySelector('#files');
 const originalReady = window.mochimonoInstantGridReady || Promise.resolve(false);
 const geometry = new Map();
 const pendingRows = new Set();
+const STARTUP_VISIBLE_MS = 1800;
+const startupVisibleUntil = performance.now() + STARTUP_VISIBLE_MS;
 let rowFrame = 0;
+let userInteracted = false;
 
 function apply(card, width, height) {
   width = Number(width) || 0;
@@ -58,10 +61,13 @@ function rowIsVisible(row) {
 function syncDayLabels(grid) {
   if (!grid) return;
   const gridRect = grid.getBoundingClientRect();
+  const firstByDay = new Map();
+  for (const card of grid.querySelectorAll('.file-card[data-day]')) {
+    const key = String(card.dataset.day || '');
+    if (key && !firstByDay.has(key)) firstByDay.set(key, card);
+  }
   for (const button of grid.querySelectorAll(':scope > .day-group-control[data-period-key]')) {
-    const key = String(button.dataset.periodKey || '');
-    if (!key) continue;
-    const card = [...grid.querySelectorAll('.file-card[data-day]')].find(item => item.dataset.day === key);
+    const card = firstByDay.get(String(button.dataset.periodKey || ''));
     if (!card) continue;
     const rect = card.getBoundingClientRect();
     button.style.left = `${Math.round((rect.left - gridRect.left) * 100) / 100}px`;
@@ -101,19 +107,21 @@ function flushRows() {
   rowFrame = 0;
   if (!pendingRows.size) return;
   const ready = [];
-  let changesAbove = false;
+  let needsAnchor = false;
+  const allowVisible = !userInteracted && performance.now() <= startupVisibleUntil;
   for (const row of pendingRows) {
     if (!row.isConnected) {
       pendingRows.delete(row);
       continue;
     }
-    if (rowIsVisible(row)) continue;
-    if (row.getBoundingClientRect().bottom <= 0) changesAbove = true;
+    const rect = row.getBoundingClientRect();
+    if (rowIsVisible(row) && !allowVisible) continue;
+    if (rect.top < innerHeight) needsAnchor = true;
     ready.push(row);
   }
   if (!ready.length) return;
 
-  const anchor = changesAbove ? visibleAnchor() : null;
+  const anchor = needsAnchor ? visibleAnchor() : null;
   for (const row of ready) {
     pendingRows.delete(row);
     reflowRow(row);
@@ -148,6 +156,10 @@ observer?.observe(files, { childList: true, subtree: true, attributes: true, att
 window.addEventListener('scroll', () => {
   if (pendingRows.size) scheduleRows();
 }, { passive: true });
+
+for (const eventName of ['wheel','pointerdown','keydown','touchstart']) {
+  window.addEventListener(eventName, () => { userInteracted = true; }, { passive: true, capture: true, once: true });
+}
 
 function waitForInstantCards(timeout = 400) {
   if (files?.querySelector('[data-instant-hash]')) return Promise.resolve(true);
