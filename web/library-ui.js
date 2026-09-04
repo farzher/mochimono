@@ -34,10 +34,11 @@ function saveUi() {
 function restoreUi() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(UI_KEY) || '{}'); } catch {}
+  const savedVersion = Number(saved.version) || 0;
   const savedView = ['grid','list','folders'].includes(saved.view) ? saved.view : currentView();
   const validTypes = ['','media','image','video','audio','application','other'];
   const savedType = validTypes.includes(saved.type) ? saved.type : null;
-  const oldGridDefault = Number(saved.version) < UI_VERSION && savedView === 'grid' && savedType === '';
+  const oldGridDefault = savedVersion < UI_VERSION && savedView === 'grid' && savedType === '';
   const nextType = oldGridDefault ? 'media' : savedType ?? (savedView === 'grid' ? 'media' : '');
 
   if (['date-desc','date-added','date-asc','size-desc'].includes(saved.sort)) {
@@ -47,7 +48,7 @@ function restoreUi() {
   typeFilter.value = nextType;
   typeFilter.dispatchEvent(new Event('change', { bubbles: true }));
   if (['grid','list','folders'].includes(saved.view)) document.querySelector(`#views [data-view="${saved.view}"]`)?.click();
-  if (Number(saved.version) < UI_VERSION) saveUi();
+  if (savedVersion < UI_VERSION) saveUi();
 }
 
 function syncSelectedClasses() {
