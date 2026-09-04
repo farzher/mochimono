@@ -51,6 +51,29 @@ function visibleFolders() {
   ];
 }
 
+function sameLocalPath(a, b) {
+  if (!a || !b) return false;
+  const clean = value => {
+    const path = resolve(String(value));
+    return platform() === 'win32' ? path.toLowerCase() : path;
+  };
+  return clean(a) === clean(b);
+}
+
+async function takeOverBackgroundJob(path) {
+  const job = currentJob();
+  if (!job || job.status !== 'running' || !job.background) return false;
+  if (job.progress?.path && sameLocalPath(job.progress.path, path)) {
+    job.background = false;
+    return true;
+  }
+  cancelJob();
+  for (let attempt = 0; attempt < 20 && currentJob()?.status === 'running'; attempt++) {
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 50));
+  }
+  return false;
+}
+
 async function reconcileDeviceIdentity() {
   if (deviceIdentityReconciled || !settings.token) return;
   const aliases = new Set((settings.deviceAliases || []).map(String).filter(Boolean));
@@ -231,15 +254,13 @@ async function handleLocalApi(req, res, url) {
     const protectedFolder = body.path ? folderFor(body.path) : null;
     const browseFolder = body.path ? browseFolderFor(body.path) : null;
     if (protectedFolder) {
-      // Manual Sync is foreground work: it intentionally overrides Idle/On demand.
-      queueFolderSync(protectedFolder.path, undefined, 0, true);
+      const continuing = await takeOverBackgroundJob(protectedFolder.path);
+      if (!continuing) queueFolderSync(protectedFolder.path, undefined, 0, true);
       json(res, 200, { ok: true });
     } else if (browseFolder) {
-      startJob(res, 'sync', `Sync ${browseFolder}`, async update => {
-        const result = await indexBrowseFolder(browseFolder, update);
-        invalidateClientProviders();
-        return result;
-      });
+      const continuing = await takeOverBackgroundJob(browseFolder);
+      if (!continuing) await addBrowseFolder(browseFolder);
+      json(res, 200, { ok: true });
     } else json(res, 404, { error: 'Folder not found' });
     return true;
   }
@@ -272,11 +293,11 @@ async function handleLocalApi(req, res, url) {
     const body = await readJson(req);
     const path = body.path ? browseFolderFor(body.path) : null;
     if (!path) json(res, 404, { error: 'Folder not found' });
-    else startJob(res, 'sync', `Sync ${path}`, async update => {
-      const result = await indexBrowseFolder(path, update);
-      invalidateClientProviders();
-      return result;
-    });
+    else {
+      const continuing = await takeOverBackgroundJob(path);
+      if (!continuing) await addBrowseFolder(path);
+      json(res, 200, { ok: true });
+    }
     return true;
   }
 
