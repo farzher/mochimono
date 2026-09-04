@@ -5,10 +5,16 @@ const views = document.querySelector('#views');
 const folderbar = document.querySelector('#folderbar');
 const typeFilter = document.querySelector('#typeFilter');
 
-if (typeFilter && !typeFilter.value) {
+function applyDefaultType() {
+  if (!typeFilter || typeFilter.value || new URL(location.href).searchParams.has('type')) return;
+  if (!window.mochimonoLibrary) {
+    requestAnimationFrame(applyDefaultType);
+    return;
+  }
   typeFilter.value = 'media';
   typeFilter.dispatchEvent(new Event('change', { bubbles: true }));
 }
+applyDefaultType();
 
 const currentView = () => views.querySelector('[data-view].active')?.dataset.view || 'grid';
 const syncLayoutMode = () => document.documentElement.classList.toggle('library-grid-view', currentView() === 'grid');
