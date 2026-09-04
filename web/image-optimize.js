@@ -6,6 +6,7 @@ const viewerMeta = document.querySelector('#viewer-meta');
 const CLIENT = document.documentElement.classList.contains('client-library');
 
 const SUPPORTED = new Set(['jpg','jpeg','png','webp','avif','bmp','gif','tif','tiff']);
+const DIRECT_BROWSER = new Set(['jpg','jpeg','png','webp','avif','bmp','gif']);
 const AUTO_MAX_EDGE = 3072;
 const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
 const currentHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
@@ -29,7 +30,7 @@ style.textContent = `
 .image-optimize-result{display:grid;gap:5px}.image-optimize-result-line{display:flex;align-items:baseline;justify-content:space-between;gap:12px}.image-optimize-result strong{font-size:23px;line-height:1;letter-spacing:-.04em;white-space:nowrap}.image-optimize-result b{font-size:17px;line-height:1;font-weight:720;white-space:nowrap}.image-optimize-result b.good{color:#a9ceb1}.image-optimize-result b.quiet{color:#aaa19e}.image-optimize-status{min-height:15px;color:#968e8a;font-size:11px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .image-optimize-quick{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:12px}.image-optimize-quick button,.image-optimize-choice{min-height:36px;border:0;border-radius:9px;background:#2a2829;color:#ddd7d3;font-size:12px;font-weight:650}.image-optimize-quick button:hover,.image-optimize-choice:hover{background:#343132;color:#fff}.image-optimize-quick button.open{background:#3a3638;color:#fff}
 .image-optimize-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}.image-optimize-actions button{min-height:38px;border-radius:9px;font-size:12px;font-weight:700}.image-optimize-keep{background:#2a2829;color:#d2cbc7}.image-optimize-keep:hover{background:#343132;color:#fff}.image-optimize-replace{background:#eee9e5;color:#171416}.image-optimize-replace:hover{background:#fff}.image-optimize-actions button:disabled{opacity:.36;cursor:default}
-.image-optimize-pane-title{margin:0 0 9px;color:#8d8581;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}.image-optimize-choice-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.image-optimize-choice-grid.size{grid-template-columns:repeat(3,1fr)}.image-optimize-choice.active{background:#eee9e5;color:#171416}.image-optimize-choice.wide{grid-column:span 3}
+.image-optimize-pane-title{margin:0 0 9px;color:#8d8581;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}.image-optimize-choice-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.image-optimize-choice.active{background:#eee9e5;color:#171416}
 .image-optimize-quality{display:grid;gap:8px}.image-optimize-quality-head{display:flex;justify-content:space-between;align-items:center;color:#d6cfcb;font-size:12px;font-weight:650}.image-optimize-quality output{font-variant-numeric:tabular-nums}.image-optimize-quality input[type=range]{width:100%;accent-color:#eee9e5}.image-optimize-lossless{display:flex;align-items:center;gap:8px;margin-top:11px;color:#cfc7c3;font-size:12px}.image-optimize-lossless[hidden]{display:none!important}.image-optimize-more-empty{color:#8f8784;font-size:11px;line-height:1.4}
 @media(max-width:700px){.viewer-optimize-trigger{margin-left:6px}.image-optimize-label{top:60px;font-size:10px}.image-optimize-label.original{left:10px}.image-optimize-label.optimized{right:10px}.image-optimize-controls{right:max(8px,env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));width:min(340px,calc(100% - 16px));padding:12px}.image-optimize-result-line{align-items:flex-end}.image-optimize-result strong{font-size:21px}.image-optimize-result b{font-size:16px}.image-optimize-status{font-size:10.5px}.image-optimize-quick button,.image-optimize-actions button,.image-optimize-choice{font-size:11px}.image-optimize-divider:after{width:30px;height:30px}}
 `;
@@ -65,7 +66,7 @@ layer.innerHTML = `
       </div>
       <div class="image-optimize-pane" data-opt-pane="size" hidden>
         <div class="image-optimize-pane-title">Size</div>
-        <div class="image-optimize-choice-grid size" data-opt-sizes>
+        <div class="image-optimize-choice-grid" data-opt-sizes>
           <button class="image-optimize-choice" type="button" data-size-kind="auto" data-size-value="3072">Auto</button>
           <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="100">100%</button>
           <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="75">75%</button>
@@ -136,6 +137,7 @@ let split = 50;
 let splitPointer = null;
 let openPane = '';
 let displayedCandidate = '';
+let renderingCandidate = '';
 let committing = false;
 
 const active = () => Boolean(viewer?.classList.contains('image-optimize-active'));
@@ -324,15 +326,17 @@ async function renderCandidate(data) {
   const selected = data.selected;
   if (!selected) return;
   const key = `${data.id}:${selected.id}`;
-  if (displayedCandidate === key) return;
+  if (displayedCandidate === key || renderingCandidate === key) return;
   const serial = ++renderSerial;
+  renderingCandidate = key;
   try {
     const optimizedSrc = await preload(selected.url);
     if (!active() || data.id !== activeId || serial !== renderSerial) return;
     optimized.src = optimizedSrc;
     displayedCandidate = key;
 
-    if (data.originalUrl && original.dataset.sourceUrl !== data.originalUrl) {
+    const sourceExt = extension(viewerName?.textContent);
+    if (!DIRECT_BROWSER.has(sourceExt) && data.originalUrl && original.dataset.sourceUrl !== data.originalUrl) {
       original.dataset.sourceUrl = data.originalUrl;
       preload(data.originalUrl).then(src => {
         if (active() && data.id === activeId && original.dataset.sourceUrl === data.originalUrl) original.src = src;
@@ -341,6 +345,8 @@ async function renderCandidate(data) {
   } catch {
     // Keep the previous visible preview. Polling can still recover if a later
     // candidate completes successfully.
+  } finally {
+    if (renderingCandidate === key) renderingCandidate = '';
   }
 }
 
@@ -432,6 +438,7 @@ function resetState() {
   session = null;
   splitPointer = null;
   displayedCandidate = '';
+  renderingCandidate = '';
   committing = false;
   original.removeAttribute('src');
   original.removeAttribute('data-source-url');
@@ -492,6 +499,7 @@ function openOptimizer(hash = currentHash()) {
   quality.value = '94';
   lossless.checked = false;
   displayedCandidate = '';
+  renderingCandidate = '';
   committing = false;
   setSplit(50);
   syncControls();
