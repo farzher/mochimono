@@ -46,6 +46,12 @@ function upperBound(rows, y) {
   return Math.max(0, Math.min(rows.length - 1, low - 1));
 }
 
+function elementFromHtml(html) {
+  const template = document.createElement('template');
+  template.innerHTML = String(html || '').trim();
+  return template.content.firstElementChild;
+}
+
 function groupButton(period, key, label, escapeHtml) {
   return `<button type="button" class="timeline-group-select" data-select-period="${period}" data-period-key="${escapeHtml(key)}" data-period-label="${escapeHtml(label)}" aria-label="Select ${escapeHtml(label)}"><span class="timeline-check" aria-hidden="true"></span><span>${escapeHtml(label)}</span></button>`;
 }
@@ -64,12 +70,14 @@ export function createStableMediaGrid({
 }) {
   let active = false;
   let items = [];
+  let itemIndex = new Map();
   let sort = 'date-desc';
   let rows = [];
   let itemToRow = [];
   let headers = [];
   let totalHeight = 0;
   let layoutWidth = 0;
+  let layoutMediaSize = 0;
   let firstRow = -1;
   let lastRow = -1;
   let renderedTop = 0;
@@ -84,14 +92,12 @@ export function createStableMediaGrid({
   }
 
   function fileIndexByHash(hash) {
-    if (!hash) return -1;
-    for (let index = 0; index < items.length; index++) if (items[index].hash === hash) return index;
-    return -1;
+    const index = itemIndex.get(String(hash || ''));
+    return Number.isInteger(index) ? index : -1;
   }
 
   function viewportTop() {
-    const bar = document.querySelector('.commandbar');
-    return Math.max(0, bar?.getBoundingClientRect().bottom || 0);
+    return Math.max(0, document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0);
   }
 
   function visibleAnchor() {
@@ -104,8 +110,7 @@ export function createStableMediaGrid({
       if (y >= innerHeight) break;
       for (const x of xs) {
         const card = document.elementFromPoint(x, y)?.closest?.('#files [data-hash]');
-        if (!card) continue;
-        return { hash: card.dataset.hash, top: card.getBoundingClientRect().top };
+        if (card) return { hash: card.dataset.hash, top: card.getBoundingClientRect().top };
       }
     }
     return null;
@@ -118,10 +123,10 @@ export function createStableMediaGrid({
     const rowIndex = rows.length;
     const boxes = [];
     for (const index of indices) {
-      const width = ratioFor(items[index]) * height;
-      boxes.push({ index, x, width, height });
+      const itemWidth = ratioFor(items[index]) * height;
+      boxes.push({ index, x, width: itemWidth, height });
       itemToRow[index] = rowIndex;
-      x += width + GAP;
+      x += itemWidth + GAP;
     }
     rows.push({ y, height, start: indices[0], end: indices.at(-1) + 1, boxes });
     return y + height + GAP;
@@ -162,13 +167,14 @@ export function createStableMediaGrid({
     rows = [];
     headers = [];
     itemToRow = new Array(items.length);
+    itemIndex = new Map(items.map((file, index) => [file.hash, index]));
     layoutWidth = Math.max(1, files.clientWidth || files.getBoundingClientRect().width || innerWidth);
-    const target = Math.max(48, Number(mediaSize()) || 170);
+    layoutMediaSize = Math.max(48, Number(mediaSize()) || 170);
     let y = 0;
 
     if (!sort.startsWith('date-')) {
       y = FLAT_TOP;
-      totalHeight = packRange(0, items.length, y, layoutWidth, target);
+      totalHeight = Math.max(1, packRange(0, items.length, y, layoutWidth, layoutMediaSize));
       return;
     }
 
@@ -190,7 +196,7 @@ export function createStableMediaGrid({
       const month = monthName(items[start]);
       headers.push({ kind: 'month', top: y, height: MONTH_HEIGHT, key, label: month });
       y += MONTH_HEIGHT + MONTH_BOTTOM;
-      y = packRange(start, end, y, layoutWidth, target);
+      y = packRange(start, end, y, layoutWidth, layoutMediaSize);
       previousYear = year;
       start = end;
       groupIndex++;
@@ -204,33 +210,75 @@ export function createStableMediaGrid({
 
   function contentViewport() {
     const top = window.scrollY - planeTop() + viewportTop();
-    return { top: Math.max(0, top), bottom: Math.max(0, top) + Math.max(1, innerHeight - viewportTop()) };
+    const height = Math.max(1, innerHeight - viewportTop());
+    return { top: Math.max(0, top), bottom: Math.max(0, top) + height };
   }
 
-  function restoreFocus(hash) {
-    if (!hash) return;
-    const card = files.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
-    if (!card) return;
-    card.classList.add('keyboard-cursor');
-    card.focus({ preventScroll: true });
+  function updateCardGeometry(card, file, box, rowY) {
+    card.style.left = px(box.x);
+    card.style.top = px(rowY);
+    card.style.width = px(box.width);
+    card.style.height = px(box.height);
+    card.style.flexBasis = px(box.width);
+    card.style.setProperty('--ratio', String(ratioFor(file)));
+    card.dataset.filename = file.filename;
+    card.dataset.width = String(file.width || 0);
+    card.dataset.height = String(file.height || 0);
+    card.dataset.day = dayKey(file);
+    card.dataset.dayLabel = dayLabel(file);
+    card.title = file.filename;
+  }
+
+  function makeHeader(header) {
+    const tag = header.kind === 'year' ? 'h2' : 'h3';
+    const className = header.kind === 'year' ? 'year-heading stable-year-heading' : 'date-heading stable-month-heading';
+    const node = document.createElement(tag);
+    node.className = className;
+    node.dataset.stableHeader = `${header.kind}:${header.key}`;
+    node.innerHTML = groupButton(header.kind, header.key, header.label, escapeHtml);
+    return node;
+  }
+
+  function makeDayControl(key, label) {
+    const node = document.createElement('button');
+    node.type = 'button';
+    node.className = 'timeline-group-select day-group-control stable-day-control';
+    node.dataset.stableDay = key;
+    node.dataset.selectPeriod = 'day';
+    node.dataset.periodKey = key;
+    node.dataset.periodLabel = label;
+    node.setAttribute('aria-label', `Select ${label}`);
+    node.innerHTML = `<span class="timeline-check" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
+    return node;
   }
 
   function renderRows(nextFirst, nextLast) {
     if (!active || !rows.length) return;
     nextFirst = Math.max(0, Math.min(rows.length - 1, nextFirst));
     nextLast = Math.max(nextFirst, Math.min(rows.length - 1, nextLast));
-    const focused = document.activeElement?.closest?.('#files [data-hash]')?.dataset.hash || '';
     const minY = Math.max(0, rows[nextFirst].y - 70);
     const maxY = rows[nextLast].y + rows[nextLast].height + 70;
-    const html = [];
+
+    const existingCards = new Map([...files.querySelectorAll(':scope > .stable-media-card[data-hash]')].map(node => [node.dataset.hash, node]));
+    const existingHeaders = new Map([...files.querySelectorAll(':scope > [data-stable-header]')].map(node => [node.dataset.stableHeader, node]));
+    const existingDays = new Map([...files.querySelectorAll(':scope > [data-stable-day]')].map(node => [node.dataset.stableDay, node]));
+    const wantedCards = new Set();
+    const wantedHeaders = new Set();
+    const wantedDays = new Set();
+    const fragment = document.createDocumentFragment();
+    let changed = false;
 
     for (const header of headers) {
       if (header.top + header.height < minY || header.top > maxY) continue;
-      if (header.kind === 'year') {
-        html.push(`<h2 class="year-heading stable-year-heading" style="top:${px(header.top)}">${groupButton('year', header.key, header.label, escapeHtml)}</h2>`);
-      } else {
-        html.push(`<h3 class="date-heading stable-month-heading" style="top:${px(header.top)}">${groupButton('month', header.key, header.label, escapeHtml)}</h3>`);
+      const key = `${header.kind}:${header.key}`;
+      wantedHeaders.add(key);
+      let node = existingHeaders.get(key);
+      if (!node) {
+        node = makeHeader(header);
+        fragment.append(node);
+        changed = true;
       }
+      node.style.top = px(header.top);
     }
 
     for (let rowIndex = nextFirst; rowIndex <= nextLast; rowIndex++) {
@@ -238,23 +286,46 @@ export function createStableMediaGrid({
       for (const box of row.boxes) {
         const index = box.index;
         const file = items[index];
-        const previousDay = index > 0 ? dayKey(items[index - 1]) : '';
-        const currentDay = dayKey(file);
-        if (sort.startsWith('date-') && currentDay && currentDay !== previousDay) {
-          const label = dayLabel(file);
-          html.push(`<button type="button" class="timeline-group-select day-group-control stable-day-control" data-select-period="day" data-period-key="${escapeHtml(currentDay)}" data-period-label="${escapeHtml(label)}" aria-label="Select ${escapeHtml(label)}" style="left:${px(box.x)};top:${px(row.y - 19)}"><span class="timeline-check" aria-hidden="true"></span><span>${escapeHtml(label)}</span></button>`);
+        const hash = file.hash;
+        wantedCards.add(hash);
+        let card = existingCards.get(hash);
+        if (!card) {
+          card = elementFromHtml(renderCard(file, { ...box, y: row.y, index }));
+          if (!card) continue;
+          fragment.append(card);
+          changed = true;
         }
-        html.push(renderCard(file, { ...box, y: row.y, index }));
+        updateCardGeometry(card, file, box, row.y);
+
+        if (sort.startsWith('date-')) {
+          const previousDay = index > 0 ? dayKey(items[index - 1]) : '';
+          const currentDay = dayKey(file);
+          if (currentDay && currentDay !== previousDay) {
+            wantedDays.add(currentDay);
+            const label = dayLabel(file);
+            let day = existingDays.get(currentDay);
+            if (!day) {
+              day = makeDayControl(currentDay, label);
+              fragment.append(day);
+              changed = true;
+            }
+            day.style.left = px(box.x);
+            day.style.top = px(row.y - 19);
+          }
+        }
       }
     }
 
-    files.innerHTML = html.join('');
+    for (const [hash, node] of existingCards) if (!wantedCards.has(hash)) { node.remove(); changed = true; }
+    for (const [key, node] of existingHeaders) if (!wantedHeaders.has(key)) { node.remove(); changed = true; }
+    for (const [key, node] of existingDays) if (!wantedDays.has(key)) { node.remove(); changed = true; }
+    if (fragment.childNodes.length) files.append(fragment);
+
     firstRow = nextFirst;
     lastRow = nextLast;
     renderedTop = rows[firstRow].y;
     renderedBottom = rows[lastRow].y + rows[lastRow].height;
-    restoreFocus(focused);
-    window.dispatchEvent(new CustomEvent('mochimono:stable-grid-rendered'));
+    if (changed) window.dispatchEvent(new CustomEvent('mochimono:stable-grid-rendered'));
   }
 
   function renderAroundY(y, force = false) {
@@ -296,9 +367,11 @@ export function createStableMediaGrid({
   }
 
   function render(nextItems, options = {}) {
+    const wasStable = active && files.classList.contains('stable-media-grid');
     items = nextItems || [];
     sort = String(options.sort || 'date-desc');
     active = true;
+    if (!wasStable) files.replaceChildren();
     files.className = 'files grid stable-media-grid';
     files.style.position = 'relative';
     buildLayout();
@@ -323,10 +396,12 @@ export function createStableMediaGrid({
     scrollFrame = rebuildFrame = 0;
     rows = [];
     itemToRow = [];
+    itemIndex = new Map();
     headers = [];
     items = [];
     firstRow = lastRow = -1;
     renderedTop = renderedBottom = totalHeight = 0;
+    layoutWidth = layoutMediaSize = 0;
     files.style.removeProperty('height');
     files.style.removeProperty('position');
     files.classList.remove('stable-media-grid');
@@ -376,11 +451,17 @@ export function createStableMediaGrid({
       rebuildFrame = 0;
       if (!active) return;
       const width = Math.max(1, files.clientWidth || files.getBoundingClientRect().width || innerWidth);
-      if (Math.abs(width - layoutWidth) < .5 && !anchor) return;
+      const target = Math.max(48, Number(mediaSize()) || 170);
+      if (Math.abs(width - layoutWidth) < .5 && Math.abs(target - layoutMediaSize) < .5) return;
       buildLayout();
       files.style.height = px(totalHeight);
-      if (anchor?.hash) restoreAnchor(anchor);
-      else refreshViewport(true);
+      firstRow = lastRow = -1;
+      renderedTop = renderedBottom = 0;
+      if (anchor?.hash && fileIndexByHash(anchor.hash) >= 0) {
+        const row = itemToRow[fileIndexByHash(anchor.hash)];
+        renderAroundY(rows[row]?.y || 0, true);
+        restoreAnchor(anchor);
+      } else refreshViewport(true);
     });
   }
 
