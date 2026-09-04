@@ -18,9 +18,13 @@ for (const [name, wanted] of Object.entries(pkg.dependencies || {})) {
 
 if (missing.length) {
   console.log(`Installing Mochimono dependencies: ${missing.join(', ')}`);
-  const command = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const windows = process.platform === 'win32';
+  const command = windows ? (process.env.ComSpec || 'cmd.exe') : 'npm';
+  const args = windows
+    ? ['/d', '/s', '/c', 'npm.cmd install --no-audit --no-fund --prefer-offline']
+    : ['install', '--no-audit', '--no-fund', '--prefer-offline'];
   const code = await new Promise((resolve, reject) => {
-    const child = spawn(command, ['install', '--no-audit', '--no-fund', '--prefer-offline'], {
+    const child = spawn(command, args, {
       cwd: root,
       stdio: 'inherit',
       windowsHide: true
