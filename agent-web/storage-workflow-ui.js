@@ -4,50 +4,26 @@ const storagePane = document.querySelector('#storagePane');
 if (folders && storagePane) {
   const style = document.createElement('style');
   style.textContent = `
-    /* One stable storage-work story. The older thumbnail phase UI exposed
-       scheduler internals (Checking/Generating/Next); keep it out of view. */
-    #storagePane [data-preview-progress]{display:none!important}
-    #storagePane .folder-item .item-progress{display:none!important}
-    #storagePane .folder-workflow{margin-top:12px;padding-top:11px;border-top:1px solid #292429}
-    #storagePane .folder-workflow-head{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
-    #storagePane .folder-workflow-state{display:flex;align-items:center;gap:7px;min-width:0;color:#d9cfcb;font-size:11px;font-weight:720;line-height:1.2}
-    #storagePane .folder-workflow-state:before{content:'';width:6px;height:6px;flex:0 0 auto;border-radius:50%;background:#81797a}
-    #storagePane .folder-workflow.ready .folder-workflow-state:before{background:#91a68d}
-    #storagePane .folder-workflow.active .folder-workflow-state:before{background:#efa09a;animation:storage-work-pulse 1s ease-in-out infinite}
-    #storagePane .folder-workflow.waiting .folder-workflow-state:before{background:#8b8283;opacity:.68}
-    #storagePane .folder-workflow-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#766f6e;font-size:9px;font-weight:590}
-    #storagePane .folder-workflow-stages{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
-    #storagePane .folder-stage{display:inline-flex;align-items:center;gap:5px;min-height:22px;padding:3px 7px;border:1px solid #2b272b;border-radius:999px;background:#171518;color:#777071;font-size:9px;font-weight:660;font-variant-numeric:tabular-nums;white-space:nowrap}
-    #storagePane .folder-stage:before{content:'';width:5px;height:5px;border-radius:50%;background:#5f595b}
-    #storagePane .folder-stage.done{border-color:#293129;color:#9ca998;background:#151916}
-    #storagePane .folder-stage.done:before{background:#83977f}
-    #storagePane .folder-stage.active{border-color:#483438;color:#d7aaa5;background:#1f181a}
-    #storagePane .folder-stage.active:before{background:#efa09a}
-    #storagePane .folder-stage.waiting{color:#8c8382}
-    #storagePane .folder-stage.waiting:before{background:#756d6f}
-    #storagePane .folder-work-list{display:grid;gap:9px;margin-top:10px}
-    #storagePane .folder-work-row{display:grid;gap:5px;min-width:0}
-    #storagePane .folder-work-copy{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:9px;line-height:1.2;font-variant-numeric:tabular-nums}
-    #storagePane .folder-work-copy strong{flex:0 0 auto;color:#aaa19e;font-weight:700}
-    #storagePane .folder-work-copy span{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#777071}
-    #storagePane .folder-work-copy em{flex:0 0 auto;color:#b8aeaa;font-style:normal;font-weight:700}
-    #storagePane .folder-work-cancel{flex:0 0 auto;padding:1px 0 1px 7px;border:0;background:transparent;color:#8f8583;font:inherit;font-weight:680;cursor:pointer}
-    #storagePane .folder-work-cancel:hover{color:#eee6e2}
-    #storagePane .folder-work-track{height:4px;overflow:hidden;border-radius:999px;background:#292429}
-    #storagePane .folder-work-track>i{display:block;height:100%;border-radius:inherit;background:#e99b95;transform:scaleX(var(--folder-work-progress,0));transform-origin:left center;transition:transform .5s cubic-bezier(.22,1,.36,1),opacity .2s ease}
-    #storagePane .folder-work-row.waiting .folder-work-track>i{opacity:.38}
-    #storagePane .folder-work-row.scan .folder-work-track{display:none}
-    #storagePane .folder-work-row.active .folder-work-track>i{position:relative}
-    #storagePane .folder-work-row.active .folder-work-track>i:after{content:'';position:absolute;inset:0;width:32%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.28),transparent);transform:translateX(-140%);animation:storage-work-sheen 1.25s linear infinite}
-    @keyframes storage-work-pulse{0%,100%{opacity:.55;transform:scale(.75)}50%{opacity:1;transform:scale(1.15)}}
-    @keyframes storage-work-sheen{to{transform:translateX(420%)}}
-    @media(max-width:700px){
-      #storagePane .folder-workflow-head{align-items:flex-start;flex-direction:column;gap:3px}
-      #storagePane .folder-workflow-note{max-width:100%}
-    }
-    @media(prefers-reduced-motion:reduce){
-      #storagePane .folder-workflow-state:before,#storagePane .folder-work-track>i,#storagePane .folder-work-track>i:after{animation:none!important;transition:none!important}
-    }
+    #storagePane [data-preview-progress],#storagePane .folder-item .item-progress{display:none!important}
+    #storagePane .folder-workflow{margin-top:11px;padding-top:10px;border-top:1px solid #292429}
+    #storagePane .folder-workflow[hidden]{display:none!important}
+    #storagePane .folder-work-line{display:flex;align-items:center;gap:8px;min-width:0;height:18px;color:#aaa19e;font-size:10px;font-weight:680;font-variant-numeric:tabular-nums}
+    #storagePane .folder-work-dot{width:6px;height:6px;flex:0 0 auto;border-radius:50%;background:#746d6f}
+    #storagePane .folder-workflow.active .folder-work-dot{background:#efa09a;animation:folder-work-pulse 1s ease-in-out infinite}
+    #storagePane .folder-workflow.waiting .folder-work-dot{background:#777071;opacity:.6}
+    #storagePane .folder-workflow.paused .folder-work-dot{background:#655f60;opacity:.45}
+    #storagePane .folder-work-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#aaa19e}
+    #storagePane .folder-work-metric{margin-left:auto;flex:0 0 auto;color:#817978;font-weight:650}
+    #storagePane .folder-work-cancel{display:none;flex:0 0 auto;width:18px;height:18px;padding:0;border:0;border-radius:5px;background:transparent;color:#746d6d;font-size:15px;line-height:18px;cursor:pointer}
+    #storagePane .folder-workflow:hover .folder-work-cancel{display:block}
+    #storagePane .folder-work-cancel:hover{background:#262226;color:#ddd4d0}
+    #storagePane .folder-work-track{position:relative;height:3px;margin-top:6px;overflow:hidden;border-radius:999px;background:#292429}
+    #storagePane .folder-work-track>i{position:absolute;inset:0;background:#e99b95;transform:scaleX(var(--folder-work-progress,0));transform-origin:left center;transition:transform .55s cubic-bezier(.22,1,.36,1),opacity .2s ease}
+    #storagePane .folder-workflow.waiting .folder-work-track>i,#storagePane .folder-workflow.paused .folder-work-track>i{opacity:.35}
+    #storagePane .folder-workflow.indeterminate .folder-work-track>i{width:26%;transform:none;animation:folder-work-slide 1.15s ease-in-out infinite}
+    @keyframes folder-work-pulse{0%,100%{opacity:.45;transform:scale(.75)}50%{opacity:1;transform:scale(1.15)}}
+    @keyframes folder-work-slide{0%{transform:translateX(-120%)}50%{transform:translateX(145%)}100%{transform:translateX(420%)}}
+    @media(prefers-reduced-motion:reduce){#storagePane .folder-work-dot,#storagePane .folder-work-track>i{animation:none!important;transition:none!important}}
   `;
   document.head.append(style);
 
@@ -57,22 +33,14 @@ if (folders && storagePane) {
   let timer = 0;
   let busy = false;
 
-  function bytes(number) {
-    const units = ['B','KB','MB','GB','TB'];
-    let value = Math.max(0, Number(number) || 0);
-    let unit = 0;
-    while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
-    return `${value < 10 && unit ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
-  }
-
   function eta(seconds) {
     seconds = Number(seconds);
     if (!Number.isFinite(seconds) || seconds <= 0) return '';
-    if (seconds < 90) return `~${Math.max(10, Math.round(seconds / 10) * 10)}s`;
-    if (seconds < 3600) return `~${Math.max(1, Math.round(seconds / 60))}m`;
+    if (seconds < 90) return `${Math.max(10, Math.round(seconds / 10) * 10)}s`;
+    if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))}m`;
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.round((seconds % 3600) / 60);
-    return `~${hours}h${minutes ? ` ${minutes}m` : ''}`;
+    return `${hours}h${minutes ? ` ${minutes}m` : ''}`;
   }
 
   async function request(path, options = {}) {
@@ -85,232 +53,167 @@ if (folders && storagePane) {
     const job = state?.job;
     if (!job || job.status !== 'running' || job.type !== 'sync') return null;
     const path = job.progress?.path;
-    if (path && samePath(path, folder.path)) return job;
-    return null;
+    return path && samePath(path, folder.path) ? job : null;
   }
 
-  function percentRatio(done, total) {
-    total = Number(total) || 0;
-    done = Number(done) || 0;
-    return total > 0 ? Math.max(0, Math.min(1, done / total)) : 0;
-  }
-
-  function previewProgress(folder, mode) {
+  function previewProgress(folder) {
     const total = Number(folder.previewTotal) || 0;
-    const ready = Number(folder.previewReady) || 0;
-    const failed = Number(folder.previewFailed) || 0;
-    const deferred = Number(folder.previewDeferred) || 0;
-    const generated = Number(folder.previewGenerated) || 0;
-    const active = Number(folder.previewQueueActive) || 0;
-    const queued = Number(folder.previewQueueBackground) || 0;
-    const done = String(folder.previewPhase || '') === 'done' || !folder.previewWarming;
+    const completeNow = Math.min(total || Infinity,
+      (Number(folder.previewReady) || 0) +
+      (Number(folder.previewFailed) || 0) +
+      (Number(folder.previewDeferred) || 0) +
+      (Number(folder.previewGenerated) || 0));
     const run = `${Number(folder.previewStartedAt) || 0}:${total}`;
     const key = pathKey(folder.path);
     const now = Date.now();
-    const resolved = Math.min(total || Infinity, ready + failed + deferred + generated);
     const previous = previewMemory.get(key);
-    let ratio = total ? Math.min(done ? 1 : .995, resolved / total) : 0;
+    let ratio = total ? Math.min(.995, completeNow / total) : 0;
     let rate = previous?.run === run ? Number(previous.rate) || 0 : 0;
     let lastProgressAt = previous?.run === run ? Number(previous.lastProgressAt) || now : now;
 
     if (previous?.run === run) {
       ratio = Math.max(Number(previous.ratio) || 0, ratio);
       const elapsed = Math.max(.001, (now - Number(previous.sampleAt || now)) / 1000);
-      const delta = Math.max(0, resolved - Number(previous.resolved || 0));
+      const delta = Math.max(0, completeNow - Number(previous.complete || 0));
       if (delta > 0) {
         const instant = delta / elapsed;
         rate = rate > 0 ? rate * .72 + instant * .28 : instant;
         lastProgressAt = now;
-      } else if (now - lastProgressAt > 12_000) {
-        rate = 0;
-      }
+      } else if (now - lastProgressAt > 12_000) rate = 0;
     }
 
-    const waitingIdle = Boolean(folder.previewWaiting) || mode === 'idle' && folder.previewWarming && folder.previewWaiting;
-    const paused = mode === 'off';
-    const waiting = !done && !paused && !waitingIdle && String(folder.previewPhase || '') === 'generating' && active <= 0;
-    const working = !done && !paused && !waitingIdle && !waiting;
+    const done = String(folder.previewPhase || '') === 'done' || !folder.previewWarming;
+    if (done) ratio = 1;
+    previewMemory.set(key, { run, ratio, complete:completeNow, rate, sampleAt:now, lastProgressAt });
+
     const remaining = total ? Math.max(0, total - Math.round(ratio * total)) : 0;
     const scanComplete = total > 0 && Number(folder.previewProcessed) >= total;
-    const etaText = working && scanComplete && total && rate > 0 && now - lastProgressAt < 8000 && resolved >= Math.min(20, total)
+    const etaText = scanComplete && rate > 0 && now - lastProgressAt < 8000 && completeNow >= Math.min(20, total)
       ? eta(remaining / rate)
       : '';
-
-    previewMemory.set(key, { run, ratio, resolved, rate, sampleAt:now, lastProgressAt });
-
-    let state = 'active';
-    let status = 'Preparing';
-    if (done) { state = 'done'; status = 'Ready'; ratio = 1; }
-    else if (paused) { state = 'waiting'; status = 'Paused'; }
-    else if (waitingIdle || waiting) { state = 'waiting'; status = 'Waiting'; }
-
-    const percentage = total ? `${Math.floor(ratio * 100)}%` : '';
-    const estimating = working && total && !etaText ? 'Estimating…' : '';
-    const detail = [status, percentage, etaText || estimating].filter(Boolean).join(' · ');
-    const count = total ? `${resolved.toLocaleString()} / ${total.toLocaleString()}` : '';
-    const activity = done ? ''
-      : waitingIdle ? 'waiting for idle'
-        : waiting ? 'waiting'
-          : String(folder.previewPhase || '') === 'checking' ? 'checking cache'
-            : active > 0 ? `${active.toLocaleString()} generating`
-              : queued > 0 ? `${queued.toLocaleString()} queued`
-                : 'preparing';
-    const note = [count, activity].filter(Boolean).join(' · ');
-
-    return { total, ratio, percentage, state, status, detail, note, done, working, resolved };
+    return { total, ratio, etaText, done };
   }
 
-  function protectedWork(folder, state) {
+  function cloudModel(folder, state) {
     const job = currentFolderJob(folder, state);
-    const p = job?.progress || {};
     if (!job) {
-      if (folder.pending) {
-        const note = folder.waitingForIdle ? 'Waiting for idle' : 'Waiting to sync';
-        return {
-          headline:'Waiting',
-          tone:'waiting',
-          note,
-          stages:[{ label:'Cloud', value:'Waiting', state:'waiting' }],
-          rows:[]
-        };
-      }
-      const synced = Boolean(folder.lastSynced);
-      return {
-        headline: synced ? 'Backed up' : 'Cloud',
-        tone: synced ? 'ready' : 'waiting',
-        note: synced ? 'Cloud copy complete' : 'Not synced yet',
-        stages:[{ label:'Cloud', value:synced ? 'Ready' : 'Waiting', state:synced ? 'done' : 'waiting' }],
-        rows:[]
-      };
+      if (!folder.pending) return null;
+      return { label:'Waiting', tone:'waiting', ratio:0, indeterminate:false, metric:'', cancel:false, title:'Waiting to sync' };
     }
 
-    const phase = String(p.phase || 'Working');
-    const totalBytes = Number(p.totalBytes) || 0;
-    const doneBytes = Math.min(totalBytes, Number(p.doneBytes) || 0);
-    const ratio = percentRatio(doneBytes, totalBytes);
-    const percentage = totalBytes ? `${Math.floor(ratio * 100)}%` : '';
-    const etaText = Number(p.etaSeconds) > 0 ? eta(p.etaSeconds) : '';
-    const phaseLower = phase.toLowerCase();
-    const headline = phaseLower.includes('upload') ? 'Backing up'
-      : phaseLower.includes('sav') ? 'Finishing'
-        : phaseLower.includes('hash') ? 'Preparing files'
-          : phaseLower.includes('scan') ? 'Indexing'
+    const progress = job.progress || {};
+    const phase = String(progress.phase || '').toLowerCase();
+    const total = Number(progress.totalBytes) || 0;
+    const done = Math.min(total, Number(progress.doneBytes) || 0);
+    const ratio = total ? Math.max(0, Math.min(1, done / total)) : 0;
+    const percentage = total ? `${Math.floor(ratio * 100)}%` : '';
+    const etaText = Number(progress.etaSeconds) > 0 ? eta(progress.etaSeconds) : '';
+    const label = phase.includes('upload') ? 'Uploading'
+      : phase.includes('hash') ? 'Hashing'
+        : phase.includes('sav') ? 'Finishing'
+          : phase.includes('scan') ? 'Indexing'
             : 'Syncing';
-    const meta = totalBytes
-      ? `${bytes(doneBytes)} / ${bytes(totalBytes)}${etaText ? ` · ${etaText}` : ''}`
-      : p.scanned != null ? `${Number(p.scanned).toLocaleString()} files found`
-        : '';
-    const row = {
-      label:'Cloud copy',
-      detail:[phase, percentage, etaText].filter(Boolean).join(' · '),
-      note:meta,
-      ratio,
-      bar:Boolean(totalBytes),
-      state:'active',
-      cancel:true
-    };
-    const step = phaseLower.includes('scan') ? 0
-      : phaseLower.includes('hash') ? 1
-        : phaseLower.includes('upload') ? 2
-          : phaseLower.includes('sav') ? 3
-            : 0;
-    const labels = ['Index','Hash','Upload','Finish'];
-    const stages = labels.map((label, index) => ({
+    return {
       label,
-      value:index < step ? 'Ready' : index === step ? percentage || 'Working' : '',
-      state:index < step ? 'done' : index === step ? 'active' : ''
-    }));
-    return { headline, tone:'active', note:meta || phase, stages, rows:[row] };
+      tone:'active',
+      ratio,
+      indeterminate:!total,
+      metric:[percentage, etaText].filter(Boolean).join(' · '),
+      cancel:true,
+      title:String(progress.current || label)
+    };
   }
 
-  function localWork(folder, mode, state) {
+  function localModel(folder, mode, state) {
     const job = currentFolderJob(folder, state);
     const indexed = Boolean(folder.lastIndexed);
     const indexRunning = Boolean(job) || Boolean(folder.diagnostics?.running && folder.diagnostics?.jobType !== 'hash');
-    const indexing = Boolean(folder.pending && indexRunning);
-    const waitingIndex = Boolean(folder.waitingForIdle || (!indexed && folder.pending && !indexRunning));
-    const tracked = Number(folder.hashTracked) || 0;
-    const hashReady = Number(folder.hashReady) || 0;
-    const hashPending = Number(folder.hashPending) || 0;
-    const hashDone = tracked > 0 ? hashPending <= 0 : indexed && hashPending <= 0;
-    const hashRatio = tracked ? Math.max(0, Math.min(1, hashReady / tracked)) : hashDone ? 1 : 0;
-    const previews = previewProgress(folder, mode);
-    const stages = [];
-    const rows = [];
-
-    stages.push({
-      label:'Index',
-      value:indexed ? 'Ready' : waitingIndex ? 'Waiting' : indexing ? 'Working' : 'Waiting',
-      state:indexed ? 'done' : waitingIndex ? 'waiting' : indexing ? 'active' : 'waiting'
-    });
-
-    if (tracked || hashPending) {
-      const value = hashDone ? 'Ready' : tracked ? `${Math.floor(hashRatio * 100)}%` : 'Waiting';
-      const stageState = hashDone ? 'done' : folder.hashing ? 'active' : 'waiting';
-      stages.push({ label:'Verify', value, state:stageState });
-      if (!hashDone) {
-        const detail = folder.hashing ? `Verifying · ${value}` : folder.hashWaiting ? `Waiting · ${value}` : `Waiting · ${value}`;
-        rows.push({
-          label:'Content', detail,
-          note:tracked ? `${hashReady.toLocaleString()} / ${tracked.toLocaleString()} files` : '',
-          ratio:hashRatio, bar:Boolean(tracked), state:folder.hashing ? 'active' : 'waiting'
-        });
-      }
-    }
-
-    if (folder.previewWarming || folder.previewPhase) {
-      stages.push({ label:'Thumbnails', value:previews.done ? 'Ready' : previews.percentage || previews.status, state:previews.done ? 'done' : previews.state });
-      if (!previews.done) {
-        rows.push({
-          label:'Thumbnails', detail:previews.detail, note:previews.note,
-          ratio:previews.ratio, bar:Boolean(previews.total), state:previews.state
-        });
-      }
-    }
-
-    let headline = 'Ready';
-    let tone = 'ready';
-    let note = '';
     if (!indexed) {
-      headline = waitingIndex ? 'Waiting' : 'Indexing';
-      tone = waitingIndex ? 'waiting' : 'active';
-      note = waitingIndex ? 'Waiting for idle' : `${Number(folder.files || 0).toLocaleString()} files found`;
-      rows.unshift({
-        label:'Index', detail:waitingIndex ? 'Waiting' : 'Indexing', note,
-        ratio:0, bar:false, state:waitingIndex ? 'waiting' : 'active', scan:true, cancel:Boolean(job)
-      });
-    } else if (!hashDone || !previews.done) {
-      headline = 'Ready to browse';
-      note = 'Background work continues';
-    } else {
-      headline = 'Ready to browse';
-      note = 'All background work complete';
+      const waiting = Boolean(folder.waitingForIdle || (folder.pending && !indexRunning));
+      return {
+        label:waiting ? 'Waiting' : 'Indexing',
+        tone:waiting ? 'waiting' : 'active',
+        ratio:0,
+        indeterminate:!waiting,
+        metric:'',
+        cancel:Boolean(job),
+        title:waiting ? 'Waiting to index' : 'Indexing folder'
+      };
     }
 
-    return { headline, tone, note, stages, rows };
-  }
+    const preview = previewProgress(folder);
+    const previewActive = folder.previewWarming && mode !== 'off' && !folder.previewWaiting &&
+      (Number(folder.previewQueueActive) > 0 || String(folder.previewPhase || '') === 'checking');
+    if (previewActive && !preview.done) {
+      return {
+        label:'Thumbnails',
+        tone:'active',
+        ratio:preview.ratio,
+        indeterminate:!preview.total,
+        metric:[preview.total ? `${Math.floor(preview.ratio * 100)}%` : '', preview.etaText].filter(Boolean).join(' · '),
+        cancel:false,
+        title:'Preparing thumbnails'
+      };
+    }
 
-  function stageMarkup(stage) {
-    const value = stage.value ? `<span>${stage.value}</span>` : '';
-    return `<span class="folder-stage ${stage.state || ''}"><b>${stage.label}</b>${value}</span>`;
-  }
+    const tracked = Number(folder.hashTracked) || 0;
+    const ready = Number(folder.hashReady) || 0;
+    const pending = Number(folder.hashPending) || 0;
+    if (pending > 0 && folder.hashing) {
+      const ratio = tracked ? Math.max(0, Math.min(1, ready / tracked)) : 0;
+      return {
+        label:'Verifying',
+        tone:'active',
+        ratio,
+        indeterminate:!tracked,
+        metric:tracked ? `${Math.floor(ratio * 100)}%` : '',
+        cancel:false,
+        title:'Verifying file contents'
+      };
+    }
 
-  function rowMarkup(row) {
-    const percentage = row.bar ? `<em>${Math.floor(Math.max(0, Math.min(1, Number(row.ratio) || 0)) * 100)}%</em>` : '';
-    const cancel = row.cancel ? '<button type="button" class="folder-work-cancel" data-cancel-folder-work>Cancel</button>' : '';
-    const bar = row.bar ? `<div class="folder-work-track"><i style="--folder-work-progress:${Math.max(0, Math.min(1, Number(row.ratio) || 0))}"></i></div>` : '';
-    return `<div class="folder-work-row ${row.state || ''} ${row.scan ? 'scan' : ''}">
-      <div class="folder-work-copy"><strong>${row.label}</strong><span title="${String(row.note || '').replaceAll('"','&quot;')}">${row.detail || row.note || ''}</span>${percentage}${cancel}</div>
-      ${bar}
-    </div>`;
+    if (folder.previewWarming && !preview.done) {
+      const paused = mode === 'off';
+      return {
+        label:paused ? 'Paused' : 'Waiting',
+        tone:paused ? 'paused' : 'waiting',
+        ratio:preview.ratio,
+        indeterminate:false,
+        metric:preview.total ? `${Math.floor(preview.ratio * 100)}%` : '',
+        cancel:false,
+        title:paused ? 'Thumbnail work paused' : 'Thumbnail work waiting'
+      };
+    }
+
+    if (pending > 0) {
+      const ratio = tracked ? Math.max(0, Math.min(1, ready / tracked)) : 0;
+      return {
+        label:mode === 'off' ? 'Paused' : 'Waiting',
+        tone:mode === 'off' ? 'paused' : 'waiting',
+        ratio,
+        indeterminate:false,
+        metric:tracked ? `${Math.floor(ratio * 100)}%` : '',
+        cancel:false,
+        title:'Content verification waiting'
+      };
+    }
+
+    return null;
   }
 
   function workflowNode(row) {
     let node = row.querySelector('[data-folder-workflow]');
     if (node) return node;
     node = document.createElement('div');
-    node.className = 'folder-workflow';
     node.dataset.folderWorkflow = '';
+    node.innerHTML = `
+      <div class="folder-work-line">
+        <i class="folder-work-dot"></i>
+        <span class="folder-work-label"></span>
+        <span class="folder-work-metric"></span>
+        <button type="button" class="folder-work-cancel" data-cancel-folder-work title="Cancel" aria-label="Cancel">×</button>
+      </div>
+      <div class="folder-work-track"><i></i></div>`;
     const meta = row.querySelector('.storage-meta');
     if (meta) meta.insertAdjacentElement('afterend', node);
     else row.querySelector('.storage-copy')?.append(node);
@@ -319,19 +222,19 @@ if (folders && storagePane) {
 
   function renderFolder(row, folder, state) {
     const mode = String(state?.settings?.thumbnailMode || 'idle');
-    const model = folder.protected === false ? localWork(folder, mode, state) : protectedWork(folder, state);
+    const model = folder.protected === false ? localModel(folder, mode, state) : cloudModel(folder, state);
     const node = workflowNode(row);
-    const key = JSON.stringify(model);
-    if (node.dataset.key === key) return;
-    node.dataset.key = key;
-    node.className = `folder-workflow ${model.tone || ''}`;
-    node.innerHTML = `
-      <div class="folder-workflow-head">
-        <span class="folder-workflow-state">${model.headline}</span>
-        <span class="folder-workflow-note">${model.note || ''}</span>
-      </div>
-      <div class="folder-workflow-stages">${model.stages.map(stageMarkup).join('')}</div>
-      ${model.rows.length ? `<div class="folder-work-list">${model.rows.map(rowMarkup).join('')}</div>` : ''}`;
+    if (!model) {
+      node.hidden = true;
+      return;
+    }
+    node.hidden = false;
+    node.className = `folder-workflow ${model.tone}${model.indeterminate ? ' indeterminate' : ''}`;
+    node.title = model.title || model.label;
+    node.querySelector('.folder-work-label').textContent = model.label;
+    node.querySelector('.folder-work-metric').textContent = model.metric || '';
+    node.querySelector('.folder-work-cancel').hidden = !model.cancel;
+    node.style.setProperty('--folder-work-progress', String(Math.max(0, Math.min(1, Number(model.ratio) || 0))));
   }
 
   function mergeFolders(stats, state) {
@@ -355,7 +258,7 @@ if (folders && storagePane) {
   async function refresh() {
     clearTimeout(timer);
     timer = 0;
-    if (busy) return schedule(400);
+    if (busy) return schedule(500);
     busy = true;
     let working = false;
     try {
@@ -364,7 +267,7 @@ if (folders && storagePane) {
     } catch {
     } finally {
       busy = false;
-      schedule(working ? 900 : 5000);
+      schedule(working ? 800 : 5000);
     }
   }
 
@@ -375,11 +278,10 @@ if (folders && storagePane) {
 
   folders.addEventListener('click', async event => {
     const button = event.target.closest('[data-cancel-folder-work]');
-    if (!button) return;
+    if (!button || button.hidden) return;
     button.disabled = true;
-    button.textContent = 'Canceling…';
     try { await request('/api/job/cancel', { method:'POST', body:'{}' }); }
-    catch { button.disabled = false; button.textContent = 'Cancel'; }
+    catch { button.disabled = false; }
     schedule(0);
   });
 
