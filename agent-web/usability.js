@@ -129,6 +129,9 @@ function previewInfo(folder) {
   const failed = Number(folder.previewFailed) || 0;
   const deferred = Number(folder.previewDeferred) || 0;
   const queued = Number(folder.previewQueued) || 0;
+  const workerQueued = Number(folder.previewQueueBackground) || 0;
+  const workerActive = Number(folder.previewQueueActive) || 0;
+  const workerBusy = workerQueued > 0 || workerActive > 0;
 
   if (!phase) {
     if (!previous) return null;
@@ -167,7 +170,13 @@ function previewInfo(folder) {
     ratio = total ? Math.min(.99, ready / total) : 0;
     percent = total ? `${Math.floor(ratio * 100)}%` : '';
   } else if (phase === 'checking') {
-    if (total) {
+    if (!processed && workerBusy) {
+      const parts = ['Waiting for thumbnail workers'];
+      if (workerActive) parts.push(`${workerActive.toLocaleString()} generating`);
+      if (workerQueued) parts.push(`${workerQueued.toLocaleString()} queued`);
+      text = parts.join(' · ');
+      indeterminate = true;
+    } else if (total) {
       ratio = Math.min(.99, processed / total);
       percent = `${Math.floor(ratio * 100)}%`;
       text = `${Math.min(processed,total).toLocaleString()} / ${total.toLocaleString()} · Checking cache…`;
@@ -176,11 +185,17 @@ function previewInfo(folder) {
       indeterminate = true;
     }
   } else if (phase === 'generating') {
-    ratio = total ? Math.min(.99, ready / total) : 0;
+    const complete = ready + failed + deferred;
+    const remaining = total ? Math.max(0, total - complete) : 0;
+    ratio = total ? Math.min(.99, complete / total) : 0;
     percent = total ? `${Math.floor(ratio * 100)}%` : '';
-    text = queued
-      ? `Generating ${queued.toLocaleString()} missing…`
-      : 'Generating missing thumbnails…';
+    if (total) text = remaining ? `Generating ${remaining.toLocaleString()} remaining…` : 'Finishing thumbnails…';
+    else {
+      const parts = ['Generating thumbnails'];
+      if (workerActive) parts.push(`${workerActive.toLocaleString()} active`);
+      if (workerQueued) parts.push(`${workerQueued.toLocaleString()} queued`);
+      text = `${parts.join(' · ')}…`;
+    }
     indeterminate = !total;
   } else if (phase === 'verifying') {
     ratio = total ? Math.min(.99, processed / total) : 0;
@@ -249,9 +264,10 @@ function renderPreviewProgress(stats) {
     node.style.setProperty('--preview-progress', String(info.ratio));
     node.title = previewMode() === 'off' ? 'Automatic thumbnail work is paused; visible files still generate on demand'
       : info.waiting ? 'Thumbnail work is waiting until this computer is idle'
-        : info.phase === 'checking' ? 'Checking the existing local thumbnail cache'
-          : info.phase === 'verifying' ? 'Verifying generated thumbnails'
-            : 'Generating missing local thumbnails';
+        : info.text.startsWith('Waiting for thumbnail workers') ? 'Another folder currently owns the background thumbnail queue'
+          : info.phase === 'checking' ? 'Checking the existing local thumbnail cache'
+            : info.phase === 'verifying' ? 'Verifying generated thumbnails'
+              : 'Generating missing local thumbnails';
   }
   return warming;
 }
