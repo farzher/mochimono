@@ -1,4 +1,5 @@
 const UI_KEY = 'mochimono-library-ui';
+const UI_VERSION = 2;
 const files = document.querySelector('#files');
 const folderbar = document.querySelector('#folderbar');
 const source = document.querySelector('#source');
@@ -27,21 +28,26 @@ const allServerStored = hashes => window.mochimonoLocations?.allServerStored?.(h
 const gridMoving = () => Boolean(window.mochimonoGridInteraction?.active?.());
 
 function saveUi() {
-  localStorage.setItem(UI_KEY, JSON.stringify({ view: currentView(), sort: sort.value, type: typeFilter.value }));
+  localStorage.setItem(UI_KEY, JSON.stringify({ version: UI_VERSION, view: currentView(), sort: sort.value, type: typeFilter.value }));
 }
 
 function restoreUi() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(UI_KEY) || '{}'); } catch {}
+  const savedView = ['grid','list','folders'].includes(saved.view) ? saved.view : currentView();
+  const validTypes = ['','media','image','video','audio','application','other'];
+  const savedType = validTypes.includes(saved.type) ? saved.type : null;
+  const oldGridDefault = Number(saved.version) < UI_VERSION && savedView === 'grid' && savedType === '';
+  const nextType = oldGridDefault ? 'media' : savedType ?? (savedView === 'grid' ? 'media' : '');
+
   if (['date-desc','date-added','date-asc','size-desc'].includes(saved.sort)) {
     sort.value = saved.sort;
     sort.dispatchEvent(new Event('change', { bubbles: true }));
   }
-  if (['','media','image','video','audio','application','other'].includes(saved.type)) {
-    typeFilter.value = saved.type;
-    typeFilter.dispatchEvent(new Event('change', { bubbles: true }));
-  }
+  typeFilter.value = nextType;
+  typeFilter.dispatchEvent(new Event('change', { bubbles: true }));
   if (['grid','list','folders'].includes(saved.view)) document.querySelector(`#views [data-view="${saved.view}"]`)?.click();
+  if (Number(saved.version) < UI_VERSION) saveUi();
 }
 
 function syncSelectedClasses() {
