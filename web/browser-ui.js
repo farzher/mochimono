@@ -3,6 +3,12 @@ import './file-context-menu.js';
 const files = document.querySelector('#files');
 const views = document.querySelector('#views');
 const folderbar = document.querySelector('#folderbar');
+const typeFilter = document.querySelector('#typeFilter');
+
+if (typeFilter && !typeFilter.value) {
+  typeFilter.value = 'media';
+  typeFilter.dispatchEvent(new Event('change', { bubbles: true }));
+}
 
 const currentView = () => views.querySelector('[data-view].active')?.dataset.view || 'grid';
 const syncLayoutMode = () => document.documentElement.classList.toggle('library-grid-view', currentView() === 'grid');
