@@ -2,7 +2,6 @@ const viewer = document.querySelector('#viewer');
 const viewerMedia = document.querySelector('#viewer-media');
 const viewerOpen = document.querySelector('#viewer-open');
 const viewerName = document.querySelector('#viewer-name');
-const viewerMeta = document.querySelector('#viewer-meta');
 const CLIENT = document.documentElement.classList.contains('client-library');
 
 const SUPPORTED = new Set(['jpg','jpeg','png','webp','avif','bmp','gif','tif','tiff']);
@@ -14,8 +13,8 @@ const currentImage = () => CLIENT && Boolean(viewerMedia?.querySelector(':scope 
 
 const style = document.createElement('style');
 style.textContent = `
-.viewer-optimize-trigger{display:inline-flex;align-items:center;margin-left:7px;padding:0;border:0;background:transparent;color:#ddd5d1;font-size:10px;font-weight:700;line-height:1;text-shadow:0 1px 4px rgba(0,0,0,.9)}
-.viewer-optimize-trigger:hover{background:transparent;color:#fff}.viewer-optimize-trigger[hidden]{display:none!important}
+.viewer-optimize-trigger{position:absolute;z-index:101;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));display:inline-flex;align-items:center;justify-content:center;min-height:36px;padding:0 12px;border:1px solid rgba(255,255,255,.1);border-radius:9px;background:rgba(24,23,24,.88);color:#e3ddda;font-size:12px;font-weight:700;line-height:1;box-shadow:0 8px 28px rgba(0,0,0,.32);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.viewer-optimize-trigger:hover{background:rgba(38,36,37,.94);color:#fff}.viewer-optimize-trigger[hidden]{display:none!important}.viewer.image-optimize-active .viewer-optimize-trigger{z-index:108;top:max(14px,env(safe-area-inset-top));right:max(14px,env(safe-area-inset-right));bottom:auto}
 .image-optimize-layer[hidden]{display:none!important}.image-optimize-layer{position:absolute;z-index:102;inset:0;background:#050505;overflow:hidden;color:#eee}
 .viewer.image-optimize-active .viewer-nav{display:none!important}
 .image-optimize-compare{--split:50%;position:absolute;inset:0;overflow:hidden;touch-action:none;background:#050505}
@@ -25,15 +24,16 @@ style.textContent = `
 .image-optimize-divider:before{content:'';position:absolute;left:50%;top:0;bottom:0;width:2px;transform:translateX(-50%);background:#050505;box-shadow:0 0 0 1px rgba(255,255,255,.08)}
 .image-optimize-divider:after{content:'↔';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:rgba(14,14,14,.9);border:1px solid rgba(255,255,255,.35);color:#fff;font-size:12px;box-shadow:0 3px 14px rgba(0,0,0,.42)}
 .image-optimize-label{position:absolute;z-index:4;top:70px;color:rgba(255,255,255,.72);font-size:11px;font-weight:700;pointer-events:none;text-shadow:0 1px 5px #000}.image-optimize-label.original{left:16px}.image-optimize-label.optimized{right:16px}
-.image-optimize-controls{position:absolute;z-index:6;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));width:min(350px,calc(100% - 28px));padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(20,19,20,.92);box-shadow:0 16px 48px rgba(0,0,0,.46);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.image-optimize-controls{position:absolute;z-index:6;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));width:min(350px,calc(100% - 28px));padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(20,19,20,.92);box-shadow:0 16px 48px rgba(0,0,0,.46);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);transition:border-color .18s ease,box-shadow .18s ease}
+.image-optimize-controls.working{border-color:rgba(224,170,86,.42);box-shadow:0 16px 48px rgba(0,0,0,.46),0 0 0 1px rgba(224,170,86,.08)}
 .image-optimize-drawer{position:absolute;right:0;bottom:calc(100% + 9px);width:100%;padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:13px;background:rgba(20,19,20,.95);box-shadow:0 12px 34px rgba(0,0,0,.42);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
 .image-optimize-drawer[hidden],.image-optimize-pane[hidden]{display:none!important}
-.image-optimize-result{display:grid;gap:5px}.image-optimize-result-line{display:flex;align-items:baseline;justify-content:space-between;gap:12px}.image-optimize-result strong{font-size:23px;line-height:1;letter-spacing:-.04em;white-space:nowrap}.image-optimize-result b{font-size:17px;line-height:1;font-weight:720;white-space:nowrap}.image-optimize-result b.good{color:#a9ceb1}.image-optimize-result b.quiet{color:#aaa19e}.image-optimize-status{min-height:15px;color:#968e8a;font-size:11px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.image-optimize-result{display:grid;gap:7px}.image-optimize-result-line{display:flex;align-items:flex-end;justify-content:space-between;gap:14px}.image-optimize-saving{font-size:46px;line-height:.88;letter-spacing:-.06em;font-weight:790;color:#6fb1ff;white-space:nowrap}.image-optimize-result-size{padding-bottom:2px;color:#ddd6d2;font-size:17px;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}.image-optimize-status-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0}.image-optimize-status{display:flex;align-items:center;min-width:0;color:#968e8a;font-size:11px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.image-optimize-controls.working .image-optimize-status:before{content:'';flex:0 0 auto;width:8px;height:8px;margin-right:7px;border:2px solid #d9a657;border-top-color:transparent;border-radius:50%;animation:image-optimize-spin .72s linear infinite}.image-optimize-zoom{flex:0 0 auto;color:#b9b1ad;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}.image-optimize-controls.working .image-optimize-saving{color:#8eadd0}@keyframes image-optimize-spin{to{transform:rotate(360deg)}}
 .image-optimize-quick{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:12px}.image-optimize-quick button,.image-optimize-choice{min-height:36px;border:0;border-radius:9px;background:#2a2829;color:#ddd7d3;font-size:12px;font-weight:650}.image-optimize-quick button:hover,.image-optimize-choice:hover{background:#343132;color:#fff}.image-optimize-quick button.open{background:#3a3638;color:#fff}
 .image-optimize-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}.image-optimize-actions button{min-height:38px;border-radius:9px;font-size:12px;font-weight:700}.image-optimize-keep{background:#2a2829;color:#d2cbc7}.image-optimize-keep:hover{background:#343132;color:#fff}.image-optimize-replace{background:#eee9e5;color:#171416}.image-optimize-replace:hover{background:#fff}.image-optimize-actions button:disabled{opacity:.36;cursor:default}
-.image-optimize-pane-title{margin:0 0 9px;color:#8d8581;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}.image-optimize-choice-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.image-optimize-choice.active{background:#eee9e5;color:#171416}
-.image-optimize-quality{display:grid;gap:8px}.image-optimize-quality-head{display:flex;justify-content:space-between;align-items:center;color:#d6cfcb;font-size:12px;font-weight:650}.image-optimize-quality output{font-variant-numeric:tabular-nums}.image-optimize-quality input[type=range]{width:100%;accent-color:#eee9e5}.image-optimize-lossless{display:flex;align-items:center;gap:8px;margin-top:11px;color:#cfc7c3;font-size:12px}.image-optimize-lossless[hidden]{display:none!important}.image-optimize-more-empty{color:#8f8784;font-size:11px;line-height:1.4}
-@media(max-width:700px){.viewer-optimize-trigger{margin-left:6px}.image-optimize-label{top:60px;font-size:10px}.image-optimize-label.original{left:10px}.image-optimize-label.optimized{right:10px}.image-optimize-controls{right:max(8px,env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));width:min(340px,calc(100% - 16px));padding:12px}.image-optimize-result-line{align-items:flex-end}.image-optimize-result strong{font-size:21px}.image-optimize-result b{font-size:16px}.image-optimize-status{font-size:10.5px}.image-optimize-quick button,.image-optimize-actions button,.image-optimize-choice{font-size:11px}.image-optimize-divider:after{width:30px;height:30px}}
+.image-optimize-pane-title{margin:0 0 9px;color:#8d8581;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}.image-optimize-choice-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.image-optimize-choice-grid.two{grid-template-columns:repeat(2,1fr)}.image-optimize-choice.active{background:#eee9e5;color:#171416}.image-optimize-section+.image-optimize-section{margin-top:13px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06)}
+.image-optimize-quality{display:grid;gap:8px}.image-optimize-quality-head{display:flex;justify-content:space-between;align-items:center;color:#d6cfcb;font-size:12px;font-weight:650}.image-optimize-quality output{font-variant-numeric:tabular-nums}.image-optimize-quality input[type=range]{width:100%;accent-color:#eee9e5}.image-optimize-quality[hidden]{display:none!important}.image-optimize-lossless{display:flex;align-items:center;gap:8px;margin-top:11px;color:#cfc7c3;font-size:12px}.image-optimize-lossless[hidden]{display:none!important}
+@media(max-width:700px){.viewer-optimize-trigger{right:max(8px,env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));min-height:34px;font-size:11px}.viewer.image-optimize-active .viewer-optimize-trigger{top:max(8px,env(safe-area-inset-top));right:max(8px,env(safe-area-inset-right))}.image-optimize-label{top:60px;font-size:10px}.image-optimize-label.original{left:10px}.image-optimize-label.optimized{right:10px}.image-optimize-controls{right:max(8px,env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));width:min(340px,calc(100% - 16px));padding:12px}.image-optimize-saving{font-size:42px}.image-optimize-result-size{font-size:16px}.image-optimize-status,.image-optimize-zoom{font-size:10.5px}.image-optimize-quick button,.image-optimize-actions button,.image-optimize-choice{font-size:11px}.image-optimize-divider:after{width:30px;height:30px}}
 `;
 document.head.append(style);
 
@@ -42,7 +42,7 @@ trigger.type = 'button';
 trigger.className = 'viewer-optimize-trigger';
 trigger.textContent = 'Optimize';
 trigger.hidden = true;
-viewerMeta?.after(trigger);
+viewer?.append(trigger);
 
 const layer = document.createElement('div');
 layer.className = 'image-optimize-layer';
@@ -72,16 +72,24 @@ layer.innerHTML = `
           <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="100">100%</button>
           <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="75">75%</button>
           <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="50">50%</button>
+          <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="33">33%</button>
           <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="25">25%</button>
           <button class="image-optimize-choice" type="button" data-size-kind="max" data-size-value="3840">3840 px</button>
           <button class="image-optimize-choice" type="button" data-size-kind="max" data-size-value="3072">3072 px</button>
           <button class="image-optimize-choice" type="button" data-size-kind="max" data-size-value="2560">2560 px</button>
           <button class="image-optimize-choice" type="button" data-size-kind="max" data-size-value="1920">1920 px</button>
+          <button class="image-optimize-choice" type="button" data-size-kind="max" data-size-value="720">720 px</button>
         </div>
       </div>
       <div class="image-optimize-pane" data-opt-pane="more" hidden>
-        <div class="image-optimize-more-empty" data-opt-auto-more>Choose WebP or AVIF to set quality manually.</div>
-        <div class="image-optimize-quality" data-opt-quality-wrap hidden>
+        <div class="image-optimize-section">
+          <div class="image-optimize-pane-title">Effort</div>
+          <div class="image-optimize-choice-grid two" data-opt-efforts>
+            <button class="image-optimize-choice" type="button" data-effort="normal">Normal</button>
+            <button class="image-optimize-choice" type="button" data-effort="max">Max</button>
+          </div>
+        </div>
+        <div class="image-optimize-section image-optimize-quality" data-opt-quality-wrap hidden>
           <div class="image-optimize-quality-head"><span>Quality</span><output data-opt-quality-label>94</output></div>
           <input data-opt-quality type="range" min="50" max="100" value="94">
         </div>
@@ -89,8 +97,8 @@ layer.innerHTML = `
       </div>
     </div>
     <div class="image-optimize-result" data-opt-result>
-      <div class="image-optimize-result-line"><strong>Preparing…</strong><b></b></div>
-      <div class="image-optimize-status" data-opt-status>Starting preview…</div>
+      <div class="image-optimize-result-line"><strong class="image-optimize-saving" data-opt-saving>—</strong><span class="image-optimize-result-size" data-opt-result-size>Preparing…</span></div>
+      <div class="image-optimize-status-row"><div class="image-optimize-status" data-opt-status>Starting preview…</div><div class="image-optimize-zoom" data-opt-zoom>100%</div></div>
     </div>
     <div class="image-optimize-quick">
       <button type="button" data-opt-format-button>Auto</button>
@@ -112,15 +120,17 @@ const drawer = layer.querySelector('[data-opt-drawer]');
 const panes = [...layer.querySelectorAll('[data-opt-pane]')];
 const formats = layer.querySelector('[data-opt-formats]');
 const sizes = layer.querySelector('[data-opt-sizes]');
+const efforts = layer.querySelector('[data-opt-efforts]');
 const formatButton = layer.querySelector('[data-opt-format-button]');
 const sizeButton = layer.querySelector('[data-opt-size-button]');
 const moreButton = layer.querySelector('[data-opt-more-button]');
-const result = layer.querySelector('[data-opt-result]');
+const saving = layer.querySelector('[data-opt-saving]');
+const resultSize = layer.querySelector('[data-opt-result-size]');
 const status = layer.querySelector('[data-opt-status]');
+const zoomLabel = layer.querySelector('[data-opt-zoom]');
 const quality = layer.querySelector('[data-opt-quality]');
 const qualityLabel = layer.querySelector('[data-opt-quality-label]');
 const qualityWrap = layer.querySelector('[data-opt-quality-wrap]');
-const autoMore = layer.querySelector('[data-opt-auto-more]');
 const lossless = layer.querySelector('[data-opt-lossless]');
 const losslessRow = layer.querySelector('[data-opt-lossless-row]');
 const keep = layer.querySelector('[data-opt-keep]');
@@ -134,6 +144,7 @@ let previewDebounce = 0;
 let requestSerial = 0;
 let renderSerial = 0;
 let format = 'auto';
+let effort = 'normal';
 let sizeMode = { kind:'auto', value:AUTO_MAX_EDGE };
 let split = 50;
 let splitPointer = null;
@@ -229,9 +240,8 @@ function syncControls() {
     const value = Number(button.dataset.sizeValue);
     button.classList.toggle('active', kind === sizeMode.kind && value === sizeMode.value);
   }
-  const manual = format !== 'auto';
-  autoMore.hidden = manual;
-  qualityWrap.hidden = !manual;
+  for (const button of efforts.querySelectorAll('[data-effort]')) button.classList.toggle('active', button.dataset.effort === effort);
+  qualityWrap.hidden = format === 'auto';
   losslessRow.hidden = format !== 'webp';
   qualityLabel.textContent = quality.value;
 }
@@ -255,7 +265,7 @@ function options() {
   return {
     format,
     quality: Number(quality.value) || (format === 'avif' ? 92 : 94),
-    effort: 'normal',
+    effort,
     lossless: format === 'webp' && lossless.checked,
     resizeMax: sizeMode.kind === 'auto' || sizeMode.kind === 'max' ? sizeMode.value : 0,
     resizePercent: sizeMode.kind === 'percent' ? sizeMode.value : 0
@@ -285,28 +295,34 @@ function dimensionsText(data, selected) {
   return sourceDims === outputDims ? sourceDims : `${sourceDims} → ${outputDims}`;
 }
 
+function setWorking(value) {
+  controls.classList.toggle('working', Boolean(value));
+}
+
 function updateResult(data) {
   const selected = data.selected;
+  const working = data.status === 'encoding' || data.status === 'queued' || data.status === 'starting';
+  setWorking(working);
   if (!selected) {
-    const source = data.sourceSize ? bytes(data.sourceSize) : 'Preparing…';
-    result.querySelector('strong').textContent = source;
-    result.querySelector('b').textContent = '';
+    if (!displayedCandidate) {
+      saving.textContent = '—';
+      resultSize.textContent = 'Preparing…';
+    }
     status.textContent = progressLabel(data) || 'Preparing preview…';
     return;
   }
 
   const percent = Math.max(0, Number(selected.percent) || 0);
-  result.querySelector('strong').textContent = `${bytes(data.sourceSize)} → ${bytes(selected.size)}`;
-  const verdict = result.querySelector('b');
-  verdict.textContent = data.worthwhile ? `${percent.toFixed(0)}% smaller` : 'Already efficient';
-  verdict.className = data.worthwhile ? 'good' : 'quiet';
+  saving.textContent = `${percent.toFixed(0)}%`;
+  resultSize.textContent = bytes(selected.size);
 
   const dims = dimensionsText(data, selected);
-  if (data.status === 'encoding' || data.status === 'queued') {
+  const effortLabel = data.options?.effort === 'max' ? 'Max effort' : 'Normal effort';
+  if (working) {
     const work = progressLabel(data);
     status.textContent = `Showing ${selected.label}${work ? ` · ${work}` : ''}`;
   } else {
-    status.textContent = `${selected.label}${dims ? ` · ${dims}` : ''}`;
+    status.textContent = `${selected.label}${dims ? ` · ${dims}` : ''} · ${effortLabel}`;
   }
 }
 
@@ -359,6 +375,7 @@ function setSaveState(data) {
 }
 
 function showError(message) {
+  setWorking(false);
   status.textContent = message || 'Could not optimize this image';
   keep.disabled = true;
   replace.disabled = true;
@@ -398,6 +415,7 @@ async function startPreview() {
   session = null;
   keep.disabled = true;
   replace.disabled = true;
+  setWorking(true);
   status.textContent = 'Starting preview…';
   try {
     const data = await api('/api/image-optimize/start', {
@@ -415,6 +433,8 @@ async function startPreview() {
 function schedulePreview(delay = 180) {
   clearTimeout(previewDebounce);
   if (!active() || committing) return;
+  setWorking(true);
+  status.textContent = 'Updating preview…';
   previewDebounce = setTimeout(() => {
     previewDebounce = 0;
     startPreview();
@@ -442,6 +462,14 @@ function setSize(kind, value) {
   startPreview();
 }
 
+function setEffort(next) {
+  if (!['normal','max'].includes(next) || next === effort) return closeDrawer();
+  effort = next;
+  syncControls();
+  closeDrawer();
+  startPreview();
+}
+
 function resetState() {
   clearTimeout(pollTimer);
   clearTimeout(previewDebounce);
@@ -455,6 +483,7 @@ function resetState() {
   displayedCandidate = '';
   renderingCandidate = '';
   committing = false;
+  setWorking(false);
   original.removeAttribute('src');
   original.removeAttribute('data-source-url');
   optimized.removeAttribute('src');
@@ -476,13 +505,15 @@ async function commit(mode) {
   committing = true;
   keep.disabled = true;
   replace.disabled = true;
-  status.textContent = 'Finalizing at max effort…';
+  setWorking(true);
+  status.textContent = session.selected.effort === 'max' ? 'Verifying and saving…' : 'Finalizing at max effort…';
   try {
     const data = await api('/api/image-optimize/commit', {
       method:'POST',
       body:JSON.stringify({ id:session.id, candidate:session.selected.id, mode })
     });
     const saved = Number(data.result?.saved) || 0;
+    setWorking(false);
     status.textContent = `${data.result?.filename || 'Saved'}${saved > 0 ? ` · saved ${bytes(saved)}` : ''}`;
     setTimeout(() => {
       closeOptimizer();
@@ -509,6 +540,7 @@ function openOptimizer(hash = currentHash()) {
   activeId = '';
   session = null;
   format = 'auto';
+  effort = 'normal';
   sizeMode = { kind:'auto', value:AUTO_MAX_EDGE };
   quality.dataset.userChanged = '';
   quality.value = '94';
@@ -516,6 +548,9 @@ function openOptimizer(hash = currentHash()) {
   displayedCandidate = '';
   renderingCandidate = '';
   committing = false;
+  saving.textContent = '—';
+  resultSize.textContent = 'Preparing…';
+  zoomLabel.textContent = `${Math.round(initialView.scale * 100)}%`;
   setSplit(50);
   syncControls();
   closeDrawer();
@@ -543,6 +578,10 @@ sizes.addEventListener('click', event => {
   const button = event.target.closest('[data-size-kind]');
   if (button) setSize(button.dataset.sizeKind, button.dataset.sizeValue);
 });
+efforts.addEventListener('click', event => {
+  const button = event.target.closest('[data-effort]');
+  if (button) setEffort(button.dataset.effort);
+});
 quality.addEventListener('input', () => {
   quality.dataset.userChanged = '1';
   qualityLabel.textContent = quality.value;
@@ -551,6 +590,11 @@ quality.addEventListener('input', () => {
 lossless.addEventListener('change', () => schedulePreview(0));
 keep.addEventListener('click', () => commit('keep'));
 replace.addEventListener('click', () => commit('replace'));
+
+window.addEventListener('mochimono:optimize-zoom', event => {
+  const scale = Math.max(.1, Number(event.detail?.scale) || 1);
+  zoomLabel.textContent = `${Math.round(scale * 100)}%`;
+});
 
 controls.addEventListener('pointerdown', event => event.stopPropagation());
 
