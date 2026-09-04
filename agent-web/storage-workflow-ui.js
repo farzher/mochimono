@@ -156,22 +156,6 @@ if (folders && storagePane) {
       };
     }
 
-    const tracked = Number(folder.hashTracked) || 0;
-    const ready = Number(folder.hashReady) || 0;
-    const pending = Number(folder.hashPending) || 0;
-    if (pending > 0 && folder.hashing) {
-      const ratio = tracked ? Math.max(0, Math.min(1, ready / tracked)) : 0;
-      return {
-        label:'Verifying',
-        tone:'active',
-        ratio,
-        indeterminate:!tracked,
-        metric:tracked ? `${Math.floor(ratio * 100)}%` : '',
-        cancel:false,
-        title:'Verifying file contents'
-      };
-    }
-
     if (folder.previewWarming && !preview.done) {
       const paused = mode === 'off';
       return {
@@ -182,19 +166,6 @@ if (folders && storagePane) {
         metric:preview.total ? `${Math.floor(preview.ratio * 100)}%` : '',
         cancel:false,
         title:paused ? 'Thumbnail work paused' : 'Thumbnail work waiting'
-      };
-    }
-
-    if (pending > 0) {
-      const ratio = tracked ? Math.max(0, Math.min(1, ready / tracked)) : 0;
-      return {
-        label:mode === 'off' ? 'Paused' : 'Waiting',
-        tone:mode === 'off' ? 'paused' : 'waiting',
-        ratio,
-        indeterminate:false,
-        metric:tracked ? `${Math.floor(ratio * 100)}%` : '',
-        cancel:false,
-        title:'Content verification waiting'
       };
     }
 
@@ -250,7 +221,7 @@ if (folders && storagePane) {
       const folder = byPath.get(pathKey(row.dataset.folderPath));
       if (!folder) continue;
       renderFolder(row, folder, state);
-      working ||= Boolean(folder.pending || folder.hashPending || folder.previewWarming || currentFolderJob(folder, state));
+      working ||= Boolean(folder.pending || folder.previewWarming || currentFolderJob(folder, state));
     }
     return working;
   }
