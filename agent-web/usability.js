@@ -48,7 +48,6 @@ style.textContent = `
   .storage-shortcut svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.45;stroke-linecap:round;stroke-linejoin:round}
   .storage-shortcut .storage-shortcut-library{display:none}
   .storage-shortcut.active .storage-shortcut-storage{display:none}
-  .storage-shortcut.active .storage-shortcut-library{display:block}
   [data-folder-status][data-waiting-idle="1"]{font-size:0}
   [data-folder-status][data-waiting-idle="1"]:after{content:'Waiting for idle';font-size:9px;color:#b9aaa5}
   .folder-item[data-waiting-idle="1"] .item-progress .progress-bar.indeterminate>i{animation:none!important;transform:none!important;left:0!important;opacity:.45}
@@ -128,10 +127,12 @@ function previewInfo(folder) {
   let ready = Number(folder.previewReady) || 0;
   const failed = Number(folder.previewFailed) || 0;
   const deferred = Number(folder.previewDeferred) || 0;
+  const generated = Number(folder.previewGenerated) || 0;
   const queued = Number(folder.previewQueued) || 0;
   const workerQueued = Number(folder.previewQueueBackground) || 0;
   const workerActive = Number(folder.previewQueueActive) || 0;
-  const workerBusy = workerQueued > 0 || workerActive > 0;
+  const complete = total ? Math.min(total, ready + failed + deferred + generated) : ready + failed + deferred + generated;
+  const remaining = total ? Math.max(0, total - complete) : 0;
 
   if (!phase) {
     if (!previous) return null;
@@ -140,80 +141,58 @@ function previewInfo(folder) {
     ready = previous.ready;
     const done = previous.done;
     return {
-      key, phase:'', total, processed, failed:previous.failed || 0, deferred:previous.deferred || 0, queued:0,
-      text:done ? 'Ready' : mode === 'off' ? 'Paused' : waiting ? 'Waiting for idle' : 'Waiting…',
-      percent:total ? `${done ? 100 : Math.floor(Math.min(1, ready / total) * 100)}%` : '',
-      ratio:total ? Math.min(1, done ? 1 : ready / total) : 0,
-      indeterminate:false, done, waiting, working:!done && mode !== 'off' && !waiting
+      key, phase:'', total, processed, failed:previous.failed || 0, deferred:previous.deferred || 0, generated:previous.generated || 0, queued:0,
+      text:done ? 'Ready' : mode === 'off' ? 'Paused' : waiting ? 'Waiting for idle' : 'Queued',
+      percent:previous.percent || '', ratio:previous.ratio || 0, indeterminate:false,
+      done, waiting, state:waiting ? 'waiting' : 'queued', working:!done && mode !== 'off' && !waiting
     };
   }
 
   const done = phase === 'done';
-  let ratio = 0;
-  let percent = '';
+  let ratio = total ? Math.min(1, complete / total) : 0;
+  let percent = total ? `${Math.floor(ratio * 100)}%` : '';
   let text = '';
   let indeterminate = false;
+  let state = 'checking';
 
   if (done) {
-    if (total) processed = total;
     ratio = 1;
     percent = total ? '100%' : '';
     text = 'Ready';
+    state = 'done';
   } else if (mode === 'off') {
-    const count = total ? `${Math.min(ready, total).toLocaleString()} / ${total.toLocaleString()}` : processed ? `${processed.toLocaleString()} checked` : '';
-    text = [count, 'Paused'].filter(Boolean).join(' · ');
-    ratio = total ? Math.min(.99, ready / total) : 0;
-    percent = total ? `${Math.floor(ratio * 100)}%` : '';
+    text = total && remaining ? `Paused · ${remaining.toLocaleString()} left` : 'Paused';
+    state = 'paused';
   } else if (waiting) {
-    const count = total ? `${Math.min(ready, total).toLocaleString()} / ${total.toLocaleString()}` : processed ? `${processed.toLocaleString()} checked` : '';
-    text = [count, 'Waiting for idle'].filter(Boolean).join(' · ');
-    ratio = total ? Math.min(.99, ready / total) : 0;
-    percent = total ? `${Math.floor(ratio * 100)}%` : '';
-  } else if (phase === 'checking') {
-    if (!processed && workerBusy) {
-      const parts = ['Waiting for thumbnail workers'];
-      if (workerActive) parts.push(`${workerActive.toLocaleString()} generating`);
-      if (workerQueued) parts.push(`${workerQueued.toLocaleString()} queued`);
-      text = parts.join(' · ');
-      indeterminate = true;
-    } else if (total) {
-      ratio = Math.min(.99, processed / total);
-      percent = `${Math.floor(ratio * 100)}%`;
-      text = `${Math.min(processed,total).toLocaleString()} / ${total.toLocaleString()} · Checking cache…`;
-    } else {
-      text = `${processed ? `${processed.toLocaleString()} checked · ` : ''}Checking cache…`;
-      indeterminate = true;
-    }
-  } else if (phase === 'generating') {
-    const complete = ready + failed + deferred;
-    const remaining = total ? Math.max(0, total - complete) : 0;
-    ratio = total ? Math.min(.99, complete / total) : 0;
-    percent = total ? `${Math.floor(ratio * 100)}%` : '';
-    if (total) text = remaining ? `Generating ${remaining.toLocaleString()} remaining…` : 'Finishing thumbnails…';
-    else {
-      const parts = ['Generating thumbnails'];
-      if (workerActive) parts.push(`${workerActive.toLocaleString()} active`);
-      if (workerQueued) parts.push(`${workerQueued.toLocaleString()} queued`);
-      text = `${parts.join(' · ')}…`;
-    }
+    text = total && remaining ? `Waiting for idle · ${remaining.toLocaleString()} left` : 'Waiting for idle';
+    state = 'waiting';
+  } else if (workerActive > 0) {
+    text = total && remaining ? `Generating · ${remaining.toLocaleString()} left` : `Generating · ${workerActive.toLocaleString()} active`;
+    state = 'active';
     indeterminate = !total;
-  } else if (phase === 'verifying') {
-    ratio = total ? Math.min(.99, processed / total) : 0;
-    percent = total ? `${Math.floor(ratio * 100)}%` : '';
-    text = total
-      ? `${Math.min(processed,total).toLocaleString()} / ${total.toLocaleString()} · Verifying…`
-      : 'Verifying thumbnails…';
+  } else if (workerQueued > 0) {
+    text = total && remaining ? `Queued · ${remaining.toLocaleString()} left` : `Queued · ${workerQueued.toLocaleString()}`;
+    state = 'queued';
+    indeterminate = !total;
+  } else if (phase === 'checking') {
+    text = processed ? `Checking · ${processed.toLocaleString()}` : 'Checking';
+    state = 'checking';
+    indeterminate = true;
+  } else if (phase === 'generating') {
+    text = total && remaining ? `Preparing · ${remaining.toLocaleString()} left` : 'Preparing';
+    state = 'queued';
     indeterminate = !total;
   } else {
-    text = 'Checking cache…';
+    text = 'Working';
+    state = 'checking';
     indeterminate = true;
   }
 
   const info = {
-    key, phase, total, processed, ready, failed, deferred, queued, text, percent, ratio, indeterminate, done, waiting,
+    key, phase, total, processed, ready, failed, deferred, generated, queued, text, percent, ratio, indeterminate, done, waiting, state,
     working: Boolean(folder.previewWarming && mode !== 'off' && !waiting)
   };
-  previewMemory.set(key, { total, processed, ready, failed, deferred, done });
+  previewMemory.set(key, { total, processed, ready, failed, deferred, generated, done, percent, ratio });
   return info;
 }
 
@@ -259,15 +238,15 @@ function renderPreviewProgress(stats) {
     warming ||= Boolean(info.working);
     const node = previewNode(row);
     node.classList.toggle('preview-indeterminate', info.indeterminate);
+    for (const state of ['active','queued','checking','waiting','paused']) node.classList.toggle(`preview-${state}`, info.state === state);
     node.querySelector('[data-preview-progress-text]').textContent = info.text;
     node.querySelector('[data-preview-percent]').textContent = info.percent;
     node.style.setProperty('--preview-progress', String(info.ratio));
-    node.title = previewMode() === 'off' ? 'Automatic thumbnail work is paused; visible files still generate on demand'
-      : info.waiting ? 'Thumbnail work is waiting until this computer is idle'
-        : info.text.startsWith('Waiting for thumbnail workers') ? 'Another folder currently owns the background thumbnail queue'
-          : info.phase === 'checking' ? 'Checking the existing local thumbnail cache'
-            : info.phase === 'verifying' ? 'Verifying generated thumbnails'
-              : 'Generating missing local thumbnails';
+    node.title = info.state === 'active' ? 'Generating thumbnails now'
+      : info.state === 'queued' ? 'Waiting for a thumbnail worker'
+        : info.state === 'checking' ? 'Checking the thumbnail cache'
+          : info.state === 'waiting' ? 'Waiting until this computer is idle'
+            : 'Background thumbnails paused';
   }
   return warming;
 }
@@ -295,8 +274,9 @@ function diagnosticProgress(folder) {
   const key = pathKey(folder.path);
   const signature = [
     folder.previewPhase, folder.previewProcessed, folder.previewReady, folder.previewFailed,
-    folder.previewDeferred, folder.previewQueued, folder.previewCursor,
-    folder.pending, folder.waitingForIdle, folder.diagnostics?.pendingChanges
+    folder.previewDeferred, folder.previewGenerated, folder.previewQueued, folder.previewQueueBackground,
+    folder.previewQueueActive, folder.previewCursor, folder.pending, folder.waitingForIdle,
+    folder.diagnostics?.pendingChanges
   ].join('|');
   const previous = diagnosticHistory.get(key);
   const now = Date.now();
@@ -327,9 +307,9 @@ function diagnosticsText(stats, state) {
     const tracker = diagnosticProgress(folder);
     const unchanged = now - tracker.changedAt;
     const phase = String(folder.previewPhase || '');
-    const activelyChecking = folder.previewWarming && !folder.previewWaiting && previewMode() !== 'off' && (phase === 'checking' || phase === 'verifying');
+    const activelyWorking = folder.previewWarming && !folder.previewWaiting && previewMode() !== 'off';
     const queueMoving = Number(folder.previewQueueActive) > 0 || Number(folder.previewQueueBackground) > 0;
-    const stalled = activelyChecking && !queueMoving && unchanged > 15_000;
+    const stalled = activelyWorking && phase !== 'done' && !queueMoving && unchanged > 15_000;
     const diag = folder.diagnostics || {};
 
     lines.push('');
@@ -341,8 +321,8 @@ function diagnosticsText(stats, state) {
       lines.push(`  watcher    ${diag.watcher ? 'on' : 'off'} · full=${diag.fullCheckQueued ? 'queued' : 'no'} · incremental=${diag.incrementalQueued ? 'queued' : 'no'} · changes=${Number(diag.pendingChanges) || 0}`);
     }
     if (phase) {
-      lines.push(`  thumbnails ${phase} · checked=${Number(folder.previewProcessed) || 0} · ready=${Number(folder.previewReady) || 0} · failed=${Number(folder.previewFailed) || 0} · deferred=${Number(folder.previewDeferred) || 0}`);
-      lines.push(`  queue      queued=${Number(folder.previewQueueBackground) || 0} · active=${Number(folder.previewQueueActive) || 0} · urgent=${Number(folder.previewQueueUrgent) || 0} · requested=${Number(folder.previewQueued) || 0}`);
+      lines.push(`  thumbnails ${phase} · checked=${Number(folder.previewProcessed) || 0} · cached=${Number(folder.previewReady) || 0} · generated=${Number(folder.previewGenerated) || 0} · failed=${Number(folder.previewFailed) || 0} · deferred=${Number(folder.previewDeferred) || 0}`);
+      lines.push(`  queue      queued=${Number(folder.previewQueueBackground) || 0} · active=${Number(folder.previewQueueActive) || 0} · global=${Number(folder.previewQueueGlobalBackground) || 0}/${Number(folder.previewQueueGlobalActive) || 0} · requested=${Number(folder.previewQueued) || 0}`);
       lines.push(`  progress   ${duration(now - (Number(folder.previewLastProgressAt) || now))} ago · pass=${Number(folder.previewPasses) || 0}${stalled ? '  ← no progress' : ''}`);
       if (folder.previewPauseUntil > now) lines.push(`  pause      ${duration(folder.previewPauseUntil - now)} remaining`);
       if (folder.previewCursor) lines.push(`  cursor     ${shortPath(folder.previewCursor)}`);
@@ -403,7 +383,7 @@ function schedulePreviewProgress(delay = 0) {
 
 async function refreshPreviewProgress() {
   progressTimer = 0;
-  if (progressBusy) return schedulePreviewProgress(500);
+  if (progressBusy) return schedulePreviewProgress(350);
   progressBusy = true;
   let warming = false;
   try {
@@ -412,7 +392,7 @@ async function refreshPreviewProgress() {
   } catch {}
   finally {
     progressBusy = false;
-    schedulePreviewProgress(warming ? 1200 : 7000);
+    schedulePreviewProgress(warming ? 650 : 7000);
   }
 }
 schedulePreviewProgress(120);
