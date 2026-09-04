@@ -109,6 +109,7 @@ function previewInfo(folder) {
   const previous = previewMemory.get(key) || null;
   const phase = String(folder.previewPhase || '');
   const mode = previewMode();
+  const waiting = Boolean(folder.previewWaiting);
   let total = Number(folder.previewTotal) || 0;
   let processed = Number(folder.previewProcessed) || 0;
   let ready = Number(folder.previewReady) || 0;
@@ -123,10 +124,10 @@ function previewInfo(folder) {
     const done = previous.done;
     return {
       key, phase:'', total, processed, failed:previous.failed || 0, queued:0,
-      text:done ? 'Ready' : mode === 'off' ? 'Paused' : 'Waiting…',
+      text:done ? 'Ready' : mode === 'off' ? 'Paused' : waiting ? 'Waiting for idle' : 'Waiting…',
       percent:total ? `${done ? 100 : Math.floor(Math.min(1, ready / total) * 100)}%` : '',
       ratio:total ? Math.min(1, done ? 1 : ready / total) : 0,
-      indeterminate:!total, done, working:!done && mode !== 'off'
+      indeterminate:false, done, waiting, working:!done && mode !== 'off' && !waiting
     };
   }
 
@@ -146,7 +147,11 @@ function previewInfo(folder) {
     text = [count, 'Paused'].filter(Boolean).join(' · ');
     ratio = total ? Math.min(.99, ready / total) : 0;
     percent = total ? `${Math.floor(ratio * 100)}%` : '';
-    indeterminate = !total;
+  } else if (waiting) {
+    const count = total ? `${Math.min(ready, total).toLocaleString()} / ${total.toLocaleString()}` : processed ? `${processed.toLocaleString()} checked` : '';
+    text = [count, 'Waiting for idle'].filter(Boolean).join(' · ');
+    ratio = total ? Math.min(.99, ready / total) : 0;
+    percent = total ? `${Math.floor(ratio * 100)}%` : '';
   } else if (phase === 'checking') {
     if (total) {
       ratio = Math.min(.99, processed / total);
@@ -175,7 +180,10 @@ function previewInfo(folder) {
     indeterminate = true;
   }
 
-  const info = { key, phase, total, processed, ready, failed, queued, text, percent, ratio, indeterminate, done, working: Boolean(folder.previewWarming) };
+  const info = {
+    key, phase, total, processed, ready, failed, queued, text, percent, ratio, indeterminate, done, waiting,
+    working: Boolean(folder.previewWarming && mode !== 'off' && !waiting)
+  };
   previewMemory.set(key, { total, processed, ready, failed, done });
   return info;
 }
@@ -214,10 +222,11 @@ function renderPreviewProgress(stats) {
     node.querySelector('[data-preview-percent]').textContent = info.percent;
     node.style.setProperty('--preview-progress', String(info.ratio));
     node.title = info.done ? 'Local thumbnails ready'
-      : previewMode() === 'off' ? 'Background thumbnail generation is paused; visible files still generate on demand'
-        : info.phase === 'checking' ? 'Checking the existing local thumbnail cache'
-          : info.phase === 'verifying' ? 'Verifying generated thumbnails'
-            : 'Generating missing local thumbnails';
+      : previewMode() === 'off' ? 'Automatic thumbnail work is paused; visible files still generate on demand'
+        : info.waiting ? 'Thumbnail work is waiting until this computer is idle'
+          : info.phase === 'checking' ? 'Checking the existing local thumbnail cache'
+            : info.phase === 'verifying' ? 'Verifying generated thumbnails'
+              : 'Generating missing local thumbnails';
   }
   return warming;
 }
