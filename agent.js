@@ -5,7 +5,7 @@ import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
-import { api, cancelJob, currentJob, DEVICE, json, persistSettings, readJson, serverState, settings, startJob } from './lib/agent-context.js';
+import { api, cancelJob, currentJob, DEVICE, json, persistSettings, preemptBackgroundJob, readJson, serverState, settings, startJob } from './lib/agent-context.js';
 import { backgroundWorkStatus } from './lib/background-work.js';
 import { addFolder, folderFor, folderStats, queueFolderSync, removeFolder, startSyncService } from './lib/agent-sync.js';
 import { addBrowseFolder, browseFolderFor, browseFolderStats, indexBrowseFolder, protectBrowseFolder, refreshBrowsePreviewPolicy, removeBrowseFolder, startBrowseService } from './lib/browse-folders.js';
@@ -67,7 +67,7 @@ async function takeOverBackgroundJob(path) {
     job.background = false;
     return true;
   }
-  cancelJob();
+  if (!preemptBackgroundJob()) return false;
   for (let attempt = 0; attempt < 20 && currentJob()?.status === 'running'; attempt++) {
     await new Promise(resolvePromise => setTimeout(resolvePromise, 50));
   }
