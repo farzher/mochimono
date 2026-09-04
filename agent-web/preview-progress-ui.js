@@ -12,7 +12,7 @@ style.textContent = `
   .preview-mode-row>summary strong{color:inherit;font-size:10px;font-weight:730}
   .preview-mode-row>summary:after{content:'⌄';margin-left:1px;color:#686164;font-size:10px;line-height:1;transform:translateY(-1px)}
   .preview-mode-row[open]>summary:after{transform:rotate(180deg) translateY(1px)}
-  .preview-mode-popover{position:absolute;right:0;top:38px;z-index:45;width:244px;padding:6px;border:1px solid #302b30;border-radius:11px;background:#171518;box-shadow:0 16px 46px rgba(0,0,0,.46)}
+  .preview-mode-popover{position:absolute;right:0;top:38px;z-index:45;width:260px;padding:6px;border:1px solid #302b30;border-radius:11px;background:#171518;box-shadow:0 16px 46px rgba(0,0,0,.46)}
   .preview-mode-popover button{position:relative;width:100%;min-height:43px;display:grid;gap:2px;padding:8px 31px 8px 9px;border:0;border-radius:7px;background:transparent;color:#c8bfbc;text-align:left;cursor:pointer}
   .preview-mode-popover button:hover{background:#252126;color:#fff}
   .preview-mode-popover button.active{background:#252126;color:#fff}
@@ -35,7 +35,7 @@ style.textContent = `
   @media(max-width:700px){
     .preview-mode-row>summary{padding:0 7px}
     .preview-mode-row>summary span{display:none}
-    .preview-mode-popover{right:-2px;width:226px}
+    .preview-mode-popover{right:-2px;width:244px}
   }
   @media(prefers-reduced-motion:reduce){
     #storagePane .preview-progress-track>i{transition:none!important;animation:none!important}
@@ -65,11 +65,11 @@ if (headActions) {
   modeControl = document.createElement('details');
   modeControl.className = 'preview-mode-row';
   modeControl.innerHTML = `
-    <summary title="Thumbnail generation"><span>Thumbnails</span><strong data-preview-mode-value>Idle</strong></summary>
-    <div class="preview-mode-popover" role="group" aria-label="Thumbnail generation">
-      <button type="button" data-preview-mode="off" title="Only generate missing thumbnails when files are viewed"><strong>On demand</strong><span>Generate only what you browse to</span></button>
-      <button type="button" data-preview-mode="idle" title="Generate thumbnails in the background when Mochimono and your computer are idle"><strong>Idle</strong><span>Pause while Mochimono or your computer is busy</span></button>
-      <button type="button" data-preview-mode="max" title="Use available CPU and storage throughput to finish thumbnails quickly"><strong>Max</strong><span>Finish the whole thumbnail cache as fast as possible</span></button>
+    <summary title="Background work"><span>Background</span><strong data-preview-mode-value>Idle</strong></summary>
+    <div class="preview-mode-popover" role="group" aria-label="Background work">
+      <button type="button" data-preview-mode="off" title="Do not automatically scan, sync, or generate thumbnails"><strong>On demand</strong><span>Only run expensive work when you ask</span></button>
+      <button type="button" data-preview-mode="idle" title="Run folder sync, indexing, and thumbnail work only when this computer is idle"><strong>Idle</strong><span>Wait until the computer is idle · recommended</span></button>
+      <button type="button" data-preview-mode="max" title="Run pending sync, indexing, and thumbnail work immediately"><strong>Max</strong><span>Finish pending background work now</span></button>
     </div>`;
   modeValue = modeControl.querySelector('[data-preview-mode-value]');
   if (serverStorage) serverStorage.insertAdjacentElement('afterend', modeControl);
@@ -90,7 +90,7 @@ if (headActions) {
         headers:{ 'content-type':'application/json' },
         body:JSON.stringify({ thumbnailMode:mode })
       });
-      if (!response.ok) throw new Error('Could not change thumbnail mode');
+      if (!response.ok) throw new Error('Could not change background mode');
     } catch {
       setMode(previous);
     } finally {
