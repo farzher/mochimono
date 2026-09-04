@@ -1,3 +1,5 @@
+import './storage-insights.js';
+
 const protectionMenu = document.querySelector('#clientProtection');
 const serverStorage = document.querySelector('#serverStorage');
 const serverStorageText = document.querySelector('#serverStorageText');
