@@ -29,6 +29,27 @@ const observer = files ? new MutationObserver(records => {
 }) : null;
 observer?.observe(files, { childList: true, subtree: true });
 
+function waitForInstantCards(timeout = 400) {
+  if (files?.querySelector('[data-instant-hash]')) return Promise.resolve(true);
+  if (!files) return Promise.resolve(false);
+  return new Promise(resolve => {
+    let done = false;
+    let timer = 0;
+    const finish = value => {
+      if (done) return;
+      done = true;
+      watch.disconnect();
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const watch = new MutationObserver(() => {
+      if (files.querySelector('[data-instant-hash]')) finish(true);
+    });
+    watch.observe(files, { childList: true, subtree: true });
+    timer = setTimeout(() => finish(false), timeout);
+  });
+}
+
 async function prime() {
   const cards = [...files.querySelectorAll('[data-instant-hash]')];
   const hashes = [...new Set(cards.map(card => String(card.dataset.instantHash || '')).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
@@ -53,16 +74,16 @@ async function prime() {
     }
   } catch {}
 
-  // catalog-cache is the next module in the page and is normally installed by
-  // the time this local metadata request finishes. Persist what we learned so
-  // future cold starts do not need to rediscover the same geometry.
-  setTimeout(() => {
-    for (const [hash, item] of geometry) window.mochimonoCatalogCache?.rememberDimensions?.(hash, item.width, item.height);
-  }, 0);
+  // Feed the catalog cache before this startup promise resolves. The first real
+  // grid can therefore use these dimensions instead of freezing fallback ratios.
+  for (const [hash, item] of geometry) {
+    window.mochimonoCatalogCache?.rememberDimensions?.(hash, item.width, item.height);
+  }
 }
 
 window.mochimonoStartupGeometry = geometry;
 window.mochimonoInstantGridReady = Promise.resolve(originalReady).then(async painted => {
-  if (painted) await prime();
+  const hasInstantGrid = painted || await waitForInstantCards();
+  if (hasInstantGrid) await prime();
   return painted;
 });
