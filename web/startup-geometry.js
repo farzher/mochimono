@@ -3,7 +3,7 @@ const originalReady = window.mochimonoInstantGridReady || Promise.resolve(false)
 const geometry = new Map();
 const pendingRows = new Set();
 const STARTUP_VISIBLE_MS = 1800;
-const startupVisibleUntil = performance.now() + STARTUP_VISIBLE_MS;
+let startupVisibleUntil = 0;
 let rowFrame = 0;
 let userInteracted = false;
 
@@ -22,6 +22,7 @@ function applyKnown(node) {
   const cards = [];
   if (node.matches('[data-hash]')) cards.push(node);
   cards.push(...node.querySelectorAll('[data-hash]'));
+  if (cards.length && !startupVisibleUntil) startupVisibleUntil = performance.now() + STARTUP_VISIBLE_MS;
   for (const card of cards) {
     if (Number(card.dataset.width) > 0 && Number(card.dataset.height) > 0) continue;
     const known = geometry.get(String(card.dataset.hash || ''));
@@ -108,7 +109,7 @@ function flushRows() {
   if (!pendingRows.size) return;
   const ready = [];
   let needsAnchor = false;
-  const allowVisible = !userInteracted && performance.now() <= startupVisibleUntil;
+  const allowVisible = !userInteracted && startupVisibleUntil && performance.now() <= startupVisibleUntil;
   for (const row of pendingRows) {
     if (!row.isConnected) {
       pendingRows.delete(row);
