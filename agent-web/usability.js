@@ -155,8 +155,7 @@ function previewInfo(folder) {
     if (total) processed = total;
     ratio = 1;
     percent = total ? '100%' : '';
-    const unavailable = failed + deferred;
-    text = unavailable ? `Ready · ${unavailable.toLocaleString()} retry on demand` : 'Ready';
+    text = 'Ready';
   } else if (mode === 'off') {
     const count = total ? `${Math.min(ready, total).toLocaleString()} / ${total.toLocaleString()}` : processed ? `${processed.toLocaleString()} checked` : '';
     text = [count, 'Paused'].filter(Boolean).join(' · ');
@@ -238,7 +237,7 @@ function renderPreviewProgress(stats) {
     if (jobTitle && waitingForIdle) jobTitle.textContent = 'Waiting for idle';
 
     const info = previewInfo(folder);
-    if (!info) {
+    if (!info || info.done) {
       row.querySelector('[data-preview-progress]')?.remove();
       continue;
     }
@@ -248,12 +247,11 @@ function renderPreviewProgress(stats) {
     node.querySelector('[data-preview-progress-text]').textContent = info.text;
     node.querySelector('[data-preview-percent]').textContent = info.percent;
     node.style.setProperty('--preview-progress', String(info.ratio));
-    node.title = info.done ? 'Local thumbnails ready'
-      : previewMode() === 'off' ? 'Automatic thumbnail work is paused; visible files still generate on demand'
-        : info.waiting ? 'Thumbnail work is waiting until this computer is idle'
-          : info.phase === 'checking' ? 'Checking the existing local thumbnail cache'
-            : info.phase === 'verifying' ? 'Verifying generated thumbnails'
-              : 'Generating missing local thumbnails';
+    node.title = previewMode() === 'off' ? 'Automatic thumbnail work is paused; visible files still generate on demand'
+      : info.waiting ? 'Thumbnail work is waiting until this computer is idle'
+        : info.phase === 'checking' ? 'Checking the existing local thumbnail cache'
+          : info.phase === 'verifying' ? 'Verifying generated thumbnails'
+            : 'Generating missing local thumbnails';
   }
   return warming;
 }
