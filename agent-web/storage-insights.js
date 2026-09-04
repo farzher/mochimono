@@ -36,18 +36,9 @@ if (storagePane && foldersSection) {
   section.hidden = true;
   section.innerHTML = `
     <div class="storage-space-head"><h2>Space</h2><span class="storage-space-total" data-space-total></span></div>
-    <div class="storage-space-block">
-      <div class="storage-space-label">By type</div>
-      <div class="storage-space-types" data-space-types></div>
-    </div>
-    <div class="storage-space-block">
-      <div class="storage-space-label">Worth shrinking</div>
-      <div class="storage-space-list" data-space-candidates></div>
-    </div>
-    <div class="storage-space-block">
-      <div class="storage-space-label">Largest files</div>
-      <div class="storage-space-list" data-space-largest></div>
-    </div>
+    <div class="storage-space-block"><div class="storage-space-label">By type</div><div class="storage-space-types" data-space-types></div></div>
+    <div class="storage-space-block"><div class="storage-space-label">Worth shrinking</div><div class="storage-space-list" data-space-candidates></div></div>
+    <div class="storage-space-block"><div class="storage-space-label">Largest files</div><div class="storage-space-list" data-space-largest></div></div>
     <div class="storage-space-error" data-space-error hidden></div>`;
   storagePane.insertBefore(section, foldersSection);
 
@@ -82,7 +73,7 @@ if (storagePane && foldersSection) {
   function compressionCandidate(file) {
     const size = Number(file.size) || 0;
     const extension = ext(file.filename || file.originalPath);
-    if (['bmp'].includes(extension) && size >= 2_000_000) return { reason:'BMP → WebP', saving:.82, weight:3.4 };
+    if (extension === 'bmp' && size >= 2_000_000) return { reason:'BMP → WebP', saving:.82, weight:3.4 };
     if (['tif','tiff'].includes(extension) && size >= 2_000_000) return { reason:'TIFF → WebP', saving:.65, weight:3.1 };
     if (extension === 'png' && size >= 2_000_000) return { reason:'PNG → WebP', saving:.50, weight:2.8 };
     if (['jpg','jpeg'].includes(extension) && size >= 20_000_000) return { reason:'Large JPEG', saving:.22, weight:1.3 };
@@ -95,37 +86,47 @@ if (storagePane && foldersSection) {
   }
 
   function addFiles(data, files, seen) {
-    for (const file of data.files || []) {
-      const hash = String(file.hash || '');
-      if (hash && seen.has(hash)) continue;
-      if (hash) seen.add(hash);
+    for (const file of data?.files || []) {
+      const hash = String(file?.hash || '');
+      if (!hash || seen.has(hash)) continue;
+      seen.add(hash);
       files.push(file);
     }
   }
 
-  async function catalog(url, token) {
+  async function json(url, token, optional = false) {
     if (token !== generation) return null;
-    const response = await fetch(url, { cache:'no-store' });
-    if (!response.ok) throw new Error(`Could not inspect indexed files (${response.status})`);
-    return response.json();
+    try {
+      const response = await fetch(url, { cache:'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      if (optional) return null;
+      throw error;
+    }
   }
 
-  async function localFiles(token) {
-    const files = [];
-    const seen = new Set();
+  async function libraryCache(token, files, seen) {
+    const frame = filesFrame?.contentWindow;
+    for (let attempt = 0; attempt < 8 && token === generation && !frame?.mochimonoLibrary; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 60));
+    }
+    if (token !== generation) return { visibleTotal:0, cached:0 };
+    const visibleTotal = Number(frame?.mochimonoLibrary?.state?.().total) || 0;
+    let snapshot = null;
+    try { snapshot = await frame?.mochimonoCatalogCache?.load?.(); } catch {}
+    if (token !== generation) return { visibleTotal, cached:0 };
+    addFiles(snapshot, files, seen);
+    return { visibleTotal, cached:Number(snapshot?.files?.length) || 0 };
+  }
 
-    // Match the normal library first. The non-paged catalog includes live
-    // browse-staging rows while a local folder is being indexed/reconciled.
-    const live = await catalog('/api/client/local-catalog?limit=5000', token);
-    if (!live) return [];
-    addFiles(live, files, seen);
-
-    // Then walk the canonical SQLite catalog so completed indexes are analyzed
-    // in full. Hash de-duplication above makes overlap with the live seed cheap.
+  async function mergeLocal(token, files, seen) {
+    const live = await json('/api/client/local-catalog?limit=5000', token, true);
+    if (live) addFiles(live, files, seen);
     let offset = 0;
     for (;;) {
-      const data = await catalog(`/api/client/local-catalog?limit=5000&offset=${offset}`, token);
-      if (!data) return [];
+      const data = await json(`/api/client/local-catalog?limit=5000&offset=${offset}`, token, true);
+      if (!data) break;
       addFiles(data, files, seen);
       if (data.nextOffset == null) break;
       const next = Number(data.nextOffset);
@@ -133,6 +134,33 @@ if (storagePane && foldersSection) {
       offset = next;
       await new Promise(resolve => setTimeout(resolve, 0));
     }
+  }
+
+  async function mergeServer(token, files, seen) {
+    let after = '';
+    do {
+      const data = await json(`/api/catalog?limit=5000&after=${encodeURIComponent(after)}`, token, true);
+      if (!data) return false;
+      addFiles(data, files, seen);
+      after = String(data.nextAfter || '');
+      await new Promise(resolve => setTimeout(resolve, 0));
+    } while (after && token === generation);
+    return true;
+  }
+
+  async function libraryFiles(token) {
+    const files = [];
+    const seen = new Set();
+    const cache = await libraryCache(token, files, seen);
+    if (token !== generation) return [];
+
+    await mergeLocal(token, files, seen);
+    if (token !== generation) return [];
+
+    // If the iframe's persisted snapshot exactly matches its live catalog count,
+    // it is already the same dataset powering the grid. Otherwise fill any gap
+    // from the server catalog that the grid refreshes from.
+    if (!cache.cached || cache.cached !== cache.visibleTotal) await mergeServer(token, files, seen);
     return files;
   }
 
@@ -144,12 +172,12 @@ if (storagePane && foldersSection) {
       totals.set(kind(file), (totals.get(kind(file)) || 0) + size);
       total += size;
     }
-    totalNode.textContent = total ? `${bytes(total)} unique` : '';
+    totalNode.textContent = files.length ? `${bytes(total)} · ${files.length.toLocaleString()} files` : '';
     const rows = [...totals].filter(([,size]) => size > 0).sort((a,b) => b[1] - a[1]);
     typesNode.innerHTML = rows.length ? rows.map(([label,size]) => {
       const share = total ? size / total * 100 : 0;
       return `<div class="storage-space-type"><span class="storage-space-type-name">${label}</span><span class="storage-space-type-bar"><i style="width:${Math.max(1,share).toFixed(2)}%"></i></span><span class="storage-space-type-size">${esc(bytes(size))}</span><span class="storage-space-type-share">${share.toFixed(0)}%</span></div>`;
-    }).join('') : '<div class="storage-space-empty">No indexed files yet</div>';
+    }).join('') : '<div class="storage-space-empty">No files in library</div>';
   }
 
   function row(file, note = '') {
@@ -172,7 +200,7 @@ if (storagePane && foldersSection) {
 
   function renderLargest(files) {
     const shown = [...files].sort((a,b) => Number(b.size || 0) - Number(a.size || 0)).slice(0, 8);
-    largestNode.innerHTML = shown.length ? shown.map(file => row(file, kind(file))).join('') : '<div class="storage-space-empty">No indexed files yet</div>';
+    largestNode.innerHTML = shown.length ? shown.map(file => row(file, kind(file))).join('') : '<div class="storage-space-empty">No files in library</div>';
   }
 
   function openFile(hash) {
@@ -198,7 +226,7 @@ if (storagePane && foldersSection) {
     errorNode.hidden = true;
     loading = (async () => {
       try {
-        const files = await localFiles(token);
+        const files = await libraryFiles(token);
         if (token !== generation) return;
         renderTypes(files);
         renderCandidates(files);
@@ -210,7 +238,7 @@ if (storagePane && foldersSection) {
         typesNode.innerHTML = '<div class="storage-space-empty">Analysis unavailable</div>';
         candidatesNode.innerHTML = '';
         largestNode.innerHTML = '';
-        errorNode.textContent = error?.message || 'Could not analyze indexed files';
+        errorNode.textContent = error?.message || 'Could not analyze library';
         errorNode.hidden = false;
       } finally {
         if (token === generation) loading = null;
