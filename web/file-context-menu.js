@@ -46,6 +46,9 @@ if (files) {
 
   let generation = 0;
   let active = null;
+  let dismissPointerId = null;
+  let swallowDismissClick = false;
+  let dismissGuardTimer = 0;
 
   const filenameNode = menu.querySelector('[data-context-filename]');
   const pathNode = menu.querySelector('[data-context-path]');
@@ -114,6 +117,20 @@ if (files) {
     active = null;
     menu.hidden = true;
     statusNode.textContent = '';
+  }
+
+  function clearDismissGuard() {
+    dismissPointerId = null;
+    swallowDismissClick = false;
+    clearTimeout(dismissGuardTimer);
+    dismissGuardTimer = 0;
+  }
+
+  function armDismissGuard(pointerId) {
+    dismissPointerId = pointerId;
+    swallowDismissClick = true;
+    clearTimeout(dismissGuardTimer);
+    dismissGuardTimer = setTimeout(clearDismissGuard, 800);
   }
 
   function place(x, y) {
@@ -256,7 +273,28 @@ if (files) {
   });
 
   document.addEventListener('pointerdown', event => {
-    if (!menu.hidden && !menu.contains(event.target)) close();
+    if (menu.hidden || menu.contains(event.target)) return;
+    close();
+    armDismissGuard(event.pointerId);
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+  document.addEventListener('pointerup', event => {
+    if (!swallowDismissClick || (dismissPointerId != null && event.pointerId !== dismissPointerId)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+  document.addEventListener('click', event => {
+    if (!swallowDismissClick) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    clearDismissGuard();
+  }, true);
+  document.addEventListener('contextmenu', event => {
+    if (!swallowDismissClick) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    clearDismissGuard();
   }, true);
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || menu.hidden) return;
