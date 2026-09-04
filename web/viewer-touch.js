@@ -4,13 +4,17 @@ const media = document.querySelector('#viewer-media');
 const prev = document.querySelector('#viewer-prev');
 const next = document.querySelector('#viewer-next');
 
+// Keep the legacy navigation buttons only as internal command targets for
+// keyboard/swipe navigation. They should never be visible or tappable.
+const navStyle = document.createElement('style');
+navStyle.textContent = '#viewer-prev,#viewer-next{display:none!important;pointer-events:none!important}';
+document.head.append(navStyle);
+
 if (viewer && stage && media && prev && next) {
   const DOUBLE_TAP_MS = 300;
   const DOUBLE_TAP_DISTANCE = 44;
   const TAP_TRAVEL = 14;
-  const PAN_START = 14;
-  const SIDE_EDGE = .36;
-  const VIDEO_EDGE = .22;
+  const PAN_START = 22;
   const MAX_SCALE = 4;
 
   const pointers = new Map();
@@ -100,13 +104,6 @@ if (viewer && stage && media && prev && next) {
     return Math.hypot(a.x - b.x, a.y - b.y);
   }
 
-  function sideButton(clientX, video = false) {
-    const edge = video ? VIDEO_EDGE : SIDE_EDGE;
-    if (clientX < innerWidth * edge) return prev;
-    if (clientX > innerWidth * (1 - edge)) return next;
-    return null;
-  }
-
   function navigate(button) {
     if (!button || button.disabled || zoomed()) return false;
     clearTap();
@@ -131,7 +128,7 @@ if (viewer && stage && media && prev && next) {
   }
 
   function ignoredTarget(target) {
-    return target.closest?.('.viewer-bar,.viewer-collections,.viewer-info,dialog,.viewer-nav');
+    return target.closest?.('.viewer-bar,.viewer-collections,.viewer-info,dialog');
   }
 
   function beginPinch() {
@@ -170,9 +167,6 @@ if (viewer && stage && media && prev && next) {
     const imageHit = Boolean(event.target.closest?.('#viewer-media img'));
     const video = event.target.closest?.('#viewer-media video');
     const startedZoomed = zoomed();
-    const side = !startedZoomed ? sideButton(event.clientX, Boolean(video)) : null;
-
-    if (side) clearTap();
 
     if (startedZoomed && imageHit && isDoubleTap(event.clientX, event.clientY)) {
       clearTap();
@@ -195,7 +189,6 @@ if (viewer && stage && media && prev && next) {
       image: imageHit,
       video: Boolean(video),
       videoControls: Boolean(rect && event.clientY >= rect.bottom - Math.min(64, rect.height * .22)),
-      side,
       moved: false
     };
     pointers.set(event.pointerId, point);
@@ -252,11 +245,21 @@ if (viewer && stage && media && prev && next) {
     if (point.startedZoomed && pan?.id === event.pointerId) {
       if (!pan.active && travel < PAN_START) return;
       if (!pan.active) {
+        // Crossing the pan threshold should not move the image. Start the pan
+        // from this exact position so normal tap jitter cannot produce a small
+        // visible jump before the second tap of a double-tap-to-zoom-out.
         pan.active = true;
+        pan.startX = event.clientX;
+        pan.startY = event.clientY;
+        pan.zoomX = zoom.x;
+        pan.zoomY = zoom.y;
         clearTap();
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
       }
-      zoom.x = pan.zoomX + dx;
-      zoom.y = pan.zoomY + dy;
+      zoom.x = pan.zoomX + event.clientX - pan.startX;
+      zoom.y = pan.zoomY + event.clientY - pan.startY;
       applyZoom();
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -345,16 +348,6 @@ if (viewer && stage && media && prev && next) {
 
     if (point.video) {
       clearTap();
-      if (!point.videoControls && navigate(sideButton(event.clientX, true))) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      }
-      return;
-    }
-
-    if (point.side && navigate(point.side)) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
       return;
     }
 
@@ -366,6 +359,9 @@ if (viewer && stage && media && prev && next) {
       return;
     }
 
+    // A normal tap only toggles viewer chrome. Left/right position no longer
+    // has any navigation meaning on touch devices; swiping is the gesture for
+    // previous/next.
     rememberTap(event.clientX, event.clientY);
     event.preventDefault();
     event.stopImmediatePropagation();
