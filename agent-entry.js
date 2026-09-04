@@ -1,3 +1,4 @@
+import { registerHooks } from 'node:module';
 import { availableParallelism } from 'node:os';
 
 const cpus = Math.max(1, availableParallelism());
@@ -9,6 +10,20 @@ process.env.MOCHIMONO_THUMBNAIL_VIDEO_WORKERS ||= String(Math.max(1, Math.min(2,
 // default of four concurrent ffmpeg jobs.
 process.env.MOCHIMONO_PROVIDER_THUMBNAIL_WORKERS ||= String(cpus);
 process.env.MOCHIMONO_PROVIDER_THUMBNAIL_VIDEO_WORKERS ||= String(cpus);
+
+// provider-thumbs decodes arbitrary files from local folders. Redirect only its
+// Sharp import through a child-process proxy, so a malformed image can kill one
+// tiny libvips worker without killing indexing or the Agent process itself.
+const providerThumbsUrl = new URL('./lib/provider-thumbs.js', import.meta.url).href;
+const providerSharpProxyUrl = new URL('./lib/sharp-provider-proxy.js', import.meta.url).href;
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === 'sharp' && context.parentURL === providerThumbsUrl) {
+      return { url: providerSharpProxyUrl, shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  }
+});
 
 const [{ startThumbnailAgent }, { startMediaMetadataAgent }, { startProtectionAgent }] = await Promise.all([
   import('./lib/thumbnail-agent.js'),
