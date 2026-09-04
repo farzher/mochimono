@@ -143,7 +143,7 @@ if (folders && storagePane) {
 
     const preview = previewProgress(folder);
     const previewActive = folder.previewWarming && mode !== 'off' && !folder.previewWaiting &&
-      (Number(folder.previewQueueActive) > 0 || String(folder.previewPhase || '') === 'checking');
+      (Number(folder.previewQueueActive) > 0 || Number(folder.previewQueueBackground) > 0);
     if (previewActive && !preview.done) {
       return {
         label:'Thumbnails',
