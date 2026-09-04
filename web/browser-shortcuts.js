@@ -148,9 +148,13 @@ document.addEventListener('keydown', event => {
   if (!viewer?.hidden && viewerPageKeys.has(event.key)) {
     event.preventDefault();
     event.stopImmediatePropagation();
-    if (event.key === 'PageUp') navigateViewerBy(-1);
-    else if (event.key === 'PageDown') navigateViewerBy(1);
-    else jumpViewerEdge(event.key === 'Home');
+    if (event.key === 'PageUp' || event.key === 'PageDown') {
+      document.dispatchEvent(new KeyboardEvent('keydown', {
+        key: event.key === 'PageUp' ? 'ArrowUp' : 'ArrowDown',
+        bubbles: true,
+        cancelable: true
+      }));
+    } else jumpViewerEdge(event.key === 'Home');
     return;
   }
   if (!event.altKey && zoomed() && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
