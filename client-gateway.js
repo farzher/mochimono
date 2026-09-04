@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { json, pathKey, readJson, settings } from './lib/agent-context.js';
 import { backupThumbnailCandidates } from './lib/backup-thumb-candidates.js';
 import { handleClientProviderApi } from './lib/client-providers.js';
+import { handleImageOptimizeApi } from './lib/image-optimize.js';
 import { localCandidate, localCandidates, localCatalog, localLocations } from './lib/local-locations.js';
 import { providerThumbnail, providerThumbnailFailure, queueProviderThumbnail, serveProviderThumbnail } from './lib/provider-thumbs.js';
 import { queueRemoteThumbnail, thumbnailFailure } from './lib/thumbnail-agent.js';
@@ -375,6 +376,7 @@ export async function handleClientGateway(req, res, url) {
     return true;
   }
   if (url.pathname.startsWith('/api/')) {
+    if (await handleImageOptimizeApi(req, res, url)) return true;
     if (await handleClientProviderApi(req, res, url)) return true;
     await proxyApi(req, res, url);
     return true;
