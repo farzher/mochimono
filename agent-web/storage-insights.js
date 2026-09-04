@@ -94,21 +94,39 @@ if (storagePane && foldersSection) {
     return null;
   }
 
+  function addFiles(data, files, seen) {
+    for (const file of data.files || []) {
+      const hash = String(file.hash || '');
+      if (hash && seen.has(hash)) continue;
+      if (hash) seen.add(hash);
+      files.push(file);
+    }
+  }
+
+  async function catalog(url, token) {
+    if (token !== generation) return null;
+    const response = await fetch(url, { cache:'no-store' });
+    if (!response.ok) throw new Error(`Could not inspect indexed files (${response.status})`);
+    return response.json();
+  }
+
   async function localFiles(token) {
     const files = [];
     const seen = new Set();
+
+    // Match the normal library first. The non-paged catalog includes live
+    // browse-staging rows while a local folder is being indexed/reconciled.
+    const live = await catalog('/api/client/local-catalog?limit=5000', token);
+    if (!live) return [];
+    addFiles(live, files, seen);
+
+    // Then walk the canonical SQLite catalog so completed indexes are analyzed
+    // in full. Hash de-duplication above makes overlap with the live seed cheap.
     let offset = 0;
     for (;;) {
-      if (token !== generation) return [];
-      const response = await fetch(`/api/client/local-catalog?limit=5000&offset=${offset}`, { cache:'no-store' });
-      if (!response.ok) throw new Error(`Could not inspect indexed files (${response.status})`);
-      const data = await response.json();
-      for (const file of data.files || []) {
-        const hash = String(file.hash || '');
-        if (hash && seen.has(hash)) continue;
-        if (hash) seen.add(hash);
-        files.push(file);
-      }
+      const data = await catalog(`/api/client/local-catalog?limit=5000&offset=${offset}`, token);
+      if (!data) return [];
+      addFiles(data, files, seen);
       if (data.nextOffset == null) break;
       const next = Number(data.nextOffset);
       if (!Number.isFinite(next) || next <= offset) break;
