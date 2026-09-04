@@ -6,8 +6,6 @@ const pageKeys = new Set(['PageUp', 'PageDown', 'Home', 'End']);
 const EDGE_MARGIN = 240;
 const MAX_PREPARE_PASSES = 8;
 
-// Keep the exact pre-viewer grid position unless viewer navigation moved to a
-// file that would otherwise be entirely offscreen.
 let viewerWasOpen = Boolean(viewer && !viewer.hidden);
 let viewerScrollY = window.scrollY;
 let lastViewerHash = '';
@@ -19,7 +17,6 @@ function viewerHash() {
 function revealOnlyIfNeeded(hash, savedY) {
   const card = hash ? files?.querySelector(`[data-hash="${CSS.escape(hash)}"]`) : null;
   if (!card) return;
-
   window.scrollTo({ top: savedY, left: 0, behavior: 'auto' });
   const top = Math.max(0, commandbar?.getBoundingClientRect().bottom || 0);
   const rect = card.getBoundingClientRect();
@@ -34,9 +31,7 @@ if (viewer && viewerOpen) {
     const hash = viewerHash();
     if (hash) lastViewerHash = hash;
     if (open && !viewerWasOpen) viewerScrollY = window.scrollY;
-    else if (!open && viewerWasOpen) {
-      requestAnimationFrame(() => requestAnimationFrame(() => revealOnlyIfNeeded(lastViewerHash, viewerScrollY)));
-    }
+    else if (!open && viewerWasOpen) requestAnimationFrame(() => requestAnimationFrame(() => revealOnlyIfNeeded(lastViewerHash, viewerScrollY)));
     viewerWasOpen = open;
   }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 
@@ -46,9 +41,6 @@ if (viewer && viewerOpen) {
   }).observe(viewerOpen, { attributes: true, attributeFilter: ['href'] });
 }
 
-// Page movement is measured only after the virtual window is fully prepared.
-// That keeps a page press equal to one viewport step even when older/newer rows
-// have to be inserted before the movement can happen.
 let pageBusy = false;
 let queuedDirection = 0;
 let releaseTimer = 0;
@@ -61,6 +53,10 @@ function editingControl(target) {
 function pageDistance() {
   const top = Math.max(0, commandbar?.getBoundingClientRect().bottom || 0);
   return Math.max(160, innerHeight - top - 36);
+}
+
+function stableVirtual() {
+  return Boolean(window.mochimonoLibrary?.state?.().virtual);
 }
 
 function canExtend(direction) {
@@ -123,9 +119,6 @@ function preparePage(direction, distance, generation, callback, pass = 0) {
     callback();
     return;
   }
-  // library-app has a defensive two-frame anchor restore. Let it finish before
-  // deciding whether another virtual batch is needed. No intentional page motion
-  // happens until every anchor correction is complete.
   afterAnchorRestore(() => preparePage(direction, distance, generation, callback, pass + 1));
 }
 
@@ -136,9 +129,9 @@ function release() {
   window.mochimonoGridInteraction?.release?.();
 }
 
-function armRelease() {
+function armRelease(delay = 220) {
   clearTimeout(releaseTimer);
-  releaseTimer = setTimeout(release, 220);
+  releaseTimer = setTimeout(release, delay);
 }
 
 function finishPage(generation) {
@@ -165,20 +158,43 @@ function runPage(direction) {
   const generation = motionGeneration;
   const distance = pageDistance();
   window.mochimonoGridInteraction?.pulse?.(220);
-
   preparePage(direction, distance, generation, () => doExactScroll(direction, distance, generation));
 }
 
-function jumpEdge(key) {
-  const library = window.mochimonoLibrary;
-  const hashes = library?.filteredHashes?.();
-  if (!Array.isArray(hashes) || !hashes.length) return false;
-
+function resetLegacyMotion() {
   motionGeneration++;
   pageBusy = false;
   queuedDirection = 0;
   clearTimeout(releaseTimer);
   releaseTimer = 0;
+}
+
+function jumpStableEdge(key) {
+  const library = window.mochimonoLibrary;
+  const hashes = library?.filteredHashes?.();
+  if (!Array.isArray(hashes) || !hashes.length) return false;
+  resetLegacyMotion();
+  const first = key === 'Home';
+  const index = first ? 0 : hashes.length - 1;
+  const hash = hashes[index];
+  library.ensureIndex?.(index);
+  window.mochimonoGridInteraction?.pulse?.(180);
+  requestAnimationFrame(() => {
+    const card = files?.querySelector(`[data-hash="${CSS.escape(hash)}"]`);
+    if (!card) return;
+    if (first) window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    else card.scrollIntoView({ behavior: 'auto', block: 'end', inline: 'nearest' });
+    window.mochimonoThumbnails?.prioritize?.([card]);
+  });
+  armRelease(180);
+  return true;
+}
+
+function jumpLegacyEdge(key) {
+  const library = window.mochimonoLibrary;
+  const hashes = library?.filteredHashes?.();
+  if (!Array.isArray(hashes) || !hashes.length) return false;
+  resetLegacyMotion();
   const generation = motionGeneration;
   const first = key === 'Home';
   const index = first ? 0 : hashes.length - 1;
@@ -204,7 +220,15 @@ function jumpEdge(key) {
 
 function press(key) {
   if (!pageKeys.has(key) || (viewer && !viewer.hidden)) return false;
-  if (key === 'Home' || key === 'End') return jumpEdge(key);
+  const stable = stableVirtual();
+  if (key === 'Home' || key === 'End') return stable ? jumpStableEdge(key) : jumpLegacyEdge(key);
+  if (stable) {
+    resetLegacyMotion();
+    window.mochimonoGridInteraction?.pulse?.(180);
+    window.scrollBy({ top: (key === 'PageUp' ? -1 : 1) * pageDistance(), left: 0, behavior: 'auto' });
+    armRelease(180);
+    return true;
+  }
   armRelease();
   runPage(key === 'PageUp' ? -1 : 1);
   return true;

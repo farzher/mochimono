@@ -1,8 +1,8 @@
+import './stable-grid-adapter.js';
+
 const viewer = document.querySelector('#viewer');
 const files = document.querySelector('#files');
 
-// Mochimono owns scroll anchoring for its virtual grid. Native browser anchoring
-// otherwise competes with the explicit card anchor when rows are inserted above.
 document.documentElement.style.overflowAnchor = 'none';
 
 let active = false;
@@ -12,6 +12,10 @@ let upwardEdgeFrame = 0;
 let upwardEdgeOffset = -1;
 let keyboardBoundaryPending = false;
 let queuedBoundaryKey = '';
+
+function stableVirtual() {
+  return Boolean(window.mochimonoLibrary?.state?.().virtual);
+}
 
 function finish() {
   timer = 0;
@@ -68,18 +72,13 @@ function restoreCardTop(card, top) {
 }
 
 function repairUpwardWheelEdge(expectedOffset) {
+  if (stableVirtual()) return;
   const library = window.mochimonoLibrary;
   const state = library?.state?.();
   if (!state || state.view === 'folders' || !state.hasPrevious || state.offset !== expectedOffset || (viewer && !viewer.hidden)) return;
 
   const sentinel = document.querySelector('#top-scroll-sentinel');
   if (!sentinel || sentinel.hidden || sentinel.getBoundingClientRect().bottom < -360) return;
-
-  // At the physical document top library-app normally has no anchor. If this is
-  // only the top of the current virtual window, preserve the visible card here so
-  // prepending creates real upward scroll headroom instead of leaving the sentinel
-  // intersecting forever. Force justified-row geometry before measuring the
-  // correction so the rough pre-layout rows never become a visible intermediate.
   const anchor = scrollY <= 4 ? visibleTopAnchor() : null;
   if (!library.extend(-1)) return;
   window.mochimonoGallery?.layoutNow?.();
@@ -87,6 +86,7 @@ function repairUpwardWheelEdge(expectedOffset) {
 }
 
 function scheduleUpwardWheelEdge() {
+  if (stableVirtual()) return;
   const state = window.mochimonoLibrary?.state?.();
   if (!state?.hasPrevious || state.view === 'folders') return;
   upwardEdgeOffset = state.offset;
@@ -131,15 +131,10 @@ function editingControl(target) {
 
 function runBoundaryArrow(key) {
   window.mochimonoGridKeyboard?.press?.(key);
-  // The real keydown was intercepted before fast-arrow-nav saw it. Release the
-  // synthetic press here so a very quick tap cannot leave its internal hold state
-  // latched after the physical keyup has already happened.
   window.mochimonoGridKeyboard?.release?.();
 }
 
 function finishKeyboardBoundary(key, current, top) {
-  // library-app keeps a delayed defensive anchor too. Let that settle while the
-  // old cursor remains visually fixed, then make exactly one normal arrow move.
   requestAnimationFrame(() => requestAnimationFrame(() => {
     restoreCardTop(current, top);
     keyboardBoundaryPending = false;
@@ -150,6 +145,7 @@ function finishKeyboardBoundary(key, current, top) {
 }
 
 function interceptKeyboardBoundary(event) {
+  if (stableVirtual()) return;
   if ((event.key !== 'ArrowUp' && event.key !== 'ArrowDown') || (viewer && !viewer.hidden) || !files?.classList.contains('grid') || editingControl(event.target)) return;
   const current = document.activeElement?.closest?.('#files [data-hash]');
   if (!current) return;
@@ -181,7 +177,7 @@ window.mochimonoGridInteraction = { active: () => active, pulse, release };
 
 window.addEventListener('scroll', () => pulse(140), { passive: true });
 window.addEventListener('wheel', event => {
-  if (event.deltaY >= 0 || Math.abs(event.deltaY) <= Math.abs(event.deltaX) || (viewer && !viewer.hidden)) return;
+  if (stableVirtual() || event.deltaY >= 0 || Math.abs(event.deltaY) <= Math.abs(event.deltaX) || (viewer && !viewer.hidden)) return;
   scheduleUpwardWheelEdge();
 }, { passive: true, capture: true });
 document.addEventListener('keydown', interceptKeyboardBoundary, true);
