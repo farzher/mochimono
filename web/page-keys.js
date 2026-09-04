@@ -78,10 +78,42 @@ function shouldPreExtend(direction, distance) {
   return Boolean(rect && rect.top <= innerHeight + EDGE_MARGIN + distance);
 }
 
+function visibleAnchor() {
+  if (!files) return null;
+  const viewportTop = Math.max(0, commandbar?.getBoundingClientRect().bottom || 0);
+  const bounds = files.getBoundingClientRect();
+  const xs = [bounds.left + 8, (bounds.left + bounds.right) / 2, bounds.right - 8]
+    .map(x => Math.max(1, Math.min(innerWidth - 2, x)));
+  for (const y of [viewportTop + 2, viewportTop + 40, viewportTop + 80, viewportTop + 120]) {
+    if (y >= innerHeight) break;
+    for (const x of xs) {
+      const card = document.elementFromPoint(x, y)?.closest?.('#files [data-hash]');
+      if (!card) continue;
+      return { card, hash: card.dataset.hash, top: card.getBoundingClientRect().top };
+    }
+  }
+  return null;
+}
+
+function restoreAnchorNow(anchor) {
+  if (!anchor) return;
+  const card = anchor.card?.isConnected ? anchor.card : files?.querySelector(`[data-hash="${CSS.escape(anchor.hash || '')}"]`);
+  if (!card) return;
+  const delta = card.getBoundingClientRect().top - anchor.top;
+  if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
+}
+
 function extend(direction) {
+  // library-app restores its own anchor two animation frames later. That is safe,
+  // but it used to expose the newly prepended rough geometry for one paint first.
+  // Stabilize the visible row synchronously after the justified layout so there
+  // is no intermediate frame for Page Up/Down to visibly jump through.
+  const anchor = visibleAnchor();
   const changed = Boolean(window.mochimonoLibrary?.extend?.(direction));
-  if (changed) window.mochimonoGallery?.layoutNow?.();
-  return changed;
+  if (!changed) return false;
+  window.mochimonoGallery?.layoutNow?.();
+  restoreAnchorNow(anchor);
+  return true;
 }
 
 function afterAnchorRestore(callback) {
