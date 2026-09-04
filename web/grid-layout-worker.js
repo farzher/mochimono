@@ -227,14 +227,9 @@ function layoutFiles(files, config) {
       }
       ratioSum += nextRatio;
     }
-    if (rowStart < end) {
-      const count = end - rowStart;
-      let sum = 0;
-      for (let index = rowStart; index < end; index++) sum += ratio(files[index]);
-      const filledHeight = (width - gap * (count - 1)) / Math.max(.001, sum);
-      const fill = count >= 2 && filledHeight <= target * 1.42;
-      finishRow(rowStart, end, fill);
-    }
+    // The terminal incomplete row should look like normal thumbnails, not grow
+    // just to touch the right edge. Leave the remaining horizontal space empty.
+    if (rowStart < end) finishRow(rowStart, end, false);
   }
 
   if (grouped) {

@@ -1,5 +1,7 @@
 const files = document.querySelector('#files');
 const mediaSize = document.querySelector('#mediaSize');
+const viewer = document.querySelector('#viewer');
+const viewerStage = document.querySelector('#viewer-stage');
 const viewerMedia = document.querySelector('#viewer-media');
 const viewerName = document.querySelector('#viewer-name');
 
@@ -11,8 +13,15 @@ style.textContent = `
 .media-thumb.thumb-decoding::after{content:"";position:absolute;z-index:3;inset:0;background:#080809;pointer-events:none}
 .media-thumb>.play-badge{z-index:4}
 #viewer-media>video{width:100vw!important;height:100dvh!important;max-width:100vw!important;max-height:100dvh!important;object-fit:contain!important;background:#000}
+#viewer-preview-status{position:absolute;z-index:102;right:14px;top:66px;padding:4px 7px;border:1px solid rgba(255,255,255,.11);border-radius:999px;background:rgba(18,18,18,.58);backdrop-filter:blur(7px);color:rgba(255,255,255,.78);font-size:10px;font-weight:650;line-height:1;letter-spacing:.01em;pointer-events:none}
 `;
 document.head.append(style);
+
+const viewerPreviewStatus = document.createElement('span');
+viewerPreviewStatus.id = 'viewer-preview-status';
+viewerPreviewStatus.textContent = 'Preview';
+viewerPreviewStatus.hidden = true;
+viewerStage?.append(viewerPreviewStatus);
 
 function finishDecode(image, box) {
   const reveal = () => requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -48,6 +57,12 @@ function imagesIn(node) {
   return result;
 }
 
+function syncViewerPreviewStatus() {
+  if (!viewerPreviewStatus) return;
+  const preview = viewerMedia?.querySelector(':scope>img[data-full-src],:scope>img[data-preview-only="1"]');
+  viewerPreviewStatus.hidden = !preview || Boolean(viewer?.hidden);
+}
+
 function stabilizeViewerImage(node) {
   if (!(node instanceof Element)) return;
   const image = node.matches('#viewer-media>img') ? node : node.querySelector?.('#viewer-media>img');
@@ -57,6 +72,7 @@ function stabilizeViewerImage(node) {
   // Chromium/Windows does not reliably decode the original HEIC. Keep the
   // generated WebP preview instead of letting library-app swap it for a broken
   // original after the thumbnail has rendered successfully.
+  image.dataset.previewOnly = '1';
   image.removeAttribute('data-full-src');
 }
 
@@ -66,16 +82,17 @@ function cardRatio(card) {
   return width && height ? Math.max(.65, Math.min(2.1, width / height)) : 1;
 }
 
-function capJustifiedRows() {
+function normalizeJustifiedRows() {
   if (!files?.isConnected) return;
   const target = Number(mediaSize?.value) || 170;
   const cap = target * 1.42;
   for (const row of files.querySelectorAll('.justified-media-row')) {
     const cards = [...row.querySelectorAll(':scope > .file-card.media-card')];
     if (!cards.length) continue;
+    const last = row.classList.contains('last-layout-row');
     const current = Math.max(...cards.map(card => card.getBoundingClientRect().height));
-    if (current <= cap + 1) continue;
-    const height = cards.length === 1 ? target : cap;
+    if (!last && current <= cap + 1) continue;
+    const height = last || cards.length === 1 ? target : cap;
     for (const card of cards) {
       const width = cardRatio(card) * height;
       card.style.width = `${width}px`;
@@ -100,11 +117,14 @@ if (files) {
 
 if (viewerMedia) {
   stabilizeViewerImage(viewerMedia);
+  syncViewerPreviewStatus();
   new MutationObserver(records => {
     for (const record of records) for (const node of record.addedNodes) stabilizeViewerImage(node);
-  }).observe(viewerMedia, { childList:true, subtree:true });
+    syncViewerPreviewStatus();
+  }).observe(viewerMedia, { childList:true, subtree:true, attributes:true, attributeFilter:['data-full-src','data-preview-only'] });
+  new MutationObserver(syncViewerPreviewStatus).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
 }
 
-window.addEventListener('mochimono:grid-laid-out', capJustifiedRows);
-mediaSize?.addEventListener('input', () => requestAnimationFrame(capJustifiedRows));
-requestAnimationFrame(capJustifiedRows);
+window.addEventListener('mochimono:grid-laid-out', normalizeJustifiedRows);
+mediaSize?.addEventListener('input', () => requestAnimationFrame(normalizeJustifiedRows));
+requestAnimationFrame(normalizeJustifiedRows);
