@@ -17,12 +17,14 @@ window.mochimonoViewerControls = { show: showControls, toggle: toggleControls };
 
 const zoom = { scale: 1, x: 0, y: 0 };
 const WHEEL_NAV_STEP = 100;
+const ZOOM_EXIT_GRACE_MS = 180;
 const viewerPageKeys = new Set(['PageUp', 'PageDown', 'Home', 'End']);
 let navState = null;
 let pan = null;
 let suppressClick = false;
 let clickTimer = 0;
 let wheelNavigationDelta = 0;
+let wheelNavigationBlockedUntil = 0;
 
 const image = () => viewerMedia?.querySelector('img') || null;
 const zoomed = () => zoom.scale > 1.01;
@@ -196,6 +198,12 @@ if (stage && viewer) {
       if (!image()) return;
       const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1;
       setScaleAt(zoom.scale * Math.exp(-event.deltaY * multiplier * (event.ctrlKey ? .006 : .0015)), event.clientX, event.clientY);
+      if (!zoomed()) wheelNavigationBlockedUntil = performance.now() + ZOOM_EXIT_GRACE_MS;
+    } else if (performance.now() < wheelNavigationBlockedUntil) {
+      // Consume the tail of the same wheel/trackpad gesture that just zoomed back
+      // to 1x. Without this tiny grace window, momentum from zoom-out immediately
+      // becomes a Next navigation event.
+      wheelNavigationDelta = 0;
     } else {
       // Browser pixel-wheel events are commonly about 100px per mouse-wheel notch;
       // line-mode wheels are commonly three lines. Normalize both into the same
@@ -263,6 +271,7 @@ if (stage && viewer) {
   new MutationObserver(() => {
     document.documentElement.classList.toggle('viewer-open', !viewer.hidden);
     wheelNavigationDelta = 0;
+    wheelNavigationBlockedUntil = 0;
     if (viewer.hidden) resetZoom();
     else showControls();
   }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
