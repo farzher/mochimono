@@ -20,35 +20,51 @@ let libraryWrapped = false;
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
 const px = value => `${Math.round(value * 100) / 100}px`;
 
-function normalizedFile(raw) {
+function normalizedFile(raw, previous = null) {
   if (!raw?.hash) return null;
+  const old = previous || {};
   return {
+    ...old,
     ...raw,
     hash: String(raw.hash),
-    filename: String(raw.filename || ''),
-    mime: String(raw.mime || ''),
-    width: Number(raw.width) || 0,
-    height: Number(raw.height) || 0,
-    size: Number(raw.size) || 0,
-    fileDate: raw.fileDate || raw.createdAt || 0,
-    addedAt: raw.addedAt || raw.createdAt || raw.fileDate || 0
+    filename: raw.filename == null ? String(old.filename || '') : String(raw.filename || ''),
+    mime: raw.mime == null ? String(old.mime || '') : String(raw.mime || ''),
+    width: raw.width == null ? Number(old.width) || 0 : Number(raw.width) || 0,
+    height: raw.height == null ? Number(old.height) || 0 : Number(raw.height) || 0,
+    size: raw.size == null ? Number(old.size) || 0 : Number(raw.size) || 0,
+    fileDate: raw.fileDate ?? raw.createdAt ?? old.fileDate ?? old.createdAt ?? 0,
+    addedAt: raw.addedAt ?? raw.createdAt ?? old.addedAt ?? old.createdAt ?? raw.fileDate ?? old.fileDate ?? 0
   };
 }
 
+function materialChange(previous, next) {
+  if (!previous) return true;
+  return previous.filename !== next.filename ||
+    previous.mime !== next.mime ||
+    Number(previous.width) !== Number(next.width) ||
+    Number(previous.height) !== Number(next.height) ||
+    Number(previous.size) !== Number(next.size) ||
+    String(previous.fileDate || '') !== String(next.fileDate || '') ||
+    String(previous.addedAt || '') !== String(next.addedAt || '');
+}
+
 function captureCatalog(items) {
-  if (!Array.isArray(items) || !items.length) return;
+  if (!Array.isArray(items) || !items.length) return false;
   let changed = false;
   for (const raw of items) {
-    const file = normalizedFile(raw);
+    const hash = String(raw?.hash || '');
+    if (!hash) continue;
+    const previous = metadata.get(hash) || null;
+    const file = normalizedFile(raw, previous);
     if (!file) continue;
-    const previous = metadata.get(file.hash);
-    metadata.set(file.hash, previous ? { ...previous, ...file } : file);
-    changed = true;
+    metadata.set(hash, file);
+    changed ||= materialChange(previous, file);
   }
   if (changed) {
     metadataRevision++;
     scheduleSync();
   }
+  return changed;
 }
 
 function captureRenderedDimensions() {
@@ -154,10 +170,6 @@ function hideLegacyEdges() {
   if (bottomSentinel) bottomSentinel.hidden = true;
 }
 
-function legacyState() {
-  return window.mochimonoLibrary?.state?.() || null;
-}
-
 function stableItems() {
   const library = window.mochimonoLibrary;
   const state = library?.state?.();
@@ -173,9 +185,14 @@ function stableItems() {
 }
 
 function signatureFor(data) {
-  const first = data.hashes[0] || '';
-  const last = data.hashes.at(-1) || '';
-  return `${data.state.sort}|${data.hashes.length}|${first}|${last}|${metadataRevision}`;
+  let hash = 2166136261;
+  for (const value of data.hashes) {
+    for (let index = 0; index < value.length; index++) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+  }
+  return `${data.state.sort}|${data.hashes.length}|${hash >>> 0}|${metadataRevision}`;
 }
 
 function syncStableGrid() {
@@ -216,9 +233,14 @@ function wrapLibrary() {
   const extend = library.extend?.bind(library);
   const ensureIndex = library.ensureIndex?.bind(library);
   const state = library.state?.bind(library);
+  const upsertMany = library.upsertMany?.bind(library);
 
   library.extend = direction => stableGrid.active() ? stableGrid.extend(direction) : extend?.(direction);
   library.ensureIndex = index => stableGrid.active() ? stableGrid.ensureIndex(index) : ensureIndex?.(index);
+  if (upsertMany) library.upsertMany = items => {
+    captureCatalog(items);
+    return upsertMany(items);
+  };
   library.state = () => {
     const base = state?.() || {};
     const virtual = stableGrid.state();
