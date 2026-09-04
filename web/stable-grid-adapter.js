@@ -126,7 +126,7 @@ function dayLabel(file) {
 }
 
 function ratioFor(file) {
-  return file.width && file.height ? Math.max(.65, Math.min(2.1, file.width / file.height)) : 4 / 3;
+  return file.width && file.height ? Math.max(.65, Math.min(2.1, file.width / file.height)) : 1;
 }
 
 function renderCard(file, box) {
