@@ -66,23 +66,21 @@ function captureCatalog(items) {
   return changed;
 }
 
-function captureRenderedDimensions() {
-  let changed = false;
-  for (const card of files?.querySelectorAll?.('[data-hash][data-width][data-height]') || []) {
-    const width = Number(card.dataset.width) || 0;
-    const height = Number(card.dataset.height) || 0;
-    if (!width || !height) continue;
-    const file = metadata.get(card.dataset.hash);
-    if (!file || (file.width === width && file.height === height)) continue;
-    metadata.set(card.dataset.hash, { ...file, width, height });
-    changed = true;
-  }
-  if (changed) metadataRevision++;
+function rememberGeometry(hash, width, height) {
+  hash = String(hash || '');
+  width = Number(width) || 0;
+  height = Number(height) || 0;
+  const previous = metadata.get(hash);
+  if (!previous || !width || !height || (previous.width === width && previous.height === height)) return;
+  // Keep the current row plane frozen. Learned dimensions are retained for the
+  // next intentional layout rebuild instead of reflowing rows during scrolling.
+  metadata.set(hash, { ...previous, width, height });
 }
 
 if (cache) {
   const load = cache.load?.bind(cache);
   const save = cache.save?.bind(cache);
+  const rememberDimensions = cache.rememberDimensions?.bind(cache);
   if (load) cache.load = async (...args) => {
     const value = await load(...args);
     captureCatalog(value?.files);
@@ -91,6 +89,10 @@ if (cache) {
   if (save) cache.save = async (items, ...args) => {
     captureCatalog(items);
     return save(items, ...args);
+  };
+  if (rememberDimensions) cache.rememberDimensions = (hash, width, height) => {
+    rememberGeometry(hash, width, height);
+    return rememberDimensions(hash, width, height);
   };
   load?.().then(value => captureCatalog(value?.files)).catch(() => {});
 }
@@ -176,9 +178,7 @@ function hideLegacyEdges() {
 function watchLegacyEdges() {
   edgeObserver?.disconnect();
   edgeObserver = new MutationObserver(() => hideLegacyEdges());
-  for (const sentinel of legacyEdges()) {
-    edgeObserver.observe(sentinel, { attributes: true, attributeFilter: ['hidden'] });
-  }
+  for (const sentinel of legacyEdges()) edgeObserver.observe(sentinel, { attributes: true, attributeFilter: ['hidden'] });
   hideLegacyEdges();
 }
 
@@ -210,7 +210,6 @@ function signatureFor(data) {
 function syncStableGrid() {
   syncFrame = 0;
   if (!window.mochimonoLibrary || !files) return scheduleSync();
-  captureRenderedDimensions();
   const data = stableItems();
   if (!data) {
     if (stableGrid.active()) {
