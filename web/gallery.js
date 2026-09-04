@@ -15,6 +15,7 @@ let lastFilesWidth = 0;
 let guardFrame = 0;
 let guardDirection = 1;
 let lastScrollY = window.scrollY;
+let ignoreNextScrollDirection = false;
 
 const style = document.createElement('style');
 style.textContent = `
@@ -168,7 +169,7 @@ function repackEdge(grid, direction, loose, width, target, gap) {
 
 function incrementalGrid(grid, width, target, gap) {
   cleanupRows(grid);
-  let rows = rowsIn(grid);
+  const rows = rowsIn(grid);
   const loose = directCards(grid);
   if (!rows.length) return rebuildGrid(grid, [...grid.querySelectorAll('.file-card')], width, target, gap);
   if (!loose.length) return syncLastRow(grid);
@@ -322,6 +323,32 @@ function layoutNow() {
   return true;
 }
 
+function visibleGuardAnchor() {
+  if (!files?.isConnected || window.scrollY <= 1) return null;
+  const top = Math.max(0, document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0);
+  const bounds = files.getBoundingClientRect();
+  const xs = [bounds.left + 8, (bounds.left + bounds.right) / 2, bounds.right - 8]
+    .map(x => Math.max(1, Math.min(innerWidth - 2, x)));
+  for (const y of [top + 2, top + 40, top + 80]) {
+    if (y >= innerHeight) break;
+    for (const x of xs) {
+      const card = document.elementFromPoint(x, y)?.closest?.('#files [data-hash]');
+      if (card) return { hash: card.dataset.hash, top: card.getBoundingClientRect().top };
+    }
+  }
+  return null;
+}
+
+function restoreGuardAnchor(anchor) {
+  if (!anchor?.hash) return;
+  const card = files.querySelector(`[data-hash="${CSS.escape(anchor.hash)}"]`);
+  if (!card) return;
+  const delta = card.getBoundingClientRect().top - anchor.top;
+  if (Math.abs(delta) <= .5) return;
+  ignoreNextScrollDirection = true;
+  window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
+}
+
 function guardMargin() {
   const top = Math.max(0, document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0);
   return Math.max(MIN_GUARD_PX, Math.max(300, innerHeight - top) * GUARD_SCREENS);
@@ -345,9 +372,11 @@ function needsGuard(direction) {
 function fillGuard() {
   guardFrame = 0;
   if (!needsGuard(guardDirection)) return;
+  const anchor = visibleGuardAnchor();
   if (!window.mochimonoLibrary?.extend?.(guardDirection)) return;
   layoutNow();
   guardFrame = requestAnimationFrame(fillGuard);
+  restoreGuardAnchor(anchor);
 }
 
 function scheduleGuard(direction = guardDirection) {
@@ -385,7 +414,8 @@ window.addEventListener('wheel', event => {
 
 window.addEventListener('scroll', () => {
   const next = window.scrollY;
-  if (Math.abs(next - lastScrollY) > 1) guardDirection = next < lastScrollY ? -1 : 1;
+  if (ignoreNextScrollDirection) ignoreNextScrollDirection = false;
+  else if (Math.abs(next - lastScrollY) > 1) guardDirection = next < lastScrollY ? -1 : 1;
   lastScrollY = next;
   scheduleGuard(guardDirection);
 }, { passive: true });
@@ -397,7 +427,6 @@ document.addEventListener('keydown', event => {
 
 window.addEventListener('mochimono:catalog-cache-restored', () => scheduleGuard(1));
 window.addEventListener('mochimono:catalog-updated', () => scheduleGuard(guardDirection));
-window.addEventListener('mochimono:grid-laid-out', () => scheduleGuard(guardDirection));
 
 const saved = Number(localStorage.getItem('mochimono-media-size')) || 170;
 const nearest = sizes.reduce((best, size) => Math.abs(size - saved) < Math.abs(best - saved) ? size : best, sizes[0]);
