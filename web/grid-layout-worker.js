@@ -181,7 +181,7 @@ function layoutFiles(files, config) {
     let sum = 0;
     for (let index = start; index < end; index++) sum += ratio(files[index]);
     const filledHeight = (width - gap * (count - 1)) / Math.max(.001, sum);
-    const height = fill ? filledHeight : target;
+    const height = fill && count > 1 ? Math.min(filledHeight, target * 1.42) : target;
     const row = rowStarts.length;
     rowStarts.push(start);
     rowCounts.push(count);
