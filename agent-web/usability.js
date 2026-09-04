@@ -25,7 +25,7 @@ if (menu && manageButton) {
   storageShortcut.type = 'button';
   storageShortcut.className = 'storage-shortcut';
   storageShortcut.innerHTML = `
-    <svg class="storage-shortcut-storage" viewBox="0 0 20 20" aria-hidden="true"><path d="M3.25 5.25h13.5v9.5H3.25z"/><path d="M5.25 12.25h1M8.5 12.25h6"/></svg>
+    <svg class="storage-shortcut-storage" viewBox="0 0 20 20" aria-hidden="true"><ellipse cx="10" cy="5" rx="6.5" ry="2.5"/><path d="M3.5 5v5c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5V5"/><path d="M3.5 10v5c0 1.4 2.9 2.5 6.5 2.5s6.5-1.1 6.5-2.5v-5"/></svg>
     <svg class="storage-shortcut-library" viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="3.5" width="5" height="5" rx=".7"/><rect x="11.5" y="3.5" width="5" height="5" rx=".7"/><rect x="3.5" y="11.5" width="5" height="5" rx=".7"/><rect x="11.5" y="11.5" width="5" height="5" rx=".7"/></svg>`;
   menu.before(storageShortcut);
   storageShortcut.addEventListener('click', () => manageButton.click());
