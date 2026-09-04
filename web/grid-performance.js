@@ -3,8 +3,8 @@ const viewer = document.querySelector('#viewer');
 let active = false;
 let until = 0;
 let timer = 0;
-let edgeFrame = 0;
-let edgeDirection = 0;
+let upwardEdgeFrame = 0;
+let upwardEdgeOffset = -1;
 
 function finish() {
   timer = 0;
@@ -55,40 +55,34 @@ function visibleTopAnchor() {
   return null;
 }
 
-function extendNearWheelEdge(direction) {
+function repairUpwardWheelEdge(expectedOffset) {
   const library = window.mochimonoLibrary;
   const state = library?.state?.();
-  if (!state || state.view === 'folders' || (viewer && !viewer.hidden)) return;
+  if (!state || state.view === 'folders' || !state.hasPrevious || state.offset !== expectedOffset || (viewer && !viewer.hidden)) return;
 
-  const upward = direction < 0;
-  if (upward ? !state.hasPrevious : !state.hasMore) return;
-  const sentinel = document.querySelector(upward ? '#top-scroll-sentinel' : '#scroll-sentinel');
-  if (!sentinel || sentinel.hidden) return;
-
-  const rect = sentinel.getBoundingClientRect();
-  const margin = 360;
-  if (upward ? rect.bottom < -margin : rect.top > innerHeight + margin) return;
+  const sentinel = document.querySelector('#top-scroll-sentinel');
+  if (!sentinel || sentinel.hidden || sentinel.getBoundingClientRect().bottom < -360) return;
 
   // At the physical document top library-app normally has no anchor. If this is
   // only the top of the current virtual window, preserve the visible card here so
-  // prepending gives the user fresh scroll headroom instead of leaving the top
-  // sentinel intersecting forever.
-  const anchor = upward && scrollY <= 4 ? visibleTopAnchor() : null;
-  if (!library.extend(direction)) return;
+  // prepending creates real upward scroll headroom instead of leaving the sentinel
+  // intersecting forever.
+  const anchor = scrollY <= 4 ? visibleTopAnchor() : null;
+  if (!library.extend(-1)) return;
   if (anchor?.card.isConnected) {
     const delta = anchor.card.getBoundingClientRect().top - anchor.top;
     if (Math.abs(delta) > .5) scrollBy({ top: delta, left: 0, behavior: 'auto' });
   }
 }
 
-function scheduleWheelEdge(direction) {
-  edgeDirection = direction;
-  if (edgeFrame) return;
-  edgeFrame = requestAnimationFrame(() => {
-    edgeFrame = 0;
-    const next = edgeDirection;
-    edgeDirection = 0;
-    extendNearWheelEdge(next);
+function scheduleUpwardWheelEdge() {
+  const state = window.mochimonoLibrary?.state?.();
+  if (!state?.hasPrevious || state.view === 'folders') return;
+  upwardEdgeOffset = state.offset;
+  if (upwardEdgeFrame) return;
+  upwardEdgeFrame = requestAnimationFrame(() => {
+    upwardEdgeFrame = 0;
+    repairUpwardWheelEdge(upwardEdgeOffset);
   });
 }
 
@@ -96,7 +90,7 @@ window.mochimonoGridInteraction = { active: () => active, pulse, release };
 
 window.addEventListener('scroll', () => pulse(140), { passive: true });
 window.addEventListener('wheel', event => {
-  if (!event.deltaY || Math.abs(event.deltaY) <= Math.abs(event.deltaX) || (viewer && !viewer.hidden)) return;
-  scheduleWheelEdge(event.deltaY < 0 ? -1 : 1);
+  if (event.deltaY >= 0 || Math.abs(event.deltaY) <= Math.abs(event.deltaX) || (viewer && !viewer.hidden)) return;
+  scheduleUpwardWheelEdge();
 }, { passive: true, capture: true });
 window.addEventListener('blur', release);
