@@ -1,5 +1,7 @@
 const files = document.querySelector('#files');
 const mediaSize = document.querySelector('#mediaSize');
+const viewerMedia = document.querySelector('#viewer-media');
+const viewerName = document.querySelector('#viewer-name');
 
 const style = document.createElement('style');
 style.textContent = `
@@ -46,6 +48,18 @@ function imagesIn(node) {
   return result;
 }
 
+function stabilizeViewerImage(node) {
+  if (!(node instanceof Element)) return;
+  const image = node.matches('#viewer-media>img') ? node : node.querySelector?.('#viewer-media>img');
+  if (!(image instanceof HTMLImageElement)) return;
+  const name = String(image.alt || viewerName?.textContent || '');
+  if (!/\.hei[cf]$/i.test(name)) return;
+  // Chromium/Windows does not reliably decode the original HEIC. Keep the
+  // generated WebP preview instead of letting library-app swap it for a broken
+  // original after the thumbnail has rendered successfully.
+  image.removeAttribute('data-full-src');
+}
+
 function cardRatio(card) {
   const width = Number(card.dataset.width) || 0;
   const height = Number(card.dataset.height) || 0;
@@ -82,6 +96,13 @@ if (files) {
       }
     }
   }).observe(files, { childList:true, subtree:true });
+}
+
+if (viewerMedia) {
+  stabilizeViewerImage(viewerMedia);
+  new MutationObserver(records => {
+    for (const record of records) for (const node of record.addedNodes) stabilizeViewerImage(node);
+  }).observe(viewerMedia, { childList:true, subtree:true });
 }
 
 window.addEventListener('mochimono:grid-laid-out', capJustifiedRows);
