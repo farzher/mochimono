@@ -24,13 +24,30 @@ style.textContent = `
 
   #storagePane [data-preview-progress]{display:block;margin-top:10px;padding-top:8px;border-top:1px solid #211e21}
   #storagePane .preview-progress-head{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:9px;line-height:1.2}
-  #storagePane .preview-progress-title{flex:0 0 auto;color:#a69d9a;font-weight:650}
-  #storagePane [data-preview-progress-text]{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#746e6e}
+  #storagePane .preview-progress-title{display:flex;align-items:center;gap:5px;flex:0 0 auto;color:#a69d9a;font-weight:650}
+  #storagePane .preview-progress-title:before{content:'';width:5px;height:5px;border-radius:50%;background:#655e60;opacity:.75}
+  #storagePane [data-preview-progress-text]{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#746e6e;font-variant-numeric:tabular-nums}
   #storagePane [data-preview-percent]{flex:0 0 auto;color:#bdb3af;font-variant-numeric:tabular-nums;font-weight:700}
   #storagePane .preview-progress-track{position:relative;height:4px;margin-top:6px;overflow:hidden;border-radius:999px;background:#292429}
-  #storagePane .preview-progress-track>i{position:absolute;inset:0;background:#e99b95;transform:scaleX(var(--preview-progress,0));transform-origin:left center;transition:transform .75s cubic-bezier(.22,1,.36,1);will-change:transform}
+  #storagePane .preview-progress-track>i{position:absolute;inset:0;background:#e99b95;transform:scaleX(var(--preview-progress,0));transform-origin:left center;transition:transform .5s cubic-bezier(.22,1,.36,1),opacity .2s ease;will-change:transform}
   #storagePane [data-preview-progress].preview-indeterminate .preview-progress-track>i{width:34%;transform:none;animation:preview-progress-slide 1.35s ease-in-out infinite}
+
+  #storagePane [data-preview-progress].preview-active .preview-progress-title:before{background:#e99b95;opacity:1;animation:preview-dot-pulse .9s ease-in-out infinite}
+  #storagePane [data-preview-progress].preview-active .preview-progress-track>i:after{content:'';position:absolute;inset:0;width:38%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.38),transparent);transform:translateX(-130%);animation:preview-progress-sheen 1.15s linear infinite}
+  #storagePane [data-preview-progress].preview-active [data-preview-progress-text]{color:#a99e9c}
+  #storagePane [data-preview-progress].preview-queued .preview-progress-title:before{background:#7b7375;opacity:.58}
+  #storagePane [data-preview-progress].preview-queued .preview-progress-track>i{opacity:.48}
+  #storagePane [data-preview-progress].preview-queued [data-preview-progress-text]{color:#6f696a}
+  #storagePane [data-preview-progress].preview-checking .preview-progress-title:before{background:#9b8f90;animation:preview-dot-soft 1.5s ease-in-out infinite}
+  #storagePane [data-preview-progress].preview-waiting .preview-progress-title:before,
+  #storagePane [data-preview-progress].preview-paused .preview-progress-title:before{opacity:.35}
+  #storagePane [data-preview-progress].preview-waiting .preview-progress-track>i,
+  #storagePane [data-preview-progress].preview-paused .preview-progress-track>i{animation:none!important;opacity:.32}
+
   @keyframes preview-progress-slide{0%{transform:translateX(-110%)}50%{transform:translateX(100%)}100%{transform:translateX(310%)}}
+  @keyframes preview-progress-sheen{to{transform:translateX(360%)}}
+  @keyframes preview-dot-pulse{0%,100%{transform:scale(.72);opacity:.55}50%{transform:scale(1.18);opacity:1}}
+  @keyframes preview-dot-soft{0%,100%{opacity:.35}50%{opacity:.9}}
 
   html.background-paused [data-folder-status][data-waiting-idle="1"]:after{content:'Paused'}
   html.background-paused .folder-item[data-waiting-idle="1"] .inline-progress-head strong{font-size:0}
@@ -46,7 +63,7 @@ style.textContent = `
     .preview-mode-popover{right:-2px;width:244px}
   }
   @media(prefers-reduced-motion:reduce){
-    #storagePane .preview-progress-track>i{transition:none!important;animation:none!important}
+    #storagePane .preview-progress-track>i,#storagePane .preview-progress-track>i:after,#storagePane .preview-progress-title:before{transition:none!important;animation:none!important}
   }
 `;
 document.head.append(style);
