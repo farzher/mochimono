@@ -410,7 +410,7 @@ const server = http.createServer(async (req, res) => {
     if (await handleServerAuth(req, res, url)) return;
     if (url.pathname.startsWith('/api/')) {
       if (!requireAuth(req, res)) return;
-      for (const route of featureRoutes) if (await route(req, res, url)) return;
+      for (const route of featureRoutes) if (await route(req, res, url) || res.headersSent) return;
       return await handleCoreApi(req, res, url);
     }
     if (await serveStatic(res, decodeURIComponent(url.pathname))) return;
