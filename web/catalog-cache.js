@@ -1,3 +1,5 @@
+import './startup-geometry.js';
+
 const DB_NAME = 'mochimono-library';
 const DB_VERSION = 1;
 const SCHEMA = 1;
@@ -76,7 +78,7 @@ function memorySnapshot() {
   return {
     version: String(meta.version),
     imports: Array.isArray(meta.imports) ? meta.imports : [],
-    files: [...records.values()].map(publicFile),
+    files: [...records.values()].map(file => publicFile(mergeGeometry(file))),
     savedAt: Number(meta.savedAt) || 0
   };
 }
