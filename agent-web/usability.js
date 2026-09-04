@@ -48,6 +48,7 @@ style.textContent = `
   .storage-shortcut svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.45;stroke-linecap:round;stroke-linejoin:round}
   .storage-shortcut .storage-shortcut-library{display:none}
   .storage-shortcut.active .storage-shortcut-storage{display:none}
+  .storage-shortcut.active .storage-shortcut-library{display:block}
   [data-folder-status][data-waiting-idle="1"]{font-size:0}
   [data-folder-status][data-waiting-idle="1"]:after{content:'Waiting for idle';font-size:9px;color:#b9aaa5}
   .folder-item[data-waiting-idle="1"] .item-progress .progress-bar.indeterminate>i{animation:none!important;transform:none!important;left:0!important;opacity:.45}
