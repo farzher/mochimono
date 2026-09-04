@@ -28,22 +28,14 @@ if (viewer && compare && original && optimized) {
   let pinch = null;
 
   const active = () => viewer.classList.contains('image-optimize-active');
-
-  function loadingReady() {
-    const loading = compare.querySelector('[data-opt-loading]');
-    return !loading || loading.hidden;
-  }
-
-  function clamp(value, min, max) {
-    return Math.max(min, Math.min(max, value));
-  }
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
   function clampPan() {
     const rect = compare.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    // Unlike the normal viewer, Optimize is a workspace: even at the fitted
-    // 1× size (and below it), the image can be moved around for inspection.
-    // Keep a generous bound only so the image cannot be lost completely.
+    // Optimize is a workspace rather than a constrained photo viewer. Keep the
+    // image movable at fitted size and below, only preventing it from becoming
+    // completely lost offscreen.
     const extraX = rect.width * Math.max(0, zoom.scale - 1) / 2;
     const extraY = rect.height * Math.max(0, zoom.scale - 1) / 2;
     const maxX = rect.width * .9 + extraX;
@@ -141,7 +133,7 @@ if (viewer && compare && original && optimized) {
   }
 
   compare.addEventListener('pointerdown', event => {
-    if (!active() || !loadingReady()) return;
+    if (!active()) return;
     pointers.set(event.pointerId, { id:event.pointerId, x:event.clientX, y:event.clientY });
     try { compare.setPointerCapture(event.pointerId); } catch {}
 
