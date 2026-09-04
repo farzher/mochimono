@@ -3,11 +3,12 @@ const viewerMedia = document.querySelector('#viewer-media');
 const viewerOpen = document.querySelector('#viewer-open');
 const viewerName = document.querySelector('#viewer-name');
 const viewerMenu = document.querySelector('#viewer-menu');
+const CLIENT = document.documentElement.classList.contains('client-library');
 
 const SUPPORTED = new Set(['jpg','jpeg','png','webp','avif','bmp','gif','tif','tiff']);
 const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
 const currentHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
-const currentImage = () => Boolean(viewerMedia?.querySelector(':scope > img')) && SUPPORTED.has(extension(viewerName?.textContent));
+const currentImage = () => CLIENT && Boolean(viewerMedia?.querySelector(':scope > img')) && SUPPORTED.has(extension(viewerName?.textContent));
 
 const style = document.createElement('style');
 style.textContent = `
@@ -30,7 +31,7 @@ style.textContent = `
 .image-optimize-presets{display:flex;gap:5px}.image-optimize-presets button{padding:6px 10px;border-radius:7px;background:transparent;color:#918a87;font-size:11px}.image-optimize-presets button:hover{background:#242124;color:#ddd}.image-optimize-presets button.active{background:#2a2729;color:#f3edeb}
 .image-optimize-advanced{font-size:11px;color:#8f8785}.image-optimize-advanced summary{width:max-content;cursor:pointer;list-style:none;color:#8f8785}.image-optimize-advanced summary::-webkit-details-marker{display:none}.image-optimize-advanced summary:after{content:' ▾'}.image-optimize-advanced[open] summary:after{content:' ▴'}
 .image-optimize-advanced-grid{display:grid;grid-template-columns:minmax(180px,1fr) 150px auto;gap:10px;align-items:end;margin-top:10px}.image-optimize-advanced label{display:grid;gap:5px}.image-optimize-advanced input[type=range]{width:100%;accent-color:#dba19b}.image-optimize-advanced select{width:100%;background:#201e20;color:#ddd;border:0;border-radius:7px;padding:7px 8px}.image-optimize-lossless{display:flex!important;align-items:center;gap:6px!important;padding-bottom:7px;white-space:nowrap}.image-optimize-lossless input{width:auto}.image-optimize-update{justify-self:start;padding:7px 9px;border-radius:7px;background:#262326;color:#d9d1ce;font-size:11px}
-.image-optimize-foot{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid rgba(255,255,255,.08);background:#111}.image-optimize-foot-status{min-width:0;flex:1;color:#817977;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.image-optimize-foot button{padding:8px 11px;border-radius:7px;font-size:11px}.image-optimize-keep{background:#242124;color:#ddd}.image-optimize-replace{background:#eee8e4;color:#171316}.image-optimize-foot button:disabled{opacity:.35;cursor:default}
+.image-optimize-foot{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid rgba(255,255,255,.08);background:#111}.image-optimize-foot-status{min-width:0;flex:1;color:#817977;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.image-optimize-foot button{padding:8px 11px;border-radius:7px;font-size:11px}.image-optimize-keep{background:#242124;color:#ddd}.image-optimize-replace{background:#eee8e4;color:#171316}.image-optimize-foot button:disabled,.image-optimize-controls button:disabled,.image-optimize-controls input:disabled,.image-optimize-controls select:disabled{opacity:.35;cursor:default}
 @media(max-width:700px){.image-optimize-dialog{width:100vw;height:100dvh;border-radius:0}.image-optimize-head{height:48px}.image-optimize-main{grid-template-rows:minmax(260px,58dvh) auto}.image-optimize-controls{padding:12px}.image-optimize-result strong{font-size:16px}.image-optimize-advanced-grid{grid-template-columns:1fr 110px}.image-optimize-lossless,.image-optimize-update{grid-column:1/-1}.image-optimize-foot{padding:10px 12px}.image-optimize-foot-status{display:none}.image-optimize-foot button{flex:1}.image-optimize-label{top:9px}.image-optimize-label.original{left:9px}.image-optimize-label.optimized{right:9px}}
 `;
 document.head.append(style);
@@ -68,7 +69,7 @@ dialog.innerHTML = `<div class="image-optimize-shell">
       </details>
     </div>
   </div>
-  <div class="image-optimize-foot"><span class="image-optimize-foot-status" data-opt-status>No resize · metadata preserved</span><button class="image-optimize-keep" data-opt-keep type="button" disabled>Keep both</button><button class="image-optimize-replace" data-opt-replace type="button" disabled>Replace original</button></div>
+  <div class="image-optimize-foot"><span class="image-optimize-foot-status" data-opt-status>No resize · metadata copied where supported</span><button class="image-optimize-keep" data-opt-keep type="button" disabled>Keep both</button><button class="image-optimize-replace" data-opt-replace type="button" disabled>Replace original</button></div>
 </div>`;
 document.body.append(dialog);
 
@@ -86,6 +87,7 @@ const losslessRow = dialog.querySelector('[data-opt-lossless-row]');
 const keep = dialog.querySelector('[data-opt-keep]');
 const replace = dialog.querySelector('[data-opt-replace]');
 const presets = dialog.querySelector('[data-opt-presets]');
+const updateButton = dialog.querySelector('[data-opt-update]');
 let activeId = '';
 let activeHash = '';
 let session = null;
@@ -125,7 +127,12 @@ function syncButton() {
   button.hidden = !currentImage() || !currentHash();
 }
 
+function setControlsDisabled(disabled) {
+  for (const control of [...presets.querySelectorAll('button'), quality, effort, lossless, updateButton]) control.disabled = disabled;
+}
+
 function setBusy(text) {
+  setControlsDisabled(true);
   loading.hidden = false;
   loading.textContent = text || 'Preparing…';
   keep.disabled = true;
@@ -134,6 +141,7 @@ function setBusy(text) {
 }
 
 function showError(message) {
+  setControlsDisabled(false);
   loading.hidden = false;
   loading.textContent = message || 'Could not optimize this image';
   status.textContent = '';
@@ -231,10 +239,11 @@ async function renderReady(data) {
   if (!dialog.open || data.id !== activeId) return;
   setSplit(50);
   loading.hidden = true;
+  setControlsDisabled(false);
   const percent = Math.max(0, Number(selected.percent) || 0);
   const verdict = data.worthwhile ? `<span class="good">${percent.toFixed(0)}% smaller</span>` : '<span class="quiet">Already fairly efficient</span>';
   result.innerHTML = `<strong>${bytes(data.sourceSize)} → ${bytes(selected.size)}</strong>${verdict}<span>${selected.label}${data.options?.effort === 'max' ? ' · max effort' : ''}</span>`;
-  status.textContent = `No resize · metadata preserved · ${Number(data.width).toLocaleString()}×${Number(data.height).toLocaleString()}`;
+  status.textContent = `No resize · metadata copied where supported · ${Number(data.width).toLocaleString()}×${Number(data.height).toLocaleString()}`;
   keep.disabled = false;
   replace.disabled = false;
 }
@@ -242,6 +251,7 @@ async function renderReady(data) {
 async function commit(mode) {
   if (!session?.selected || session.status !== 'ready') return;
   if (mode === 'replace' && !confirm(`Replace ${session.filename} with the optimized ${session.selected.format.toUpperCase()}?\n\nThe optimized file is verified before the original is removed.`)) return;
+  setControlsDisabled(true);
   keep.disabled = true;
   replace.disabled = true;
   loading.hidden = false;
@@ -270,7 +280,7 @@ async function commit(mode) {
 }
 
 function openOptimizer(hash = currentHash()) {
-  if (!hash) return;
+  if (!CLIENT || !hash) return;
   activeHash = hash;
   activeId = '';
   session = null;
@@ -295,6 +305,7 @@ dialog.addEventListener('close', () => {
   activeId = '';
   activeHash = '';
   session = null;
+  setControlsDisabled(false);
   original.removeAttribute('src');
   optimized.removeAttribute('src');
 });
@@ -306,7 +317,7 @@ quality.addEventListener('input', () => {
   quality.dataset.userChanged = '1';
   qualityLabel.textContent = quality.value;
 });
-dialog.querySelector('[data-opt-update]').addEventListener('click', startPreview);
+updateButton.addEventListener('click', startPreview);
 keep.addEventListener('click', () => commit('keep'));
 replace.addEventListener('click', () => commit('replace'));
 
