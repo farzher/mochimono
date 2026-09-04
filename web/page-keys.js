@@ -58,9 +58,33 @@ function editingControl(target) {
   return Boolean(target?.closest?.('input,select,textarea,[contenteditable="true"]'));
 }
 
+function viewportTop() {
+  return Math.max(0, commandbar?.getBoundingClientRect().bottom || 0);
+}
+
 function pageDistance() {
-  const top = Math.max(0, commandbar?.getBoundingClientRect().bottom || 0);
-  return Math.max(160, innerHeight - top - 36);
+  return Math.max(160, innerHeight - viewportTop() - 36);
+}
+
+function warmDestination(direction, distance) {
+  const thumbnails = window.mochimonoThumbnails;
+  if (!files || !thumbnails?.prioritize) return;
+
+  // Warm three viewports centered on the destination: one behind, the page
+  // being revealed, and one ahead. The stable grid already keeps these cards in
+  // DOM overscan, so this starts fetch/decode before the page jump can paint a
+  // placeholder. It also makes rapid repeated PageUp/PageDown presses warm the
+  // following page before it becomes visible.
+  const shift = direction * distance;
+  const start = viewportTop() + shift - distance;
+  const end = innerHeight + shift + distance;
+  const cards = [];
+  for (const card of files.querySelectorAll('[data-hash]')) {
+    const rect = card.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= start || rect.top >= end) continue;
+    cards.push(card);
+  }
+  if (cards.length) thumbnails.prioritize(cards);
 }
 
 function canExtend(direction) {
@@ -72,7 +96,7 @@ function shouldPreExtend(direction, distance) {
   if (!canExtend(direction)) return false;
   if (direction < 0) {
     const rect = document.querySelector('#top-scroll-sentinel')?.getBoundingClientRect();
-    const top = Math.max(0, commandbar?.getBoundingClientRect().bottom || 0);
+    const top = viewportTop();
     return Boolean(rect && rect.bottom >= top - EDGE_MARGIN - distance);
   }
   const rect = document.querySelector('#scroll-sentinel')?.getBoundingClientRect();
@@ -81,11 +105,11 @@ function shouldPreExtend(direction, distance) {
 
 function visibleAnchor() {
   if (!files) return null;
-  const viewportTop = Math.max(0, commandbar?.getBoundingClientRect().bottom || 0);
+  const top = viewportTop();
   const bounds = files.getBoundingClientRect();
   const xs = [bounds.left + 8, (bounds.left + bounds.right) / 2, bounds.right - 8]
     .map(x => Math.max(1, Math.min(innerWidth - 2, x)));
-  for (const y of [viewportTop + 2, viewportTop + 40, viewportTop + 80, viewportTop + 120]) {
+  for (const y of [top + 2, top + 40, top + 80, top + 120]) {
     if (y >= innerHeight) break;
     for (const x of xs) {
       const card = document.elementFromPoint(x, y)?.closest?.('#files [data-hash]');
@@ -133,6 +157,7 @@ function release() {
   clearTimeout(releaseTimer);
   releaseTimer = 0;
   queuedDirection = 0;
+  window.mochimonoThumbnails?.clearPriority?.();
   window.mochimonoGridInteraction?.release?.();
 }
 
@@ -151,9 +176,16 @@ function finishPage(generation) {
 
 function doExactScroll(direction, distance, generation) {
   if (generation !== motionGeneration) return;
-  const start = window.scrollY;
-  window.scrollTo({ top: start + direction * distance, left: 0, behavior: 'auto' });
-  requestAnimationFrame(() => finishPage(generation));
+  warmDestination(direction, distance);
+  // Give the browser one paint cycle to dispatch the eager image requests and
+  // begin decode before those cards can become visible. This is one frame, not a
+  // wait for I/O, so PageUp/PageDown remains immediate even with a cold cache.
+  requestAnimationFrame(() => {
+    if (generation !== motionGeneration) return;
+    const start = window.scrollY;
+    window.scrollTo({ top: start + direction * distance, left: 0, behavior: 'auto' });
+    requestAnimationFrame(() => finishPage(generation));
+  });
 }
 
 function runPage(direction) {
@@ -166,6 +198,11 @@ function runPage(direction) {
   const distance = pageDistance();
   window.mochimonoGridInteraction?.pulse?.(220);
 
+  // Usually the stable grid already has the destination in its 3.25-screen DOM
+  // overscan. Start those thumbnails now, before any edge-extension work, to
+  // maximize lead time. doExactScroll repeats this after extension in case rows
+  // had to be materialized first.
+  warmDestination(direction, distance);
   preparePage(direction, distance, generation, () => doExactScroll(direction, distance, generation));
 }
 
@@ -196,7 +233,9 @@ function jumpEdge(key) {
       window.mochimonoThumbnails?.prioritize?.([card]);
     }
     setTimeout(() => {
-      if (generation === motionGeneration) window.mochimonoGridInteraction?.release?.();
+      if (generation !== motionGeneration) return;
+      window.mochimonoThumbnails?.clearPriority?.();
+      window.mochimonoGridInteraction?.release?.();
     }, 70);
   });
   return true;
