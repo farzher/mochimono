@@ -1,3 +1,5 @@
+import './startup-geometry.js';
+
 const DB_NAME = 'mochimono-library';
 const DB_VERSION = 1;
 const SCHEMA = 1;
@@ -64,6 +66,8 @@ function publicFile(file) {
 function mergeGeometry(file) {
   const hash = String(file?.hash || '');
   if (Number(file.width) > 0 && Number(file.height) > 0) return file;
+  const startup = window.mochimonoStartupGeometry?.get?.(hash);
+  if (startup?.width && startup?.height) return { ...file, width: startup.width, height: startup.height };
   const pending = pendingGeometry.get(hash);
   if (pending?.width && pending?.height) return { ...file, width: pending.width, height: pending.height };
   const previous = records.get(hash);
@@ -76,7 +80,7 @@ function memorySnapshot() {
   return {
     version: String(meta.version),
     imports: Array.isArray(meta.imports) ? meta.imports : [],
-    files: [...records.values()].map(publicFile),
+    files: [...records.values()].map(file => publicFile(mergeGeometry(file))),
     savedAt: Number(meta.savedAt) || 0
   };
 }
