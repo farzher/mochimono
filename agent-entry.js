@@ -26,13 +26,22 @@ registerHooks({
   }
 });
 
-const [{ startThumbnailAgent }, { startMediaMetadataAgent }, { startProtectionAgent }] = await Promise.all([
+const [
+  { startThumbnailAgent },
+  { startMediaMetadataAgent },
+  { startProtectionAgent },
+  { startBrowseFastDedupe },
+  { invalidateClientProviders }
+] = await Promise.all([
   import('./lib/thumbnail-agent.js'),
   import('./lib/media-metadata-agent.js'),
-  import('./lib/protection-agent.js')
+  import('./lib/protection-agent.js'),
+  import('./lib/browse-fast-dedupe.js'),
+  import('./lib/client-providers.js')
 ]);
 
 startThumbnailAgent();
 startMediaMetadataAgent();
 startProtectionAgent().catch(error => console.error('Protection agent failed', error));
 await import('./agent.js');
+startBrowseFastDedupe(invalidateClientProviders);
