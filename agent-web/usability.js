@@ -113,9 +113,46 @@ if (folders) new MutationObserver(records => {
 let progressTimer = 0;
 let progressBusy = false;
 const previewMemory = new Map();
+const previewDriveOwners = new Map();
 let latestFolderStats = [];
 
 const previewMode = () => window.mochimonoPreviewMode?.() || 'idle';
+const previewDrive = value => {
+  const text = String(value || '');
+  const match = text.match(/^([a-z]:)[\\/]/i);
+  return match ? match[1].toLowerCase() : '/';
+};
+const folderName = value => String(value || '').split(/[\\/]/).filter(Boolean).at(-1) || String(value || '');
+
+function syncPreviewDriveOwners(stats) {
+  const byPath = new Map((stats || []).map(folder => [pathKey(folder.path), folder]));
+  const drives = new Map();
+  for (const folder of stats || []) {
+    if (Number(folder.previewQueueActive) <= 0) continue;
+    const drive = previewDrive(folder.path);
+    if (!drives.has(drive)) drives.set(drive, folder.path);
+  }
+  for (const [drive, owner] of previewDriveOwners) {
+    if (drives.has(drive)) continue;
+    const folder = byPath.get(pathKey(owner));
+    if (folder?.previewWarming) drives.set(drive, owner);
+  }
+  for (const folder of stats || []) {
+    const drive = previewDrive(folder.path);
+    if (!drives.has(drive) && folder.previewWarming) drives.set(drive, folder.path);
+  }
+  previewDriveOwners.clear();
+  for (const [drive, owner] of drives) previewDriveOwners.set(drive, owner);
+}
+
+function formatEta(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '';
+  if (seconds < 90) return `~${Math.max(10, Math.round(seconds / 10) * 10)}s`;
+  if (seconds < 3600) return `~${Math.max(1, Math.round(seconds / 60))}m`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+  return `~${hours}h${minutes ? ` ${minutes}m` : ''}`;
+}
 
 function previewInfo(folder) {
   const key = pathKey(folder.path);
@@ -123,6 +160,8 @@ function previewInfo(folder) {
   const phase = String(folder.previewPhase || '');
   const mode = previewMode();
   const waiting = Boolean(folder.previewWaiting);
+  const driveOwner = previewDriveOwners.get(previewDrive(folder.path)) || '';
+  const driveBlocked = Boolean(folder.previewWarming && driveOwner && pathKey(driveOwner) !== key);
   let total = Number(folder.previewTotal) || 0;
   let processed = Number(folder.previewProcessed) || 0;
   let ready = Number(folder.previewReady) || 0;
@@ -134,6 +173,19 @@ function previewInfo(folder) {
   const workerActive = Number(folder.previewQueueActive) || 0;
   const complete = total ? Math.min(total, ready + failed + deferred + generated) : ready + failed + deferred + generated;
   const remaining = total ? Math.max(0, total - complete) : 0;
+  const now = Date.now();
+  let rate = Number(previous?.rate) || 0;
+  let lastGeneratedAt = Number(previous?.lastGeneratedAt) || 0;
+  if (previous && workerActive > 0 && generated > Number(previous.generated || 0)) {
+    const elapsed = Math.max(.001, (now - Number(previous.sampleAt || now)) / 1000);
+    const instant = (generated - Number(previous.generated || 0)) / elapsed;
+    rate = rate > 0 ? rate * .7 + instant * .3 : instant;
+    lastGeneratedAt = now;
+  } else if (lastGeneratedAt && now - lastGeneratedAt > 15_000) rate = 0;
+  const scanComplete = total > 0 && processed >= total;
+  const eta = scanComplete && !driveBlocked && workerActive > 0 && generated >= 8 && rate > 0
+    ? formatEta(remaining / rate)
+    : '';
 
   if (!phase) {
     if (!previous) return null;
@@ -143,9 +195,9 @@ function previewInfo(folder) {
     const done = previous.done;
     return {
       key, phase:'', total, processed, failed:previous.failed || 0, deferred:previous.deferred || 0, generated:previous.generated || 0, queued:0,
-      text:done ? 'Ready' : mode === 'off' ? 'Paused' : waiting ? 'Waiting for idle' : 'Queued',
+      text:done ? 'Ready' : mode === 'off' ? 'Paused' : waiting ? 'Waiting for idle' : driveBlocked ? 'Next' : 'Working',
       percent:previous.percent || '', ratio:previous.ratio || 0, indeterminate:false,
-      done, waiting, state:waiting ? 'waiting' : 'queued', working:!done && mode !== 'off' && !waiting
+      done, waiting, driveBlocked, driveOwner, state:waiting ? 'waiting' : 'queued', working:!done && mode !== 'off' && !waiting && !driveBlocked
     };
   }
 
@@ -162,38 +214,40 @@ function previewInfo(folder) {
     text = 'Ready';
     state = 'done';
   } else if (mode === 'off') {
-    text = total && remaining ? `Paused · ${remaining.toLocaleString()} left` : 'Paused';
+    text = 'Paused';
     state = 'paused';
   } else if (waiting) {
-    text = total && remaining ? `Waiting for idle · ${remaining.toLocaleString()} left` : 'Waiting for idle';
+    text = 'Waiting for idle';
     state = 'waiting';
+  } else if (driveBlocked) {
+    text = 'Next';
+    state = 'queued';
   } else if (workerActive > 0) {
-    text = total && remaining ? `Generating · ${remaining.toLocaleString()} left` : `Generating · ${workerActive.toLocaleString()} active`;
+    text = eta ? `Generating · ${eta}` : 'Generating';
     state = 'active';
     indeterminate = !total;
-  } else if (workerQueued > 0) {
-    text = total && remaining ? `Queued · ${remaining.toLocaleString()} left` : `Queued · ${workerQueued.toLocaleString()}`;
-    state = 'queued';
-    indeterminate = !total;
   } else if (phase === 'checking') {
-    text = processed ? `Checking · ${processed.toLocaleString()}` : 'Checking';
+    text = 'Checking';
     state = 'checking';
-    indeterminate = true;
-  } else if (phase === 'generating') {
-    text = total && remaining ? `Preparing · ${remaining.toLocaleString()} left` : 'Preparing';
+    indeterminate = !total;
+  } else if (workerQueued > 0 || phase === 'generating') {
+    text = 'Starting';
     state = 'queued';
     indeterminate = !total;
   } else {
     text = 'Working';
     state = 'checking';
-    indeterminate = true;
+    indeterminate = !total;
   }
 
   const info = {
-    key, phase, total, processed, ready, failed, deferred, generated, queued, text, percent, ratio, indeterminate, done, waiting, state,
-    working: Boolean(folder.previewWarming && mode !== 'off' && !waiting)
+    key, phase, total, processed, ready, failed, deferred, generated, queued, text, percent, ratio, indeterminate, done, waiting,
+    driveBlocked, driveOwner, state, working: Boolean(folder.previewWarming && mode !== 'off' && !waiting && !driveBlocked)
   };
-  previewMemory.set(key, { total, processed, ready, failed, deferred, generated, done, percent, ratio });
+  previewMemory.set(key, {
+    total, processed, ready, failed, deferred, generated, done, percent, ratio,
+    rate, sampleAt:now, lastGeneratedAt
+  });
   return info;
 }
 
@@ -212,6 +266,7 @@ function previewNode(row) {
 
 function renderPreviewProgress(stats) {
   const byPath = new Map((stats || []).map(folder => [pathKey(folder.path), folder]));
+  syncPreviewDriveOwners(stats);
   let warming = false;
   for (const row of folders?.querySelectorAll(':scope > [data-folder-path]') || []) {
     const folder = byPath.get(pathKey(row.dataset.folderPath));
@@ -243,11 +298,12 @@ function renderPreviewProgress(stats) {
     node.querySelector('[data-preview-progress-text]').textContent = info.text;
     node.querySelector('[data-preview-percent]').textContent = info.percent;
     node.style.setProperty('--preview-progress', String(info.ratio));
-    node.title = info.state === 'active' ? 'Generating thumbnails now'
-      : info.state === 'queued' ? 'Waiting for a thumbnail worker'
-        : info.state === 'checking' ? 'Checking the thumbnail cache'
-          : info.state === 'waiting' ? 'Waiting until this computer is idle'
-            : 'Background thumbnails paused';
+    node.title = info.driveBlocked ? `Next after ${folderName(info.driveOwner)} on this drive`
+      : info.state === 'active' ? 'Generating thumbnails now'
+        : info.state === 'queued' ? 'Starting thumbnail workers'
+          : info.state === 'checking' ? 'Checking the thumbnail cache'
+            : info.state === 'waiting' ? 'Waiting until this computer is idle'
+              : 'Background thumbnails paused';
   }
   return warming;
 }
@@ -304,11 +360,13 @@ function diagnosticsText(stats, state) {
   } else lines.push('Job         none');
 
   for (const folder of stats || []) {
-    const name = String(folder.path || '').split(/[\\/]/).filter(Boolean).at(-1) || folder.path || 'Folder';
+    const name = folderName(folder.path) || 'Folder';
     const tracker = diagnosticProgress(folder);
     const unchanged = now - tracker.changedAt;
     const phase = String(folder.previewPhase || '');
-    const activelyWorking = folder.previewWarming && !folder.previewWaiting && previewMode() !== 'off';
+    const driveOwner = previewDriveOwners.get(previewDrive(folder.path)) || '';
+    const driveBlocked = Boolean(folder.previewWarming && driveOwner && pathKey(driveOwner) !== pathKey(folder.path));
+    const activelyWorking = folder.previewWarming && !folder.previewWaiting && !driveBlocked && previewMode() !== 'off';
     const queueMoving = Number(folder.previewQueueActive) > 0 || Number(folder.previewQueueBackground) > 0;
     const stalled = activelyWorking && phase !== 'done' && !queueMoving && unchanged > 15_000;
     const diag = folder.diagnostics || {};
@@ -322,7 +380,7 @@ function diagnosticsText(stats, state) {
       lines.push(`  watcher    ${diag.watcher ? 'on' : 'off'} · full=${diag.fullCheckQueued ? 'queued' : 'no'} · incremental=${diag.incrementalQueued ? 'queued' : 'no'} · changes=${Number(diag.pendingChanges) || 0}`);
     }
     if (phase) {
-      lines.push(`  thumbnails ${phase} · checked=${Number(folder.previewProcessed) || 0} · cached=${Number(folder.previewReady) || 0} · generated=${Number(folder.previewGenerated) || 0} · failed=${Number(folder.previewFailed) || 0} · deferred=${Number(folder.previewDeferred) || 0}`);
+      lines.push(`  thumbnails ${driveBlocked ? `next after ${folderName(driveOwner)}` : phase} · checked=${Number(folder.previewProcessed) || 0} · cached=${Number(folder.previewReady) || 0} · generated=${Number(folder.previewGenerated) || 0} · failed=${Number(folder.previewFailed) || 0} · deferred=${Number(folder.previewDeferred) || 0}`);
       lines.push(`  queue      queued=${Number(folder.previewQueueBackground) || 0} · active=${Number(folder.previewQueueActive) || 0} · global=${Number(folder.previewQueueGlobalBackground) || 0}/${Number(folder.previewQueueGlobalActive) || 0} · requested=${Number(folder.previewQueued) || 0}`);
       lines.push(`  progress   ${duration(now - (Number(folder.previewLastProgressAt) || now))} ago · pass=${Number(folder.previewPasses) || 0}${stalled ? '  ← no progress' : ''}`);
       if (folder.previewPauseUntil > now) lines.push(`  pause      ${duration(folder.previewPauseUntil - now)} remaining`);
@@ -344,6 +402,7 @@ async function refreshDiagnostics() {
       request('/api/state')
     ]);
     latestFolderStats = folderData.folders || latestFolderStats;
+    syncPreviewDriveOwners(latestFolderStats);
     diagnosticsOutput.textContent = diagnosticsText(latestFolderStats, state);
   } catch (error) {
     diagnosticsOutput.textContent = `Diagnostics unavailable: ${error.message}`;
