@@ -150,7 +150,7 @@ if (folders && storagePane) {
     const count = total ? `${resolved.toLocaleString()} / ${total.toLocaleString()}` : '';
     const activity = done ? ''
       : waitingIdle ? 'waiting for idle'
-        : waiting ? 'waiting for this drive'
+        : waiting ? 'waiting'
           : String(folder.previewPhase || '') === 'checking' ? 'checking cache'
             : active > 0 ? `${active.toLocaleString()} generating`
               : queued > 0 ? `${queued.toLocaleString()} queued`
@@ -165,11 +165,12 @@ if (folders && storagePane) {
     const p = job?.progress || {};
     if (!job) {
       if (folder.pending) {
+        const note = folder.waitingForIdle ? 'Waiting for idle' : 'Waiting to sync';
         return {
-          headline: folder.waitingForIdle ? 'Waiting' : 'Checking',
-          tone: folder.waitingForIdle ? 'waiting' : 'active',
-          note: folder.waitingForIdle ? 'Waiting for idle' : 'Checking for changes',
-          stages:[{ label:'Cloud', value:folder.waitingForIdle ? 'Waiting' : 'Checking', state:folder.waitingForIdle ? 'waiting' : 'active' }],
+          headline:'Waiting',
+          tone:'waiting',
+          note,
+          stages:[{ label:'Cloud', value:'Waiting', state:'waiting' }],
           rows:[]
         };
       }
@@ -225,8 +226,9 @@ if (folders && storagePane) {
   function localWork(folder, mode, state) {
     const job = currentFolderJob(folder, state);
     const indexed = Boolean(folder.lastIndexed);
-    const indexing = Boolean(folder.pending);
-    const waitingIndex = Boolean(folder.waitingForIdle);
+    const indexRunning = Boolean(job) || Boolean(folder.diagnostics?.running && folder.diagnostics?.jobType !== 'hash');
+    const indexing = Boolean(folder.pending && indexRunning);
+    const waitingIndex = Boolean(folder.waitingForIdle || (!indexed && folder.pending && !indexRunning));
     const tracked = Number(folder.hashTracked) || 0;
     const hashReady = Number(folder.hashReady) || 0;
     const hashPending = Number(folder.hashPending) || 0;
@@ -362,7 +364,7 @@ if (folders && storagePane) {
     } catch {
     } finally {
       busy = false;
-      schedule(working ? 650 : 5000);
+      schedule(working ? 900 : 5000);
     }
   }
 
