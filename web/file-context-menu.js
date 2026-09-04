@@ -6,7 +6,10 @@ if (files) {
   style.textContent = `
     .file-context-menu{position:fixed;z-index:90;width:min(360px,calc(100vw - 16px));padding:7px;border:1px solid #373238;border-radius:13px;background:rgba(24,22,25,.98);box-shadow:0 18px 55px rgba(0,0,0,.52);backdrop-filter:blur(18px);color:#eee8e4;font-size:11px;user-select:none}
     .file-context-menu[hidden]{display:none}
-    .file-context-summary{padding:10px 10px 11px;border-bottom:1px solid #2d292d}
+    .file-context-close{position:absolute;top:8px;right:8px;width:24px;height:24px;display:grid;place-items:center;padding:0;border:0;border-radius:7px;background:transparent;color:#837b7d;cursor:pointer}
+    .file-context-close:hover,.file-context-close:focus-visible{outline:none;background:#2b272c;color:#f5f0ed}
+    .file-context-close svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round}
+    .file-context-summary{padding:10px 38px 11px 10px;border-bottom:1px solid #2d292d}
     .file-context-summary>strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:1.35;color:#f5f0ed;user-select:text}
     .file-context-path-wrap{margin-top:9px}
     .file-context-label{display:block;margin-bottom:4px;color:#716a6d;font-size:8px;font-weight:750;letter-spacing:.08em;text-transform:uppercase}
@@ -31,12 +34,14 @@ if (files) {
   const openIcon = icon('<path d="M8 4.2h7.8V12"/><path d="M15.8 4.2 8.7 11.3"/><path d="M12.8 9.3v6.2H4.5V7.2h6.2"/>');
   const saveIcon = icon('<path d="M3.5 3.5h10.1l2.9 2.9v10.1h-13z"/><path d="M6.1 3.5v5h7.2v-5"/><path d="M6.2 12.1h7.6v4.4H6.2z"/>');
   const copyIcon = icon('<rect x="6.4" y="6.4" width="9.1" height="9.1" rx="1.3"/><path d="M13.2 6.4V4.5H4.5v8.7h1.9"/>');
+  const closeIcon = icon('<path d="M6 6l8 8M14 6l-8 8"/>');
 
   const menu = document.createElement('div');
   menu.className = 'file-context-menu';
   menu.hidden = true;
   menu.setAttribute('role', 'menu');
   menu.innerHTML = `
+    <button type="button" class="file-context-close" data-context-action="close" aria-label="Close" title="Close">${closeIcon}</button>
     <div class="file-context-summary">
       <strong data-context-filename></strong>
       <div class="file-context-path-wrap">
@@ -230,6 +235,10 @@ if (files) {
     const snapshot = { ...active };
     statusNode.textContent = '';
 
+    if (action === 'close') {
+      close();
+      return;
+    }
     if (action === 'tab') {
       window.open(objectUrl(snapshot.hash), '_blank', 'noopener');
       close();
