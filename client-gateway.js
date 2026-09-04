@@ -225,10 +225,12 @@ function openNativePath(path, selectFile = false) {
   let child;
   const options = { detached: true, stdio: 'ignore', windowsHide: false };
   if (platform() === 'win32') {
-    // Explorer requires /select and the path as one comma-delimited argument.
-    // Splitting them into separate argv entries can launch Explorer successfully
-    // while silently ignoring the requested file.
-    child = spawn('explorer.exe', selectFile ? [`/select,${target}`] : [target], options);
+    // Explorer parses /select itself. Node's normal Windows argv quoting can
+    // turn a path containing spaces into an argument Explorer silently ignores,
+    // which opens the generic home folder instead of selecting the file.
+    child = selectFile
+      ? spawn('explorer.exe', [`/select,"${target}"`], { ...options, windowsVerbatimArguments: true })
+      : spawn('explorer.exe', [target], options);
   } else if (platform() === 'darwin') {
     child = spawn('open', selectFile ? ['-R', target] : [target], options);
   } else {
