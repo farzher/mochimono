@@ -13,11 +13,12 @@ const SAFE_SCREENS = .7;
 const style = document.createElement('style');
 style.textContent = `
 .files.stable-media-grid{position:relative!important;display:block!important;overflow:visible!important}
-.stable-media-grid>.stable-media-card{position:absolute!important;margin:0!important}
+.stable-media-grid>.stable-media-row{position:absolute;left:0;width:100%;margin:0;padding:0}
+.stable-media-row>.stable-media-card{position:absolute!important;top:0!important;margin:0!important}
+.stable-media-row>.stable-day-control{position:absolute!important}
 .stable-media-grid>.stable-year-heading,.stable-media-grid>.stable-month-heading{position:absolute!important;left:2px!important;margin:0!important;padding:0!important;white-space:nowrap}
 .stable-media-grid>.stable-year-heading{height:${YEAR_HEIGHT}px!important;line-height:${YEAR_HEIGHT}px!important}
 .stable-media-grid>.stable-month-heading{height:${MONTH_HEIGHT}px!important;line-height:${MONTH_HEIGHT}px!important}
-.stable-media-grid>.stable-day-control{position:absolute!important}
 `;
 document.head.append(style);
 
@@ -173,8 +174,7 @@ export function createStableMediaGrid({
     let y = 0;
 
     if (!sort.startsWith('date-')) {
-      y = FLAT_TOP;
-      totalHeight = Math.max(1, packRange(0, items.length, y, layoutWidth, layoutMediaSize));
+      totalHeight = Math.max(1, packRange(0, items.length, FLAT_TOP, layoutWidth, layoutMediaSize));
       return;
     }
 
@@ -214,9 +214,8 @@ export function createStableMediaGrid({
     return { top: Math.max(0, top), bottom: Math.max(0, top) + height };
   }
 
-  function updateCardGeometry(card, file, box, rowY) {
+  function updateCardGeometry(card, file, box) {
     card.style.left = px(box.x);
-    card.style.top = px(rowY);
     card.style.width = px(box.width);
     card.style.height = px(box.height);
     card.style.flexBasis = px(box.width);
@@ -239,17 +238,69 @@ export function createStableMediaGrid({
     return node;
   }
 
-  function makeDayControl(key, label) {
-    const node = document.createElement('button');
-    node.type = 'button';
-    node.className = 'timeline-group-select day-group-control stable-day-control';
-    node.dataset.stableDay = key;
-    node.dataset.selectPeriod = 'day';
-    node.dataset.periodKey = key;
-    node.dataset.periodLabel = label;
-    node.setAttribute('aria-label', `Select ${label}`);
-    node.innerHTML = `<span class="timeline-check" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
-    return node;
+  function rowSignature(row) {
+    return row.boxes.map(box => items[box.index].hash).join(',');
+  }
+
+  function syncRowNode(node, rowIndex) {
+    const row = rows[rowIndex];
+    const signature = rowSignature(row);
+    node.dataset.stableRow = String(rowIndex);
+    node.style.top = px(row.y);
+    node.style.height = px(row.height);
+
+    let cards = new Map([...node.querySelectorAll(':scope > .stable-media-card[data-hash]')].map(card => [card.dataset.hash, card]));
+    if (node.dataset.rowSignature !== signature) {
+      node.replaceChildren();
+      cards = new Map();
+      node.dataset.rowSignature = signature;
+    }
+
+    const wantedDays = new Set();
+    const existingDays = new Map([...node.querySelectorAll(':scope > [data-stable-day]')].map(day => [day.dataset.stableDay, day]));
+    for (const box of row.boxes) {
+      const index = box.index;
+      const file = items[index];
+      let card = cards.get(file.hash);
+      if (!card) {
+        card = elementFromHtml(renderCard(file, { ...box, y: 0, index }));
+        if (card) node.append(card);
+      }
+      if (card) updateCardGeometry(card, file, box);
+
+      if (!sort.startsWith('date-')) continue;
+      const previousDay = index > 0 ? dayKey(items[index - 1]) : '';
+      const currentDay = dayKey(file);
+      if (!currentDay || currentDay === previousDay) continue;
+      wantedDays.add(currentDay);
+      const label = dayLabel(file);
+      let day = existingDays.get(currentDay);
+      if (!day) {
+        day = document.createElement('button');
+        day.type = 'button';
+        day.className = 'timeline-group-select day-group-control stable-day-control';
+        day.dataset.stableDay = currentDay;
+        day.dataset.selectPeriod = 'day';
+        day.dataset.periodKey = currentDay;
+        day.dataset.periodLabel = label;
+        day.setAttribute('aria-label', `Select ${label}`);
+        day.innerHTML = `<span class="timeline-check" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
+        node.append(day);
+      }
+      day.style.left = px(box.x);
+      day.style.top = px(-19);
+    }
+    for (const [key, day] of existingDays) if (!wantedDays.has(key)) day.remove();
+  }
+
+  function insertRowInOrder(node, rowIndex) {
+    for (const sibling of files.querySelectorAll(':scope > .stable-media-row')) {
+      if (Number(sibling.dataset.stableRow) > rowIndex) {
+        files.insertBefore(node, sibling);
+        return;
+      }
+    }
+    files.append(node);
   }
 
   function renderRows(nextFirst, nextLast) {
@@ -258,14 +309,10 @@ export function createStableMediaGrid({
     nextLast = Math.max(nextFirst, Math.min(rows.length - 1, nextLast));
     const minY = Math.max(0, rows[nextFirst].y - 70);
     const maxY = rows[nextLast].y + rows[nextLast].height + 70;
-
-    const existingCards = new Map([...files.querySelectorAll(':scope > .stable-media-card[data-hash]')].map(node => [node.dataset.hash, node]));
+    const existingRows = new Map([...files.querySelectorAll(':scope > .stable-media-row')].map(node => [Number(node.dataset.stableRow), node]));
     const existingHeaders = new Map([...files.querySelectorAll(':scope > [data-stable-header]')].map(node => [node.dataset.stableHeader, node]));
-    const existingDays = new Map([...files.querySelectorAll(':scope > [data-stable-day]')].map(node => [node.dataset.stableDay, node]));
-    const wantedCards = new Set();
+    const wantedRows = new Set();
     const wantedHeaders = new Set();
-    const wantedDays = new Set();
-    const fragment = document.createDocumentFragment();
     let changed = false;
 
     for (const header of headers) {
@@ -275,51 +322,27 @@ export function createStableMediaGrid({
       let node = existingHeaders.get(key);
       if (!node) {
         node = makeHeader(header);
-        fragment.append(node);
+        files.append(node);
         changed = true;
       }
       node.style.top = px(header.top);
     }
 
     for (let rowIndex = nextFirst; rowIndex <= nextLast; rowIndex++) {
-      const row = rows[rowIndex];
-      for (const box of row.boxes) {
-        const index = box.index;
-        const file = items[index];
-        const hash = file.hash;
-        wantedCards.add(hash);
-        let card = existingCards.get(hash);
-        if (!card) {
-          card = elementFromHtml(renderCard(file, { ...box, y: row.y, index }));
-          if (!card) continue;
-          fragment.append(card);
-          changed = true;
-        }
-        updateCardGeometry(card, file, box, row.y);
-
-        if (sort.startsWith('date-')) {
-          const previousDay = index > 0 ? dayKey(items[index - 1]) : '';
-          const currentDay = dayKey(file);
-          if (currentDay && currentDay !== previousDay) {
-            wantedDays.add(currentDay);
-            const label = dayLabel(file);
-            let day = existingDays.get(currentDay);
-            if (!day) {
-              day = makeDayControl(currentDay, label);
-              fragment.append(day);
-              changed = true;
-            }
-            day.style.left = px(box.x);
-            day.style.top = px(row.y - 19);
-          }
-        }
+      wantedRows.add(rowIndex);
+      let node = existingRows.get(rowIndex);
+      if (!node) {
+        node = document.createElement('div');
+        node.className = 'stable-media-row';
+        node.dataset.stableRow = String(rowIndex);
+        insertRowInOrder(node, rowIndex);
+        changed = true;
       }
+      syncRowNode(node, rowIndex);
     }
 
-    for (const [hash, node] of existingCards) if (!wantedCards.has(hash)) { node.remove(); changed = true; }
+    for (const [rowIndex, node] of existingRows) if (!wantedRows.has(rowIndex)) { node.remove(); changed = true; }
     for (const [key, node] of existingHeaders) if (!wantedHeaders.has(key)) { node.remove(); changed = true; }
-    for (const [key, node] of existingDays) if (!wantedDays.has(key)) { node.remove(); changed = true; }
-    if (fragment.childNodes.length) files.append(fragment);
 
     firstRow = nextFirst;
     lastRow = nextLast;
