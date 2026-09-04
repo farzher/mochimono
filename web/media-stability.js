@@ -1,3 +1,5 @@
+import './mobile-thumb-prewarm.js';
+
 const files = document.querySelector('#files');
 const mediaSize = document.querySelector('#mediaSize');
 const viewer = document.querySelector('#viewer');
