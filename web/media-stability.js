@@ -13,6 +13,7 @@ style.textContent = `
 .media-thumb.thumb-decoding::after{content:"";position:absolute;z-index:3;inset:0;background:#080809;pointer-events:none}
 .media-thumb>.play-badge{z-index:4}
 #viewer-media>video{width:100vw!important;height:100dvh!important;max-width:100vw!important;max-height:100dvh!important;object-fit:contain!important;background:#000}
+.viewer-nav{display:none!important;pointer-events:none!important}
 #viewer-preview-status{position:absolute;z-index:102;right:14px;top:66px;padding:4px 7px;border:1px solid rgba(255,255,255,.11);border-radius:999px;background:rgba(18,18,18,.58);backdrop-filter:blur(7px);color:rgba(255,255,255,.78);font-size:10px;font-weight:650;line-height:1;letter-spacing:.01em;pointer-events:none}
 `;
 document.head.append(style);
