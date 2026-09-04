@@ -32,6 +32,14 @@ style.textContent = `
   #storagePane [data-preview-progress].preview-indeterminate .preview-progress-track>i{width:34%;transform:none;animation:preview-progress-slide 1.35s ease-in-out infinite}
   @keyframes preview-progress-slide{0%{transform:translateX(-110%)}50%{transform:translateX(100%)}100%{transform:translateX(310%)}}
 
+  html.background-paused [data-folder-status][data-waiting-idle="1"]:after{content:'Paused'}
+  html.background-paused .folder-item[data-waiting-idle="1"] .inline-progress-head strong{font-size:0}
+  html.background-paused .folder-item[data-waiting-idle="1"] .inline-progress-head strong:after{content:'Paused';font-size:10px}
+  html.background-waiting #activity>span,html.background-paused #activity>span{font-size:0}
+  html.background-waiting #activity>span:after{content:'Background · Waiting for idle';font-size:10px}
+  html.background-paused #activity>span:after{content:'Background · Paused';font-size:10px}
+  html.background-waiting #activity .progress-bar>i,html.background-paused #activity .progress-bar>i{animation:none!important;transform:none!important;left:0!important;opacity:.45}
+
   @media(max-width:700px){
     .preview-mode-row>summary{padding:0 7px}
     .preview-mode-row>summary span{display:none}
@@ -51,15 +59,32 @@ const modeLabel = {
 let modeControl = null;
 let modeValue = null;
 let currentMode = 'idle';
+let currentBackgroundAllowed = false;
+
+function syncBackgroundClasses() {
+  document.documentElement.classList.toggle('background-paused', currentMode === 'off');
+  document.documentElement.classList.toggle('background-waiting', currentMode === 'idle' && !currentBackgroundAllowed);
+}
 
 function setMode(mode) {
   mode = ['off','idle','max'].includes(mode) ? mode : 'idle';
   currentMode = mode;
   modeControl?.querySelectorAll('[data-preview-mode]').forEach(button => button.classList.toggle('active', button.dataset.previewMode === mode));
   if (modeValue) modeValue.textContent = modeLabel[mode];
+  syncBackgroundClasses();
   window.dispatchEvent(new CustomEvent('mochimono:preview-mode', { detail: { mode } }));
 }
 window.mochimonoPreviewMode = () => currentMode;
+
+async function refreshBackgroundState() {
+  try {
+    const response = await fetch('/api/state', { cache:'no-store' });
+    if (!response.ok) return;
+    const state = await response.json();
+    currentBackgroundAllowed = Boolean(state?.background?.allowed);
+    setMode(state?.settings?.thumbnailMode || currentMode);
+  } catch {}
+}
 
 if (headActions) {
   modeControl = document.createElement('details');
@@ -91,6 +116,7 @@ if (headActions) {
         body:JSON.stringify({ thumbnailMode:mode })
       });
       if (!response.ok) throw new Error('Could not change background mode');
+      await refreshBackgroundState();
     } catch {
       setMode(previous);
     } finally {
@@ -102,5 +128,7 @@ if (headActions) {
     if (modeControl.open && !modeControl.contains(event.target)) modeControl.open = false;
   });
 
-  fetch('/api/state').then(response => response.json()).then(state => setMode(state?.settings?.thumbnailMode || 'idle')).catch(() => setMode('idle'));
+  refreshBackgroundState();
+  const backgroundStateTimer = setInterval(refreshBackgroundState, 5000);
+  addEventListener('beforeunload', () => clearInterval(backgroundStateTimer), { once:true });
 }
