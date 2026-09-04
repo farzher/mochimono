@@ -12,9 +12,11 @@ export function extension(name) {
 }
 
 export function fileKind(file) {
+  const filename = String(file?.filename || '');
+  if (/\.d\.(?:mts|cts|ts)$/i.test(filename)) return 'text';
   const base = String(file?.mime || '').split('/')[0];
   if (base && base !== 'application') return base;
-  const ext = extension(file?.filename);
+  const ext = extension(filename);
   if (IMAGE_EXTENSIONS.has(ext)) return 'image';
   if (VIDEO_EXTENSIONS.has(ext)) return 'video';
   if (AUDIO_EXTENSIONS.has(ext)) return 'audio';
