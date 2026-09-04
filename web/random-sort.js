@@ -94,9 +94,8 @@ if (sortSelect) {
   sortSelect.addEventListener('change', () => {
     if (sortSelect.value === 'random') {
       setMode(true, true);
-      // The library already has a stable non-date virtualized path for Largest.
-      // Let its existing handler use that path while the exact size comparator is
-      // replaced with our stable random rank for this selection.
+      // Reuse the library's stable non-date virtualized path. Its exact size
+      // comparator is swapped for a stable random rank only while Random is on.
       sortSelect.value = 'size-desc';
       queueMicrotask(() => {
         if (randomMode) sortSelect.value = 'random';
@@ -108,7 +107,7 @@ if (sortSelect) {
 }
 
 const style = document.createElement('style');
-style.textContent = 'html.random-sort-active #dateRail{display:none!important}';
+style.textContent = 'html.random-sort-active #dateRail{display:none!important}html.random-sort-active{scrollbar-width:auto!important}html.random-sort-active::-webkit-scrollbar{display:block!important}';
 document.head.append(style);
 
 wrapLibrary();
