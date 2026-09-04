@@ -115,6 +115,16 @@
 
   <dialog id="restoreDialog">
     <div class="dialog-head"><div><h3>Restore</h3><div id="restoreBackupLabel" class="picker-path"></div></div><button class="icon" data-close>×</button></div>
+    <div class="field-stack">
+      <input id="backupName" placeholder="Backup name">
+      <label class="field-label" for="backupScope">Back up</label>
+      <select id="backupScope"><option value="">Everything</option></select>
+    </div>
+    <div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="initializeBackup" class="primary">Save</button></div>
+  </dialog>
+
+  <dialog id="restoreDialog">
+    <div class="dialog-head"><div><h3>Restore</h3><div id="restoreBackupLabel" class="picker-path"></div></div><button class="icon" data-close>×</button></div>
     <div id="restoreSummary" class="restore-summary">Loading…</div>
     <div id="restoreSources" class="restore-sources"></div>
     <div id="restoreFiles" class="restore-files"></div>
@@ -123,6 +133,7 @@
 
   <div id="toast" class="toast"></div>
   <script type="module" src="/app.js"></script>
+  <script type="module" src="/lan-access.js"></script>
   <script type="module" src="/protection.js"></script>
   <script type="module" src="/folder-modes.js"></script>
   <script type="module" src="/multi-folder-pick.js"></script>
