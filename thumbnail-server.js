@@ -11,6 +11,7 @@ const MAX_THUMB_BYTES = 5 * 1024 * 1024;
 const PRIORITY_WINDOW_MS = 20_000;
 const uploadLocks = new Map();
 const thumbPath = hash => join(DATA_DIR, 'thumbs', hash.slice(0, 2), `${hash}.webp`);
+const isDeclarationName = name => /\.d\.(?:mts|cts|ts)$/i.test(String(name || ''));
 
 const staleRequestCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 db.prepare('DELETE FROM thumbnail_requests WHERE requested_at < ?').run(staleRequestCutoff);
@@ -107,14 +108,15 @@ function hydrateMissing(objects, imports, extensions) {
     if (!sources.has(row.hash)) sources.set(row.hash, []);
     sources.get(row.hash).push({ importId: row.importId, originalPath: row.originalPath, filename: row.filename, mtime: row.mtime });
   }
-  const isMediaName = name => extensions.some(extension => String(name || '').toLowerCase().endsWith(extension));
+  const isMediaName = name => !isDeclarationName(name) && extensions.some(extension => String(name || '').toLowerCase().endsWith(extension));
   return objects.map(object => {
     const candidates = sources.get(object.hash) || [];
+    const mediaCandidates = candidates.filter(candidate => !isDeclarationName(candidate.filename));
     const first = object.mime.startsWith('image/') || object.mime.startsWith('video/')
-      ? candidates[0]
-      : candidates.find(candidate => isMediaName(candidate.filename)) || candidates[0];
-    return { ...object, ...(first || {}), filename: first?.filename || object.hash, sources: candidates };
-  });
+      ? mediaCandidates[0]
+      : mediaCandidates.find(candidate => isMediaName(candidate.filename)) || mediaCandidates[0];
+    return first ? { ...object, ...first, filename: first.filename || object.hash, sources: candidates } : null;
+  }).filter(Boolean);
 }
 
 function missingThumbnails(res, url) {
@@ -125,6 +127,7 @@ function missingThumbnails(res, url) {
   const priorityOnly = url.searchParams.get('priority') === '1';
   const importMarks = imports.map(() => '?').join(',');
   const extensions = mediaExtensions();
+  const declarationSql = `(lower(s.filename) NOT LIKE '%.d.mts' AND lower(s.filename) NOT LIKE '%.d.cts' AND lower(s.filename) NOT LIKE '%.d.ts')`;
   let objects;
   if (priorityOnly) {
     const priorityCutoff = new Date(Date.now() - PRIORITY_WINDOW_MS).toISOString();
@@ -135,6 +138,7 @@ function missingThumbnails(res, url) {
       JOIN sources s ON s.object_hash = o.hash
       LEFT JOIN thumbnails t ON t.object_hash = o.hash AND t.version = ?
       WHERE s.import_id IN (${importMarks}) AND r.requested_at >= ? AND o.state = 'active' AND t.object_hash IS NULL
+        AND ${declarationSql}
       GROUP BY o.hash, o.size, o.mime
       ORDER BY requestedAt DESC, o.size ASC, o.hash
       LIMIT ?
@@ -147,6 +151,7 @@ function missingThumbnails(res, url) {
       JOIN objects o ON o.hash = s.object_hash
       LEFT JOIN thumbnails t ON t.object_hash = o.hash AND t.version = ?
       WHERE s.import_id IN (${importMarks}) AND o.state = 'active' AND t.object_hash IS NULL
+        AND ${declarationSql}
         AND (o.mime LIKE 'image/%' OR o.mime LIKE 'video/%' OR ${extensionSql})
       GROUP BY o.hash, o.size, o.mime
       ORDER BY o.size ASC, o.hash
@@ -181,13 +186,13 @@ async function checkThumbnails(req, res) {
   const hashes = cleanHashes(await readJson(req, 128 * 1024));
   const statuses = thumbnailStatuses(hashes);
   const thumbnails = statuses.filter(row => row.ready).map(({ ready, size, mime, filename, ...row }) => row);
-  const missing = statuses.filter(row => !row.ready).map(({ ready, width, height, duration, ...row }) => row);
+  const missing = statuses.filter(row => !row.ready && !isDeclarationName(row.filename)).map(({ ready, width, height, duration, ...row }) => row);
   json(res, 200, { version: THUMB_VERSION, thumbnails, missing });
 }
 
 async function requestThumbnails(req, res) {
   const hashes = cleanHashes(await readJson(req, 128 * 1024));
-  const missing = thumbnailStatuses(hashes).filter(row => !row.ready).map(row => row.hash);
+  const missing = thumbnailStatuses(hashes).filter(row => !row.ready && !isDeclarationName(row.filename)).map(row => row.hash);
   if (!missing.length) return json(res, 200, { ok: true, count: 0 });
   const insert = db.prepare(`
     INSERT INTO thumbnail_requests(object_hash, requested_at) VALUES(?, ?)
