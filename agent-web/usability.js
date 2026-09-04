@@ -101,6 +101,7 @@ if (folders) new MutationObserver(records => {
 let progressTimer = 0;
 let progressBusy = false;
 const previewMemory = new Map();
+
 const previewMode = () => window.mochimonoPreviewMode?.() || 'idle';
 
 function previewInfo(folder) {
@@ -108,14 +109,14 @@ function previewInfo(folder) {
   const previous = previewMemory.get(key) || null;
   const phase = String(folder.previewPhase || '');
   const mode = previewMode();
-  const failed = Number(folder.previewFailed) || 0;
-  const queued = Number(folder.previewQueued) || 0;
   let total = Number(folder.previewTotal) || 0;
   let processed = Number(folder.previewProcessed) || 0;
   let ready = Number(folder.previewReady) || 0;
+  const failed = Number(folder.previewFailed) || 0;
+  const queued = Number(folder.previewQueued) || 0;
 
-  if (!phase && !previous) return null;
-  if (!phase && previous) {
+  if (!phase) {
+    if (!previous) return null;
     total = previous.total;
     processed = previous.processed;
     ready = previous.ready;
@@ -146,16 +147,16 @@ function previewInfo(folder) {
     ratio = total ? Math.min(.99, ready / total) : 0;
     percent = total ? `${Math.floor(ratio * 100)}%` : '';
     indeterminate = !total;
-  } else if (phase === 'checking' || phase === 'counting' || phase === 'warming') {
+  } else if (phase === 'checking') {
     if (total) {
       ratio = Math.min(.99, processed / total);
       percent = `${Math.floor(ratio * 100)}%`;
-      text = `${Math.min(processed,total).toLocaleString()} / ${total.toLocaleString()} · Checking thumbnails…`;
+      text = `${Math.min(processed,total).toLocaleString()} / ${total.toLocaleString()} · Checking cache…`;
     } else {
-      text = `${processed ? `${processed.toLocaleString()} checked · ` : ''}Checking thumbnails…`;
+      text = `${processed ? `${processed.toLocaleString()} checked · ` : ''}Checking cache…`;
       indeterminate = true;
     }
-  } else if (phase === 'generating' || phase === 'finishing') {
+  } else if (phase === 'generating') {
     ratio = total ? Math.min(.99, ready / total) : 0;
     percent = total ? `${Math.floor(ratio * 100)}%` : '';
     text = queued
@@ -170,7 +171,7 @@ function previewInfo(folder) {
       : 'Verifying thumbnails…';
     indeterminate = !total;
   } else {
-    text = 'Checking thumbnails…';
+    text = 'Checking cache…';
     indeterminate = true;
   }
 
@@ -239,7 +240,7 @@ async function refreshPreviewProgress() {
   } catch {}
   finally {
     progressBusy = false;
-    schedulePreviewProgress(warming ? 900 : 7000);
+    schedulePreviewProgress(warming ? 1200 : 7000);
   }
 }
 schedulePreviewProgress(120);
