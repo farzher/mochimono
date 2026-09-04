@@ -21,8 +21,9 @@ style.textContent = `
 .image-optimize-compare{--split:50%;position:absolute;inset:0;overflow:hidden;touch-action:none;background:#050505}
 .image-optimize-compare img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;user-select:none;-webkit-user-drag:none;pointer-events:none;transform-origin:50% 50%}
 .image-optimize-after{clip-path:inset(0 0 0 var(--split))}
-.image-optimize-divider{position:absolute;z-index:3;left:var(--split);top:0;bottom:0;width:1px;background:rgba(255,255,255,.88);pointer-events:none;box-shadow:0 0 8px rgba(0,0,0,.4)}
-.image-optimize-divider:after{content:'↔';position:absolute;left:0;top:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:rgba(14,14,14,.86);border:1px solid rgba(255,255,255,.35);color:#fff;font-size:12px;box-shadow:0 3px 14px rgba(0,0,0,.42)}
+.image-optimize-divider{position:absolute;z-index:3;left:var(--split);top:0;bottom:0;width:30px;transform:translateX(-50%);background:transparent;cursor:col-resize;pointer-events:auto;touch-action:none}
+.image-optimize-divider:before{content:'';position:absolute;left:50%;top:0;bottom:0;width:2px;transform:translateX(-50%);background:#050505;box-shadow:0 0 0 1px rgba(255,255,255,.08)}
+.image-optimize-divider:after{content:'↔';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:rgba(14,14,14,.9);border:1px solid rgba(255,255,255,.35);color:#fff;font-size:12px;box-shadow:0 3px 14px rgba(0,0,0,.42)}
 .image-optimize-label{position:absolute;z-index:4;top:70px;color:rgba(255,255,255,.72);font-size:11px;font-weight:700;pointer-events:none;text-shadow:0 1px 5px #000}.image-optimize-label.original{left:16px}.image-optimize-label.optimized{right:16px}
 .image-optimize-controls{position:absolute;z-index:6;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));width:min(350px,calc(100% - 28px));padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(20,19,20,.92);box-shadow:0 16px 48px rgba(0,0,0,.46);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
 .image-optimize-drawer{position:absolute;right:0;bottom:calc(100% + 9px);width:100%;padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:13px;background:rgba(20,19,20,.95);box-shadow:0 12px 34px rgba(0,0,0,.42);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
@@ -129,6 +130,7 @@ let activeId = '';
 let activeHash = '';
 let session = null;
 let pollTimer = 0;
+let previewDebounce = 0;
 let requestSerial = 0;
 let renderSerial = 0;
 let format = 'auto';
@@ -389,6 +391,8 @@ function poll(id, serial) {
 async function startPreview() {
   const hash = activeHash || currentHash();
   if (!hash || !active() || committing) return;
+  clearTimeout(previewDebounce);
+  previewDebounce = 0;
   const serial = ++requestSerial;
   clearTimeout(pollTimer);
   session = null;
@@ -406,6 +410,15 @@ async function startPreview() {
   } catch (error) {
     if (serial === requestSerial) showError(error.message);
   }
+}
+
+function schedulePreview(delay = 180) {
+  clearTimeout(previewDebounce);
+  if (!active() || committing) return;
+  previewDebounce = setTimeout(() => {
+    previewDebounce = 0;
+    startPreview();
+  }, delay);
 }
 
 function setFormat(next) {
@@ -431,6 +444,8 @@ function setSize(kind, value) {
 
 function resetState() {
   clearTimeout(pollTimer);
+  clearTimeout(previewDebounce);
+  previewDebounce = 0;
   requestSerial++;
   renderSerial++;
   activeId = '';
@@ -531,9 +546,9 @@ sizes.addEventListener('click', event => {
 quality.addEventListener('input', () => {
   quality.dataset.userChanged = '1';
   qualityLabel.textContent = quality.value;
+  schedulePreview();
 });
-quality.addEventListener('change', startPreview);
-lossless.addEventListener('change', startPreview);
+lossless.addEventListener('change', () => schedulePreview(0));
 keep.addEventListener('click', () => commit('keep'));
 replace.addEventListener('click', () => commit('replace'));
 
