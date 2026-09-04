@@ -142,6 +142,14 @@ function folderRow(folder) {
   </article>`;
 }
 
+function jobOperation(job) {
+  if (job?.type === 'sync') return /^(?:Check|Update) /.test(String(job.label || '')) ? 'Index' : 'Sync';
+  if (job?.type === 'backup') return 'Backup';
+  if (job?.type === 'verify') return 'Verify';
+  if (job?.type === 'restore') return 'Restore';
+  return '';
+}
+
 function progressData(job) {
   if (!job || job.status !== 'running') return null;
   const p = job.progress || {};
@@ -164,9 +172,11 @@ function progressData(job) {
   if (p.speedBps > 0) meta.push(`${bytes(p.speedBps)}/s`);
   if (p.etaSeconds > 0) meta.push(`${duration(p.etaSeconds)} left`);
   const phase = job.cancelRequested ? 'Canceling…' : p.phase || 'Working…';
+  const operation = jobOperation(job);
+  const title = operation ? `${operation} · ${phase}` : phase;
   return {
-    key: JSON.stringify([phase, meta, p.current || '', percent, Boolean(p.indeterminate), job.cancelRequested]),
-    html: `<div class="inline-progress-head"><strong>${esc(phase)}</strong><button class="action-link" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>Cancel</button></div>
+    key: JSON.stringify([title, meta, p.current || '', percent, Boolean(p.indeterminate), job.cancelRequested]),
+    html: `<div class="inline-progress-head"><strong>${esc(title)}</strong><button class="action-link" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>Cancel</button></div>
       <div class="progress-bar ${p.indeterminate || !totalBytes ? 'indeterminate' : ''}"><i style="width:${p.indeterminate || !totalBytes ? '32%' : `${percent}%`}"></i></div>
       <div class="inline-progress-meta"><span>${esc(meta.join(' · '))}</span><span title="${esc(p.current || '')}">${esc(p.current || '')}</span></div>`
   };
@@ -190,7 +200,10 @@ function renderItemProgress(row, job) {
 }
 
 function folderJob(folder, job) {
-  return job?.type === 'sync' && job.status === 'running' && job.label === `Sync ${pathName(folder.path) || folder.path}` ? job : null;
+  if (!job || job.type !== 'sync' || job.status !== 'running') return null;
+  if (job.progress?.path && samePath(job.progress.path, folder.path)) return job;
+  const name = pathName(folder.path) || folder.path;
+  return [`Sync ${name}`, `Check ${name}`, `Update ${name}`].includes(job.label) ? job : null;
 }
 
 function backupJob(location, job) {
@@ -203,12 +216,12 @@ function renderFolders(folders, job) {
   const key = JSON.stringify(folders.map(folder => [folder.path, folder.importId, folder.protected !== false]));
   if (key !== foldersRenderKey) {
     foldersRenderKey = key;
-    $('#folders').innerHTML = folders.length ? folders.map(folderRow).join('') : '<div class="empty-state">No protected folders</div>';
+    $('#folders').innerHTML = folders.length ? folders.map(folderRow).join('') : '<div class="empty-state">No folders</div>';
   }
   for (const row of $('#folders').querySelectorAll('[data-folder-path]')) {
     const folder = folders.find(item => samePath(item.path, row.dataset.folderPath));
     if (!folder) continue;
-    setRelativeTime(row.querySelector('[data-folder-status]'), folder.lastSynced, 'Not synced yet');
+    setRelativeTime(row.querySelector('[data-folder-status]'), folder.lastSynced, folder.protected === false ? 'Not indexed yet' : 'Not synced yet');
     renderItemProgress(row, folderJob(folder, job));
   }
 }
@@ -222,6 +235,7 @@ async function refreshFolderStats() {
       row.querySelector('[data-folder-files]').textContent = `${Number(item.files).toLocaleString()} files`;
       row.querySelector('[data-folder-size]').textContent = bytes(item.bytes);
       row.querySelector('[data-folder-free]').textContent = `${bytes(item.freeBytes)} free`;
+      if (item.protected === false) setRelativeTime(row.querySelector('[data-folder-status]'), item.lastIndexed, 'Not indexed yet');
       const ratio = item.capacityBytes ? Math.min(100, Number(item.bytes) / Number(item.capacityBytes) * 100) : 0;
       const meter = row.querySelector('[data-folder-meter]');
       meter.style.width = item.bytes ? `max(2px, ${ratio}%)` : '0';
@@ -230,15 +244,15 @@ async function refreshFolderStats() {
   } catch {}
 }
 
-function backgroundActivity(job, previews = {}) {
+function backgroundActivity(_job, previews = {}) {
   const active = Number(previews.active) || 0;
   const queued = (Number(previews.urgent) || 0) + (Number(previews.priority) || 0) + (Number(previews.queued) || 0);
-  if (job?.status === 'running' || (!active && !queued)) return void (activityCard.hidden = true);
+  if (!active && !queued) return void (activityCard.hidden = true);
   activityCard.hidden = false;
   const key = `${active}:${queued}`;
   if ($('#activity').dataset.key === key) return;
   $('#activity').dataset.key = key;
-  $('#activity').innerHTML = `<span><strong>Previews</strong>${active ? ` · ${active} working` : ''}${queued ? ` · ${queued.toLocaleString()} queued` : ''}</span><div class="progress-bar indeterminate"><i style="width:32%"></i></div>`;
+  $('#activity').innerHTML = `<span><strong>Thumbnails</strong>${active ? ` · ${active} generating` : ''}${queued ? ` · ${queued.toLocaleString()} queued` : ''}</span><div class="progress-bar indeterminate"><i style="width:32%"></i></div>`;
 }
 
 async function refreshLibrary() {
@@ -252,7 +266,7 @@ async function refreshLibrary() {
 function finishedToast(job) {
   if (job.status === 'canceled') return 'Canceled';
   if (job.status !== 'done') return job.error;
-  if (job.type === 'sync') return 'Synced';
+  if (job.type === 'sync') return /^(?:Check|Update) /.test(String(job.label || '')) ? 'Indexed' : 'Synced';
   if (job.type === 'restore') return 'Restored';
   if (job.type === 'verify') {
     const result = job.result || {};
