@@ -66,6 +66,8 @@ function publicFile(file) {
 function mergeGeometry(file) {
   const hash = String(file?.hash || '');
   if (Number(file.width) > 0 && Number(file.height) > 0) return file;
+  const startup = window.mochimonoStartupGeometry?.get?.(hash);
+  if (startup?.width && startup?.height) return { ...file, width: startup.width, height: startup.height };
   const pending = pendingGeometry.get(hash);
   if (pending?.width && pending?.height) return { ...file, width: pending.width, height: pending.height };
   const previous = records.get(hash);
