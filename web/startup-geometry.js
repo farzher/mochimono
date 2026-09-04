@@ -1,33 +1,46 @@
 const files = document.querySelector('#files');
 const originalReady = window.mochimonoInstantGridReady || Promise.resolve(false);
 const geometry = new Map();
+const pendingHashes = new Set();
 const pendingRows = new Set();
-const STARTUP_VISIBLE_MS = 1800;
-let startupVisibleUntil = 0;
+const attempts = new Map();
+const CHECK_LIMIT = 500;
+const RETRY_DELAY = 180;
+const MAX_RETRIES = 2;
+let checkTimer = 0;
+let checking = false;
 let rowFrame = 0;
-let userInteracted = false;
+
+const style = document.createElement('style');
+style.textContent = `
+.files.grid .geometry-pending{visibility:hidden}
+.files.grid .justified-media-row:has(>.geometry-pending){visibility:hidden}
+`;
+document.head.append(style);
+
+const validHash = hash => /^[a-f0-9]{64}$/.test(String(hash || ''));
+const hashFor = card => String(card?.dataset?.hash || card?.dataset?.instantHash || '');
+const hasDimensions = card => Number(card?.dataset?.width) > 0 && Number(card?.dataset?.height) > 0;
+
+function mediaCardsIn(node) {
+  if (!(node instanceof Element)) return [];
+  const cards = [];
+  if (node.matches('.media-card[data-hash],.media-card[data-instant-hash]')) cards.push(node);
+  cards.push(...node.querySelectorAll('.media-card[data-hash],.media-card[data-instant-hash]'));
+  return cards;
+}
 
 function apply(card, width, height) {
   width = Number(width) || 0;
   height = Number(height) || 0;
   if (!card || !width || !height) return false;
-  card.dataset.width = String(width);
-  card.dataset.height = String(height);
-  card.style.setProperty('--ratio', String(width / height));
+  const widthText = String(width);
+  const heightText = String(height);
+  if (card.dataset.width !== widthText) card.dataset.width = widthText;
+  if (card.dataset.height !== heightText) card.dataset.height = heightText;
+  const ratio = String(width / height);
+  if (card.style.getPropertyValue('--ratio') !== ratio) card.style.setProperty('--ratio', ratio);
   return true;
-}
-
-function applyKnown(node) {
-  if (!(node instanceof Element)) return;
-  const cards = [];
-  if (node.matches('[data-hash]')) cards.push(node);
-  cards.push(...node.querySelectorAll('[data-hash]'));
-  if (cards.length && !startupVisibleUntil) startupVisibleUntil = performance.now() + STARTUP_VISIBLE_MS;
-  for (const card of cards) {
-    if (Number(card.dataset.width) > 0 && Number(card.dataset.height) > 0) continue;
-    const known = geometry.get(String(card.dataset.hash || ''));
-    if (known) apply(card, known.width, known.height);
-  }
 }
 
 function visibleAnchor() {
@@ -37,6 +50,7 @@ function visibleAnchor() {
   const xs = [bounds.left + 8, (bounds.left + bounds.right) / 2, bounds.right - 8]
     .map(x => Math.max(1, Math.min(innerWidth - 2, x)));
   for (const y of [top + 2, top + 40, top + 80]) {
+    if (y >= innerHeight) break;
     for (const x of xs) {
       const card = document.elementFromPoint(x, y)?.closest?.('#files [data-hash]');
       if (card) return { hash: card.dataset.hash, top: card.getBoundingClientRect().top };
@@ -109,15 +123,16 @@ function flushRows() {
   if (!pendingRows.size) return;
   const ready = [];
   let needsAnchor = false;
-  const allowVisible = !userInteracted && startupVisibleUntil && performance.now() <= startupVisibleUntil;
+
   for (const row of pendingRows) {
     if (!row.isConnected) {
       pendingRows.delete(row);
       continue;
     }
-    const rect = row.getBoundingClientRect();
-    if (rowIsVisible(row) && !allowVisible) continue;
-    if (rect.top < innerHeight) needsAnchor = true;
+    const blocking = [...row.querySelectorAll(':scope > .geometry-pending')];
+    if (blocking.some(card => !hasDimensions(card))) continue;
+    if (!blocking.length && rowIsVisible(row)) continue;
+    if (row.getBoundingClientRect().top < innerHeight) needsAnchor = true;
     ready.push(row);
   }
   if (!ready.length) return;
@@ -126,6 +141,11 @@ function flushRows() {
   for (const row of ready) {
     pendingRows.delete(row);
     reflowRow(row);
+    for (const card of row.querySelectorAll(':scope > .geometry-pending')) {
+      if (hasDimensions(card)) {
+        card.classList.remove('geometry-pending', 'geometry-fallback');
+      }
+    }
   }
   restoreAnchor(anchor);
 }
@@ -135,12 +155,123 @@ function scheduleRows() {
 }
 
 function queueCardRow(card) {
-  if (!(card instanceof Element)) return;
-  if (!(Number(card.dataset.width) > 0 && Number(card.dataset.height) > 0)) return;
+  if (!(card instanceof Element) || !hasDimensions(card)) return;
   const row = card.closest('.justified-media-row');
   if (!row) return;
   pendingRows.add(row);
   scheduleRows();
+}
+
+function remember(hash, width, height) {
+  hash = String(hash || '');
+  width = Number(width) || 0;
+  height = Number(height) || 0;
+  if (!validHash(hash) || !width || !height) return;
+  geometry.set(hash, { width, height });
+
+  const selector = `.media-card[data-hash="${CSS.escape(hash)}"],.media-card[data-instant-hash="${CSS.escape(hash)}"]`;
+  for (const card of files?.querySelectorAll(selector) || []) {
+    apply(card, width, height);
+    const row = card.closest('.justified-media-row');
+    if (row) queueCardRow(card);
+    else card.classList.remove('geometry-pending', 'geometry-fallback');
+  }
+
+  try { window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height); } catch {}
+}
+
+function fallback(hash) {
+  hash = String(hash || '');
+  if (!validHash(hash)) return;
+  const selector = `.media-card[data-hash="${CSS.escape(hash)}"],.media-card[data-instant-hash="${CSS.escape(hash)}"]`;
+  for (const card of files?.querySelectorAll(selector) || []) {
+    card.classList.remove('geometry-pending');
+    card.classList.add('geometry-fallback');
+  }
+  attempts.delete(hash);
+  scheduleRows();
+}
+
+async function resolveHashes(hashes) {
+  hashes = [...new Set(hashes.map(String).filter(validHash))].slice(0, CHECK_LIMIT);
+  if (!hashes.length) return true;
+  try {
+    const response = await fetch('/api/thumbs/check', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hashes })
+    });
+    if (!response.ok) throw new Error(`Thumbnail geometry check failed (${response.status})`);
+    const data = await response.json();
+    const ready = new Set();
+    for (const item of data.thumbnails || []) {
+      const hash = String(item.hash || '');
+      const width = Number(item.width) || 0;
+      const height = Number(item.height) || 0;
+      if (!validHash(hash) || !width || !height) continue;
+      ready.add(hash);
+      attempts.delete(hash);
+      remember(hash, width, height);
+    }
+    for (const hash of hashes) if (!ready.has(hash)) fallback(hash);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function scheduleCheck(delay = 0) {
+  if (checkTimer || checking || !pendingHashes.size) return;
+  checkTimer = setTimeout(flushChecks, delay);
+}
+
+async function flushChecks() {
+  checkTimer = 0;
+  if (checking || !pendingHashes.size || document.hidden) return;
+  const hashes = [...pendingHashes].slice(0, CHECK_LIMIT);
+  hashes.forEach(hash => pendingHashes.delete(hash));
+  checking = true;
+  const ok = await resolveHashes(hashes);
+  checking = false;
+
+  if (!ok) {
+    for (const hash of hashes) {
+      const count = (attempts.get(hash) || 0) + 1;
+      attempts.set(hash, count);
+      if (count <= MAX_RETRIES) pendingHashes.add(hash);
+      else fallback(hash);
+    }
+  }
+  if (pendingHashes.size) scheduleCheck(ok ? 0 : RETRY_DELAY);
+}
+
+function inspectCard(card) {
+  if (!(card instanceof Element) || !card.matches('.media-card[data-hash],.media-card[data-instant-hash]')) return;
+  const hash = hashFor(card);
+  if (!validHash(hash)) return;
+
+  if (hasDimensions(card)) {
+    const width = Number(card.dataset.width);
+    const height = Number(card.dataset.height);
+    geometry.set(hash, { width, height });
+    card.classList.remove('geometry-pending');
+    return;
+  }
+
+  const known = geometry.get(hash);
+  if (known) {
+    apply(card, known.width, known.height);
+    card.classList.remove('geometry-pending', 'geometry-fallback');
+    return;
+  }
+
+  card.classList.add('geometry-pending');
+  pendingHashes.add(hash);
+  scheduleCheck();
+}
+
+function inspectTree(node) {
+  for (const card of mediaCardsIn(node)) inspectCard(card);
 }
 
 const observer = files ? new MutationObserver(records => {
@@ -149,7 +280,7 @@ const observer = files ? new MutationObserver(records => {
       queueCardRow(record.target);
       continue;
     }
-    for (const node of record.addedNodes) applyKnown(node);
+    for (const node of record.addedNodes) inspectTree(node);
   }
 }) : null;
 observer?.observe(files, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-width','data-height'] });
@@ -158,9 +289,9 @@ window.addEventListener('scroll', () => {
   if (pendingRows.size) scheduleRows();
 }, { passive: true });
 
-for (const eventName of ['wheel','pointerdown','keydown','touchstart']) {
-  window.addEventListener(eventName, () => { userInteracted = true; }, { passive: true, capture: true, once: true });
-}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && pendingHashes.size) scheduleCheck();
+});
 
 function waitForInstantCards(timeout = 400) {
   if (files?.querySelector('[data-instant-hash]')) return Promise.resolve(true);
@@ -183,40 +314,22 @@ function waitForInstantCards(timeout = 400) {
   });
 }
 
-async function prime() {
-  const cards = [...files.querySelectorAll('[data-instant-hash]')];
-  const hashes = [...new Set(cards.map(card => String(card.dataset.instantHash || '')).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
-  if (!hashes.length) return;
-
-  try {
-    const response = await fetch('/api/thumbs/check', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ hashes })
-    });
-    if (!response.ok) return;
-    const data = await response.json();
-    for (const item of data.thumbnails || []) {
-      const hash = String(item.hash || '');
-      const width = Number(item.width) || 0;
-      const height = Number(item.height) || 0;
-      if (!hash || !width || !height) continue;
-      geometry.set(hash, { width, height });
-      const instant = files.querySelector(`[data-instant-hash="${CSS.escape(hash)}"]`);
-      apply(instant, width, height);
-    }
-  } catch {}
-
-  // Feed the catalog cache before this startup promise resolves. The first real
-  // grid can therefore use these dimensions instead of freezing fallback ratios.
-  for (const [hash, item] of geometry) {
-    window.mochimonoCatalogCache?.rememberDimensions?.(hash, item.width, item.height);
-  }
+async function primeInstant() {
+  const cards = [...files.querySelectorAll('.media-card[data-instant-hash]')];
+  cards.forEach(inspectCard);
+  const hashes = cards.map(hashFor).filter(hash => validHash(hash) && !geometry.has(hash));
+  if (hashes.length) await resolveHashes(hashes);
 }
 
 window.mochimonoStartupGeometry = geometry;
+window.mochimonoGeometry = {
+  get: hash => geometry.get(String(hash || '')) || null,
+  prime: hashes => resolveHashes(Array.isArray(hashes) ? hashes : []),
+  state: () => ({ known: geometry.size, pending: pendingHashes.size, checking })
+};
+
 window.mochimonoInstantGridReady = Promise.resolve(originalReady).then(async painted => {
   const hasInstantGrid = painted || await waitForInstantCards();
-  if (hasInstantGrid) await prime();
+  if (hasInstantGrid) await primeInstant();
   return painted;
 });
