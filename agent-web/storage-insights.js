@@ -16,6 +16,8 @@ if (storagePane && foldersSection) {
 .storage-space-folder>i{height:4px;border-radius:999px;background:#272327;overflow:hidden}
 .storage-space-folder>i>b{display:block;height:100%;border-radius:inherit;background:#d69a95}
 .storage-space-folder>strong{min-width:62px;color:#968d8b;font-size:11px;font-weight:650;text-align:right;white-space:nowrap}
+.storage-space-types{display:flex;flex-wrap:wrap;gap:5px 12px;padding:1px 3px 0;color:#8f8684;font-size:11px}
+.storage-space-types b{color:#b7aeab;font-weight:650}
 .storage-space-candidates{padding:3px 3px 0}
 .storage-space-candidates[hidden]{display:none!important}
 .storage-space-candidates-head{margin:3px 0 5px;color:#8f8684;font-size:11px;font-weight:700}
@@ -35,6 +37,7 @@ if (storagePane && foldersSection) {
   section.innerHTML = `
     <div class="storage-space-head"><h2>Space</h2><span class="storage-space-total" data-space-total></span></div>
     <div class="storage-space-folders" data-space-folders></div>
+    <div class="storage-space-types" data-space-types title="Unique indexed content"></div>
     <div class="storage-space-candidates" data-space-candidates hidden>
       <div class="storage-space-candidates-head">Worth shrinking</div>
       <div data-space-candidate-list></div>
@@ -43,6 +46,7 @@ if (storagePane && foldersSection) {
 
   const totalNode = section.querySelector('[data-space-total]');
   const foldersNode = section.querySelector('[data-space-folders]');
+  const typesNode = section.querySelector('[data-space-types]');
   const candidatesNode = section.querySelector('[data-space-candidates]');
   const candidateList = section.querySelector('[data-space-candidate-list]');
   let loading = null;
@@ -94,19 +98,42 @@ if (storagePane && foldersSection) {
 
   async function localFiles(token) {
     const files = [];
+    const seen = new Set();
     let offset = 0;
     for (;;) {
       if (token !== generation) return [];
       const response = await fetch(`/api/client/local-catalog?limit=5000&offset=${offset}`, { cache:'no-store' });
       if (!response.ok) throw new Error('Could not inspect local files');
       const data = await response.json();
-      files.push(...(data.files || []));
+      for (const file of data.files || []) {
+        const hash = String(file.hash || '');
+        if (hash && seen.has(hash)) continue;
+        if (hash) seen.add(hash);
+        files.push(file);
+      }
       if (data.nextOffset == null) break;
       offset = Number(data.nextOffset) || 0;
       if (!offset) break;
       await new Promise(resolve => setTimeout(resolve, 0));
     }
     return files;
+  }
+
+  function renderTypes(files) {
+    const totals = { Videos:0, Images:0, Audio:0, Other:0 };
+    for (const file of files) {
+      const mime = String(file.mime || '');
+      const size = Number(file.size) || 0;
+      if (mime.startsWith('video/')) totals.Videos += size;
+      else if (mime.startsWith('image/')) totals.Images += size;
+      else if (mime.startsWith('audio/')) totals.Audio += size;
+      else totals.Other += size;
+    }
+    typesNode.innerHTML = Object.entries(totals)
+      .filter(([,size]) => size > 0)
+      .sort((a,b) => b[1] - a[1])
+      .map(([label,size]) => `<span><b>${label}</b> ${esc(bytes(size))}</span>`)
+      .join('');
   }
 
   function renderCandidates(files) {
@@ -135,6 +162,7 @@ if (storagePane && foldersSection) {
         if (token !== generation || !renderFolders(stats.folders || [])) return;
         const files = await localFiles(token);
         if (token !== generation) return;
+        renderTypes(files);
         renderCandidates(files);
         loadedAt = Date.now();
       } catch {
