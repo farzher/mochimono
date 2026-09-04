@@ -49,6 +49,9 @@ style.textContent = `
   .storage-shortcut .storage-shortcut-library{display:none}
   .storage-shortcut.active .storage-shortcut-storage{display:none}
   .storage-shortcut.active .storage-shortcut-library{display:block}
+  [data-folder-status][data-waiting-idle="1"]{font-size:0}
+  [data-folder-status][data-waiting-idle="1"]:after{content:'Waiting for idle';font-size:9px;color:#b9aaa5}
+  .folder-item[data-waiting-idle="1"] .item-progress .progress-bar.indeterminate>i{animation:none!important;transform:none!important;left:0!important;opacity:.45}
 `;
 document.head.append(style);
 
@@ -210,6 +213,18 @@ function renderPreviewProgress(stats) {
       row.querySelector('[data-preview-progress]')?.remove();
       continue;
     }
+
+    const waitingForIdle = Boolean(folder.waitingForIdle);
+    if (waitingForIdle) row.dataset.waitingIdle = '1';
+    else delete row.dataset.waitingIdle;
+    const status = row.querySelector('[data-folder-status]');
+    if (status) {
+      if (waitingForIdle) status.dataset.waitingIdle = '1';
+      else delete status.dataset.waitingIdle;
+    }
+    const jobTitle = row.querySelector('[data-item-progress] .inline-progress-head strong');
+    if (jobTitle && waitingForIdle) jobTitle.textContent = 'Waiting for idle';
+
     const info = previewInfo(folder);
     if (!info) {
       row.querySelector('[data-preview-progress]')?.remove();
