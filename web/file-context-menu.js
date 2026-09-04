@@ -4,25 +4,33 @@ const CLIENT = document.documentElement.classList.contains('client-library');
 if (files) {
   const style = document.createElement('style');
   style.textContent = `
-    .file-context-menu{position:fixed;z-index:90;width:min(330px,calc(100vw - 16px));padding:7px;border:1px solid #373238;border-radius:13px;background:rgba(24,22,25,.98);box-shadow:0 18px 55px rgba(0,0,0,.52);backdrop-filter:blur(18px);color:#eee8e4;font-size:11px;user-select:none}
+    .file-context-menu{position:fixed;z-index:90;width:min(360px,calc(100vw - 16px));padding:7px;border:1px solid #373238;border-radius:13px;background:rgba(24,22,25,.98);box-shadow:0 18px 55px rgba(0,0,0,.52);backdrop-filter:blur(18px);color:#eee8e4;font-size:11px;user-select:none}
     .file-context-menu[hidden]{display:none}
-    .file-context-summary{padding:9px 9px 10px;border-bottom:1px solid #2d292d;user-select:text}
-    .file-context-summary strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:1.35;color:#f3eeeb}
-    .file-context-path{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8f8785;font:9px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace}
-    .file-context-facts{display:flex;gap:10px;margin-top:7px;color:#777071;font-size:9px}
-    .file-context-facts span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .file-context-summary{padding:10px 10px 11px;border-bottom:1px solid #2d292d}
+    .file-context-summary>strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:1.35;color:#f5f0ed;user-select:text}
+    .file-context-path-wrap{margin-top:9px}
+    .file-context-label{display:block;margin-bottom:4px;color:#716a6d;font-size:8px;font-weight:750;letter-spacing:.08em;text-transform:uppercase}
+    .file-context-path{max-height:46px;overflow:auto;padding:6px 7px;border:1px solid #302c31;border-radius:7px;background:#161417;color:#aaa19f;font:9.5px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;user-select:text;scrollbar-width:thin}
+    .file-context-facts{display:grid;grid-template-columns:1fr auto;gap:18px;margin-top:9px}
+    .file-context-fact{min-width:0}
+    .file-context-fact b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#d8d0cd;font-size:10px;font-weight:600;line-height:1.35;user-select:text}
     .file-context-actions{display:grid;gap:1px;padding-top:5px}
-    .file-context-action{width:100%;min-height:33px;display:flex;align-items:center;gap:9px;padding:7px 9px;border:0;border-radius:8px;background:transparent;color:#d9d1ce;text-align:left;font-size:10px;font-weight:650;cursor:pointer}
+    .file-context-action{width:100%;min-height:34px;display:flex;align-items:center;gap:10px;padding:7px 9px;border:0;border-radius:8px;background:transparent;color:#d9d1ce;text-align:left;font-size:10.5px;font-weight:650;cursor:pointer}
     .file-context-action:hover,.file-context-action:focus-visible{outline:none;background:#2b272c;color:#fff}
     .file-context-action[disabled]{opacity:.38;cursor:default;background:transparent}
-    .file-context-action i{width:17px;height:17px;display:grid;place-items:center;flex:0 0 17px;color:#9e9694;font-style:normal;font-size:13px}
-    .file-context-action.primary{color:#f1d7d3}
-    .file-context-action.primary i{color:#e9aaa4}
+    .file-context-action i{width:18px;height:18px;display:grid;place-items:center;flex:0 0 18px;color:#a49c99;font-style:normal}
+    .file-context-action i svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.55;stroke-linecap:round;stroke-linejoin:round}
     .file-context-status{min-height:0;padding:0 9px;color:#d89089;font-size:9px;line-height:1.3}
     .file-context-status:not(:empty){padding-top:5px;padding-bottom:4px}
-    @media(max-width:700px){.file-context-menu{width:min(310px,calc(100vw - 12px))}}
+    @media(max-width:700px){.file-context-menu{width:min(330px,calc(100vw - 12px))}}
   `;
   document.head.append(style);
+
+  const icon = path => `<svg viewBox="0 0 20 20" aria-hidden="true">${path}</svg>`;
+  const folderIcon = icon('<path d="M2.8 5.8h5l1.5-1.9h2.8l1.4 1.9h3.7v9.3H2.8z"/><path d="M5.3 9.1h9.4"/>');
+  const openIcon = icon('<path d="M8 4.2h7.8V12"/><path d="M15.8 4.2 8.7 11.3"/><path d="M12.8 9.3v6.2H4.5V7.2h6.2"/>');
+  const saveIcon = icon('<path d="M3.5 3.5h10.1l2.9 2.9v10.1h-13z"/><path d="M6.1 3.5v5h7.2v-5"/><path d="M6.2 12.1h7.6v4.4H6.2z"/>');
+  const copyIcon = icon('<rect x="6.4" y="6.4" width="9.1" height="9.1" rx="1.3"/><path d="M13.2 6.4V4.5H4.5v8.7h1.9"/>');
 
   const menu = document.createElement('div');
   menu.className = 'file-context-menu';
@@ -31,15 +39,20 @@ if (files) {
   menu.innerHTML = `
     <div class="file-context-summary">
       <strong data-context-filename></strong>
-      <div class="file-context-path" data-context-path></div>
-      <div class="file-context-facts"><span data-context-date></span><span data-context-size></span><span data-context-type></span></div>
+      <div class="file-context-path-wrap">
+        <span class="file-context-label">Path</span>
+        <div class="file-context-path" data-context-path></div>
+      </div>
+      <div class="file-context-facts">
+        <div class="file-context-fact"><span class="file-context-label">Date</span><b data-context-date></b></div>
+        <div class="file-context-fact"><span class="file-context-label">Size</span><b data-context-size></b></div>
+      </div>
     </div>
     <div class="file-context-actions">
-      <button type="button" class="file-context-action primary" data-context-action="open"><i>↗</i><span>Open</span></button>
-      <button type="button" class="file-context-action" data-context-action="reveal"><i>⌕</i><span>Show in Explorer</span></button>
-      <button type="button" class="file-context-action" data-context-action="tab"><i>□</i><span>Open in new tab</span></button>
-      <button type="button" class="file-context-action" data-context-action="save"><i>↓</i><span>Save as</span></button>
-      <button type="button" class="file-context-action" data-context-action="copy-path"><i>⧉</i><span>Copy path</span></button>
+      <button type="button" class="file-context-action" data-context-action="reveal"><i>${folderIcon}</i><span>Open in Explorer</span></button>
+      <button type="button" class="file-context-action" data-context-action="tab"><i>${openIcon}</i><span>Open in new tab</span></button>
+      <button type="button" class="file-context-action" data-context-action="save"><i>${saveIcon}</i><span>Save as</span></button>
+      <button type="button" class="file-context-action" data-context-action="copy-path"><i>${copyIcon}</i><span>Copy path</span></button>
     </div>
     <div class="file-context-status" data-context-status></div>`;
   document.body.append(menu);
@@ -54,14 +67,13 @@ if (files) {
   const pathNode = menu.querySelector('[data-context-path]');
   const dateNode = menu.querySelector('[data-context-date]');
   const sizeNode = menu.querySelector('[data-context-size]');
-  const typeNode = menu.querySelector('[data-context-type]');
   const statusNode = menu.querySelector('[data-context-status]');
   const revealButton = menu.querySelector('[data-context-action="reveal"]');
   const copyPathButton = menu.querySelector('[data-context-action="copy-path"]');
 
   function formatBytes(value) {
     let size = Number(value) || 0;
-    if (!size) return '';
+    if (!size) return '—';
     const units = ['B','KB','MB','GB','TB'];
     let unit = 0;
     while (size >= 1000 && unit < units.length - 1) { size /= 1000; unit++; }
@@ -69,10 +81,12 @@ if (files) {
   }
 
   function formatDate(value) {
-    if (!value) return '';
+    if (!value) return '—';
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return String(value);
-    return date.toLocaleString(undefined, { year:'numeric', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+    return date.toLocaleString(undefined, {
+      year:'numeric', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'
+    });
   }
 
   function joinedPath(root, relative) {
@@ -93,20 +107,13 @@ if (files) {
     return `/api/objects/${encodeURIComponent(hash)}`;
   }
 
-  function viewerUrl(hash) {
-    const url = new URL(location.href);
-    url.searchParams.set('file', hash);
-    return url.href;
-  }
-
   function render() {
     if (!active) return;
     filenameNode.textContent = active.filename || active.hash;
     pathNode.textContent = active.path || 'Path unavailable';
     pathNode.title = active.path || '';
-    dateNode.textContent = active.date ? `Date  ${formatDate(active.date)}` : 'Date  —';
-    sizeNode.textContent = active.size ? `Size  ${formatBytes(active.size)}` : 'Size  —';
-    typeNode.textContent = active.mime ? String(active.mime).split('/').pop().toUpperCase() : '';
+    dateNode.textContent = formatDate(active.date);
+    sizeNode.textContent = formatBytes(active.size);
     revealButton.hidden = !CLIENT;
     revealButton.disabled = CLIENT && active.local === false;
     copyPathButton.disabled = !active.path;
@@ -183,7 +190,6 @@ if (files) {
     active.local = Boolean(local || localPath(hash));
     active.date = source.mtime || object.fileDate || object.createdAt || active.date;
     active.size = Number(object.size) || Number(head?.headers?.get?.('content-length')) || active.size;
-    active.mime = object.mime || head?.headers?.get?.('content-type') || active.mime;
     render();
   }
 
@@ -198,8 +204,7 @@ if (files) {
       path: initialLocal,
       local: Boolean(initialLocal),
       date: card.dataset.day || '',
-      size: 0,
-      mime: card.classList.contains('video-card') ? 'video' : 'image'
+      size: 0
     };
     statusNode.textContent = '';
     render();
@@ -225,13 +230,8 @@ if (files) {
     const snapshot = { ...active };
     statusNode.textContent = '';
 
-    if (action === 'open') {
-      close();
-      window.mochimonoOpenViewer?.(snapshot.hash);
-      return;
-    }
     if (action === 'tab') {
-      window.open(viewerUrl(snapshot.hash), '_blank', 'noopener');
+      window.open(objectUrl(snapshot.hash), '_blank', 'noopener');
       close();
       return;
     }
@@ -246,12 +246,8 @@ if (files) {
       return;
     }
     if (action === 'copy-path') {
-      try {
-        await navigator.clipboard.writeText(snapshot.path);
-        statusNode.textContent = 'Path copied';
-      } catch {
-        statusNode.textContent = 'Could not copy path';
-      }
+      navigator.clipboard.writeText(snapshot.path).catch(() => {});
+      close();
       return;
     }
     if (action === 'reveal') {
@@ -263,10 +259,10 @@ if (files) {
           body:JSON.stringify({ hash:snapshot.hash })
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || 'Could not show file');
+        if (!response.ok) throw new Error(data.error || 'Could not open file in Explorer');
         close();
       } catch (error) {
-        statusNode.textContent = error?.message || 'Could not show file';
+        statusNode.textContent = error?.message || 'Could not open file in Explorer';
         button.disabled = false;
       }
     }
