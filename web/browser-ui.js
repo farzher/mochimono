@@ -37,55 +37,61 @@ document.addEventListener('keydown', event => {
 let press = null;
 let dispatchingLongPress = false;
 let suppressHash = '';
+let suppressUntil = 0;
 
 function cancelPress() {
-  if (!press) return;
-  clearTimeout(press.timer);
+  if (press?.timer) clearTimeout(press.timer);
   press = null;
 }
 
-function startPress(event) {
-  if (event.pointerType !== 'touch') return;
-  const card = event.target.closest('#files [data-hash]');
-  if (!card) return;
+files.addEventListener('pointerdown', event => {
+  if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+  const item = event.target.closest('[data-hash]');
+  if (!item) return;
   cancelPress();
-  const start = { x: event.clientX, y: event.clientY };
+  const hash = item.dataset.hash;
   press = {
     pointerId: event.pointerId,
-    card,
-    start,
+    hash,
+    x: event.clientX,
+    y: event.clientY,
     timer: setTimeout(() => {
-      if (!press || press.card !== card) return;
-      suppressHash = card.dataset.hash || '';
+      if (!press || press.hash !== hash) return;
+      suppressHash = hash;
+      suppressUntil = performance.now() + 900;
       dispatchingLongPress = true;
-      card.dispatchEvent(new MouseEvent('contextmenu', {
+      item.dispatchEvent(new MouseEvent('click', {
         bubbles: true,
         cancelable: true,
-        clientX: start.x,
-        clientY: start.y,
-        button: 2
+        ctrlKey: true,
+        clientX: press.x,
+        clientY: press.y
       }));
       dispatchingLongPress = false;
+      navigator.vibrate?.(8);
       cancelPress();
-    }, 520)
+    }, 500)
   };
-}
+}, { passive: true });
 
-files.addEventListener('pointerdown', startPress, { passive: true });
 files.addEventListener('pointermove', event => {
-  if (!press || press.pointerId !== event.pointerId) return;
-  if (Math.hypot(event.clientX - press.start.x, event.clientY - press.start.y) > 12) cancelPress();
+  if (!press || event.pointerId !== press.pointerId) return;
+  if (Math.hypot(event.clientX - press.x, event.clientY - press.y) > 12) cancelPress();
 }, { passive: true });
 files.addEventListener('pointerup', cancelPress, { passive: true });
 files.addEventListener('pointercancel', cancelPress, { passive: true });
+
 files.addEventListener('click', event => {
-  const card = event.target.closest('[data-hash]');
-  if (!card || !suppressHash || card.dataset.hash !== suppressHash) return;
+  if (dispatchingLongPress) return;
+  const item = event.target.closest('[data-hash]');
+  if (!item || item.dataset.hash !== suppressHash || performance.now() > suppressUntil) return;
   suppressHash = '';
+  suppressUntil = 0;
   event.preventDefault();
   event.stopImmediatePropagation();
 }, true);
+
 files.addEventListener('contextmenu', event => {
-  if (dispatchingLongPress) return;
-  cancelPress();
-}, true);
+  const item = event.target.closest('[data-hash]');
+  if (item && item.dataset.hash === suppressHash && performance.now() <= suppressUntil) event.preventDefault();
+});
