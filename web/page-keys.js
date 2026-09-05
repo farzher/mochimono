@@ -2,6 +2,7 @@ const viewer = document.querySelector('#viewer');
 const commandbar = document.querySelector('.commandbar');
 const pageKeys = new Set(['PageUp','PageDown','Home','End']);
 let releaseTimer = 0;
+let lastWarmAt = 0;
 
 function editingControl(target) {
   return Boolean(target?.closest?.('input,select,textarea,[contenteditable="true"]'));
@@ -15,6 +16,7 @@ function pageDistance() {
 function release() {
   clearTimeout(releaseTimer);
   releaseTimer = 0;
+  lastWarmAt = 0;
   window.mochimonoThumbnails?.clearPriority?.();
   window.mochimonoGridInteraction?.release?.();
 }
@@ -22,6 +24,13 @@ function release() {
 function armRelease() {
   clearTimeout(releaseTimer);
   releaseTimer = setTimeout(release, 140);
+}
+
+function warm(stable, target) {
+  const now = performance.now();
+  if (now - lastWarmAt < 80) return;
+  lastWarmAt = now;
+  stable.warmViewport?.(target);
 }
 
 function stablePress(key) {
@@ -47,9 +56,9 @@ function stablePress(key) {
   const distance = pageDistance();
   const target = Math.max(0, window.scrollY + direction * distance);
 
-  // Native key-repeat is never serialized: each event moves immediately.
-  // Thumbnail/row warming happens asynchronously and cannot throttle motion.
-  stable.warmViewport?.(target);
+  // Every native key-repeat moves immediately. Warming is throttled and fully
+  // asynchronous, so thumbnail work can never become the speed limit.
+  warm(stable, target);
   window.scrollTo({ top:target, left:0, behavior:'auto' });
   return true;
 }
