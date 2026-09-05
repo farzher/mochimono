@@ -1,10 +1,10 @@
 const CATALOG_DB = 'mochimono-library';
 const CATALOG_META_KEY = 'catalog';
-const THUMB_CHECK_LIMIT = 500;
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const VIDEO_EXTENSIONS = new Set(['m4v','mp4','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
 
 const sessions = new Map();
+let latestBuildGeneration = 0;
 
 const requestResult = request => new Promise((resolve, reject) => {
   request.onsuccess = () => resolve(request.result);
@@ -47,7 +47,7 @@ async function loadCatalog(version = '') {
     if (!wanted || !meta?.version || String(meta.version) !== wanted) return null;
     const files = all.filter(file => file?.__snapshot === wanted);
     if (files.length !== Number(meta.count || 0)) return null;
-    return { version: wanted, files };
+    return { version:wanted, files };
   } finally {
     try { db.close(); } catch {}
   }
@@ -80,7 +80,9 @@ function matchesLocation(file, location) {
 }
 
 function timelineMs(file, sort) {
-  if (sort === 'date-added') return Number(file.addedMs) || Number(file.dateMs) || Date.parse(file.addedAt || file.createdAt || 0) || 0;
+  if (sort === 'date-added') {
+    return Number(file.addedMs) || Number(file.dateMs) || Date.parse(file.addedAt || file.createdAt || 0) || 0;
+  }
   return Number(file.dateMs) || Date.parse(file.fileDate || file.createdAt || 0) || 0;
 }
 
@@ -91,54 +93,24 @@ function filterAndSort(files, config) {
   const result = files.filter(file => {
     if (!matchesType(file, wanted) || !matchesLocation(file, location)) return false;
     if (sourceId) {
-      const ids = Array.isArray(file.importIds) ? file.importIds.map(Number) : String(file.importIds || '').split(',').map(Number);
+      const ids = Array.isArray(file.importIds)
+        ? file.importIds.map(Number)
+        : String(file.importIds || '').split(',').map(Number);
       if (!ids.includes(sourceId)) return false;
     }
     return true;
   });
 
-  if (config.sort === 'date-added') result.sort((a, b) => timelineMs(b, config.sort) - timelineMs(a, config.sort) || String(a.hash).localeCompare(String(b.hash)));
-  else if (config.sort === 'date-asc') result.sort((a, b) => timelineMs(a, config.sort) - timelineMs(b, config.sort) || String(a.hash).localeCompare(String(b.hash)));
-  else if (config.sort === 'size-desc') result.sort((a, b) => Number(b.size || 0) - Number(a.size || 0) || String(a.filename || '').localeCompare(String(b.filename || '')));
-  else result.sort((a, b) => timelineMs(b, config.sort) - timelineMs(a, config.sort) || String(a.hash).localeCompare(String(b.hash)));
-  return result;
-}
-
-async function resolveThumbnailGeometry(files) {
-  const missing = files.filter(file => !(Number(file.width) > 0 && Number(file.height) > 0)).map(file => String(file.hash || '')).filter(Boolean);
-  if (!missing.length) return { unresolved: 0, learned: [] };
-  const byHash = new Map(files.map(file => [String(file.hash || ''), file]));
-  const learned = [];
-  let unresolved = 0;
-
-  for (let offset = 0; offset < missing.length; offset += THUMB_CHECK_LIMIT) {
-    const hashes = missing.slice(offset, offset + THUMB_CHECK_LIMIT);
-    try {
-      const response = await fetch('/api/thumbs/check', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ hashes })
-      });
-      if (!response.ok) throw new Error(`thumbnail check ${response.status}`);
-      const data = await response.json();
-      const ready = new Set();
-      for (const item of data.thumbnails || []) {
-        const hash = String(item.hash || '');
-        const width = Number(item.width) || 0;
-        const height = Number(item.height) || 0;
-        const file = byHash.get(hash);
-        if (!file || !width || !height) continue;
-        ready.add(hash);
-        file.width = width;
-        file.height = height;
-        learned.push([hash, width, height]);
-      }
-      unresolved += hashes.length - ready.size;
-    } catch {
-      unresolved += hashes.length;
-    }
+  if (config.sort === 'date-added') {
+    result.sort((a, b) => timelineMs(b, config.sort) - timelineMs(a, config.sort) || String(a.hash).localeCompare(String(b.hash)));
+  } else if (config.sort === 'date-asc') {
+    result.sort((a, b) => timelineMs(a, config.sort) - timelineMs(b, config.sort) || String(a.hash).localeCompare(String(b.hash)));
+  } else if (config.sort === 'size-desc') {
+    result.sort((a, b) => Number(b.size || 0) - Number(a.size || 0) || String(a.filename || '').localeCompare(String(b.filename || '')));
+  } else {
+    result.sort((a, b) => timelineMs(b, config.sort) - timelineMs(a, config.sort) || String(a.hash).localeCompare(String(b.hash)));
   }
-  return { unresolved, learned };
+  return result;
 }
 
 function ratio(file) {
@@ -149,7 +121,7 @@ function ratio(file) {
 
 function dateParts(ms) {
   const date = new Date(Number(ms) || 0);
-  return { year: date.getFullYear(), month: date.getMonth(), day: date.getDate() };
+  return { year:date.getFullYear(), month:date.getMonth(), day:date.getDate() };
 }
 
 function layoutFiles(files, config) {
@@ -187,6 +159,7 @@ function layoutFiles(files, config) {
     rowCounts.push(count);
     rowTops.push(y);
     rowHeights.push(height);
+
     let x = 0;
     for (let index = start; index < end; index++) {
       const w = ratio(files[index]) * height;
@@ -196,7 +169,7 @@ function layoutFiles(files, config) {
       const parts = dateParts(timelineMs(files[index], config.sort));
       const dayKey = `${parts.year}-${parts.month + 1}-${parts.day}`;
       if (grouped && dayKey !== previousDayKey) {
-        dayStarts.push({ index, row, x, top: y, year: parts.year, month: parts.month, day: parts.day });
+        dayStarts.push({ index, row, x, top:y, year:parts.year, month:parts.month, day:parts.day });
         previousDayKey = dayKey;
       }
       x += w + gap;
@@ -227,8 +200,6 @@ function layoutFiles(files, config) {
       }
       ratioSum += nextRatio;
     }
-    // The terminal incomplete row should look like normal thumbnails, not grow
-    // just to touch the right edge. Leave the remaining horizontal space empty.
     if (rowStart < end) finishRow(rowStart, end, false);
   }
 
@@ -244,11 +215,11 @@ function layoutFiles(files, config) {
       }
       y += GROUP_GAP;
       if (first.year !== previousYear) {
-        headers.push({ kind: 'year', year: first.year, month: first.month, top: y });
+        headers.push({ kind:'year', year:first.year, month:first.month, top:y });
         y += YEAR_HEIGHT;
         previousYear = first.year;
       }
-      headers.push({ kind: 'month', year: first.year, month: first.month, top: y });
+      headers.push({ kind:'month', year:first.year, month:first.month, top:y });
       y += MONTH_HEIGHT;
       layoutRange(start, end);
       start = end;
@@ -261,11 +232,11 @@ function layoutFiles(files, config) {
   y += 20;
 
   return {
-    totalHeight: Math.max(1, y),
-    rowStarts: Uint32Array.from(rowStarts),
-    rowCounts: Uint16Array.from(rowCounts),
-    rowTops: Float32Array.from(rowTops),
-    rowHeights: Float32Array.from(rowHeights),
+    totalHeight:Math.max(1, y),
+    rowStarts:Uint32Array.from(rowStarts),
+    rowCounts:Uint16Array.from(rowCounts),
+    rowTops:Float32Array.from(rowTops),
+    rowHeights:Float32Array.from(rowHeights),
     itemRows,
     itemX,
     itemW,
@@ -278,15 +249,39 @@ async function build(message) {
   const generation = Number(message.generation) || 0;
   const config = message.config || {};
   const snapshot = await loadCatalog(config.version);
+
+  // Builds are asynchronous because IndexedDB is asynchronous. A newer config can
+  // arrive while an older read is in flight; abandon the old work before sorting
+  // and laying out the entire catalog.
+  if (generation !== latestBuildGeneration) return;
+
   if (!snapshot) {
-    postMessage({ type: 'unavailable', generation });
+    postMessage({ type:'unavailable', generation });
     return;
   }
+
   const files = filterAndSort(snapshot.files, config);
-  const { unresolved, learned } = await resolveThumbnailGeometry(files);
+  if (generation !== latestBuildGeneration) return;
+
+  // Geometry must never gate scrolling. Use persisted source dimensions when
+  // available and the stable 4:3 fallback otherwise. Thumbnail loading learns
+  // real dimensions independently and future builds can use them.
+  let unresolved = 0;
+  for (const file of files) {
+    if (!(Number(file.width) > 0 && Number(file.height) > 0)) unresolved++;
+  }
+
   const geometry = layoutFiles(files, config);
+  if (generation !== latestBuildGeneration) return;
+
   const hashIndex = new Map(files.map((file, index) => [String(file.hash || ''), index]));
-  sessions.set(generation, { generation, files, config: { ...config, version: snapshot.version }, layout: geometry, hashIndex });
+  sessions.set(generation, {
+    generation,
+    files,
+    config:{ ...config, version:snapshot.version },
+    layout:geometry,
+    hashIndex
+  });
   while (sessions.size > 2) sessions.delete(sessions.keys().next().value);
 
   const rowStarts = geometry.rowStarts.slice();
@@ -294,23 +289,24 @@ async function build(message) {
   const rowTops = geometry.rowTops.slice();
   const rowHeights = geometry.rowHeights.slice();
   const itemRows = geometry.itemRows.slice();
+
   postMessage({
-    type: 'ready',
+    type:'ready',
     generation,
-    version: snapshot.version,
-    count: files.length,
+    version:snapshot.version,
+    count:files.length,
     unresolved,
-    learned,
-    totalHeight: geometry.totalHeight,
+    learned:[],
+    totalHeight:geometry.totalHeight,
     rowStarts,
     rowCounts,
     rowTops,
     rowHeights,
     itemRows,
-    headers: geometry.headers,
-    dayStarts: geometry.dayStarts,
-    firstHashes: files.slice(0, 8).map(file => file.hash),
-    lastHashes: files.slice(-8).map(file => file.hash)
+    headers:geometry.headers,
+    dayStarts:geometry.dayStarts,
+    firstHashes:files.slice(0, 8).map(file => file.hash),
+    lastHashes:files.slice(-8).map(file => file.hash)
   }, [rowStarts.buffer, rowCounts.buffer, rowTops.buffer, rowHeights.buffer, itemRows.buffer]);
 }
 
@@ -321,40 +317,69 @@ function rowPayload(current, rowId) {
   const start = current.layout.rowStarts[row];
   const count = current.layout.rowCounts[row];
   const items = [];
+
   for (let index = start; index < start + count; index++) {
     const file = current.files[index];
     items.push({
       index,
-      x: current.layout.itemX[index],
-      width: current.layout.itemW[index],
-      hash: String(file.hash || ''),
-      filename: String(file.filename || ''),
-      mime: String(file.mime || ''),
-      kind: kind(file),
-      sourceWidth: Number(file.width) || 0,
-      sourceHeight: Number(file.height) || 0,
-      dateMs: timelineMs(file, current.config.sort),
-      size: Number(file.size) || 0
+      x:current.layout.itemX[index],
+      width:current.layout.itemW[index],
+      hash:String(file.hash || ''),
+      filename:String(file.filename || ''),
+      mime:String(file.mime || ''),
+      kind:kind(file),
+      sourceWidth:Number(file.width) || 0,
+      sourceHeight:Number(file.height) || 0,
+      dateMs:timelineMs(file, current.config.sort),
+      size:Number(file.size) || 0
     });
   }
-  return { row, top: current.layout.rowTops[row], height: current.layout.rowHeights[row], items };
+
+  return {
+    row,
+    top:current.layout.rowTops[row],
+    height:current.layout.rowHeights[row],
+    items
+  };
 }
 
 self.onmessage = event => {
   const message = event.data || {};
+
   if (message.type === 'build') {
-    build(message).catch(error => postMessage({ type: 'error', generation: message.generation, message: String(error?.message || error) }));
+    latestBuildGeneration = Number(message.generation) || 0;
+    build(message).catch(error => {
+      if (Number(message.generation) !== latestBuildGeneration) return;
+      postMessage({
+        type:'error',
+        generation:message.generation,
+        message:String(error?.message || error)
+      });
+    });
     return;
   }
+
   const current = sessions.get(Number(message.generation));
   if (!current) return;
+
   if (message.type === 'rows') {
     const rows = (message.rows || []).map(row => rowPayload(current, row)).filter(Boolean);
-    postMessage({ type: 'rows', generation: current.generation, requestId: message.requestId, rows });
+    postMessage({
+      type:'rows',
+      generation:current.generation,
+      requestId:message.requestId,
+      rows
+    });
     return;
   }
+
   if (message.type === 'locate') {
     const index = current.hashIndex.get(String(message.hash || ''));
-    postMessage({ type: 'located', generation: current.generation, requestId: message.requestId, index: Number.isInteger(index) ? index : -1 });
+    postMessage({
+      type:'located',
+      generation:current.generation,
+      requestId:message.requestId,
+      index:Number.isInteger(index) ? index : -1
+    });
   }
 };
