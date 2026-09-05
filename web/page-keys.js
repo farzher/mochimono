@@ -41,7 +41,11 @@ function retryPendingPage() {
   if (!pendingPage) return;
   requestAnimationFrame(() => requestAnimationFrame(() => {
     if (!pendingPage) return;
-    pageGrid(pendingPage, false);
+    const direction = pendingPage;
+    if (!pageGrid(direction, false) && !startupGridIncomplete()) {
+      pendingPage = 0;
+      pageKeyState.queued = false;
+    }
   }));
 }
 
