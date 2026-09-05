@@ -1,6 +1,6 @@
 const files = document.querySelector('#files');
 const THUMB_VERSION = 3;
-const WARM_LIMIT = 1200;
+const WARM_LIMIT = 600;
 const warmed = new Map();
 
 const style = document.createElement('style');
@@ -32,6 +32,9 @@ function warmCard(card) {
   image.loading = 'eager';
   image.alt = '';
   try { image.fetchPriority = 'auto'; } catch {}
+  image.addEventListener('error', () => {
+    if (warmed.get(hash) === image) warmed.delete(hash);
+  }, { once:true });
   rememberWarm(hash, image);
   image.src = `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
   image.decode?.().catch(() => {});
@@ -39,6 +42,8 @@ function warmCard(card) {
 
 function fadeImage(image) {
   if (!(image instanceof HTMLImageElement) || !image.classList.contains('cached-thumb')) return;
+  const hash = String(image.dataset.thumbHash || '');
+  if (hash) warmed.delete(hash);
   if (image.dataset.mochimonoFadeBound === '1') return;
   image.dataset.mochimonoFadeBound = '1';
   image.classList.add('mochimono-thumb-fade');
