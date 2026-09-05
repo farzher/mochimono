@@ -18,7 +18,9 @@ if (viewer && compare && original && tuning && qualitySlider) {
 .image-optimize-quality-map-panel .image-optimize-slider{gap:5px}.image-optimize-quality-map-panel .image-optimize-tune-head{font-size:10.5px}
 .image-optimize-quality-mask,.image-optimize-quality-cursor{position:absolute;z-index:2;display:none;pointer-events:none;user-select:none;-webkit-user-select:none;image-rendering:auto}
 .image-optimize-quality-cursor{z-index:3;opacity:.95}
-.image-optimize-compare.image-optimize-quality-painting{cursor:none}.image-optimize-compare.image-optimize-quality-painting .image-optimize-quality-mask,.image-optimize-compare.image-optimize-quality-painting .image-optimize-quality-cursor{display:block}
+.image-optimize-compare.image-optimize-quality-painting{cursor:none}
+.image-optimize-compare.image-optimize-quality-painting .image-optimize-quality-mask,.image-optimize-compare.image-optimize-quality-painting .image-optimize-quality-cursor{display:block}
+.image-optimize-compare.image-optimize-quality-painting.image-optimize-quality-previewing .image-optimize-quality-mask,.image-optimize-compare.image-optimize-quality-painting.image-optimize-quality-previewing .image-optimize-quality-cursor{display:none}
 `;
   document.head.append(style);
 
@@ -80,6 +82,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
   let previewTimer = 0;
   let geometryFrame = 0;
   let cursorPoint = null;
+  let sliderPreviewActive = false;
 
   const optimizerActive = () => viewer.classList.contains('image-optimize-active');
 
@@ -89,9 +92,6 @@ if (viewer && compare && original && tuning && qualitySlider) {
     return [255, 92, 92, 72];
   }
 
-  // Rebuild the display overlay from the mask instead of painting translucent
-  // strokes onto translucent strokes. Overpainting can therefore never become
-  // more opaque. High is blue, Normal is amber, and Who cares is unpainted.
   function renderOverlay() {
     if (!initialized) return;
     const width = maskCanvas.width;
@@ -124,7 +124,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
 
   function renderCursor() {
     clearCursor();
-    if (!enabled || !initialized || !cursorPoint) return;
+    if (!enabled || !initialized || !cursorPoint || sliderPreviewActive) return;
     const radius = Math.max(1, brush / 2);
     const activeTool = activePointer?.button === 2 ? 'low' : tool;
     const [r, g, b, a] = toolColor(activeTool);
@@ -137,6 +137,20 @@ if (viewer && compare && original && tuning && qualitySlider) {
     cursorContext.fill();
     cursorContext.stroke();
     cursorContext.restore();
+  }
+
+  function beginSliderPreview() {
+    if (!enabled) return;
+    sliderPreviewActive = true;
+    compare.classList.add('image-optimize-quality-previewing');
+    clearCursor();
+  }
+
+  function endSliderPreview() {
+    if (!sliderPreviewActive) return;
+    sliderPreviewActive = false;
+    compare.classList.remove('image-optimize-quality-previewing');
+    renderCursor();
   }
 
   function initializeMask(force = false) {
@@ -218,6 +232,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
     activePointer = null;
     lastPoint = null;
     cursorPoint = null;
+    endSliderPreview();
     toggle.classList.toggle('active', enabled);
     toggle.textContent = enabled ? 'Painting' : 'Paint';
     panel.hidden = !enabled;
@@ -269,11 +284,11 @@ if (viewer && compare && original && tuning && qualitySlider) {
   }
 
   function blockedTarget(event) {
-    return Boolean(event.target?.closest?.('.image-optimize-controls,.viewer-optimize-trigger,.viewer-bar,.viewer-info'));
+    return Boolean(event.target?.closest?.('input,button,select,textarea,label,a,.image-optimize-controls,.viewer-optimize-trigger,.viewer-bar,.viewer-info'));
   }
 
   window.addEventListener('pointerdown', event => {
-    if (!enabled || !optimizerActive() || blockedTarget(event) || (event.button !== 0 && event.button !== 2)) return;
+    if (!enabled || !optimizerActive() || sliderPreviewActive || blockedTarget(event) || (event.button !== 0 && event.button !== 2)) return;
     const point = pointForEvent(event);
     if (!point) return;
     activePointer = { id:event.pointerId, button:event.button };
@@ -314,6 +329,8 @@ if (viewer && compare && original && tuning && qualitySlider) {
   }
   window.addEventListener('pointerup', finishPaint, true);
   window.addEventListener('pointercancel', finishPaint, true);
+  window.addEventListener('pointerup', endSliderPreview, true);
+  window.addEventListener('pointercancel', endSliderPreview, true);
 
   compare.addEventListener('contextmenu', event => {
     if (enabled) event.preventDefault();
@@ -345,6 +362,12 @@ if (viewer && compare && original && tuning && qualitySlider) {
     brushLabel.textContent = String(brush);
     renderCursor();
   });
+
+  for (const input of new Set([qualitySlider, ...tuning.querySelectorAll('input[type="range"]')])) {
+    input?.addEventListener('pointerdown', () => beginSliderPreview(), true);
+    input?.addEventListener('change', endSliderPreview, true);
+    input?.addEventListener('blur', endSliderPreview, true);
+  }
 
   formats?.addEventListener('click', event => {
     const button = event.target.closest('[data-format]');
@@ -389,7 +412,8 @@ if (viewer && compare && original && tuning && qualitySlider) {
     toggle.classList.remove('active');
     toggle.textContent = 'Paint';
     panel.hidden = true;
-    compare.classList.remove('image-optimize-quality-painting');
+    compare.classList.remove('image-optimize-quality-painting', 'image-optimize-quality-previewing');
+    sliderPreviewActive = false;
     clearCursor();
     setTimeout(() => { initializeMask(true); queueGeometry(); }, 0);
   });
@@ -400,7 +424,8 @@ if (viewer && compare && original && tuning && qualitySlider) {
     activePointer = null;
     lastPoint = null;
     cursorPoint = null;
-    compare.classList.remove('image-optimize-quality-painting');
+    sliderPreviewActive = false;
+    compare.classList.remove('image-optimize-quality-painting', 'image-optimize-quality-previewing');
     panel.hidden = true;
     toggle.classList.remove('active');
     toggle.textContent = 'Paint';
