@@ -13,7 +13,7 @@ if (viewer && compare && original && optimized) {
 .image-optimize-after-mask>.image-optimize-after{clip-path:none!important}
 .image-optimize-compare{cursor:grab}
 .image-optimize-compare.image-optimize-panning{cursor:grabbing}
-.image-optimize-compare img{will-change:transform;image-rendering:auto}
+.image-optimize-compare img{image-rendering:auto}
 `;
   document.head.append(style);
 
@@ -50,51 +50,54 @@ if (viewer && compare && original && optimized) {
       dpr,
       nativeWidth,
       nativeHeight,
+      viewportWidth: rect.width,
+      viewportHeight: rect.height,
       fit: Math.min(1, rect.width / nativeWidth, rect.height / nativeHeight)
     };
   }
 
+  function clearImageStyle(image) {
+    if (!image) return;
+    for (const property of ['position','inset','left','top','width','height','maxWidth','maxHeight','marginLeft','marginTop','objectFit','transformOrigin','imageRendering','transform']) {
+      image.style[property] = '';
+    }
+  }
+
   function styleImage(image) {
     if (!metrics || !image) return;
+    const width = metrics.nativeWidth * zoom.scale;
+    const height = metrics.nativeHeight * zoom.scale;
+    image.style.position = 'absolute';
     image.style.inset = 'auto';
     image.style.left = '50%';
     image.style.top = '50%';
-    image.style.width = `${metrics.nativeWidth}px`;
-    image.style.height = `${metrics.nativeHeight}px`;
+    image.style.width = `${width}px`;
+    image.style.height = `${height}px`;
     image.style.maxWidth = 'none';
     image.style.maxHeight = 'none';
-    image.style.marginLeft = `${-metrics.nativeWidth / 2}px`;
-    image.style.marginTop = `${-metrics.nativeHeight / 2}px`;
+    image.style.marginLeft = `${-width / 2}px`;
+    image.style.marginTop = `${-height / 2}px`;
     image.style.objectFit = 'fill';
     image.style.transformOrigin = '50% 50%';
     image.style.imageRendering = 'auto';
-  }
-
-  function clearImageStyle(image) {
-    if (!image) return;
-    for (const property of ['inset','left','top','width','height','maxWidth','maxHeight','marginLeft','marginTop','objectFit','transformOrigin','imageRendering','transform']) {
-      image.style[property] = '';
-    }
+    image.style.transform = `translate3d(${zoom.x}px,${zoom.y}px,0)`;
   }
 
   function refreshMetrics() {
     const next = referenceMetrics();
     if (!next) return false;
     metrics = next;
-    styleImage(original);
-    styleImage(optimized);
     return true;
   }
 
   function clampPan() {
-    const rect = compare.getBoundingClientRect();
-    if (!rect.width || !rect.height || !metrics) return;
+    if (!metrics) return;
     const displayedWidth = metrics.nativeWidth * zoom.scale;
     const displayedHeight = metrics.nativeHeight * zoom.scale;
-    const extraX = Math.max(0, (displayedWidth - rect.width) / 2);
-    const extraY = Math.max(0, (displayedHeight - rect.height) / 2);
-    const maxX = rect.width * .9 + extraX;
-    const maxY = rect.height * .9 + extraY;
+    const extraX = Math.max(0, (displayedWidth - metrics.viewportWidth) / 2);
+    const extraY = Math.max(0, (displayedHeight - metrics.viewportHeight) / 2);
+    const maxX = metrics.viewportWidth * .9 + extraX;
+    const maxY = metrics.viewportHeight * .9 + extraY;
     zoom.x = clamp(zoom.x, -maxX, maxX);
     zoom.y = clamp(zoom.y, -maxY, maxY);
   }
@@ -111,9 +114,8 @@ if (viewer && compare && original && optimized) {
     if (!metrics && !refreshMetrics()) return;
     zoom.scale = clamp(Number(zoom.scale) || metrics.fit, MIN_SCALE, MAX_SCALE);
     clampPan();
-    const transform = `translate3d(${zoom.x}px,${zoom.y}px,0) scale(${zoom.scale})`;
-    original.style.transform = transform;
-    optimized.style.transform = transform;
+    styleImage(original);
+    styleImage(optimized);
     if (active()) reportZoom(forceReport);
   }
 
@@ -294,17 +296,18 @@ if (viewer && compare && original && optimized) {
     if (!active()) return;
     if (pendingView) applyPendingView();
     else {
-      const previousFit = metrics?.fit || 1;
       if (!refreshMetrics()) return;
-      if (fitLocked) zoom.scale = metrics.fit;
-      else if (previousFit && metrics.fit !== previousFit) zoom.scale = clamp(zoom.scale, MIN_SCALE, MAX_SCALE);
+      if (fitLocked) {
+        zoom.scale = metrics.fit;
+        zoom.x = 0;
+        zoom.y = 0;
+      }
       applyZoom(true);
     }
   });
 
   optimized.addEventListener('load', () => {
     if (!active() || !metrics) return;
-    styleImage(optimized);
     applyZoom();
   });
 
@@ -312,10 +315,13 @@ if (viewer && compare && original && optimized) {
     resetZoom(true);
     const shown = viewerMedia?.querySelector(':scope > img');
     const fullReady = Boolean(shown && !shown.dataset.fullSrc && shown.naturalWidth);
-    const view = event.detail?.view || {};
-    pendingView = fullReady
-      ? { scale:Number(view.scale), x:Number(view.x) || 0, y:Number(view.y) || 0 }
-      : { fit:true };
+    const viewerState = window.mochimonoViewerPixelZoom?.state?.();
+    const eventView = event.detail?.view || {};
+    pendingView = fullReady && viewerState?.ready
+      ? { scale:Number(viewerState.scale), x:Number(viewerState.x) || 0, y:Number(viewerState.y) || 0 }
+      : fullReady && Number.isFinite(Number(eventView.scale))
+        ? { scale:Number(eventView.scale), x:Number(eventView.x) || 0, y:Number(eventView.y) || 0 }
+        : { fit:true };
 
     const sourceExt = extension(viewerName?.textContent);
     const rawUrl = viewerOpen?.href || '';
