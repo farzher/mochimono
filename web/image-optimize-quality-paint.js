@@ -7,7 +7,8 @@ const formats = document.querySelector('[data-opt-formats]');
 
 if (viewer && compare && original && tuning && qualitySlider) {
   const MASK_MAX_EDGE = 256;
-  const DEFAULT_LOW_QUALITY = 12;
+  const DEFAULT_NORMAL_QUALITY = 50;
+  const DEFAULT_LOW_QUALITY = 5;
   const LEVELS = { high:255, normal:128, low:0 };
 
   const style = document.createElement('style');
@@ -17,10 +18,9 @@ if (viewer && compare && original && tuning && qualitySlider) {
 .image-optimize-quality-tools{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.image-optimize-quality-tools .image-optimize-choice{min-height:32px}.image-optimize-quality-reset{min-height:30px!important;font-size:10.5px!important}
 .image-optimize-quality-map-panel .image-optimize-slider{gap:5px}.image-optimize-quality-map-panel .image-optimize-tune-head{font-size:10.5px}
 .image-optimize-quality-mask,.image-optimize-quality-cursor{position:absolute;z-index:2;display:none;pointer-events:none;user-select:none;-webkit-user-select:none;image-rendering:auto}
-.image-optimize-quality-cursor{z-index:3;opacity:.95}
-.image-optimize-compare.image-optimize-quality-painting{cursor:none}
+.image-optimize-quality-cursor{z-index:3}.image-optimize-compare.image-optimize-quality-painting{cursor:none}
 .image-optimize-compare.image-optimize-quality-painting .image-optimize-quality-mask,.image-optimize-compare.image-optimize-quality-painting .image-optimize-quality-cursor{display:block}
-.image-optimize-compare.image-optimize-quality-painting.image-optimize-quality-previewing .image-optimize-quality-mask,.image-optimize-compare.image-optimize-quality-painting.image-optimize-quality-previewing .image-optimize-quality-cursor{display:none}
+.image-optimize-compare.image-optimize-quality-previewing .image-optimize-quality-mask,.image-optimize-compare.image-optimize-quality-previewing .image-optimize-quality-cursor{display:none}
 `;
   document.head.append(style);
 
@@ -30,6 +30,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
     <span class="image-optimize-tune-head">Regions</span>
     <button class="image-optimize-choice" type="button" data-quality-map-toggle>Paint</button>`;
 
+  const initialHigh = Math.max(1, Math.min(100, Math.round(Number(qualitySlider.value) || 69)));
   const panel = document.createElement('div');
   panel.className = 'image-optimize-quality-map-panel';
   panel.hidden = true;
@@ -41,8 +42,16 @@ if (viewer && compare && original && tuning && qualitySlider) {
     </div>
     <button class="image-optimize-choice image-optimize-quality-reset" type="button" data-quality-reset>Who cares · whole image</button>
     <div class="image-optimize-slider">
+      <div class="image-optimize-tune-head"><span>High AVIF quality</span><output data-quality-high-label>${initialHigh}</output></div>
+      <input data-quality-high type="range" min="1" max="100" value="${initialHigh}" aria-label="AVIF quality for high-priority regions">
+    </div>
+    <div class="image-optimize-slider">
+      <div class="image-optimize-tune-head"><span>Normal AVIF quality</span><output data-quality-normal-label>${DEFAULT_NORMAL_QUALITY}</output></div>
+      <input data-quality-normal type="range" min="1" max="100" value="${DEFAULT_NORMAL_QUALITY}" aria-label="AVIF quality for normal-priority regions">
+    </div>
+    <div class="image-optimize-slider">
       <div class="image-optimize-tune-head"><span>Who cares AVIF quality</span><output data-quality-low-label>${DEFAULT_LOW_QUALITY}</output></div>
-      <input data-quality-low type="range" min="1" max="40" value="${DEFAULT_LOW_QUALITY}" aria-label="AVIF quality for who-cares regions">
+      <input data-quality-low type="range" min="1" max="50" value="${DEFAULT_LOW_QUALITY}" aria-label="AVIF quality for who-cares regions">
     </div>
     <div class="image-optimize-slider">
       <div class="image-optimize-tune-head"><span>Brush</span><output data-quality-brush-label>32</output></div>
@@ -51,6 +60,10 @@ if (viewer && compare && original && tuning && qualitySlider) {
   tuning.append(row, panel);
 
   const toggle = row.querySelector('[data-quality-map-toggle]');
+  const highInput = panel.querySelector('[data-quality-high]');
+  const highLabel = panel.querySelector('[data-quality-high-label]');
+  const normalInput = panel.querySelector('[data-quality-normal]');
+  const normalLabel = panel.querySelector('[data-quality-normal-label]');
   const lowInput = panel.querySelector('[data-quality-low]');
   const lowLabel = panel.querySelector('[data-quality-low-label]');
   const brushInput = panel.querySelector('[data-quality-brush]');
@@ -76,12 +89,14 @@ if (viewer && compare && original && tuning && qualitySlider) {
   let initialized = false;
   let tool = 'high';
   let brush = 32;
-  let lowQuality = DEFAULT_LOW_QUALITY;
+  let highQuality = initialHigh;
+  let normalQuality = Math.min(highQuality, DEFAULT_NORMAL_QUALITY);
+  let lowQuality = Math.min(normalQuality, DEFAULT_LOW_QUALITY);
   let activePointer = null;
   let lastPoint = null;
+  let cursorPoint = null;
   let previewTimer = 0;
   let geometryFrame = 0;
-  let cursorPoint = null;
   let sliderPreviewActive = false;
 
   const optimizerActive = () => viewer.classList.contains('image-optimize-active');
@@ -92,27 +107,29 @@ if (viewer && compare && original && tuning && qualitySlider) {
     return [255, 92, 92, 72];
   }
 
+  function syncTierControls() {
+    highQuality = Math.max(1, Math.min(100, Math.round(Number(highQuality) || 69)));
+    normalQuality = Math.max(1, Math.min(highQuality, Math.round(Number(normalQuality) || DEFAULT_NORMAL_QUALITY)));
+    lowQuality = Math.max(1, Math.min(normalQuality, Math.round(Number(lowQuality) || DEFAULT_LOW_QUALITY)));
+    highInput.value = highLabel.textContent = String(highQuality);
+    normalInput.value = normalLabel.textContent = String(normalQuality);
+    lowInput.value = lowLabel.textContent = String(lowQuality);
+  }
+
   function renderOverlay() {
     if (!initialized) return;
     const width = maskCanvas.width;
     const height = maskCanvas.height;
     const mask = maskContext.getImageData(0, 0, width, height).data;
     const image = paintContext.createImageData(width, height);
-    const output = image.data;
-
-    for (let index = 0; index < width * height; index++) {
-      const level = mask[index * 4];
-      const offset = index * 4;
+    const out = image.data;
+    for (let i = 0; i < width * height; i++) {
+      const level = mask[i * 4];
+      const o = i * 4;
       if (level >= 192) {
-        output[offset] = 92;
-        output[offset + 1] = 178;
-        output[offset + 2] = 255;
-        output[offset + 3] = 96;
+        out[o] = 92; out[o + 1] = 178; out[o + 2] = 255; out[o + 3] = 96;
       } else if (level >= 64) {
-        output[offset] = 255;
-        output[offset + 1] = 190;
-        output[offset + 2] = 92;
-        output[offset + 3] = 82;
+        out[o] = 255; out[o + 1] = 190; out[o + 2] = 92; out[o + 3] = 82;
       }
     }
     paintContext.putImageData(image, 0, 0);
@@ -125,17 +142,12 @@ if (viewer && compare && original && tuning && qualitySlider) {
   function renderCursor() {
     clearCursor();
     if (!enabled || !initialized || !cursorPoint || sliderPreviewActive) return;
-    const radius = Math.max(1, brush / 2);
-    const activeTool = activePointer?.button === 2 ? 'low' : tool;
-    const [r, g, b, a] = toolColor(activeTool);
+    const [r, g, b, a] = toolColor(activePointer?.button === 2 ? 'low' : tool);
     cursorContext.save();
-    cursorContext.lineWidth = 2;
-    cursorContext.strokeStyle = `rgba(${r},${g},${b},0.95)`;
-    cursorContext.fillStyle = `rgba(${r},${g},${b},${Math.max(0.08, a / 255 * 0.22)})`;
+    cursorContext.fillStyle = `rgba(${r},${g},${b},${Math.max(0.10, a / 255 * 0.32)})`;
     cursorContext.beginPath();
-    cursorContext.arc(cursorPoint.x, cursorPoint.y, radius, 0, Math.PI * 2);
+    cursorContext.arc(cursorPoint.x, cursorPoint.y, Math.max(1, brush / 2), 0, Math.PI * 2);
     cursorContext.fill();
-    cursorContext.stroke();
     cursorContext.restore();
   }
 
@@ -161,18 +173,17 @@ if (viewer && compare && original && tuning && qualitySlider) {
     paintCanvas.width = maskCanvas.width = cursorCanvas.width = width;
     paintCanvas.height = maskCanvas.height = cursorCanvas.height = height;
     initialized = true;
-    lowAll(false);
+    maskContext.fillStyle = '#000';
+    maskContext.fillRect(0, 0, width, height);
+    renderOverlay();
     queueGeometry();
     return true;
   }
 
-  function lowAll(refresh = true) {
-    if (!initialized) return;
-    maskContext.save();
-    maskContext.globalCompositeOperation = 'source-over';
+  function resetLow(refresh = true) {
+    if (!initializeMask()) return;
     maskContext.fillStyle = '#000';
     maskContext.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
-    maskContext.restore();
     renderOverlay();
     renderCursor();
     if (refresh) requestPreview();
@@ -196,18 +207,23 @@ if (viewer && compare && original && tuning && qualitySlider) {
   }
 
   function queueGeometry() {
-    if (geometryFrame) return;
-    geometryFrame = requestAnimationFrame(syncGeometry);
+    if (!geometryFrame) geometryFrame = requestAnimationFrame(syncGeometry);
+  }
+
+  function maskDataUrl() {
+    const pixel = maskContext.getImageData(0, 0, 1, 1);
+    const originalAlpha = pixel.data[3];
+    pixel.data[3] = normalQuality;
+    maskContext.putImageData(pixel, 0, 0);
+    const url = maskCanvas.toDataURL('image/png');
+    pixel.data[3] = originalAlpha;
+    maskContext.putImageData(pixel, 0, 0);
+    return url;
   }
 
   function payload() {
     if (!enabled || !initializeMask()) return null;
-    return {
-      enabled: true,
-      mode: 'avif-base-v1',
-      lowQuality,
-      mask: maskCanvas.toDataURL('image/png')
-    };
+    return { enabled:true, mode:'avif-base-v1', lowQuality, mask:maskDataUrl() };
   }
 
   function requestPreview(delay = 220) {
@@ -239,6 +255,8 @@ if (viewer && compare && original && tuning && qualitySlider) {
     compare.classList.toggle('image-optimize-quality-painting', enabled);
     clearCursor();
     if (enabled) {
+      highQuality = Math.max(1, Math.min(100, Number(qualitySlider.value) || 69));
+      syncTierControls();
       initializeMask();
       queueGeometry();
       document.querySelector('[data-format="avif"]')?.click();
@@ -247,7 +265,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
   }
 
   function pointForEvent(event, allowOutside = false) {
-    if (!initialized && !initializeMask()) return null;
+    if (!initializeMask()) return null;
     const rect = original.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
     let x = (event.clientX - rect.left) / rect.width;
@@ -258,17 +276,14 @@ if (viewer && compare && original && tuning && qualitySlider) {
     return { x:x * maskCanvas.width, y:y * maskCanvas.height };
   }
 
-  function drawSegment(from, to, levelName = tool) {
+  function drawSegment(from, to, levelName) {
     if (!from || !to) return;
     const value = LEVELS[levelName] ?? LEVELS.high;
     const color = `rgb(${value},${value},${value})`;
     maskContext.save();
-    maskContext.globalCompositeOperation = 'source-over';
-    maskContext.strokeStyle = color;
-    maskContext.fillStyle = color;
+    maskContext.strokeStyle = maskContext.fillStyle = color;
     maskContext.lineWidth = brush;
-    maskContext.lineCap = 'round';
-    maskContext.lineJoin = 'round';
+    maskContext.lineCap = maskContext.lineJoin = 'round';
     maskContext.beginPath();
     maskContext.moveTo(from.x, from.y);
     maskContext.lineTo(to.x, to.y);
@@ -284,16 +299,22 @@ if (viewer && compare && original && tuning && qualitySlider) {
   }
 
   function blockedTarget(event) {
-    return Boolean(event.target?.closest?.('input,button,select,textarea,label,a,.image-optimize-controls,.viewer-optimize-trigger,.viewer-bar,.viewer-info'));
+    return event.composedPath().some(node =>
+      node instanceof Element && node.matches?.('input,button,select,textarea,label,a,.image-optimize-controls,.viewer-optimize-trigger,.viewer-bar,.viewer-info')
+    );
   }
+
+  window.addEventListener('pointerdown', event => {
+    if (!enabled || event.button !== 0) return;
+    if (event.composedPath().some(node => node instanceof HTMLInputElement && node.type === 'range')) beginSliderPreview();
+  }, true);
 
   window.addEventListener('pointerdown', event => {
     if (!enabled || !optimizerActive() || sliderPreviewActive || blockedTarget(event) || (event.button !== 0 && event.button !== 2)) return;
     const point = pointForEvent(event);
     if (!point) return;
     activePointer = { id:event.pointerId, button:event.button };
-    lastPoint = point;
-    cursorPoint = point;
+    lastPoint = cursorPoint = point;
     drawSegment(point, point, event.button === 2 ? 'low' : tool);
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -316,25 +337,20 @@ if (viewer && compare && original && tuning && qualitySlider) {
   function finishPaint(event) {
     if (activePointer?.id !== event.pointerId) return;
     const point = pointForEvent(event, true);
-    if (point) {
-      cursorPoint = point;
-      drawSegment(lastPoint || point, point, activePointer.button === 2 ? 'low' : tool);
-    }
+    if (point) drawSegment(lastPoint || point, point, activePointer.button === 2 ? 'low' : tool);
     activePointer = null;
     lastPoint = null;
-    renderCursor();
     requestPreview();
     event.preventDefault();
     event.stopImmediatePropagation();
   }
+
   window.addEventListener('pointerup', finishPaint, true);
   window.addEventListener('pointercancel', finishPaint, true);
   window.addEventListener('pointerup', endSliderPreview, true);
   window.addEventListener('pointercancel', endSliderPreview, true);
 
-  compare.addEventListener('contextmenu', event => {
-    if (enabled) event.preventDefault();
-  });
+  compare.addEventListener('contextmenu', event => { if (enabled) event.preventDefault(); });
   compare.addEventListener('pointerleave', () => {
     if (activePointer) return;
     cursorPoint = null;
@@ -351,12 +367,29 @@ if (viewer && compare && original && tuning && qualitySlider) {
     const button = event.target.closest('[data-quality-tool]');
     if (button) setTool(button.dataset.qualityTool);
   });
-  resetButton.addEventListener('click', () => lowAll());
-  lowInput.addEventListener('input', () => {
-    lowQuality = Math.max(1, Math.min(40, Number(lowInput.value) || DEFAULT_LOW_QUALITY));
-    lowLabel.textContent = String(lowQuality);
-    requestPreview(320);
+  resetButton.addEventListener('click', () => resetLow());
+
+  highInput.addEventListener('input', () => {
+    highQuality = Number(highInput.value) || 69;
+    syncTierControls();
+    qualitySlider.value = String(highQuality);
+    qualitySlider.dispatchEvent(new Event('input', { bubbles:true }));
   });
+  normalInput.addEventListener('input', () => {
+    normalQuality = Number(normalInput.value) || DEFAULT_NORMAL_QUALITY;
+    syncTierControls();
+    requestPreview(260);
+  });
+  lowInput.addEventListener('input', () => {
+    lowQuality = Number(lowInput.value) || DEFAULT_LOW_QUALITY;
+    syncTierControls();
+    requestPreview(260);
+  });
+  qualitySlider.addEventListener('input', () => {
+    if (!enabled) return;
+    highQuality = Number(qualitySlider.value) || 69;
+    syncTierControls();
+  }, true);
   brushInput.addEventListener('input', () => {
     brush = Math.max(6, Math.min(96, Number(brushInput.value) || 32));
     brushLabel.textContent = String(brush);
@@ -364,7 +397,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
   });
 
   for (const input of new Set([qualitySlider, ...tuning.querySelectorAll('input[type="range"]')])) {
-    input?.addEventListener('pointerdown', () => beginSliderPreview(), true);
+    input?.addEventListener('pointerdown', beginSliderPreview, true);
     input?.addEventListener('change', endSliderPreview, true);
     input?.addEventListener('blur', endSliderPreview, true);
   }
@@ -396,18 +429,19 @@ if (viewer && compare && original && tuning && qualitySlider) {
   new MutationObserver(queueGeometry).observe(original, { attributes:true, attributeFilter:['style'] });
   window.addEventListener('resize', queueGeometry);
   window.addEventListener('mochimono:optimize-zoom', queueGeometry);
+
   window.addEventListener('mochimono:optimize-open', () => {
     enabled = false;
     initialized = false;
     activePointer = null;
     lastPoint = null;
     cursorPoint = null;
-    lowQuality = DEFAULT_LOW_QUALITY;
-    lowInput.value = String(lowQuality);
-    lowLabel.textContent = String(lowQuality);
+    highQuality = Math.max(1, Math.min(100, Number(qualitySlider.value) || 69));
+    normalQuality = Math.min(highQuality, DEFAULT_NORMAL_QUALITY);
+    lowQuality = Math.min(normalQuality, DEFAULT_LOW_QUALITY);
+    syncTierControls();
     brush = 32;
-    brushInput.value = String(brush);
-    brushLabel.textContent = String(brush);
+    brushInput.value = brushLabel.textContent = String(brush);
     setTool('high');
     toggle.classList.remove('active');
     toggle.textContent = 'Paint';
@@ -417,6 +451,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
     clearCursor();
     setTimeout(() => { initializeMask(true); queueGeometry(); }, 0);
   });
+
   window.addEventListener('mochimono:optimize-close', () => {
     clearTimeout(previewTimer);
     previewTimer = 0;
