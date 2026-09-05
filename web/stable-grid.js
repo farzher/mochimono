@@ -39,6 +39,8 @@ let mountedStart = 0;
 let mountedEnd = 0;
 let railScrub = false;
 let lastRailMove = 0;
+let railKey = '';
+let observedWidth = 0;
 
 const metrics = {
   modelBuilds:0,
@@ -65,6 +67,7 @@ html.stable-grid-owned #files{position:relative!important;display:block!importan
 .stable-grid-row>.file-card>.thumb{height:100%!important}
 .stable-grid-row>.file-card:not(.media-card)>.card-copy{display:none}
 .stable-grid-heading{position:absolute;left:2px;right:0;margin:0!important;pointer-events:none}
+.stable-grid-heading>.timeline-group-select{pointer-events:auto}
 .stable-grid-heading.year-heading{height:31px;display:flex;align-items:center;color:#f1e9e5;font-size:19px;font-weight:760;letter-spacing:-.025em}
 .stable-grid-heading.date-heading{height:27px;display:flex;align-items:flex-start;padding-top:2px;color:#cfc5c1;font-size:13px!important;font-weight:700}
 .stable-grid-days>.day-group-control{position:absolute;z-index:5;pointer-events:auto}
@@ -139,6 +142,14 @@ function itemType(item) {
 
 function iconFor(type) {
   return type === 'audio' ? '♪' : type === 'application' || type === 'text' ? '▤' : '·';
+}
+
+function formatBytes(bytes) {
+  const units = ['B','KB','MB','GB','TB','PB'];
+  let value = Number(bytes) || 0;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
+  return `${value < 10 && unit ? value.toFixed(2) : value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
 }
 
 function dayInfo(ms) {
@@ -224,17 +235,34 @@ function trimRows(scrollTop = scrollY) {
   }
 }
 
+function groupButton(period, key, label) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'timeline-group-select';
+  button.dataset.selectPeriod = period;
+  button.dataset.periodKey = key;
+  button.dataset.periodLabel = label;
+  button.setAttribute('aria-label', `Select ${label}`);
+  button.innerHTML = `<span class="timeline-check" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
+  return button;
+}
+
 function buildHeaderLayer() {
   const layer = document.createElement('div');
   layer.className = 'stable-grid-headings';
   const fragment = document.createDocumentFragment();
   for (const header of layout.headers || []) {
-    const element = document.createElement(header.kind === 'year' ? 'h2' : 'h3');
-    element.className = `stable-grid-heading ${header.kind === 'year' ? 'year-heading' : 'date-heading'}`;
+    const year = Number(header.year);
+    const month = Number(header.month);
+    const yearHeader = header.kind === 'year';
+    const element = document.createElement(yearHeader ? 'h2' : 'h3');
+    element.className = `stable-grid-heading ${yearHeader ? 'year-heading' : 'date-heading'}`;
     element.style.top = `${Number(header.top).toFixed(2)}px`;
-    element.textContent = header.kind === 'year'
-      ? String(header.year)
-      : new Date(Number(header.year), Number(header.month), 1).toLocaleDateString(undefined, { month:'long' });
+    const label = yearHeader
+      ? String(year)
+      : new Date(year, month, 1).toLocaleDateString(undefined, { month:'long' });
+    const key = yearHeader ? String(year) : `${year}-${String(month + 1).padStart(2,'0')}`;
+    element.append(groupButton(yearHeader ? 'year' : 'month', key, label));
     fragment.append(element);
   }
   layer.append(fragment);
@@ -270,14 +298,8 @@ function syncDayButtons(range) {
     if (!button) {
       const date = new Date(Number(day.year), Number(day.month), Number(day.day));
       const label = date.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
-      button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'timeline-group-select day-group-control';
-      button.dataset.selectPeriod = 'day';
-      button.dataset.periodKey = key;
-      button.dataset.periodLabel = label;
-      button.setAttribute('aria-label', `Select ${label}`);
-      button.innerHTML = `<span class="timeline-check" aria-hidden="true"></span><span>${escapeHtml(label)}</span>`;
+      button = groupButton('day', key, label);
+      button.classList.add('day-group-control');
       dayLayer.append(button);
     }
     button.style.left = `${Number(day.x).toFixed(2)}px`;
@@ -301,8 +323,54 @@ function visibleIndex() {
 
 function railLabel(index) {
   const item = model?.items?.[Math.max(0, Math.min((model?.items?.length || 1) - 1, index))];
-  const date = new Date(Number(item?.[5]) || 0);
+  if (!item) return '';
+  if (model?.sort === 'size-desc') return formatBytes(item[6]);
+  const date = new Date(Number(item[5]) || 0);
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString(undefined, { year:'numeric', month:'long' });
+}
+
+function railEntries() {
+  const items = model?.items || [];
+  if (!items.length) return [];
+  if (model?.sort === 'size-desc') {
+    const count = Math.min(18, items.length);
+    const indexes = [...new Set(Array.from({ length:count }, (_, i) => Math.round(i * (items.length - 1) / Math.max(1, count - 1))))];
+    return indexes.map((index, i) => ({
+      index,
+      label:formatBytes(items[index]?.[6]),
+      short:formatBytes(items[index]?.[6]),
+      position:items.length === 1 ? 0 : index / (items.length - 1),
+      major:i % 3 === 0 || i === indexes.length - 1
+    }));
+  }
+
+  const groups = [];
+  let previous = '';
+  for (let index = 0; index < items.length; index++) {
+    const date = new Date(Number(items[index]?.[5]) || 0);
+    if (Number.isNaN(date.getTime())) continue;
+    const year = date.getFullYear();
+    const key = `${year}-${date.getMonth()}`;
+    if (key === previous) continue;
+    previous = key;
+    groups.push({
+      index,
+      year,
+      label:date.toLocaleDateString(undefined, { year:'numeric', month:'long' })
+    });
+  }
+  const compact = groups.length > 18;
+  let lastYear = null;
+  return groups.map(group => {
+    const major = !compact || group.year !== lastYear;
+    lastYear = group.year;
+    return {
+      ...group,
+      short:compact && major ? String(group.year) : group.label,
+      position:items.length === 1 ? 0 : group.index / (items.length - 1),
+      major
+    };
+  });
 }
 
 function ensureRailShell() {
@@ -310,22 +378,39 @@ function ensureRailShell() {
   rail.hidden = !layout?.count;
   document.documentElement.classList.toggle('library-scroll', Boolean(layout?.count));
   if (!layout?.count) {
+    railKey = '';
     rail.replaceChildren();
     return;
   }
-  if (!rail.querySelector('#railThumb')) {
-    rail.innerHTML = '<div class="rail-track"></div><div id="railThumb" class="rail-thumb"><span></span><i></i></div>';
+
+  const entries = railEntries();
+  const nextKey = entries.map(entry => `${entry.index}:${entry.short}:${entry.major ? 1 : 0}`).join('|');
+  if (nextKey !== railKey || !rail.querySelector('#railThumb')) {
+    railKey = nextKey;
+    rail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `<button data-index="${entry.index}" class="rail-tick ${entry.major ? 'major' : ''}" style="top:${(entry.position * 100).toFixed(3)}%" title="${escapeHtml(entry.label)}"><span>${escapeHtml(entry.short)}</span><i></i></button>`).join('')}<div id="railThumb" class="rail-thumb"><span></span><i></i></div>`;
   }
 }
 
 function updateRail() {
   if (!owned || !layout?.count || !rail || rail.hidden) return;
-  const thumb = rail.querySelector('#railThumb');
-  if (!thumb) return;
   const index = visibleIndex();
-  thumb.style.top = `${(layout.count === 1 ? 0 : index / (layout.count - 1)) * 100}%`;
-  const label = thumb.querySelector('span');
-  if (label) label.textContent = railLabel(index);
+  const thumb = rail.querySelector('#railThumb');
+  if (thumb) {
+    thumb.style.top = `${(layout.count === 1 ? 0 : index / (layout.count - 1)) * 100}%`;
+    const label = thumb.querySelector('span');
+    if (label) label.textContent = railLabel(index);
+  }
+
+  let active = null;
+  let distance = Infinity;
+  for (const tick of rail.querySelectorAll('[data-index]')) {
+    const next = Math.abs(Number(tick.dataset.index) - index);
+    if (next < distance) {
+      distance = next;
+      active = tick;
+    }
+  }
+  for (const tick of rail.querySelectorAll('[data-index]')) tick.classList.toggle('active', tick === active);
 }
 
 function renderCurrent() {
@@ -374,6 +459,7 @@ function installEmpty() {
   empty.className = 'empty';
   empty.textContent = 'No files.';
   files.replaceChildren(empty);
+  railKey = '';
   rail?.replaceChildren();
   if (rail) rail.hidden = true;
 }
@@ -409,6 +495,7 @@ function installLayout(nextLayout) {
   mountedEnd = 0;
   ensureRailShell();
   scheduleRows(true);
+  window.dispatchEvent(new CustomEvent('mochimono:stable-grid-installed'));
 }
 
 function applyPendingLayout() {
@@ -478,6 +565,7 @@ function release() {
   headerLayer = null;
   dayLayer = null;
   renderedRows.clear();
+  railKey = '';
   document.documentElement.classList.remove('stable-grid-owned');
   files?.style.removeProperty('height');
   railScrub = false;
@@ -628,6 +716,18 @@ window.addEventListener('mochimono:grid-interaction-end', () => {
   scheduleRows(false);
 });
 
+if (typeof ResizeObserver === 'function' && files) {
+  new ResizeObserver(entries => {
+    const width = Math.round(entries[0]?.contentRect?.width || currentWidth());
+    if (!width || width === observedWidth) return;
+    observedWidth = width;
+    measureViewport();
+    if (!model) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(build, 20);
+  }).observe(files);
+}
+
 window.mochimonoStableGrid = {
   setModel,
   release,
@@ -644,9 +744,11 @@ window.mochimonoStableGrid = {
     rows:layout?.rowTops?.length || 0,
     rendered:renderedRows.size,
     totalHeight:layout?.totalHeight || 0,
+    width:buildConfig?.width || 0,
     metrics:{ ...metrics }
   })
 };
 
 installRail();
 measureViewport();
+observedWidth = currentWidth();
