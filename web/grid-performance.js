@@ -65,6 +65,24 @@ function pulse(duration = 140) {
   schedule();
 }
 
+// Interaction should protect an already-current grid from layout replacement,
+// but it must never make startup self-blocking. During quick-cache -> full-cache
+// hydration the library model can be newer/larger than the installed geometry.
+// In that state the newer layout is more important than preserving the obsolete
+// empty/partial one, even if PageDown is being held.
+function layoutCaughtUp() {
+  const gridCount = Number(window.mochimonoStableGrid?.count?.()) || 0;
+  const libraryState = window.mochimonoLibrary?.state?.();
+  const expected = Number(libraryState?.filtered);
+  if (!gridCount) return false;
+  if (!Number.isFinite(expected)) return true;
+  return gridCount === expected;
+}
+
+function layoutBlockingInteraction() {
+  return active && layoutCaughtUp();
+}
+
 function wantedRapidMode(now = performance.now()) {
   if (heldPageKeys.size) return 'page';
   if (heldArrowKeys.size && arrowRepeated) return 'arrow';
@@ -145,7 +163,7 @@ function release() {
 installThumbnailGate();
 
 window.mochimonoGridInteraction = {
-  active:() => active,
+  active:() => layoutBlockingInteraction(),
   rapid:() => rapid,
   // stable-grid already has a lightweight rapid-arrow renderer that mounts only
   // a narrow row window and deliberately skips thumbnails/day controls. Route
@@ -157,6 +175,8 @@ window.mochimonoGridInteraction = {
   release,
   state:() => ({
     active,
+    layoutBlocking:layoutBlockingInteraction(),
+    layoutCaughtUp:layoutCaughtUp(),
     rapid,
     rapidMode:rapid ? 'geometry' : '',
     rapidSource:rapid ? rapidSource : '',
