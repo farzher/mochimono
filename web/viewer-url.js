@@ -87,6 +87,28 @@ async function directFile(hash) {
   };
 }
 
+function waitForCatalogFile(hash) {
+  let timer;
+  let settled = false;
+  const events = ['mochimono:catalog-cache-restored', 'mochimono:catalog-updated'];
+  return new Promise(resolve => {
+    const finish = found => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      for (const event of events) window.removeEventListener(event, check);
+      resolve(found);
+    };
+    const check = () => {
+      if (fileParam() !== hash) return finish(false);
+      if (window.mochimonoOpenViewer?.(hash)) finish(true);
+    };
+    for (const event of events) window.addEventListener(event, check);
+    timer = setTimeout(() => finish(false), 10000);
+    check();
+  });
+}
+
 async function restoreViewer() {
   const hash = fileParam();
   if (!hash) {
@@ -94,9 +116,9 @@ async function restoreViewer() {
     return;
   }
 
-  // Back/Forward normally refers to a file already present in the in-memory
-  // catalog. Reopen that immediately instead of making history navigation depend
-  // on a server details request (which can fail for local-only files).
+  // The catalog boots asynchronously. A direct link can arrive before either
+  // its cached or fresh catalog has been installed, especially for local-only
+  // files which have no server details response to use as a fallback.
   if (window.mochimonoOpenViewer?.(hash)) {
     finishRestore();
     return;
@@ -107,6 +129,10 @@ async function restoreViewer() {
     if (fileParam() !== hash) return;
     if (!window.mochimonoOpenViewer?.(hash, fallback)) throw new Error('Viewer is unavailable');
   } catch (error) {
+    if (await waitForCatalogFile(hash)) {
+      finishRestore();
+      return;
+    }
     finishRestore();
     if (error.status !== 401 && error.status !== 404) console.warn(error);
   }

@@ -732,6 +732,11 @@ function updateViewerNav() {
   $('#viewer-next').disabled = index < 0 || index >= items.length - 1;
 }
 
+function viewerMeta(file) {
+  const resolution = file.width && file.height ? `${file.width.toLocaleString()}×${file.height.toLocaleString()}` : '';
+  return [formatBytes(file.size), resolution, shortDate(file)].filter(Boolean).join(' · ');
+}
+
 function loadFullViewerImage(file) {
   const shown = $('#viewer-media img[data-full-src]');
   if (!shown) return;
@@ -747,7 +752,15 @@ function loadFullViewerImage(file) {
     shown.onerror = null;
     viewerImageLoad = null;
   };
-  image.onload = async () => { try { await image.decode(); } catch {} swap(); };
+  image.onload = async () => {
+    try { await image.decode(); } catch {}
+    if ((!file.width || !file.height) && image.naturalWidth && image.naturalHeight) {
+      file.width = image.naturalWidth;
+      file.height = image.naturalHeight;
+      if (selected?.hash === hash) $('#viewer-meta').textContent = viewerMeta(file);
+    }
+    swap();
+  };
   image.onerror = () => { if (viewerImageLoad === image) viewerImageLoad = null; };
   shown.onerror = () => {
     if (selected?.hash !== hash || !shown.dataset.fullSrc) return;
@@ -790,7 +803,7 @@ function renderViewerState() {
   viewerImageLoad = null;
   viewerPreloads = [];
   $('#viewer-name').textContent = selected.filename;
-  $('#viewer-meta').textContent = `${formatBytes(selected.size)} · ${shortDate(selected)}`;
+  $('#viewer-meta').textContent = viewerMeta(selected);
   $('#viewer-open').href = objectUrl(selected);
   $('#viewer-media').innerHTML = viewerMedia(selected, rapid);
   updateViewerNav();

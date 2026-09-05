@@ -7,6 +7,7 @@ const CLIENT = document.documentElement.classList.contains('client-library');
 const SUPPORTED = new Set(['jpg','jpeg','png','webp','avif','bmp','gif','tif','tiff']);
 const DIRECT_BROWSER = new Set(['jpg','jpeg','png','webp','avif','bmp','gif']);
 const AUTO_MAX_EDGE = 3072;
+const MAX_SIZE_STEPS = [720,1080,1440,1920,2560,3072,3840,5120,8192];
 const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
 const currentHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 const currentImage = () => CLIENT && Boolean(viewerMedia?.querySelector(':scope > img')) && SUPPORTED.has(extension(viewerName?.textContent));
@@ -25,22 +26,22 @@ style.textContent = `
 .image-optimize-divider:after{content:'↔';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:rgba(14,14,14,.9);border:1px solid rgba(255,255,255,.35);color:#fff;font-size:12px;box-shadow:0 3px 14px rgba(0,0,0,.42)}
 .image-optimize-label{position:absolute;z-index:4;top:70px;color:rgba(255,255,255,.72);font-size:11px;font-weight:700;pointer-events:none;text-shadow:0 1px 5px #000}.image-optimize-label.original{left:16px}.image-optimize-label.optimized{right:16px}
 .image-optimize-controls{position:absolute;z-index:6;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));width:min(350px,calc(100% - 28px));padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(20,19,20,.92);box-shadow:0 16px 48px rgba(0,0,0,.46);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);transition:border-color .18s ease,box-shadow .18s ease}
-.image-optimize-controls.working{border-color:rgba(224,170,86,.42);box-shadow:0 16px 48px rgba(0,0,0,.46),0 0 0 1px rgba(224,170,86,.08)}
+.image-optimize-controls.working{border-color:rgba(130,158,190,.3);background-color:rgba(20,19,20,.94);background-image:radial-gradient(circle,rgba(111,151,194,.16) 0,rgba(111,151,194,.07) 28%,transparent 64%);background-size:180% 220%;background-repeat:no-repeat;box-shadow:0 16px 48px rgba(0,0,0,.46),0 0 0 1px rgba(130,158,190,.06);animation:image-compress-working 9s ease-in-out infinite}@keyframes image-compress-working{0%,100%{background-position:135% 125%}24%{background-position:-45% 75%}51%{background-position:45% -105%}76%{background-position:125% 35%}}
 .image-optimize-drawer{position:absolute;right:0;bottom:calc(100% + 9px);width:100%;padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:13px;background:rgba(20,19,20,.95);box-shadow:0 12px 34px rgba(0,0,0,.42);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
 .image-optimize-drawer[hidden],.image-optimize-pane[hidden]{display:none!important}
-.image-optimize-result{display:grid;gap:7px}.image-optimize-result-line{display:flex;align-items:flex-end;justify-content:space-between;gap:14px}.image-optimize-saving{font-size:46px;line-height:.88;letter-spacing:-.06em;font-weight:790;color:#6fb1ff;white-space:nowrap}.image-optimize-result-size{padding-bottom:2px;color:#ddd6d2;font-size:17px;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}.image-optimize-status-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0}.image-optimize-status{display:flex;align-items:center;min-width:0;color:#968e8a;font-size:11px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.image-optimize-controls.working .image-optimize-status:before{content:'';flex:0 0 auto;width:8px;height:8px;margin-right:7px;border:2px solid #d9a657;border-top-color:transparent;border-radius:50%;animation:image-optimize-spin .72s linear infinite}.image-optimize-zoom{flex:0 0 auto;color:#b9b1ad;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}.image-optimize-controls.working .image-optimize-saving{color:#8eadd0}@keyframes image-optimize-spin{to{transform:rotate(360deg)}}
-.image-optimize-quick{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:12px}.image-optimize-quick button,.image-optimize-choice{min-height:36px;border:0;border-radius:9px;background:#2a2829;color:#ddd7d3;font-size:12px;font-weight:650}.image-optimize-quick button:hover,.image-optimize-choice:hover{background:#343132;color:#fff}.image-optimize-quick button.open{background:#3a3638;color:#fff}
-.image-optimize-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}.image-optimize-actions button{min-height:38px;border-radius:9px;font-size:12px;font-weight:700}.image-optimize-keep{background:#2a2829;color:#d2cbc7}.image-optimize-keep:hover{background:#343132;color:#fff}.image-optimize-replace{background:#eee9e5;color:#171416}.image-optimize-replace:hover{background:#fff}.image-optimize-actions button:disabled{opacity:.36;cursor:default}
-.image-optimize-pane-title{margin:0 0 9px;color:#8d8581;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}.image-optimize-choice-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.image-optimize-choice-grid.two{grid-template-columns:repeat(2,1fr)}.image-optimize-choice.active{background:#eee9e5;color:#171416}.image-optimize-section+.image-optimize-section{margin-top:13px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06)}
-.image-optimize-quality{display:grid;gap:8px}.image-optimize-quality-head{display:flex;justify-content:space-between;align-items:center;color:#d6cfcb;font-size:12px;font-weight:650}.image-optimize-quality output{font-variant-numeric:tabular-nums}.image-optimize-quality input[type=range]{width:100%;accent-color:#eee9e5}.image-optimize-quality[hidden]{display:none!important}.image-optimize-lossless{display:flex;align-items:center;gap:8px;margin-top:11px;color:#cfc7c3;font-size:12px}.image-optimize-lossless[hidden]{display:none!important}
-@media(max-width:700px){.viewer-optimize-trigger{right:max(8px,env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));min-height:34px;font-size:11px}.viewer.image-optimize-active .viewer-optimize-trigger{top:max(8px,env(safe-area-inset-top));right:max(8px,env(safe-area-inset-right))}.image-optimize-label{top:60px;font-size:10px}.image-optimize-label.original{left:10px}.image-optimize-label.optimized{right:10px}.image-optimize-controls{right:max(8px,env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));width:min(340px,calc(100% - 16px));padding:12px}.image-optimize-saving{font-size:42px}.image-optimize-result-size{font-size:16px}.image-optimize-status,.image-optimize-zoom{font-size:10.5px}.image-optimize-quick button,.image-optimize-actions button,.image-optimize-choice{font-size:11px}.image-optimize-divider:after{width:30px;height:30px}}
+.image-optimize-result{display:grid;gap:6px}.image-optimize-result-line{display:flex;align-items:baseline;justify-content:flex-start;gap:0}.image-optimize-saving{font-size:36px;line-height:.9;letter-spacing:-.045em;font-weight:790;color:#6fb1ff;white-space:nowrap}.image-optimize-result-size{color:#ddd6d2;font-size:17px;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}.image-optimize-result-size:before{content:'·';margin-right:9px;color:#625d5a}.image-optimize-original{color:#b9b1ad;font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}.image-optimize-status-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0}.image-optimize-status{display:flex;align-items:center;min-width:0;color:#968e8a;font-size:11px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.image-optimize-zoom{flex:0 0 auto;color:#b9b1ad;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}.image-optimize-controls.working .image-optimize-saving{color:#8eadd0}
+.image-optimize-quick{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:12px}.image-optimize-quick button,.image-optimize-choice{min-height:36px;border:0;border-radius:9px;background:#2a2829;color:#ddd7d3;font-size:12px;font-weight:650}.image-optimize-quick button:hover,.image-optimize-choice:hover{background:#343132;color:#fff}.image-optimize-quick button.open{background:#3a3638;color:#fff}
+.image-optimize-tuning{display:grid;gap:10px;margin-top:10px;padding:11px;border-radius:10px;background:rgba(255,255,255,.035)}.image-optimize-tune-head{display:flex;align-items:center;justify-content:space-between;color:#d6cfcb;font-size:11px;font-weight:700}.image-optimize-segmented{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:14px}.image-optimize-segmented .image-optimize-choice-grid{justify-self:end;width:220px}.image-optimize-segmented.effort .image-optimize-choice-grid{width:170px}.image-optimize-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:9px}.image-optimize-actions button{min-height:38px;border-radius:9px;font-size:12px;font-weight:700}.image-optimize-keep{background:#2a2829;color:#d2cbc7}.image-optimize-keep:hover{background:#343132;color:#fff}.image-optimize-replace{background:#eee9e5;color:#171416}.image-optimize-replace:hover{background:#fff}.image-optimize-actions button:disabled{opacity:.36;cursor:default}
+.image-optimize-pane-title{margin:0 0 9px;color:#8d8581;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}.image-optimize-choice-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.image-optimize-choice-grid.two{grid-template-columns:repeat(2,1fr)}.image-optimize-choice.active{background:#eee9e5;color:#171416}
+.image-optimize-slider{display:grid;gap:7px}.image-optimize-slider output{font-variant-numeric:tabular-nums;color:#aaa29e}.image-optimize-slider input[type=range]{width:100%;margin:0;accent-color:#eee9e5}.image-optimize-lossless{display:flex;align-items:center;gap:8px;color:#cfc7c3;font-size:11px}.image-optimize-lossless[hidden]{display:none!important}
+@media(max-width:700px){.viewer-optimize-trigger{right:max(8px,env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));min-height:34px;font-size:11px}.viewer.image-optimize-active .viewer-optimize-trigger{top:max(8px,env(safe-area-inset-top));right:max(8px,env(safe-area-inset-right))}.image-optimize-label{top:60px;font-size:10px}.image-optimize-label.original{left:10px}.image-optimize-label.optimized{right:10px}.image-optimize-controls{right:max(8px,env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));width:min(340px,calc(100% - 16px));padding:12px}.image-optimize-saving{font-size:32px}.image-optimize-result-size{font-size:16px}.image-optimize-status,.image-optimize-zoom{font-size:10.5px}.image-optimize-quick button,.image-optimize-actions button,.image-optimize-choice{font-size:11px}.image-optimize-divider:after{width:30px;height:30px}}
 `;
 document.head.append(style);
 
 const trigger = document.createElement('button');
 trigger.type = 'button';
 trigger.className = 'viewer-optimize-trigger';
-trigger.textContent = 'Optimize';
+trigger.textContent = 'Compress';
 trigger.hidden = true;
 viewer?.append(trigger);
 
@@ -50,9 +51,9 @@ layer.hidden = true;
 layer.innerHTML = `
   <div class="image-optimize-compare" data-opt-compare>
     <img data-opt-original alt="Original" draggable="false">
-    <img class="image-optimize-after" data-opt-after alt="Optimized" draggable="false">
+    <img class="image-optimize-after" data-opt-after alt="Compressed" draggable="false">
     <span class="image-optimize-label original">Original</span>
-    <span class="image-optimize-label optimized">Optimized</span>
+    <span class="image-optimize-label optimized">Compressed</span>
     <i class="image-optimize-divider"></i>
   </div>
   <div class="image-optimize-controls" data-opt-controls>
@@ -81,29 +82,41 @@ layer.innerHTML = `
           <button class="image-optimize-choice" type="button" data-size-kind="max" data-size-value="720">720 px</button>
         </div>
       </div>
-      <div class="image-optimize-pane" data-opt-pane="more" hidden>
-        <div class="image-optimize-section">
-          <div class="image-optimize-pane-title">Effort</div>
-          <div class="image-optimize-choice-grid two" data-opt-efforts>
-            <button class="image-optimize-choice" type="button" data-effort="normal">Normal</button>
-            <button class="image-optimize-choice" type="button" data-effort="max">Max</button>
-          </div>
-        </div>
-        <div class="image-optimize-section image-optimize-quality" data-opt-quality-wrap hidden>
-          <div class="image-optimize-quality-head"><span>Quality</span><output data-opt-quality-label>94</output></div>
-          <input data-opt-quality type="range" min="50" max="100" value="94">
-        </div>
-        <label class="image-optimize-lossless" data-opt-lossless-row hidden><input data-opt-lossless type="checkbox"> Lossless WebP</label>
-      </div>
     </div>
     <div class="image-optimize-result" data-opt-result>
       <div class="image-optimize-result-line"><strong class="image-optimize-saving" data-opt-saving>—</strong><span class="image-optimize-result-size" data-opt-result-size>Preparing…</span></div>
+      <div class="image-optimize-original" data-opt-original-info>Original</div>
       <div class="image-optimize-status-row"><div class="image-optimize-status" data-opt-status>Starting preview…</div><div class="image-optimize-zoom" data-opt-zoom>100%</div></div>
     </div>
     <div class="image-optimize-quick">
-      <button type="button" data-opt-format-button>Auto</button>
+      <button type="button" data-opt-format-button>Format · Auto</button>
       <button type="button" data-opt-size-button>Size · Auto</button>
-      <button type="button" data-opt-more-button>More</button>
+    </div>
+    <div class="image-optimize-tuning">
+      <div class="image-optimize-slider">
+        <div class="image-optimize-tune-head"><span>Max size</span><output data-opt-max-size-label>3072 px</output></div>
+        <input data-opt-max-size type="range" min="0" max="8" value="5" aria-label="Maximum image size">
+      </div>
+      <div class="image-optimize-slider">
+        <div class="image-optimize-tune-head"><span>Quality</span><output data-opt-quality-label>94</output></div>
+        <input data-opt-quality type="range" min="50" max="100" value="94" aria-label="Image quality">
+      </div>
+      <div class="image-optimize-segmented">
+        <span class="image-optimize-tune-head">Content</span>
+        <div class="image-optimize-choice-grid" data-opt-content>
+          <button class="image-optimize-choice" type="button" data-content="auto">Auto</button>
+          <button class="image-optimize-choice" type="button" data-content="photo">Photo</button>
+          <button class="image-optimize-choice" type="button" data-content="graphics">Graphics</button>
+        </div>
+      </div>
+      <div class="image-optimize-segmented effort">
+        <span class="image-optimize-tune-head">Effort</span>
+        <div class="image-optimize-choice-grid two" data-opt-efforts>
+          <button class="image-optimize-choice" type="button" data-effort="normal">Normal</button>
+          <button class="image-optimize-choice" type="button" data-effort="max">Max</button>
+        </div>
+      </div>
+      <label class="image-optimize-lossless" data-opt-lossless-row hidden><input data-opt-lossless type="checkbox"> Lossless WebP</label>
     </div>
     <div class="image-optimize-actions">
       <button class="image-optimize-keep" data-opt-keep type="button" disabled>Keep both</button>
@@ -120,17 +133,19 @@ const drawer = layer.querySelector('[data-opt-drawer]');
 const panes = [...layer.querySelectorAll('[data-opt-pane]')];
 const formats = layer.querySelector('[data-opt-formats]');
 const sizes = layer.querySelector('[data-opt-sizes]');
+const contentChoices = layer.querySelector('[data-opt-content]');
 const efforts = layer.querySelector('[data-opt-efforts]');
 const formatButton = layer.querySelector('[data-opt-format-button]');
 const sizeButton = layer.querySelector('[data-opt-size-button]');
-const moreButton = layer.querySelector('[data-opt-more-button]');
 const saving = layer.querySelector('[data-opt-saving]');
 const resultSize = layer.querySelector('[data-opt-result-size]');
+const originalInfo = layer.querySelector('[data-opt-original-info]');
 const status = layer.querySelector('[data-opt-status]');
 const zoomLabel = layer.querySelector('[data-opt-zoom]');
+const maxSize = layer.querySelector('[data-opt-max-size]');
+const maxSizeLabel = layer.querySelector('[data-opt-max-size-label]');
 const quality = layer.querySelector('[data-opt-quality]');
 const qualityLabel = layer.querySelector('[data-opt-quality-label]');
-const qualityWrap = layer.querySelector('[data-opt-quality-wrap]');
 const lossless = layer.querySelector('[data-opt-lossless]');
 const losslessRow = layer.querySelector('[data-opt-lossless-row]');
 const keep = layer.querySelector('[data-opt-keep]');
@@ -144,6 +159,7 @@ let previewDebounce = 0;
 let requestSerial = 0;
 let renderSerial = 0;
 let format = 'auto';
+let contentMode = 'auto';
 let effort = 'normal';
 let sizeMode = { kind:'auto', value:AUTO_MAX_EDGE };
 let split = 50;
@@ -222,7 +238,7 @@ compare.addEventListener('pointercancel', finishSplit, true);
 
 function syncTrigger() {
   trigger.hidden = !active() && (!currentImage() || !currentHash());
-  trigger.textContent = active() ? 'Done' : 'Optimize';
+  trigger.textContent = active() ? 'Done' : 'Compress';
 }
 
 function sizeLabel() {
@@ -232,16 +248,22 @@ function sizeLabel() {
 }
 
 function syncControls() {
-  formatButton.textContent = format === 'avif' ? 'AVIF' : format === 'webp' ? 'WebP' : 'Auto';
+  const formatLabel = format === 'avif' ? 'AVIF' : format === 'webp' ? 'WebP' : 'Auto';
+  formatButton.textContent = `Format · ${formatLabel}`;
   sizeButton.textContent = `Size · ${sizeLabel()}`;
+  if (sizeMode.kind !== 'percent') {
+    const index = MAX_SIZE_STEPS.indexOf(sizeMode.value);
+    if (index >= 0) maxSize.value = String(index);
+  }
+  maxSizeLabel.textContent = `${MAX_SIZE_STEPS[Number(maxSize.value)]} px`;
   for (const button of formats.querySelectorAll('[data-format]')) button.classList.toggle('active', button.dataset.format === format);
   for (const button of sizes.querySelectorAll('[data-size-kind]')) {
     const kind = button.dataset.sizeKind;
     const value = Number(button.dataset.sizeValue);
     button.classList.toggle('active', kind === sizeMode.kind && value === sizeMode.value);
   }
+  for (const button of contentChoices.querySelectorAll('[data-content]')) button.classList.toggle('active', button.dataset.content === contentMode);
   for (const button of efforts.querySelectorAll('[data-effort]')) button.classList.toggle('active', button.dataset.effort === effort);
-  qualityWrap.hidden = format === 'auto';
   losslessRow.hidden = format !== 'webp';
   qualityLabel.textContent = quality.value;
 }
@@ -250,7 +272,7 @@ function closeDrawer() {
   openPane = '';
   drawer.hidden = true;
   for (const pane of panes) pane.hidden = true;
-  for (const button of [formatButton, sizeButton, moreButton]) button.classList.remove('open');
+  for (const button of [formatButton, sizeButton]) button.classList.remove('open');
 }
 
 function togglePane(name, button) {
@@ -258,13 +280,14 @@ function togglePane(name, button) {
   openPane = name;
   drawer.hidden = false;
   for (const pane of panes) pane.hidden = pane.dataset.optPane !== name;
-  for (const item of [formatButton, sizeButton, moreButton]) item.classList.toggle('open', item === button);
+  for (const item of [formatButton, sizeButton]) item.classList.toggle('open', item === button);
 }
 
 function options() {
   return {
     format,
     quality: Number(quality.value) || (format === 'avif' ? 92 : 94),
+    content: contentMode,
     effort,
     lossless: format === 'webp' && lossless.checked,
     resizeMax: sizeMode.kind === 'auto' || sizeMode.kind === 'max' ? sizeMode.value : 0,
@@ -286,13 +309,18 @@ function progressLabel(data) {
   return label === 'Reading image' ? 'Reading image…' : `${label.replace(/^Encoding\s+/,'')}…`;
 }
 
-function dimensionsText(data, selected) {
-  if (!data.width || !data.height) return '';
-  const sourceDims = `${Number(data.width).toLocaleString()}×${Number(data.height).toLocaleString()}`;
-  const outWidth = Number(selected?.width || data.targetWidth || data.width);
-  const outHeight = Number(selected?.height || data.targetHeight || data.height);
-  const outputDims = `${outWidth.toLocaleString()}×${outHeight.toLocaleString()}`;
-  return sourceDims === outputDims ? sourceDims : `${sourceDims} → ${outputDims}`;
+function resolution(width, height) {
+  width = Number(width) || 0;
+  height = Number(height) || 0;
+  return width && height ? `${width.toLocaleString()}×${height.toLocaleString()}` : '';
+}
+
+function compressedDetails(data, selected) {
+  if (!selected) return '';
+  const format = selected.format === 'avif' ? 'AVIF' : 'WebP';
+  const mode = selected.lossless ? 'Lossless' : `Quality ${selected.quality}`;
+  const dimensions = resolution(selected.width || data.targetWidth, selected.height || data.targetHeight);
+  return [format, mode, dimensions].filter(Boolean).join(' · ');
 }
 
 function setWorking(value) {
@@ -303,6 +331,7 @@ function updateResult(data) {
   const selected = data.selected;
   const working = data.status === 'encoding' || data.status === 'queued' || data.status === 'starting';
   setWorking(working);
+  originalInfo.textContent = ['Original', resolution(data.width, data.height), bytes(data.sourceSize)].filter(Boolean).join(' · ');
   if (!selected) {
     if (!displayedCandidate) {
       saving.textContent = '—';
@@ -316,13 +345,12 @@ function updateResult(data) {
   saving.textContent = `${percent.toFixed(0)}%`;
   resultSize.textContent = bytes(selected.size);
 
-  const dims = dimensionsText(data, selected);
-  const effortLabel = data.options?.effort === 'max' ? 'Max effort' : 'Normal effort';
+  const details = compressedDetails(data, selected);
   if (working) {
     const work = progressLabel(data);
-    status.textContent = `Showing ${selected.label}${work ? ` · ${work}` : ''}`;
+    status.textContent = `${details}${work ? ` · ${work}` : ''}`;
   } else {
-    status.textContent = `${selected.label}${dims ? ` · ${dims}` : ''} · ${effortLabel}`;
+    status.textContent = details;
   }
 }
 
@@ -376,7 +404,7 @@ function setSaveState(data) {
 
 function showError(message) {
   setWorking(false);
-  status.textContent = message || 'Could not optimize this image';
+  status.textContent = message || 'Could not compress this image';
   keep.disabled = true;
   replace.disabled = true;
 }
@@ -444,8 +472,7 @@ function schedulePreview(delay = 180) {
 function setFormat(next) {
   if (!['auto','webp','avif'].includes(next) || next === format) return closeDrawer();
   format = next;
-  if (format === 'webp' && quality.dataset.userChanged !== '1') quality.value = '94';
-  if (format === 'avif' && quality.dataset.userChanged !== '1') quality.value = '92';
+  if (quality.dataset.userChanged !== '1') quality.value = format === 'avif' ? '92' : '94';
   if (format !== 'webp') lossless.checked = false;
   syncControls();
   closeDrawer();
@@ -459,6 +486,13 @@ function setSize(kind, value) {
   sizeMode = { kind, value };
   syncControls();
   closeDrawer();
+  startPreview();
+}
+
+function setContent(next) {
+  if (!['auto','photo','graphics'].includes(next) || next === contentMode) return;
+  contentMode = next;
+  syncControls();
   startPreview();
 }
 
@@ -501,7 +535,7 @@ function closeOptimizer() {
 
 async function commit(mode) {
   if (committing || !session?.selected || session.status !== 'ready') return;
-  if (mode === 'replace' && !confirm(`Replace ${session.filename} with the optimized ${session.selected.format.toUpperCase()}?\n\nMochimono will make a max-effort final encode, verify it, then replace the original.`)) return;
+  if (mode === 'replace' && !confirm(`Replace ${session.filename} with the compressed ${session.selected.format.toUpperCase()}?\n\nMochimono will make a max-effort final encode, verify it, then replace the original.`)) return;
   committing = true;
   keep.disabled = true;
   replace.disabled = true;
@@ -540,6 +574,7 @@ function openOptimizer(hash = currentHash()) {
   activeId = '';
   session = null;
   format = 'auto';
+  contentMode = 'auto';
   effort = 'normal';
   sizeMode = { kind:'auto', value:AUTO_MAX_EDGE };
   quality.dataset.userChanged = '';
@@ -550,6 +585,7 @@ function openOptimizer(hash = currentHash()) {
   committing = false;
   saving.textContent = '—';
   resultSize.textContent = 'Preparing…';
+  originalInfo.textContent = 'Original';
   zoomLabel.textContent = `${Math.round(initialView.scale * 100)}%`;
   setSplit(50);
   syncControls();
@@ -569,7 +605,6 @@ function openOptimizer(hash = currentHash()) {
 trigger.addEventListener('click', () => active() ? closeOptimizer() : openOptimizer());
 formatButton.addEventListener('click', () => togglePane('format', formatButton));
 sizeButton.addEventListener('click', () => togglePane('size', sizeButton));
-moreButton.addEventListener('click', () => togglePane('more', moreButton));
 formats.addEventListener('click', event => {
   const button = event.target.closest('[data-format]');
   if (button) setFormat(button.dataset.format);
@@ -578,9 +613,18 @@ sizes.addEventListener('click', event => {
   const button = event.target.closest('[data-size-kind]');
   if (button) setSize(button.dataset.sizeKind, button.dataset.sizeValue);
 });
+contentChoices.addEventListener('click', event => {
+  const button = event.target.closest('[data-content]');
+  if (button) setContent(button.dataset.content);
+});
 efforts.addEventListener('click', event => {
   const button = event.target.closest('[data-effort]');
   if (button) setEffort(button.dataset.effort);
+});
+maxSize.addEventListener('input', () => {
+  sizeMode = { kind:'max', value:MAX_SIZE_STEPS[Number(maxSize.value)] };
+  syncControls();
+  schedulePreview();
 });
 quality.addEventListener('input', () => {
   quality.dataset.userChanged = '1';
