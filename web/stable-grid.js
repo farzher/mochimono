@@ -44,6 +44,7 @@ let observedWidth = 0;
 
 const metrics = {
   modelBuilds:0,
+  metadataOnlyModels:0,
   workerReady:0,
   layoutInstalls:0,
   rowMounts:0,
@@ -215,6 +216,7 @@ function materializeRows(rowIds) {
     const row = createRow(id);
     renderedRows.set(id, row);
     insertRow(row, id);
+    window.mochimonoThumbnails?.prepare?.(row);
     mounted++;
   }
   if (mounted) {
@@ -229,6 +231,7 @@ function trimRows(scrollTop = scrollY) {
   const keep = new Set(rowsForScroll(layout, scrollTop, KEEP_AHEAD, KEEP_BEHIND).rows);
   for (const [row, element] of renderedRows) {
     if (keep.has(row)) continue;
+    window.mochimonoThumbnails?.release?.(element);
     element.remove();
     renderedRows.delete(row);
     metrics.rowUnmounts++;
@@ -473,6 +476,7 @@ function installLayout(nextLayout) {
     return;
   }
 
+  for (const element of renderedRows.values()) window.mochimonoThumbnails?.release?.(element);
   layout = nextLayout;
   pendingLayout = null;
   renderedRows = new Map();
@@ -539,10 +543,26 @@ function build() {
   });
 }
 
+function sameGeometrySequence(previous, next) {
+  if (!previous || !next || previous.sort !== next.sort) return false;
+  const before = previous.items;
+  const after = next.items;
+  if (!Array.isArray(before) || !Array.isArray(after) || before.length !== after.length) return false;
+  for (let index = 0; index < before.length; index++) {
+    if (String(before[index]?.[0] || '') !== String(after[index]?.[0] || '')) return false;
+  }
+  return true;
+}
+
 function setModel(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.items)) {
     release();
     return false;
+  }
+  if (owned && layout && sameGeometrySequence(model, snapshot)) {
+    model = snapshot;
+    metrics.metadataOnlyModels++;
+    return true;
   }
   model = snapshot;
   build();
@@ -564,6 +584,7 @@ function release() {
   rowLayer = null;
   headerLayer = null;
   dayLayer = null;
+  for (const element of renderedRows.values()) window.mochimonoThumbnails?.release?.(element);
   renderedRows.clear();
   railKey = '';
   document.documentElement.classList.remove('stable-grid-owned');
