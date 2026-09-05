@@ -27,13 +27,11 @@ html.grid-interaction-active #files .file-context-badge{opacity:0!important;tran
 .stable-grid-row .media-thumb{background:#262529}
 .stable-grid-row .video-thumb-pending{background:#262529!important}
 
-/* thumbs.js sets data-thumb-decoded only after img.decode() completes. Triggering
-   a compositor-only keyframe from that discrete state does not depend on a
-   previously painted opacity:0 frame, unlike the old transition approach. */
+/* This reveal is functional loading feedback, not decorative motion. Keep it active
+   even when the OS reports reduced motion; opacity-only animation is compositor-safe. */
 .stable-grid-row .cached-thumb{transition:none!important}
-.stable-grid-row .cached-thumb[data-thumb-decoded="1"]{animation:grid-thumb-reveal 220ms cubic-bezier(.16,1,.3,1) both}
-@keyframes grid-thumb-reveal{from{opacity:0}to{opacity:1}}
-@media(prefers-reduced-motion:reduce){.stable-grid-row .cached-thumb[data-thumb-decoded="1"]{animation:none!important}}
+.stable-grid-row .cached-thumb[data-thumb-decoded="1"]{animation:grid-thumb-reveal 260ms cubic-bezier(.16,1,.3,1) both!important}
+@keyframes grid-thumb-reveal{0%{opacity:0}35%{opacity:.18}100%{opacity:1}}
 
 .file-card{position:relative}
 .protection-badge{pointer-events:none;white-space:nowrap;font-weight:750;letter-spacing:.01em}
