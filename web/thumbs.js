@@ -5,11 +5,11 @@ const THUMB_VERSION = 3;
 const CHECK_LIMIT = 160;
 const RECHECK_DELAY = CLIENT ? 140 : 500;
 const CARD_PRELOAD_MARGIN = Math.max(900, Math.round(innerHeight * 2.25));
-const ROW_PRELOAD_MARGIN = Math.max(1200, Math.round(innerHeight * 2.75));
+const ROW_PRELOAD_MARGIN = Math.max(180, Math.round(innerHeight * .4));
 const IMAGE_POOL_MAX = 512;
 const MAX_IMAGE_LOADS = 48;
-const NEAR_LOAD_LIMIT = 40;
-const WARM_LOAD_LIMIT = 24;
+const NEAR_LOAD_LIMIT = 36;
+const WARM_LOAD_LIMIT = 16;
 const ROW_WORK_BUDGET_MS = 4;
 
 const states = new Map();
@@ -181,11 +181,30 @@ function touchPool(hash, image) {
   while (imagePool.size > IMAGE_POOL_MAX) imagePool.delete(imagePool.keys().next().value);
 }
 
-function finishNetwork(image) {
+function finishNetwork(image, pump = true) {
   if (image?.dataset?.thumbActive !== '1') return;
   delete image.dataset.thumbActive;
   activeImageLoads = Math.max(0, activeImageLoads - 1);
-  pumpImageLoads();
+  if (pump) pumpImageLoads();
+}
+
+function cancelCardLoad(card) {
+  queuedCards.delete(card);
+  const image = card?.querySelector('img.cached-thumb[data-thumb-active="1"]');
+  if (!image) return false;
+  const hash = String(card.dataset.hash || '');
+  image.onload = null;
+  image.onerror = null;
+  finishNetwork(image, false);
+  image.removeAttribute('src');
+  image.remove();
+  if (hash) {
+    const state = stateFor(hash);
+    state.loading = false;
+    state.nextCheck = 0;
+  }
+  pending(card);
+  return true;
 }
 
 function stashImage(card) {
@@ -415,7 +434,7 @@ function rowTier(entry) {
   const rect = entry.boundingClientRect;
   if (rect.bottom > 0 && rect.top < innerHeight) return 0;
   const distance = rect.bottom <= 0 ? -rect.bottom : Math.max(0, rect.top - innerHeight);
-  return distance <= innerHeight * 1.2 ? 1 : 2;
+  return distance <= innerHeight * .35 ? 1 : 2;
 }
 
 function prepareRow(row, tier) {
@@ -758,25 +777,44 @@ window.mochimonoThumbnails = {
   release,
   ensureHashes,
   prioritize(cards) {
-    prioritized.clear();
+    const next = new Set();
     for (const card of Array.isArray(cards) ? cards : [cards]) {
-      if (!card?.isConnected || !kind(card)) continue;
+      if (card?.isConnected && kind(card)) next.add(card);
+    }
+
+    let canceled = false;
+    for (const card of prioritized) {
+      if (next.has(card) || nearby.has(card)) continue;
+      canceled = cancelCardLoad(card) || canceled;
+    }
+
+    prioritized.clear();
+    for (const card of next) {
       if (!preparedCards.has(card)) {
         preparedCards.add(card);
         indexCard(card);
       }
       prioritized.add(card);
-      nearby.add(card);
       prepareCard(card, 0, true);
       queueCard(card, 0);
     }
+    if (canceled) pumpImageLoads();
     scheduleCheck(0);
   },
-  clearPriority() { prioritized.clear(); },
+  clearPriority() {
+    let canceled = false;
+    for (const card of prioritized) {
+      if (nearby.has(card)) continue;
+      canceled = cancelCardLoad(card) || canceled;
+    }
+    prioritized.clear();
+    if (canceled) pumpImageLoads();
+  },
   state() {
     return {
       cards:[...cardsByHash.values()].reduce((sum, group) => sum + group.size, 0),
       nearby:nearby.size,
+      prioritized:prioritized.size,
       activeRows:activeRows.size,
       pooled:imagePool.size,
       queuedImages:loadWork.reduce((sum, queue) => sum + queue.length, 0),
