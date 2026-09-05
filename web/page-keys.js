@@ -23,10 +23,10 @@ function stablePress(key) {
   const direction = key === 'PageUp' ? -1 : 1;
   const target = Math.max(0, window.scrollY + direction * pageDistance());
 
-  // Materialize the destination from the already-complete geometry before the
-  // browser moves. No worker request, thumbnail wait, RAF, or virtual-window
-  // extension is on the PageUp/PageDown path.
-  stable.prepareViewport?.(target);
+  // Page repeat is intentionally only a scroll write. The stable grid keeps a
+  // large synchronous geometry cushion around the viewport and the normal scroll
+  // frame advances that cushion. No DOM creation, worker request, thumbnail work,
+  // or animation frame is allowed to become part of key-repeat throughput.
   window.scrollTo({ top:target, left:0, behavior:'auto' });
   return true;
 }
