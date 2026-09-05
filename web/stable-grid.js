@@ -595,13 +595,28 @@ function build() {
   });
 }
 
+function geometryRatio(item) {
+  const type = String(item?.[2] || '');
+  if (type !== 'image' && type !== 'video') return 0;
+  const width = Number(item?.[3]) || 0;
+  const height = Number(item?.[4]) || 0;
+  return width > 0 && height > 0 ? width / height : 0;
+}
+
 function sameGeometrySequence(previous, next) {
   if (!previous || !next || previous.sort !== next.sort) return false;
   const before = previous.items;
   const after = next.items;
   if (!Array.isArray(before) || !Array.isArray(after) || before.length !== after.length) return false;
   for (let index = 0; index < before.length; index++) {
-    if (String(before[index]?.[0] || '') !== String(after[index]?.[0] || '')) return false;
+    const left = before[index];
+    const right = after[index];
+    if (String(left?.[0] || '') !== String(right?.[0] || '') ||
+        String(left?.[1] || '') !== String(right?.[1] || '') ||
+        String(left?.[2] || '') !== String(right?.[2] || '') ||
+        Math.abs(geometryRatio(left) - geometryRatio(right)) > 1e-6 ||
+        Number(left?.[5] || 0) !== Number(right?.[5] || 0) ||
+        Number(left?.[6] || 0) !== Number(right?.[6] || 0)) return false;
   }
   return true;
 }

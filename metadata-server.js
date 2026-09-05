@@ -10,8 +10,8 @@ function catalogPage(url) {
            COALESCE(MIN(s.original_path), '') AS originalPath,
            COALESCE(MAX(s.mtime), o.created_at) AS fileDate,
            COALESCE(MAX(s.created_at), o.created_at) AS addedAt,
-           COALESCE(MAX(t.width), 0) AS width,
-           COALESCE(MAX(t.height), 0) AS height,
+           COALESCE(NULLIF(MAX(mm.width), 0), NULLIF(MAX(t.width), 0), 0) AS width,
+           COALESCE(NULLIF(MAX(mm.height), 0), NULLIF(MAX(t.height), 0), 0) AS height,
            GROUP_CONCAT(DISTINCT (SELECT MIN(i2.id) FROM imports i2 WHERE i2.source_name = i.source_name)) AS importIds,
            GROUP_CONCAT(DISTINCT s.import_id) AS exactImportIds,
            COALESCE(GROUP_CONCAT(DISTINCT s.filename || ' ' || s.original_path || ' ' || COALESCE(ir.root_path, '')), '') AS searchText,
@@ -23,6 +23,7 @@ function catalogPage(url) {
     LEFT JOIN sources s ON s.object_hash = o.hash
     LEFT JOIN imports i ON i.id = s.import_id
     LEFT JOIN import_roots ir ON ir.import_id = s.import_id
+    LEFT JOIN media_metadata mm ON mm.object_hash = o.hash
     LEFT JOIN thumbnails t ON t.object_hash = o.hash
     WHERE o.state = 'active' AND o.hash > ?
     GROUP BY o.hash
@@ -91,7 +92,8 @@ function missingMetadata(url) {
     FROM sources s
     JOIN objects o ON o.hash = s.object_hash
     LEFT JOIN media_metadata mm ON mm.object_hash = o.hash
-    WHERE s.import_id IN (${marks}) AND o.state = 'active' AND mm.object_hash IS NULL
+    WHERE s.import_id IN (${marks}) AND o.state = 'active'
+      AND (mm.object_hash IS NULL OR COALESCE(mm.geometry_checked, 0) = 0)
       AND (o.mime LIKE 'image/%' OR o.mime LIKE 'video/%' OR ${mediaExtensionsSql()})
     GROUP BY o.hash, o.size, o.mime
     ORDER BY o.size ASC, o.hash
@@ -146,6 +148,11 @@ function details(hash) {
     date,
     serverStored: !['corrupt', 'missing'].includes(object.integrityStatus)
   };
+}
+
+function cleanDimension(value) {
+  value = Number(value);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
 }
 
 export async function handleMetadata(req, res, url) {
@@ -216,11 +223,19 @@ export async function handleMetadata(req, res, url) {
     const capturedAt = body.capturedAt == null ? null : saneDate(body.capturedAt);
     if (body.capturedAt && !capturedAt) throw Object.assign(new Error('Invalid captured date'), { status: 400 });
     const source = String(body.source || 'none').slice(0, 80);
+    const width = cleanDimension(body.width);
+    const height = cleanDimension(body.height);
     db.prepare(`
-      INSERT INTO media_metadata(object_hash, captured_at, source, checked_at) VALUES(?, ?, ?, ?)
-      ON CONFLICT(object_hash) DO UPDATE SET captured_at=excluded.captured_at, source=excluded.source, checked_at=excluded.checked_at
-    `).run(hash, capturedAt, source, now());
-    json(res, 200, { ok: true, hash, capturedAt, source });
+      INSERT INTO media_metadata(object_hash, captured_at, source, width, height, geometry_checked, checked_at)
+      VALUES(?, ?, ?, ?, ?, 1, ?)
+      ON CONFLICT(object_hash) DO UPDATE SET
+        captured_at=COALESCE(excluded.captured_at, media_metadata.captured_at),
+        source=CASE WHEN excluded.captured_at IS NOT NULL THEN excluded.source ELSE media_metadata.source END,
+        width=CASE WHEN excluded.width > 0 THEN excluded.width ELSE media_metadata.width END,
+        height=CASE WHEN excluded.height > 0 THEN excluded.height ELSE media_metadata.height END,
+        geometry_checked=1, checked_at=excluded.checked_at
+    `).run(hash, capturedAt, source, width, height, now());
+    json(res, 200, { ok: true, hash, capturedAt, source, width, height });
     return true;
   }
 
