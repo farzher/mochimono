@@ -6,7 +6,7 @@ const CLIENT = document.documentElement.classList.contains('client-library');
 
 const SUPPORTED = new Set(['jpg','jpeg','png','webp','avif','bmp','gif','tif','tiff']);
 const DIRECT_BROWSER = new Set(['jpg','jpeg','png','webp','avif','bmp','gif']);
-const AUTO_MAX_EDGE = 3072;
+const AUTO_MAX_EDGE = 2560;
 const MAX_SIZE_STEPS = [720,1080,1440,1920,2560,3072,3840,5120,8192];
 const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
 const currentHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
@@ -69,7 +69,7 @@ layer.innerHTML = `
       <div class="image-optimize-pane" data-opt-pane="size" hidden>
         <div class="image-optimize-pane-title">Size</div>
         <div class="image-optimize-choice-grid" data-opt-sizes>
-          <button class="image-optimize-choice" type="button" data-size-kind="auto" data-size-value="3072">Auto</button>
+          <button class="image-optimize-choice" type="button" data-size-kind="auto" data-size-value="2560">Auto</button>
           <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="100">100%</button>
           <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="75">75%</button>
           <button class="image-optimize-choice" type="button" data-size-kind="percent" data-size-value="50">50%</button>
@@ -94,8 +94,8 @@ layer.innerHTML = `
     </div>
     <div class="image-optimize-tuning">
       <div class="image-optimize-slider">
-        <div class="image-optimize-tune-head"><span>Max size</span><output data-opt-max-size-label>3072 px</output></div>
-        <input data-opt-max-size type="range" min="0" max="8" value="5" aria-label="Maximum image size">
+        <div class="image-optimize-tune-head"><span>Max size</span><output data-opt-max-size-label>2560 px</output></div>
+        <input data-opt-max-size type="range" min="0" max="8" value="4" aria-label="Maximum image size">
       </div>
       <div class="image-optimize-slider">
         <div class="image-optimize-tune-head"><span>Quality</span><output data-opt-quality-label>94</output></div>
