@@ -185,6 +185,29 @@ const monthRailLabel = file => timelineDate(file).toLocaleDateString(undefined, 
 const dayKey = file => `${timelineDate(file).getFullYear()}-${String(timelineDate(file).getMonth() + 1).padStart(2, '0')}-${String(timelineDate(file).getDate()).padStart(2, '0')}`;
 const dayLabel = file => timelineDate(file).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 
+function gridModel() {
+  return {
+    version:catalogVersion,
+    sort,
+    items:filtered.map(file => [
+      String(file.hash || ''),
+      String(file.filename || ''),
+      kind(file),
+      Number(file.width) || 0,
+      Number(file.height) || 0,
+      timelineMs(file),
+      Number(file.size) || 0
+    ])
+  };
+}
+
+function publishGridModel() {
+  const snapshot = gridModel();
+  window.mochimonoGridModel = snapshot;
+  window.mochimonoStableGrid?.setModel?.(snapshot);
+  window.dispatchEvent(new CustomEvent('mochimono:grid-model', { detail:snapshot }));
+}
+
 function dateGroups(items) {
   const groups = [];
   for (const file of items) {
@@ -245,7 +268,7 @@ function syncYearHeadings() {
 }
 
 function currentAnchor() {
-  if (scrollY <= 4 || !$('#viewer').hidden) return null;
+  if (view === 'grid' || scrollY <= 4 || !$('#viewer').hidden) return null;
   const barBottom = document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0;
   const bounds = filesElement.getBoundingClientRect();
   const xs = [bounds.left + 8, (bounds.left + bounds.right) / 2, bounds.right - 8]
@@ -263,7 +286,7 @@ function currentAnchor() {
 }
 
 function restoreAnchor(anchor) {
-  if (!anchor) return;
+  if (view === 'grid' || !anchor) return;
   requestAnimationFrame(() => requestAnimationFrame(() => {
     const card = anchor.element?.isConnected ? anchor.element : filesElement.querySelector(`[data-hash="${CSS.escape(anchor.hash)}"]`);
     if (!card) return;
@@ -273,8 +296,9 @@ function restoreAnchor(anchor) {
 }
 
 function syncSentinels() {
-  topScrollSentinel.hidden = renderOffset <= 0 || view === 'folders';
-  $('#scroll-sentinel').hidden = renderEnd >= filtered.length || view === 'folders';
+  const virtual = view !== 'grid' && view !== 'folders';
+  topScrollSentinel.hidden = !virtual || renderOffset <= 0;
+  $('#scroll-sentinel').hidden = !virtual || renderEnd >= filtered.length;
 }
 
 function resetMarkup() {
@@ -368,9 +392,18 @@ function trimRenderedEnd(count) {
 
 function renderFiles(preserve = false) {
   if (view === 'folders') return renderFolder();
-  const anchor = preserve ? currentAnchor() : null;
   if (folderImportId) folderBreadcrumb();
   else { $('#folderbar').hidden = true; $('#folderbar').replaceChildren(); }
+
+  if (view === 'grid') {
+    topScrollSentinel.hidden = true;
+    $('#scroll-sentinel').hidden = true;
+    publishGridModel();
+    return;
+  }
+
+  window.mochimonoStableGrid?.release?.();
+  const anchor = preserve ? currentAnchor() : null;
   resetMarkup();
   renderRail();
   restoreAnchor(anchor);
@@ -421,7 +454,7 @@ function applyFilters(reset = true, preserve = false, keepHash = '') {
 }
 
 function extendWindow(direction = 1) {
-  if (view === 'folders' || !filtered.length) return false;
+  if (view === 'grid' || view === 'folders' || !filtered.length) return false;
   if (direction < 0) {
     if (renderOffset <= 0) return false;
     const anchor = currentAnchor();
@@ -447,6 +480,7 @@ function extendWindow(direction = 1) {
 
 function ensureIndexRendered(index) {
   if (!Number.isInteger(index) || !filtered[index]) return false;
+  if (view === 'grid') return Boolean(window.mochimonoStableGrid?.ensureIndex?.(index));
   if (index >= renderOffset && index < renderEnd) return false;
   renderOffset = Math.max(0, Math.min(index - PAGE, Math.max(0, filtered.length - JUMP_WINDOW)));
   renderEnd = Math.min(filtered.length, renderOffset + JUMP_WINDOW);
@@ -455,7 +489,7 @@ function ensureIndexRendered(index) {
 }
 
 function railEntries() {
-  if (view === 'folders' || !filtered.length) return [];
+  if (view === 'grid' || view === 'folders' || !filtered.length) return [];
   if (sort === 'size-desc') {
     const count = Math.min(18, filtered.length);
     const indexes = [...new Set(Array.from({ length: count }, (_, i) => Math.round(i * (filtered.length - 1) / Math.max(1, count - 1))))];
@@ -485,11 +519,13 @@ function setRailThumb(index) {
 }
 
 function visibleIndex() {
+  if (view === 'grid') return Number(window.mochimonoStableGrid?.visibleIndex?.()) || 0;
   const visible = currentAnchor()?.element;
   return visible ? filteredIndex.get(visible.dataset.hash) ?? renderOffset : renderOffset;
 }
 
 function updateRailActive() {
+  if (view === 'grid') return;
   const rail = $('#dateRail');
   if (rail.hidden || !filtered.length) return;
   const index = visibleIndex();
@@ -505,6 +541,7 @@ function updateRailActive() {
 }
 
 function renderRail() {
+  if (view === 'grid') return;
   const rail = $('#dateRail');
   const entries = railEntries();
   rail.hidden = !entries.length;
@@ -530,6 +567,10 @@ function renderImports() {
 
 function jumpToIndex(index, smooth = true) {
   if (!Number.isInteger(index) || !filtered[index]) return;
+  if (view === 'grid') {
+    window.mochimonoStableGrid?.scrollToIndex?.(index, 'center');
+    return;
+  }
   ensureIndexRendered(index);
   const hash = filtered[index].hash;
   requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -538,7 +579,7 @@ function jumpToIndex(index, smooth = true) {
 }
 
 function scrubFromPointer(event, final = false) {
-  if (!filtered.length) return;
+  if (view === 'grid' || !filtered.length) return;
   const rect = $('#dateRail').getBoundingClientRect();
   const index = Math.round(Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)) * (filtered.length - 1));
   setRailThumb(index);
@@ -638,6 +679,7 @@ function folderBreadcrumb() {
 }
 
 function renderFolder() {
+  window.mochimonoStableGrid?.release?.();
   filesElement.className = 'files folders';
   topScrollSentinel.hidden = true;
   $('#scroll-sentinel').hidden = true;
@@ -690,6 +732,7 @@ function setView(next) {
   view = next;
   lastRailKey = '';
   const folderMode = view === 'folders';
+  if (view !== 'grid') window.mochimonoStableGrid?.release?.();
   $('#sort').hidden = folderMode;
   $('#typeFilter').hidden = folderMode;
   $('#collectionFilter').hidden = folderMode;
@@ -824,6 +867,16 @@ window.mochimonoOpenViewer = openViewer;
 
 function revealViewerHash(hash) {
   if (!hash) return requestAnimationFrame(() => window.scrollTo(0, viewerScrollY));
+  if (view === 'grid') {
+    const index = filteredIndex.get(hash);
+    if (Number.isInteger(index)) window.mochimonoStableGrid?.ensureIndex?.(index);
+    requestAnimationFrame(() => {
+      window.scrollTo({ top:viewerScrollY, left:0, behavior:'auto' });
+      window.mochimonoStableGrid?.ensureIndex?.(Number.isInteger(index) ? index : -1);
+      window.dispatchEvent(new CustomEvent('mochimono-viewer-return', { detail: { hash } }));
+    });
+    return;
+  }
   if (view !== 'folders') {
     const index = filteredIndex.get(hash);
     if (Number.isInteger(index)) ensureIndexRendered(index);
@@ -929,6 +982,7 @@ window.mochimonoLibrary = {
   refresh: () => syncCatalog(true),
   ensureIndex: ensureIndexRendered,
   filteredHashes: () => filtered.map(file => file.hash),
+  gridModel,
   sources: () => imports.map(item => ({ ...item })),
   folderState,
   folderContents: () => folderData,
@@ -945,14 +999,15 @@ window.mochimonoLibrary = {
   state: () => ({
     total: catalog.length,
     filtered: filtered.length,
-    offset: renderOffset,
-    loaded: Math.max(0, renderEnd - renderOffset),
-    hasMore: renderEnd < filtered.length,
-    hasPrevious: renderOffset > 0,
+    offset: view === 'grid' ? 0 : renderOffset,
+    loaded: view === 'grid' ? filtered.length : Math.max(0, renderEnd - renderOffset),
+    hasMore: view === 'grid' ? false : renderEnd < filtered.length,
+    hasPrevious: view === 'grid' ? false : renderOffset > 0,
     view,
     sort,
     locationFilter,
-    version: catalogVersion
+    version: catalogVersion,
+    stableGrid:view === 'grid'
   })
 };
 
@@ -1059,6 +1114,7 @@ $('#views').addEventListener('click', event => { const button = event.target.clo
 
 const rail = $('#dateRail');
 rail.addEventListener('pointerdown', event => {
+  if (view === 'grid') return;
   if (!rail.hidden) {
     scrubbing = true;
     rail.setPointerCapture?.(event.pointerId);
@@ -1067,9 +1123,9 @@ rail.addEventListener('pointerdown', event => {
     event.preventDefault();
   }
 });
-rail.addEventListener('pointermove', event => { if (scrubbing) { scrubFromPointer(event); event.preventDefault(); } });
+rail.addEventListener('pointermove', event => { if (view !== 'grid' && scrubbing) { scrubFromPointer(event); event.preventDefault(); } });
 rail.addEventListener('pointerup', event => {
-  if (scrubbing) {
+  if (view !== 'grid' && scrubbing) {
     scrubbing = false;
     rail.classList.remove('dragging');
     scrubFromPointer(event, true);
@@ -1078,6 +1134,7 @@ rail.addEventListener('pointerup', event => {
 });
 rail.addEventListener('pointercancel', () => { scrubbing = false; rail.classList.remove('dragging'); });
 rail.addEventListener('click', event => {
+  if (view === 'grid') return;
   const tick = event.target.closest('[data-index]');
   if (tick && !scrubbing) jumpToIndex(Number(tick.dataset.index), false);
 });
@@ -1121,7 +1178,7 @@ observeWindowEdge(topScrollSentinel, -1, '240px 0px');
 observeWindowEdge($('#scroll-sentinel'), 1, '240px 0px');
 
 window.addEventListener('mochimono:grid-interaction-end', () => {
-  if (!scrubbing) updateRailActive();
+  if (view !== 'grid' && !scrubbing) updateRailActive();
 });
 
 document.addEventListener('keydown', event => {
