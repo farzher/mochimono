@@ -387,7 +387,7 @@ function ensureRailShell() {
   const nextKey = entries.map(entry => `${entry.index}:${entry.short}:${entry.major ? 1 : 0}`).join('|');
   if (nextKey !== railKey || !rail.querySelector('#railThumb')) {
     railKey = nextKey;
-    rail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `<button data-index="${entry.index}" class="rail-tick ${entry.major ? 'major' : ''}" style="top:${(entry.position * 100).toFixed(3)}%" title="${escapeHtml(entry.label)}"><span>${escapeHtml(entry.short)}</span><i></i></button>`).join('')}<div id="railThumb" class="rail-thumb"><span></span><i></i></div>`;
+    rail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `<button data-index="${entry.index}" class="rail-tick ${entry.major ? 'major' : ''}" style="top:${(entry.position * 100).toFixed(3)}%" title="${escapeHtml(entry.label)}"><span>${escapeHtml(entry.short)}</span></button>`).join('')}<div id="railThumb" class="rail-thumb"><span></span><i></i></div>`;
   }
 }
 
