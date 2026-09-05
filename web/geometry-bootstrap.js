@@ -2,6 +2,7 @@ const BATCH_SIZE = 500;
 const CHECK_WORKERS = 2;
 const RETRY_DELAY_MS = 180;
 const MAX_RETRIES = 5;
+const LEARNED_REFRESH_DELAY_MS = 55;
 
 const geometry = new Map();
 const grid = window.mochimonoStableGrid;
@@ -13,11 +14,16 @@ let generation = 0;
 let currentSnapshot = null;
 let lastApplied = null;
 let retryTimer = 0;
+let learnedRefreshTimer = 0;
+let learnedRefreshPending = false;
 let checking = 0;
 let checked = 0;
 let learned = 0;
 let failedChecks = 0;
 let unresolved = 0;
+let learnedRefreshes = 0;
+let learnedRefreshDeferrals = 0;
+let currentMissing = new Set();
 
 function mediaItem(item) {
   const type = String(item?.[2] || '');
@@ -105,6 +111,7 @@ async function checkAll(hashes) {
 function apply(snapshot) {
   const next = enrich(snapshot);
   lastApplied = next;
+  currentMissing = new Set(missingHashes(next));
   window.mochimonoGridModel = next;
   return originalSetModel?.(next) ?? false;
 }
@@ -150,13 +157,40 @@ function refreshFromLearnedGeometry() {
   if (!currentSnapshot || !originalSetModel) return;
   const next = enrich(currentSnapshot);
   if (next === currentSnapshot && lastApplied === currentSnapshot) return;
+  learnedRefreshes++;
   apply(currentSnapshot);
+}
+
+function flushLearnedGeometry() {
+  learnedRefreshTimer = 0;
+  if (!learnedRefreshPending) return;
+  if (window.mochimonoGridInteraction?.active?.()) {
+    learnedRefreshDeferrals++;
+    return;
+  }
+  learnedRefreshPending = false;
+  refreshFromLearnedGeometry();
+}
+
+function scheduleLearnedGeometryRefresh() {
+  learnedRefreshPending = true;
+  if (window.mochimonoGridInteraction?.active?.()) {
+    learnedRefreshDeferrals++;
+    return;
+  }
+  if (learnedRefreshTimer) return;
+  learnedRefreshTimer = setTimeout(flushLearnedGeometry, LEARNED_REFRESH_DELAY_MS);
 }
 
 if (catalogCache && originalRememberDimensions) {
   catalogCache.rememberDimensions = (hash, width, height) => {
     originalRememberDimensions(hash, width, height);
-    if (remember(hash, width, height, false)) queueMicrotask(refreshFromLearnedGeometry);
+    hash = String(hash || '');
+    const neededByCurrentGrid = currentMissing.has(hash);
+    if (remember(hash, width, height, false) && neededByCurrentGrid) {
+      currentMissing.delete(hash);
+      scheduleLearnedGeometryRefresh();
+    }
   };
 }
 
@@ -165,9 +199,13 @@ if (grid && originalSetModel) {
     currentSnapshot = snapshot;
     clearTimeout(retryTimer);
     retryTimer = 0;
+    clearTimeout(learnedRefreshTimer);
+    learnedRefreshTimer = 0;
+    learnedRefreshPending = false;
     const token = ++generation;
     const first = enrich(snapshot);
     const missing = missingHashes(first);
+    currentMissing = new Set(missing);
     unresolved = missing.length;
     if (!missing.length) return apply(snapshot);
     prime(snapshot, token).catch(() => {
@@ -177,6 +215,23 @@ if (grid && originalSetModel) {
   };
 }
 
+window.addEventListener('mochimono:grid-interaction-end', () => {
+  if (!learnedRefreshPending) return;
+  clearTimeout(learnedRefreshTimer);
+  learnedRefreshTimer = setTimeout(flushLearnedGeometry, 0);
+});
+
 window.mochimonoGeometryBootstrap = {
-  state:() => ({ known:geometry.size, checking, checked, learned, failedChecks, unresolved, generation })
+  state:() => ({
+    known:geometry.size,
+    checking,
+    checked,
+    learned,
+    failedChecks,
+    unresolved,
+    generation,
+    learnedRefreshes,
+    learnedRefreshPending,
+    learnedRefreshDeferrals
+  })
 };
