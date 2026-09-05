@@ -7,6 +7,7 @@ const META_KEY = 'catalog';
 const WRITE_BATCH = 1500;
 const READ_BATCH = 1800;
 const QUICK_FILES = 200;
+const CLIENT = document.documentElement.classList.contains('client-library');
 
 let dbPromise = null;
 let loadPromise = null;
@@ -36,6 +37,7 @@ const paintTurn = () => new Promise(resolve => requestAnimationFrame(() => reque
 const startupStyle = document.createElement('style');
 startupStyle.textContent = 'html.mochimono-quick-grid-pending #files>.empty{visibility:hidden!important}';
 document.head.append(startupStyle);
+if (CLIENT) document.documentElement.classList.add('mochimono-quick-grid-pending');
 
 function enqueueWrite(work) {
   const run = () => work();
@@ -116,13 +118,38 @@ async function readMeta(db) {
   return validMeta(value) ? value : null;
 }
 
+async function thumbnailGeometry(files) {
+  const hashes = files.map(file => String(file.hash || '')).filter(Boolean);
+  if (!hashes.length) return new Map();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 80);
+  try {
+    const response = await fetch('/api/thumbs/check', {
+      method:'POST',
+      headers:{ 'content-type':'application/json' },
+      body:JSON.stringify({ hashes }),
+      signal:controller.signal
+    });
+    if (!response.ok) return new Map();
+    const data = await response.json();
+    return new Map((data.thumbnails || []).map(item => [String(item.hash || ''), item]));
+  } catch {
+    return new Map();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function hydrateQuickSnapshot(db, snapshot) {
   if (!db || !snapshot?.files?.length) return snapshot;
   const targets = snapshot.files.map((file, index) => ({ file, index }));
   const transaction = db.transaction('files', 'readonly');
   const done = transactionDone(transaction);
   const store = transaction.objectStore('files');
-  const rows = await Promise.all(targets.map(({ file }) => requestResult(store.get(String(file.hash || ''))).catch(() => null)));
+  const [rows, geometry] = await Promise.all([
+    Promise.all(targets.map(({ file }) => requestResult(store.get(String(file.hash || ''))).catch(() => null))),
+    thumbnailGeometry(snapshot.files)
+  ]);
   await done.catch(() => {});
 
   const files = [...snapshot.files];
@@ -131,28 +158,12 @@ async function hydrateQuickSnapshot(db, snapshot) {
     const target = targets[position];
     files[target.index] = publicFile(mergeGeometry({ ...target.file, ...stored }));
   });
-
-  try {
-    const hashes = files.map(file => String(file.hash || '')).filter(Boolean);
-    if (hashes.length) {
-      const response = await fetch('/api/thumbs/check', {
-        method:'POST',
-        headers:{ 'content-type':'application/json' },
-        body:JSON.stringify({ hashes })
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const geometry = new Map((data.thumbnails || []).map(item => [String(item.hash || ''), item]));
-        for (let index = 0; index < files.length; index++) {
-          const item = geometry.get(String(files[index].hash || ''));
-          const width = Number(item?.width) || 0;
-          const height = Number(item?.height) || 0;
-          if (width > 0 && height > 0) files[index] = { ...files[index], width, height };
-        }
-      }
-    }
-  } catch {}
-
+  for (let index = 0; index < files.length; index++) {
+    const item = geometry.get(String(files[index].hash || ''));
+    const width = Number(item?.width) || 0;
+    const height = Number(item?.height) || 0;
+    if (width > 0 && height > 0) files[index] = { ...files[index], width, height };
+  }
   return { ...snapshot, files };
 }
 
@@ -223,14 +234,19 @@ function waitForQuickGrid() {
 }
 
 async function installQuickPreview(snapshot) {
-  if (!snapshot?.files?.length || !document.documentElement.classList.contains('client-library')) return false;
+  if (!snapshot?.files?.length || !CLIENT) {
+    document.documentElement.classList.remove('mochimono-quick-grid-pending');
+    return false;
+  }
   const library = window.mochimonoLibrary;
-  if (!library?.upsertMany || Number(library.state?.().total) > 0) return false;
+  if (!library?.upsertMany || Number(library.state?.().total) > 0) {
+    document.documentElement.classList.remove('mochimono-quick-grid-pending');
+    return false;
+  }
 
   const login = document.querySelector('#login');
   const app = document.querySelector('#app');
   const logout = document.querySelector('#logout');
-  document.documentElement.classList.add('mochimono-quick-grid-pending');
   if (login) login.hidden = true;
   if (app) app.hidden = false;
   if (logout) logout.hidden = false;
@@ -250,11 +266,18 @@ async function installQuickPreview(snapshot) {
 
 async function load() {
   const memory = memorySnapshot();
-  if (memory) return memory;
+  if (memory) {
+    document.documentElement.classList.remove('mochimono-quick-grid-pending');
+    return memory;
+  }
   if (!loadPromise) {
     loadPromise = (async () => {
       const quick = await loadQuick().catch(() => null);
-      const painted = await installQuickPreview(quick).catch(() => false);
+      if (!quick) document.documentElement.classList.remove('mochimono-quick-grid-pending');
+      const painted = await installQuickPreview(quick).catch(() => {
+        document.documentElement.classList.remove('mochimono-quick-grid-pending');
+        return false;
+      });
       if (painted) await idle();
       return loadFromDb(meta);
     })().finally(() => { loadPromise = null; });
@@ -378,8 +401,6 @@ async function flushDimensionsNow() {
     store.put({ ...next, __snapshot: meta?.version || '' });
   }
 
-  // The quick startup snapshot is the first geometry source on reload. Keep it
-  // current so a learned ratio never falls back again on the next first paint.
   if (changed.size && meta?.version && Array.isArray(meta.quickFiles)) {
     const nextQuick = meta.quickFiles.map(file => {
       const geometry = changed.get(String(file.hash || ''));
@@ -413,6 +434,7 @@ function clear() {
     geometryJob = 0;
   }
   pendingGeometry.clear();
+  document.documentElement.classList.remove('mochimono-quick-grid-pending');
   return enqueueWrite(clearNow);
 }
 
