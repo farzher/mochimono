@@ -10,6 +10,7 @@ const HASH_PREFIXES = '0123456789abcdef';
 const QUICK_VERSION = 2;
 const QUICK_FILES = 600;
 const QUICK_MEDIA = 5000;
+const QUICK_UPGRADE_DELAY = 8000;
 const CLIENT = document.documentElement.classList.contains('client-library');
 
 let dbPromise = null;
@@ -176,10 +177,16 @@ function scheduleQuickUpgrade(files, storedMeta) {
   if (!validMeta(storedMeta) || Number(storedMeta.quickVersion) === QUICK_VERSION || quickUpgradeJob) return;
   const run = () => {
     quickUpgradeJob = 0;
+    // This is a one-time local migration and sorts the complete catalog. Do not
+    // trust requestIdleCallback here: Chrome can call it during cold startup.
+    // Wait for a real quiet period and keep backing off while the user navigates.
+    if (window.mochimonoGridInteraction?.state?.().active) {
+      quickUpgradeJob = setTimeout(run, 2000);
+      return;
+    }
     enqueueWrite(() => upgradeQuickMeta(files, storedMeta)).catch(() => {});
   };
-  if ('requestIdleCallback' in window) quickUpgradeJob = requestIdleCallback(run, { timeout: 3500 });
-  else quickUpgradeJob = setTimeout(run, 1500);
+  quickUpgradeJob = setTimeout(run, QUICK_UPGRADE_DELAY);
 }
 
 async function upgradeQuickMeta(files, expectedMeta) {
@@ -239,7 +246,10 @@ function waitForQuickGrid() {
       paintTurn().then(resolve);
     };
     const onGrid = () => finish();
-    const timer = setTimeout(finish, 140);
+    // Keep the temporary startup empty state hidden long enough for the quick
+    // worker geometry to actually arrive. The old 140ms timeout exposed
+    // "No files" while a valid quick layout was still being built.
+    const timer = setTimeout(finish, 900);
     window.addEventListener('mochimono:stable-grid-installed', onGrid, { once:true });
   });
 }
@@ -462,8 +472,7 @@ function clear() {
     geometryJob = 0;
   }
   if (quickUpgradeJob) {
-    if ('cancelIdleCallback' in window) cancelIdleCallback(quickUpgradeJob);
-    else clearTimeout(quickUpgradeJob);
+    clearTimeout(quickUpgradeJob);
     quickUpgradeJob = 0;
   }
   pendingGeometry.clear();
