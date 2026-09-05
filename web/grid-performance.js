@@ -16,7 +16,7 @@ let until = 0;
 let timer = 0;
 let lastThumbnailActivity = 0;
 let rapid = false;
-let rapidMode = '';
+let rapidSource = '';
 let rapidTimer = 0;
 let keyWatchdog = 0;
 let velocityUntil = 0;
@@ -92,7 +92,7 @@ function installThumbnailGate() {
 function syncRapid() {
   const next = wantedRapidMode();
   if (next) {
-    rapidMode = next;
+    rapidSource = next;
     if (!rapid) {
       rapid = true;
       document.documentElement.classList.add('grid-fast-scroll-active');
@@ -105,7 +105,7 @@ function syncRapid() {
 
   if (!rapid) return;
   rapid = false;
-  rapidMode = '';
+  rapidSource = '';
   document.documentElement.classList.remove('grid-fast-scroll-active');
   window.dispatchEvent(new CustomEvent('mochimono:grid-fast-scroll-end'));
 }
@@ -147,10 +147,21 @@ installThumbnailGate();
 window.mochimonoGridInteraction = {
   active:() => active,
   rapid:() => rapid,
-  rapidMode:() => rapid ? rapidMode : '',
+  // stable-grid already has a lightweight rapid-arrow renderer that mounts only
+  // a narrow row window and deliberately skips thumbnails/day controls. Route
+  // every rapid source through that geometry-only path instead of the old
+  // page/scroll black-void path. Keep the real source separately for diagnostics.
+  rapidMode:() => rapid ? 'arrow' : '',
+  rapidSource:() => rapid ? rapidSource : '',
   pulse,
   release,
-  state:() => ({ active, rapid, rapidMode:rapid ? rapidMode : '', pagesPerSecond })
+  state:() => ({
+    active,
+    rapid,
+    rapidMode:rapid ? 'geometry' : '',
+    rapidSource:rapid ? rapidSource : '',
+    pagesPerSecond
+  })
 };
 
 window.addEventListener('scroll', () => {
