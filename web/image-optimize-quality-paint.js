@@ -31,13 +31,13 @@ if (viewer && compare && original && tuning && qualitySlider) {
   panel.hidden = true;
   panel.innerHTML = `
     <div class="image-optimize-quality-tools">
-      <button class="image-optimize-choice active" type="button" data-quality-tool="compress">Compress</button>
-      <button class="image-optimize-choice" type="button" data-quality-tool="protect">Protect</button>
-      <button class="image-optimize-choice" type="button" data-quality-reset>Clear</button>
+      <button class="image-optimize-choice active" type="button" data-quality-tool="protect">Protect</button>
+      <button class="image-optimize-choice" type="button" data-quality-tool="compress">Compress</button>
+      <button class="image-optimize-choice" type="button" data-quality-reset>Compress all</button>
     </div>
     <div class="image-optimize-slider">
-      <div class="image-optimize-tune-head"><span>Low AVIF quality</span><output data-quality-low-label>${DEFAULT_LOW_QUALITY}</output></div>
-      <input data-quality-low type="range" min="1" max="40" value="${DEFAULT_LOW_QUALITY}" aria-label="Low quality for painted regions">
+      <div class="image-optimize-tune-head"><span>Background AVIF quality</span><output data-quality-low-label>${DEFAULT_LOW_QUALITY}</output></div>
+      <input data-quality-low type="range" min="1" max="40" value="${DEFAULT_LOW_QUALITY}" aria-label="AVIF quality outside protected regions">
     </div>
     <div class="image-optimize-slider">
       <div class="image-optimize-tune-head"><span>Brush</span><output data-quality-brush-label>32</output></div>
@@ -63,7 +63,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
 
   let enabled = false;
   let initialized = false;
-  let tool = 'compress';
+  let tool = 'protect';
   let brush = 32;
   let lowQuality = DEFAULT_LOW_QUALITY;
   let activePointer = null;
@@ -81,16 +81,16 @@ if (viewer && compare && original && tuning && qualitySlider) {
     paintCanvas.width = maskCanvas.width = width;
     paintCanvas.height = maskCanvas.height = height;
     initialized = true;
-    clearMask(false);
+    compressAll(false);
     queueGeometry();
     return true;
   }
 
-  function clearMask(refresh = true) {
+  function compressAll(refresh = true) {
     if (!initialized) return;
     maskContext.save();
     maskContext.globalCompositeOperation = 'source-over';
-    maskContext.fillStyle = '#fff';
+    maskContext.fillStyle = '#000';
     maskContext.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
     maskContext.restore();
     paintContext.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
@@ -134,7 +134,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
   }
 
   function setTool(next) {
-    tool = next === 'protect' ? 'protect' : 'compress';
+    tool = next === 'compress' ? 'compress' : 'protect';
     for (const button of panel.querySelectorAll('[data-quality-tool]')) {
       button.classList.toggle('active', button.dataset.qualityTool === tool);
     }
@@ -171,8 +171,8 @@ if (viewer && compare && original && tuning && qualitySlider) {
   function drawSegment(from, to) {
     if (!from || !to) return;
     const contexts = [
-      { context:maskContext, color:tool === 'compress' ? '#000' : '#fff', composite:'source-over' },
-      { context:paintContext, color:'rgba(255,72,56,.38)', composite:tool === 'compress' ? 'source-over' : 'destination-out' }
+      { context:maskContext, color:tool === 'protect' ? '#fff' : '#000', composite:'source-over' },
+      { context:paintContext, color:'rgba(92,178,255,.40)', composite:tool === 'protect' ? 'source-over' : 'destination-out' }
     ];
     for (const item of contexts) {
       const context = item.context;
@@ -240,7 +240,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
     const button = event.target.closest('[data-quality-tool]');
     if (button) setTool(button.dataset.qualityTool);
   });
-  resetButton.addEventListener('click', () => clearMask());
+  resetButton.addEventListener('click', () => compressAll());
   lowInput.addEventListener('input', () => {
     lowQuality = Math.max(1, Math.min(40, Number(lowInput.value) || DEFAULT_LOW_QUALITY));
     lowLabel.textContent = String(lowQuality);
@@ -289,7 +289,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
     brush = 32;
     brushInput.value = String(brush);
     brushLabel.textContent = String(brush);
-    setTool('compress');
+    setTool('protect');
     toggle.classList.remove('active');
     toggle.textContent = 'Paint';
     panel.hidden = true;
