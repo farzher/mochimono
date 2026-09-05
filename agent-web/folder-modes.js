@@ -8,6 +8,7 @@ let previewLoadedAt = 0;
 let previewTimer = 0;
 let emptyPreviewRetries = 0;
 const previewSamples = new Map();
+const readyPreviewHashes = new Set();
 
 const style = document.createElement('style');
 style.textContent = `
@@ -184,13 +185,16 @@ function rankPreviewFiles(files) {
   return [...images, ...videos];
 }
 
+function readyPreviewFiles(files) {
+  return rankPreviewFiles(files).filter(file => readyPreviewHashes.has(String(file.hash || '')));
+}
+
 function sampleGlyph(file) {
   return mediaKind(file) === 'video' ? '▶' : '▧';
 }
 
-function thumbUrl(hash, attempt = 0) {
-  const suffix = attempt ? `?storage=${attempt}&t=${Date.now()}` : '';
-  return `/api/thumbs/${encodeURIComponent(hash)}${suffix}`;
+function thumbUrl(hash) {
+  return `/api/thumbs/${encodeURIComponent(hash)}`;
 }
 
 function nearlyBlackVideoThumb(img) {
@@ -216,9 +220,9 @@ function nearlyBlackVideoThumb(img) {
 }
 
 function installThumb(img, cell, hash, onReject) {
-  const delays = [450, 800, 1300, 2200, 3600, 5600, 8500];
   img.addEventListener('load', () => {
     if (cell.classList.contains('video') && nearlyBlackVideoThumb(img) && onReject) {
+      readyPreviewHashes.delete(hash);
       onReject(cell);
       return;
     }
@@ -226,15 +230,8 @@ function installThumb(img, cell, hash, onReject) {
   });
   img.addEventListener('error', () => {
     cell.classList.remove('thumb-ready');
-    const attempt = Number(img.dataset.attempt || 0);
-    if (attempt >= delays.length) {
-      onReject?.(cell);
-      return;
-    }
-    img.dataset.attempt = String(attempt + 1);
-    setTimeout(() => {
-      if (img.isConnected) img.src = thumbUrl(hash, attempt + 1);
-    }, delays[attempt]);
+    readyPreviewHashes.delete(hash);
+    onReject?.(cell);
   });
 }
 
@@ -270,7 +267,6 @@ function sampleCell(file, index, onReject) {
     img.alt = '';
     img.loading = 'eager';
     img.decoding = 'async';
-    img.dataset.attempt = '0';
     installThumb(img, cell, hash, onReject);
     img.src = thumbUrl(hash);
     cell.append(img);
@@ -280,7 +276,7 @@ function sampleCell(file, index, onReject) {
 
 function renderFolderPreview(row) {
   const sample = previewSamples.get(pathKey(row.dataset.folderPath));
-  const candidates = rankPreviewFiles(sample?.files);
+  const candidates = readyPreviewFiles(sample?.files);
   let strip = row.querySelector('.storage-folder-samples');
   if (!strip) {
     strip = document.createElement('div');
@@ -318,14 +314,44 @@ function schedulePreviewRefresh(delay = 1600) {
 
 async function liveSample(path) {
   const data = await request(`/api/client/local-catalog?limit=240&path=${encodeURIComponent(path)}`);
-  return { path, files:rankPreviewFiles(data.files).slice(0, 16) };
+  return { path, files:rankPreviewFiles(data.files).slice(0, 80) };
+}
+
+async function refreshReadyPreviewHashes() {
+  const hashes = [...new Set([...previewSamples.values()].flatMap(sample =>
+    rankPreviewFiles(sample?.files).map(file => String(file.hash || ''))
+  ))];
+  if (!hashes.length) {
+    readyPreviewHashes.clear();
+    return;
+  }
+
+  const next = new Set();
+  for (let offset = 0; offset < hashes.length; offset += 500) {
+    const batch = hashes.slice(offset, offset + 500);
+    try {
+      const data = await request('/api/thumbs/check', {
+        method:'POST',
+        body:JSON.stringify({ hashes:batch, background:true })
+      });
+      for (const item of data.thumbnails || []) {
+        const hash = String(item?.hash || '');
+        if (hash) next.add(hash);
+      }
+    } catch {
+      for (const hash of batch) if (readyPreviewHashes.has(hash)) next.add(hash);
+    }
+  }
+
+  readyPreviewHashes.clear();
+  for (const hash of next) readyPreviewHashes.add(hash);
 }
 
 async function refreshFolderPreviews(force = false) {
   if (previewLoading || !folders) return;
   const rows = [...folders.querySelectorAll(':scope > [data-folder-path]')];
   if (!rows.length) return;
-  const empty = rows.some(row => !rankPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files).length);
+  const empty = rows.some(row => !readyPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files).length);
   const maxAge = empty ? 1800 : 30_000;
   if (!force && previewLoadedAt && Date.now() - previewLoadedAt < maxAge) {
     renderFolderPreviews();
@@ -341,9 +367,6 @@ async function refreshFolderPreviews(force = false) {
       previewSamples.set(pathKey(sample.path), { ...sample, files:rankPreviewFiles(sample.files) });
     }
 
-    // The compact combined sample can miss nicer media when a folder starts with
-    // documents or videos. Search deeper whenever it has fewer than three images;
-    // images are preferred, with videos kept only as a fallback pool.
     const weakRows = rows.filter(row => {
       const files = rankPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files);
       return files.filter(file => mediaKind(file) === 'image').length < 3;
@@ -357,9 +380,11 @@ async function refreshFolderPreviews(force = false) {
       }
     }
 
+    await refreshReadyPreviewHashes();
+
     previewLoadedAt = Date.now();
     renderFolderPreviews();
-    const stillEmpty = rows.some(row => !rankPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files).length);
+    const stillEmpty = rows.some(row => !readyPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files).length);
     if (stillEmpty) {
       emptyPreviewRetries++;
       schedulePreviewRefresh(1800);
