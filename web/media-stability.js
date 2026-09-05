@@ -6,6 +6,7 @@ const viewer = document.querySelector('#viewer');
 const viewerStage = document.querySelector('#viewer-stage');
 const viewerMedia = document.querySelector('#viewer-media');
 const viewerName = document.querySelector('#viewer-name');
+const viewerMeta = document.querySelector('#viewer-meta');
 
 const style = document.createElement('style');
 style.textContent = `
@@ -60,6 +61,53 @@ function imagesIn(node) {
   return result;
 }
 
+const RESOLUTION = /^\d[\d,]*×\d[\d,]*$/;
+
+function rewriteViewerResolution(value = '', hide = false) {
+  if (!viewerMeta) return;
+  const before = String(viewerMeta.textContent || '');
+  const parts = before.split(' · ').filter(Boolean);
+  let resolutionIndex = parts.findIndex(part => RESOLUTION.test(part.trim()));
+
+  if (hide && resolutionIndex >= 0) {
+    parts.splice(resolutionIndex, 1);
+    resolutionIndex = -1;
+  } else if (resolutionIndex >= 0) {
+    parts[resolutionIndex] = parts[resolutionIndex].replaceAll(',', '');
+  }
+
+  if (value) {
+    if (resolutionIndex >= 0) parts[resolutionIndex] = value;
+    else parts.splice(Math.min(1, parts.length), 0, value);
+  }
+
+  const after = parts.join(' · ');
+  if (after !== before) viewerMeta.textContent = after;
+}
+
+function syncViewerResolution() {
+  const image = viewerMedia?.querySelector(':scope>img');
+  if (!(image instanceof HTMLImageElement)) return rewriteViewerResolution();
+  if (image.dataset.previewOnly === '1') return rewriteViewerResolution();
+  if (image.dataset.fullSrc) return rewriteViewerResolution('', true);
+  if (image.dataset.viewerFullLoaded !== '1') return rewriteViewerResolution();
+  if (image.naturalWidth && image.naturalHeight) rewriteViewerResolution(`${image.naturalWidth}×${image.naturalHeight}`);
+}
+
+function watchViewerResolution(image) {
+  if (!(image instanceof HTMLImageElement) || image.dataset.viewerResolutionWatching === '1') return;
+  image.dataset.viewerResolutionWatching = '1';
+  image.addEventListener('load', () => {
+    if (!image.isConnected) return;
+    if (!image.dataset.fullSrc && image.dataset.previewOnly !== '1') image.dataset.viewerFullLoaded = '1';
+    requestAnimationFrame(syncViewerResolution);
+  });
+  if (image.complete && image.naturalWidth) {
+    if (!image.dataset.fullSrc && image.dataset.previewOnly !== '1') image.dataset.viewerFullLoaded = '1';
+    requestAnimationFrame(syncViewerResolution);
+  }
+}
+
 function syncViewerPreviewStatus() {
   if (!viewerPreviewStatus) return;
   const preview = viewerMedia?.querySelector(':scope>img[data-full-src],:scope>img[data-preview-only="1"]');
@@ -71,12 +119,14 @@ function stabilizeViewerImage(node) {
   const image = node.matches('#viewer-media>img') ? node : node.querySelector?.('#viewer-media>img');
   if (!(image instanceof HTMLImageElement)) return;
   const name = String(image.alt || viewerName?.textContent || '');
-  if (!/\.hei[cf]$/i.test(name)) return;
-  // Chromium/Windows does not reliably decode the original HEIC. Keep the
-  // generated WebP preview instead of letting library-app swap it for a broken
-  // original after the thumbnail has rendered successfully.
-  image.dataset.previewOnly = '1';
-  image.removeAttribute('data-full-src');
+  if (/\.hei[cf]$/i.test(name)) {
+    // Chromium/Windows does not reliably decode the original HEIC. Keep the
+    // generated WebP preview instead of letting library-app swap it for a broken
+    // original after the thumbnail has rendered successfully.
+    image.dataset.previewOnly = '1';
+    image.removeAttribute('data-full-src');
+  }
+  watchViewerResolution(image);
 }
 
 function cardRatio(card) {
@@ -121,12 +171,19 @@ if (files) {
 if (viewerMedia) {
   stabilizeViewerImage(viewerMedia);
   syncViewerPreviewStatus();
+  syncViewerResolution();
   new MutationObserver(records => {
     for (const record of records) for (const node of record.addedNodes) stabilizeViewerImage(node);
     syncViewerPreviewStatus();
-  }).observe(viewerMedia, { childList:true, subtree:true, attributes:true, attributeFilter:['data-full-src','data-preview-only'] });
-  new MutationObserver(syncViewerPreviewStatus).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
+    syncViewerResolution();
+  }).observe(viewerMedia, { childList:true, subtree:true, attributes:true, attributeFilter:['data-full-src','data-preview-only','src'] });
+  new MutationObserver(() => {
+    syncViewerPreviewStatus();
+    syncViewerResolution();
+  }).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
 }
+
+if (viewerMeta) new MutationObserver(syncViewerResolution).observe(viewerMeta, { childList:true, characterData:true, subtree:true });
 
 window.addEventListener('mochimono:grid-laid-out', normalizeJustifiedRows);
 mediaSize?.addEventListener('input', () => requestAnimationFrame(normalizeJustifiedRows));
