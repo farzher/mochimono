@@ -2,9 +2,9 @@ const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
 const CLIENT = document.documentElement.classList.contains('client-library');
 const THUMB_VERSION = 3;
-const CHECK_LIMIT = 320;
+const CHECK_LIMIT = 500;
 const RECHECK_DELAY = CLIENT ? 140 : 500;
-const PRELOAD_MARGIN = Math.max(1600, Math.round(window.innerHeight * 4.75));
+const PRELOAD_MARGIN = Math.max(900, Math.round(window.innerHeight * 2.25));
 const IMAGE_POOL_MAX = 512;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
@@ -18,17 +18,11 @@ const preparedCards = new WeakSet();
 const imagePool = new Map();
 const externalQueue = new Map();
 const waitersByHash = new Map();
-const modelIndexes = new WeakMap();
 const browserFallback = CLIENT ? null : import('./browser-thumbnail-fallback.js').catch(() => null);
 
 let checkTimer = 0;
 let checkAt = 0;
 let checking = false;
-let geometryTimer = 0;
-let geometryAt = 0;
-let geometryDirty = false;
-let geometryAnchor = null;
-let lastScrollAt = 0;
 
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
@@ -61,108 +55,16 @@ function visible(card) {
 }
 
 function activeCard(card) {
-  return nearby.has(card) || prioritized.has(card) || visible(card);
+  return mountedGridCards.has(card) || nearby.has(card) || prioritized.has(card) || visible(card);
 }
 
 function stateFor(hash) {
   let state = states.get(hash);
   if (!state) {
-    state = { ready:false, failed:false, terminal:false, nextTry:0, nextCheck:0 };
+    state = { ready:false, loading:false, failed:false, terminal:false, nextTry:0, nextCheck:0 };
     states.set(hash, state);
   }
   return state;
-}
-
-function modelIndex(snapshot) {
-  if (!snapshot || !Array.isArray(snapshot.items)) return null;
-  let index = modelIndexes.get(snapshot);
-  if (!index) {
-    index = new Map(snapshot.items.map((item, position) => [String(item?.[0] || ''), position]));
-    modelIndexes.set(snapshot, index);
-  }
-  return index;
-}
-
-function applyKnownDimensions(snapshot) {
-  const index = modelIndex(snapshot);
-  if (!index) return 0;
-  let changed = 0;
-  for (const [hash, geometry] of dimensions) {
-    const position = index.get(hash);
-    if (!Number.isInteger(position)) continue;
-    const item = snapshot.items[position];
-    if (!item || (Number(item[3]) === geometry.width && Number(item[4]) === geometry.height)) continue;
-    item[3] = geometry.width;
-    item[4] = geometry.height;
-    changed++;
-  }
-  return changed;
-}
-
-function captureGeometryAnchor() {
-  if (!files || !window.mochimonoStableGrid?.active?.()) return null;
-  const top = (document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0) + 2;
-  let best = null;
-  let distance = Infinity;
-  for (const card of files.querySelectorAll('.stable-grid-row [data-hash]')) {
-    const rect = card.getBoundingClientRect();
-    if (rect.bottom <= top || rect.top >= innerHeight) continue;
-    const next = Math.abs(rect.top - top);
-    if (next >= distance) continue;
-    distance = next;
-    best = { hash:String(card.dataset.hash || ''), top:rect.top };
-  }
-  return best;
-}
-
-function geometryInteractionActive() {
-  return Boolean(window.mochimonoGridInteraction?.active?.()) ||
-    document.querySelector('#dateRail')?.classList.contains('dragging') ||
-    performance.now() - lastScrollAt < 420;
-}
-
-function scheduleGeometry(delay = 220) {
-  if (!geometryDirty) return;
-  const at = performance.now() + delay;
-  if (geometryTimer && geometryAt <= at) return;
-  if (geometryTimer) clearTimeout(geometryTimer);
-  geometryAt = at;
-  geometryTimer = setTimeout(flushGeometry, delay);
-}
-
-function flushGeometry() {
-  geometryTimer = 0;
-  geometryAt = 0;
-  if (!geometryDirty) return;
-  if (geometryInteractionActive()) {
-    scheduleGeometry(300);
-    return;
-  }
-
-  const snapshot = window.mochimonoGridModel;
-  const stable = window.mochimonoStableGrid;
-  if (!snapshot?.items?.length || !stable?.setModel) {
-    scheduleGeometry(300);
-    return;
-  }
-
-  applyKnownDimensions(snapshot);
-  geometryDirty = false;
-  geometryAnchor = captureGeometryAnchor();
-  stable.setModel(snapshot);
-}
-
-function updateGridDimensions(hash, width, height) {
-  const snapshot = window.mochimonoGridModel;
-  const position = modelIndex(snapshot)?.get(hash);
-  if (!Number.isInteger(position)) return false;
-  const item = snapshot.items[position];
-  if (!item || (Number(item[3]) === width && Number(item[4]) === height)) return false;
-  item[3] = width;
-  item[4] = height;
-  geometryDirty = true;
-  scheduleGeometry();
-  return true;
 }
 
 function applyDimensions(card, width, height) {
@@ -171,7 +73,9 @@ function applyDimensions(card, width, height) {
   if (!card || width <= 0 || height <= 0) return;
   card.dataset.width = String(width);
   card.dataset.height = String(height);
-  if (card.classList.contains('media-card')) card.style.setProperty('--ratio', String(width / height));
+  if (card.classList.contains('media-card') && !card.closest('.stable-grid-row')) {
+    card.style.setProperty('--ratio', String(width / height));
+  }
 }
 
 function rememberDimensions(hash, width, height) {
@@ -179,17 +83,11 @@ function rememberDimensions(hash, width, height) {
   width = Number(width) || 0;
   height = Number(height) || 0;
   if (!hash || width <= 0 || height <= 0) return;
-
   const previous = dimensions.get(hash);
-  if (previous?.width === width && previous?.height === height) {
-    updateGridDimensions(hash, width, height);
-    return;
-  }
+  if (previous?.width === width && previous?.height === height) return;
   dimensions.set(hash, { width, height });
-
   for (const card of cardsByHash.get(hash) || []) applyDimensions(card, width, height);
   try { window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height); } catch {}
-  updateGridDimensions(hash, width, height);
 }
 
 function indexCard(card) {
@@ -255,6 +153,7 @@ function markFailed(hash, failure) {
   const retryAt = terminal ? Infinity : now + Math.max(RECHECK_DELAY, Number(failure?.retryAfterMs) || RECHECK_DELAY);
   const state = stateFor(hash);
   state.ready = false;
+  state.loading = false;
   state.failed = true;
   state.terminal = terminal;
   state.nextTry = retryAt;
@@ -298,7 +197,7 @@ function stashImage(card) {
 
 function adoptPooledImage(card, hash, box) {
   const image = imagePool.get(hash);
-  if (!image?.complete || !image.naturalWidth) {
+  if (!image?.complete || !image.naturalWidth || image.dataset.thumbDecoded !== '1') {
     if (image) imagePool.delete(hash);
     return false;
   }
@@ -313,47 +212,44 @@ function adoptPooledImage(card, hash, box) {
   image.dataset.thumbHash = hash;
   box.querySelector('.video-thumb-pending')?.remove();
   box.prepend(image);
-
   const state = stateFor(hash);
   state.ready = true;
+  state.loading = false;
   state.failed = false;
   state.terminal = false;
   state.nextCheck = 0;
   state.nextTry = 0;
   rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
+  settleHashWaiters(hash);
   return true;
 }
 
 async function revealLoadedImage(hash, card, image, animate = true) {
   if (!image.isConnected || image.dataset.thumbHash !== hash || !image.naturalWidth || !image.naturalHeight) return;
-
   try { await image.decode?.(); } catch {}
   if (!image.isConnected || image.dataset.thumbHash !== hash) return;
-
   image.dataset.thumbDecoded = '1';
   image.hidden = false;
   image.style.objectFit = 'cover';
   rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
-
   const box = mediaBox(card);
   box?.classList.remove('thumb-failed');
   box?.removeAttribute('title');
   box?.querySelector('.video-thumb-pending')?.remove();
-
   const state = stateFor(hash);
   state.ready = true;
+  state.loading = false;
   state.failed = false;
   state.terminal = false;
   state.nextCheck = 0;
   state.nextTry = 0;
-
+  settleHashWaiters(hash);
   if (!animate || !visible(card) || reduceMotion.matches) {
     image.style.removeProperty('transition');
     image.style.opacity = '1';
     return;
   }
-
-  image.style.transition = 'opacity 150ms ease-out';
+  image.style.transition = 'opacity 120ms ease-out';
   requestAnimationFrame(() => {
     if (!image.isConnected || image.dataset.thumbHash !== hash) return;
     image.style.opacity = '1';
@@ -365,7 +261,7 @@ async function revealLoadedImage(hash, card, image, animate = true) {
       if (!image.isConnected) return;
       image.style.removeProperty('transition');
       image.style.removeProperty('opacity');
-    }, 190);
+    }, 160);
   });
 }
 
@@ -374,25 +270,26 @@ function paintCard(card, urgent = false) {
   const hash = String(card.dataset.hash || '');
   const box = hash && mediaBox(card);
   if (!hash || !box) return;
-
   const current = box.querySelector('img.cached-thumb');
   if (current?.dataset.thumbHash === hash) {
+    if (urgent && !current.complete) {
+      current.loading = 'eager';
+      try { current.fetchPriority = 'high'; } catch {}
+    }
     if (current.complete && current.naturalWidth) {
       if (current.dataset.thumbDecoded === '1') {
         current.style.opacity = '1';
         current.style.objectFit = 'cover';
         const state = stateFor(hash);
         state.ready = true;
+        state.loading = false;
         rememberDimensions(hash, current.naturalWidth, current.naturalHeight);
-      } else {
-        revealLoadedImage(hash, card, current, false);
-      }
+        settleHashWaiters(hash);
+      } else revealLoadedImage(hash, card, current, false);
     }
     return;
   }
-
   if (adoptPooledImage(card, hash, box)) return;
-
   const state = stateFor(hash);
   const now = performance.now();
   if (state.failed && now >= (state.nextTry || 0)) {
@@ -400,18 +297,17 @@ function paintCard(card, urgent = false) {
     state.terminal = false;
     setFailedVisual(hash, false);
   }
-  if (state.terminal || now < (state.nextTry || 0)) {
+  if (state.terminal || now < (state.nextTry || 0) || state.loading) {
     pending(card);
     return;
   }
-
-  if (!state.ready) {
+  const mountedGrid = mountedGridCards.has(card);
+  if (!mountedGrid && !state.ready) {
     pending(card);
     state.nextCheck = Math.min(state.nextCheck || Infinity, now);
     scheduleCheck(0);
     return;
   }
-
   pending(card);
   const image = document.createElement('img');
   image.className = 'cached-thumb';
@@ -424,7 +320,7 @@ function paintCard(card, urgent = false) {
   image.style.transition = 'none';
   image.dataset.thumbHash = hash;
   try { image.fetchPriority = urgent || visible(card) || card.classList.contains('keyboard-cursor') ? 'high' : 'auto'; } catch {}
-
+  state.loading = true;
   image.onload = () => {
     if (image.isConnected && image.dataset.thumbHash === hash) revealLoadedImage(hash, card, image, true);
   };
@@ -433,19 +329,21 @@ function paintCard(card, urgent = false) {
     image.remove();
     const failed = stateFor(hash);
     failed.ready = false;
-    failed.nextTry = performance.now() + 350;
-    failed.nextCheck = Math.min(failed.nextCheck || Infinity, performance.now() + 80);
+    failed.loading = false;
+    failed.nextTry = performance.now() + RECHECK_DELAY;
+    failed.nextCheck = performance.now();
     pending(card);
-    scheduleCheck(80);
+    scheduleCheck(0);
   };
-
   box.prepend(image);
   image.src = thumbUrl(hash);
 }
 
 function loadHash(hash) {
   for (const card of cardsByHash.get(String(hash || '')) || []) {
-    if (nearby.has(card) || prioritized.has(card) || visible(card)) paintCard(card, prioritized.has(card) || visible(card));
+    if (mountedGridCards.has(card) || nearby.has(card) || prioritized.has(card) || visible(card)) {
+      paintCard(card, prioritized.has(card) || visible(card));
+    }
   }
 }
 
@@ -460,7 +358,6 @@ function scheduleCheck(delay = 50) {
 function cardCheckSet() {
   const result = new Set();
   if (viewer?.hidden === false) return result;
-
   for (const card of prioritized) if (card?.isConnected) result.add(card);
   for (const card of nearby) if (card?.isConnected) result.add(card);
   for (const card of mountedGridCards) if (card?.isConnected) result.add(card);
@@ -470,13 +367,12 @@ function cardCheckSet() {
 function scheduleOutstanding() {
   const now = performance.now();
   let next = Infinity;
-
   if (externalQueue.size) next = now;
   for (const card of cardCheckSet()) {
     if (!kind(card)) continue;
     const hash = String(card.dataset.hash || '');
     const state = stateFor(hash);
-    if (state.ready || state.terminal) continue;
+    if (state.ready || state.loading || state.terminal) continue;
     next = Math.min(next, state.nextCheck || now);
   }
   if (Number.isFinite(next)) scheduleCheck(Math.max(0, next - now));
@@ -489,7 +385,6 @@ async function requestMissing(hashes) {
     headers:{ 'content-type':'application/json' },
     body:JSON.stringify({ hashes })
   }).catch(() => {});
-
   const fallback = await browserFallback;
   for (const hash of hashes) {
     const card = [...(cardsByHash.get(hash) || [])].find(item => item.isConnected && activeCard(item));
@@ -519,21 +414,19 @@ async function checkBatch(hashes, background) {
   });
   if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
   const data = await response.json();
-
   const ready = new Map((data.thumbnails || []).map(item => [String(item.hash), item]));
   const failures = new Map((data.failures || []).map(item => [String(item.hash), item]));
   const missingFromServer = new Set((data.missing || []).map(item => String(item.hash)));
   const request = [];
   const now = performance.now();
-
   for (const hash of hashes) {
     externalQueue.delete(hash);
     const item = ready.get(hash);
     const failure = failures.get(hash);
     const state = stateFor(hash);
-
     if (item) {
       state.ready = true;
+      state.loading = false;
       state.failed = false;
       state.terminal = false;
       state.nextCheck = 0;
@@ -541,10 +434,12 @@ async function checkBatch(hashes, background) {
       setFailedVisual(hash, false);
       rememberDimensions(hash, item.width, item.height);
       loadHash(hash);
-    } else if (failure) {
-      markFailed(hash, failure);
-    } else {
+    } else if (state.ready) {
+      // Direct thumbnail GET completed while this status request was in flight.
+    } else if (failure) markFailed(hash, failure);
+    else {
       state.ready = false;
+      state.loading = false;
       state.failed = false;
       state.terminal = false;
       state.nextCheck = now + RECHECK_DELAY;
@@ -553,14 +448,12 @@ async function checkBatch(hashes, background) {
     }
     settleHashWaiters(hash);
   }
-
   requestMissing(request);
 }
 
 function candidateHashes() {
   const now = performance.now();
   const byHash = new Map();
-
   for (const [hash, item] of externalQueue) {
     const state = stateFor(hash);
     if (state.ready || state.terminal) {
@@ -570,19 +463,17 @@ function candidateHashes() {
     }
     byHash.set(hash, { hash, urgent:item.background === false, due:0 });
   }
-
   for (const card of cardCheckSet()) {
     if (!kind(card)) continue;
     const hash = String(card.dataset.hash || '');
     if (!hash) continue;
     const state = stateFor(hash);
-    if (state.ready || state.terminal || now < (state.nextCheck || 0)) continue;
+    if (state.ready || state.loading || state.terminal || now < (state.nextCheck || 0)) continue;
     const urgent = prioritized.has(card) || visible(card);
     const current = byHash.get(hash);
     if (!current) byHash.set(hash, { hash, urgent, due:state.nextCheck || 0 });
     else if (urgent) current.urgent = true;
   }
-
   return [...byHash.values()]
     .sort((a, b) => Number(b.urgent) - Number(a.urgent) || a.due - b.due)
     .slice(0, CHECK_LIMIT);
@@ -592,13 +483,11 @@ async function runChecks() {
   checkTimer = 0;
   checkAt = 0;
   if (checking || document.hidden) return;
-
   const candidates = candidateHashes();
   if (!candidates.length) {
     scheduleOutstanding();
     return;
   }
-
   const urgent = candidates.filter(item => item.urgent).map(item => item.hash);
   const background = candidates.filter(item => !item.urgent).map(item => item.hash);
   checking = true;
@@ -609,61 +498,57 @@ async function runChecks() {
     ]);
   } catch {
     const retry = performance.now() + 900;
-    for (const item of candidates) {
-      const state = stateFor(item.hash);
-      state.nextCheck = retry;
-      settleHashWaiters(item.hash);
-    }
+    for (const item of candidates) stateFor(item.hash).nextCheck = retry;
   } finally {
     checking = false;
     scheduleOutstanding();
   }
 }
 
-const observer = files ? new IntersectionObserver(entries => {
-  for (const entry of entries) {
-    const card = entry.target;
-    if (!entry.isIntersecting) {
-      nearby.delete(card);
-      continue;
-    }
-    nearby.add(card);
-    paintCard(card, visible(card));
-  }
-  scheduleCheck(0);
-}, { rootMargin:`${PRELOAD_MARGIN}px 0px` }) : null;
+const observer = files && typeof IntersectionObserver === 'function'
+  ? new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        const card = entry.target;
+        if (!entry.isIntersecting) {
+          nearby.delete(card);
+          continue;
+        }
+        nearby.add(card);
+        paintCard(card, visible(card));
+      }
+      scheduleCheck(0);
+    }, { rootMargin:`${PRELOAD_MARGIN}px 0px` })
+  : null;
 
 function prepare(node) {
-  if (!observer) return;
   for (const card of cardsIn(node)) {
     if (preparedCards.has(card)) continue;
     preparedCards.add(card);
     indexCard(card);
     if (!kind(card)) continue;
-
     const box = mediaBox(card);
     const hash = String(card.dataset.hash || '');
     if (box && !box.querySelector('img.cached-thumb')) adoptPooledImage(card, hash, box);
-
     const image = card.querySelector('img.cached-thumb');
     if (image?.complete && image.naturalWidth) {
       if (image.dataset.thumbDecoded === '1') {
         const state = stateFor(hash);
         state.ready = true;
+        state.loading = false;
         rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
       } else revealLoadedImage(hash, card, image, false);
     }
-    observer.observe(card);
+    if (mountedGridCards.has(card)) paintCard(card, false);
+    else observer?.observe(card);
   }
   scheduleCheck(0);
 }
 
 function release(node) {
-  if (!observer) return;
   for (const card of cardsIn(node)) {
     if (!preparedCards.has(card)) continue;
     stashImage(card);
-    observer.unobserve(card);
+    observer?.unobserve(card);
     unindexCard(card);
     preparedCards.delete(card);
   }
@@ -687,11 +572,8 @@ function repairViewport() {
 
 function ensureHashes(hashes, options = {}) {
   const background = options.background === true;
-  const unique = [...new Set((Array.isArray(hashes) ? hashes : [hashes])
-    .map(String)
-    .filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
+  const unique = [...new Set((Array.isArray(hashes) ? hashes : [hashes]).map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
   if (!unique.length) return Promise.resolve({ ready:[], failed:[] });
-
   return new Promise(resolve => {
     const waiter = { remaining:new Set(), ready:new Set(), failed:new Set(), resolve };
     for (const hash of unique) {
@@ -704,17 +586,14 @@ function ensureHashes(hashes, options = {}) {
         waiter.failed.add(hash);
         continue;
       }
-
       waiter.remaining.add(hash);
       let waiters = waitersByHash.get(hash);
       if (!waiters) waitersByHash.set(hash, waiters = new Set());
       waiters.add(waiter);
-
       const queued = externalQueue.get(hash);
       if (!queued) externalQueue.set(hash, { background });
       else if (!background) queued.background = false;
     }
-
     if (!waiter.remaining.size) {
       resolve({ ready:[...waiter.ready], failed:[...waiter.failed] });
       return;
@@ -737,9 +616,7 @@ window.mochimonoThumbnails = {
     }
     scheduleCheck(0);
   },
-  clearPriority() {
-    prioritized.clear();
-  },
+  clearPriority() { prioritized.clear(); },
   state() {
     return {
       cards:[...cardsByHash.values()].reduce((sum, group) => sum + group.size, 0),
@@ -748,8 +625,7 @@ window.mochimonoThumbnails = {
       pooled:imagePool.size,
       states:states.size,
       external:externalQueue.size,
-      checking,
-      geometryDirty
+      checking
     };
   }
 };
@@ -757,64 +633,32 @@ window.mochimonoThumbnails = {
 if (files) {
   prepare(files);
   requestAnimationFrame(repairViewport);
-
   new MutationObserver(records => {
-    for (const record of records) for (const node of record.removedNodes) if (node instanceof Element) release(node);
-    for (const record of records) for (const node of record.addedNodes) if (node instanceof Element) prepare(node);
+    for (const record of records) {
+      for (const node of record.removedNodes) if (node instanceof Element) release(node);
+      for (const node of record.addedNodes) if (node instanceof Element) prepare(node);
+    }
   }).observe(files, { childList:true, subtree:true });
-
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       refreshVisible();
       requestAnimationFrame(repairViewport);
     }
   });
-
-  window.addEventListener('scroll', () => {
-    lastScrollAt = performance.now();
-    if (geometryDirty) scheduleGeometry(460);
-  }, { passive:true });
-
   window.addEventListener('mochimono:grid-interaction-end', () => {
     repairViewport();
     scheduleOutstanding();
-    if (geometryDirty) scheduleGeometry(220);
   });
-
-  window.addEventListener('mochimono:grid-model', event => {
-    const snapshot = event.detail || window.mochimonoGridModel;
-    if (applyKnownDimensions(snapshot)) {
-      geometryDirty = true;
-      scheduleGeometry(220);
-    }
-  });
-
-  window.addEventListener('mochimono:stable-grid-installed', () => {
-    const restore = geometryAnchor;
-    geometryAnchor = null;
-    if (!restore?.hash) return;
-    const snapshot = window.mochimonoGridModel;
-    const index = modelIndex(snapshot)?.get(restore.hash);
-    if (!Number.isInteger(index)) return;
-    requestAnimationFrame(() => {
-      window.mochimonoStableGrid?.ensureIndex?.(index);
-      const card = files.querySelector(`[data-hash="${CSS.escape(restore.hash)}"]`);
-      if (!card) return;
-      const delta = card.getBoundingClientRect().top - restore.top;
-      if (Math.abs(delta) > .5) scrollBy(0, delta);
-    });
-  });
-
   window.addEventListener('mochimono:catalog-updated', () => {
     resetFailures();
     refreshVisible();
   });
-
   window.addEventListener('mochimono:browser-thumbnail-ready', event => {
     const hash = String(event.detail?.hash || '');
     if (!hash) return;
     const state = stateFor(hash);
     state.ready = false;
+    state.loading = false;
     state.failed = false;
     state.terminal = false;
     state.nextCheck = 0;
@@ -822,9 +666,7 @@ if (files) {
     setFailedVisual(hash, false);
     scheduleCheck(0);
   });
-
   addEventListener('beforeunload', () => {
     if (checkTimer) clearTimeout(checkTimer);
-    if (geometryTimer) clearTimeout(geometryTimer);
   }, { once:true });
 }
