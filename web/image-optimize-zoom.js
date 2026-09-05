@@ -1,4 +1,7 @@
 const viewer = document.querySelector('#viewer');
+const viewerMedia = document.querySelector('#viewer-media');
+const viewerOpen = document.querySelector('#viewer-open');
+const viewerName = document.querySelector('#viewer-name');
 const compare = document.querySelector('.image-optimize-compare');
 const original = compare?.querySelector('[data-opt-original]');
 const optimized = compare?.querySelector('[data-opt-after]');
@@ -10,7 +13,7 @@ if (viewer && compare && original && optimized) {
 .image-optimize-after-mask>.image-optimize-after{clip-path:none!important}
 .image-optimize-compare{cursor:grab}
 .image-optimize-compare.image-optimize-panning{cursor:grabbing}
-.image-optimize-compare img{will-change:transform}
+.image-optimize-compare img{will-change:transform;image-rendering:auto}
 `;
   document.head.append(style);
 
@@ -19,7 +22,8 @@ if (viewer && compare && original && optimized) {
   optimized.before(mask);
   mask.append(optimized);
 
-  const MIN_SCALE = 0.1;
+  const DIRECT_BROWSER = new Set(['jpg','jpeg','png','webp','avif','bmp','gif']);
+  const MIN_SCALE = 0.01;
   const MAX_SCALE = 16;
   const PAN_START = 3;
   const pointers = new Map();
@@ -27,15 +31,68 @@ if (viewer && compare && original && optimized) {
   let pan = null;
   let pinch = null;
   let reportedScale = 0;
+  let metrics = null;
+  let pendingView = null;
+  let fitLocked = true;
 
   const active = () => viewer.classList.contains('image-optimize-active');
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+  const extension = value => String(value || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
+
+  function referenceMetrics() {
+    if (!original.naturalWidth || !original.naturalHeight) return null;
+    const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
+    const nativeWidth = original.naturalWidth / dpr;
+    const nativeHeight = original.naturalHeight / dpr;
+    const rect = compare.getBoundingClientRect();
+    if (!nativeWidth || !nativeHeight || !rect.width || !rect.height) return null;
+    return {
+      dpr,
+      nativeWidth,
+      nativeHeight,
+      fit: Math.min(1, rect.width / nativeWidth, rect.height / nativeHeight)
+    };
+  }
+
+  function styleImage(image) {
+    if (!metrics || !image) return;
+    image.style.inset = 'auto';
+    image.style.left = '50%';
+    image.style.top = '50%';
+    image.style.width = `${metrics.nativeWidth}px`;
+    image.style.height = `${metrics.nativeHeight}px`;
+    image.style.maxWidth = 'none';
+    image.style.maxHeight = 'none';
+    image.style.marginLeft = `${-metrics.nativeWidth / 2}px`;
+    image.style.marginTop = `${-metrics.nativeHeight / 2}px`;
+    image.style.objectFit = 'fill';
+    image.style.transformOrigin = '50% 50%';
+    image.style.imageRendering = 'auto';
+  }
+
+  function clearImageStyle(image) {
+    if (!image) return;
+    for (const property of ['inset','left','top','width','height','maxWidth','maxHeight','marginLeft','marginTop','objectFit','transformOrigin','imageRendering','transform']) {
+      image.style[property] = '';
+    }
+  }
+
+  function refreshMetrics() {
+    const next = referenceMetrics();
+    if (!next) return false;
+    metrics = next;
+    styleImage(original);
+    styleImage(optimized);
+    return true;
+  }
 
   function clampPan() {
     const rect = compare.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    const extraX = rect.width * Math.max(0, zoom.scale - 1) / 2;
-    const extraY = rect.height * Math.max(0, zoom.scale - 1) / 2;
+    if (!rect.width || !rect.height || !metrics) return;
+    const displayedWidth = metrics.nativeWidth * zoom.scale;
+    const displayedHeight = metrics.nativeHeight * zoom.scale;
+    const extraX = Math.max(0, (displayedWidth - rect.width) / 2);
+    const extraY = Math.max(0, (displayedHeight - rect.height) / 2);
     const maxX = rect.width * .9 + extraX;
     const maxY = rect.height * .9 + extraY;
     zoom.x = clamp(zoom.x, -maxX, maxX);
@@ -45,11 +102,14 @@ if (viewer && compare && original && optimized) {
   function reportZoom(force = false) {
     if (!force && Math.abs(reportedScale - zoom.scale) < .0005) return;
     reportedScale = zoom.scale;
-    window.dispatchEvent(new CustomEvent('mochimono:optimize-zoom', { detail:{ ...zoom } }));
+    window.dispatchEvent(new CustomEvent('mochimono:optimize-zoom', {
+      detail:{ ...zoom, fit: metrics?.fit || 1, native:true }
+    }));
   }
 
   function applyZoom(forceReport = false) {
-    zoom.scale = clamp(Number(zoom.scale) || 1, MIN_SCALE, MAX_SCALE);
+    if (!metrics && !refreshMetrics()) return;
+    zoom.scale = clamp(Number(zoom.scale) || metrics.fit, MIN_SCALE, MAX_SCALE);
     clampPan();
     const transform = `translate3d(${zoom.x}px,${zoom.y}px,0) scale(${zoom.scale})`;
     original.style.transform = transform;
@@ -57,25 +117,51 @@ if (viewer && compare && original && optimized) {
     if (active()) reportZoom(forceReport);
   }
 
+  function applyPendingView() {
+    if (!active() || !refreshMetrics()) return;
+    const view = pendingView;
+    pendingView = null;
+    if (view?.fit || !Number.isFinite(Number(view?.scale))) {
+      fitLocked = true;
+      zoom = { scale: metrics.fit, x:0, y:0 };
+    } else {
+      fitLocked = false;
+      zoom = {
+        scale: clamp(Number(view.scale) || metrics.fit, MIN_SCALE, MAX_SCALE),
+        x: Number(view.x) || 0,
+        y: Number(view.y) || 0
+      };
+    }
+    applyZoom(true);
+  }
+
   function setView(view = {}) {
     pan = null;
     pinch = null;
     pointers.clear();
     compare.classList.remove('image-optimize-panning');
-    zoom = {
-      scale: clamp(Number(view.scale) || 1, MIN_SCALE, MAX_SCALE),
-      x: Number(view.x) || 0,
-      y: Number(view.y) || 0
-    };
-    applyZoom(true);
+    pendingView = view;
+    if (original.complete && original.naturalWidth) applyPendingView();
   }
 
-  function resetZoom() {
+  function resetZoom(clearStyles = false) {
     reportedScale = 0;
-    setView({ scale:1, x:0, y:0 });
+    pendingView = null;
+    metrics = null;
+    fitLocked = true;
+    zoom = { scale:1, x:0, y:0 };
+    pan = null;
+    pinch = null;
+    pointers.clear();
+    compare.classList.remove('image-optimize-panning');
+    if (clearStyles) {
+      clearImageStyle(original);
+      clearImageStyle(optimized);
+    }
   }
 
   function zoomAt(nextScale, clientX, clientY) {
+    if (!metrics && !refreshMetrics()) return;
     const rect = compare.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
     const previous = zoom.scale;
@@ -88,6 +174,7 @@ if (viewer && compare && original && optimized) {
     zoom.scale = next;
     zoom.x = px - anchorX * next;
     zoom.y = py - anchorY * next;
+    fitLocked = false;
     applyZoom();
   }
 
@@ -109,7 +196,7 @@ if (viewer && compare && original && optimized) {
 
   function beginPinch() {
     const values = [...pointers.values()];
-    if (values.length < 2) return false;
+    if (values.length < 2 || (!metrics && !refreshMetrics())) return false;
     const [a, b] = values;
     const rect = compare.getBoundingClientRect();
     const cx = (a.x + b.x) / 2 - (rect.left + rect.width / 2);
@@ -121,6 +208,7 @@ if (viewer && compare && original && optimized) {
       anchorY: (cy - zoom.y) / zoom.scale
     };
     pan = null;
+    fitLocked = false;
     compare.classList.add('image-optimize-panning');
     return true;
   }
@@ -178,6 +266,7 @@ if (viewer && compare && original && optimized) {
     if (!pan.active && Math.hypot(dx, dy) < PAN_START) return;
     if (!pan.active) {
       pan.active = true;
+      fitLocked = false;
       compare.classList.add('image-optimize-panning');
     }
     zoom.x = pan.x + dx;
@@ -201,22 +290,65 @@ if (viewer && compare && original && optimized) {
   compare.addEventListener('pointerup', finishPointer, true);
   compare.addEventListener('pointercancel', finishPointer, true);
 
-  window.addEventListener('mochimono:optimize-open', event => {
-    setView(event.detail?.view || { scale:1, x:0, y:0 });
+  original.addEventListener('load', () => {
+    if (!active()) return;
+    if (pendingView) applyPendingView();
+    else {
+      const previousFit = metrics?.fit || 1;
+      if (!refreshMetrics()) return;
+      if (fitLocked) zoom.scale = metrics.fit;
+      else if (previousFit && metrics.fit !== previousFit) zoom.scale = clamp(zoom.scale, MIN_SCALE, MAX_SCALE);
+      applyZoom(true);
+    }
   });
-  window.addEventListener('mochimono:optimize-close', resetZoom);
+
+  optimized.addEventListener('load', () => {
+    if (!active() || !metrics) return;
+    styleImage(optimized);
+    applyZoom();
+  });
+
+  window.addEventListener('mochimono:optimize-open', event => {
+    resetZoom(true);
+    const shown = viewerMedia?.querySelector(':scope > img');
+    const fullReady = Boolean(shown && !shown.dataset.fullSrc && shown.naturalWidth);
+    const view = event.detail?.view || {};
+    pendingView = fullReady
+      ? { scale:Number(view.scale), x:Number(view.x) || 0, y:Number(view.y) || 0 }
+      : { fit:true };
+
+    const sourceExt = extension(viewerName?.textContent);
+    const rawUrl = viewerOpen?.href || '';
+    if (rawUrl && DIRECT_BROWSER.has(sourceExt)) {
+      original.dataset.pixelSource = 'raw';
+      if (original.src !== rawUrl) original.src = rawUrl;
+    }
+
+    if (original.complete && original.naturalWidth) applyPendingView();
+  });
+
+  window.addEventListener('mochimono:optimize-close', () => {
+    delete original.dataset.pixelSource;
+    resetZoom(true);
+  });
 
   new MutationObserver(() => {
-    if (!active() || viewer.hidden) resetZoom();
+    if (!active() || viewer.hidden) resetZoom(true);
   }).observe(viewer, { attributes:true, attributeFilter:['class','hidden'] });
 
   window.addEventListener('resize', () => {
-    if (active()) applyZoom(true);
+    if (!active() || !refreshMetrics()) return;
+    if (fitLocked) {
+      zoom.scale = metrics.fit;
+      zoom.x = 0;
+      zoom.y = 0;
+    }
+    applyZoom(true);
   }, { passive:true });
 
   window.mochimonoImageOptimizeZoom = {
-    state: () => ({ ...zoom }),
+    state: () => ({ ...zoom, fit:metrics?.fit || 1, native:true }),
     set: setView,
-    reset: resetZoom
+    reset: () => resetZoom(false)
   };
 }

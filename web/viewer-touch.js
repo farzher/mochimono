@@ -15,7 +15,7 @@ if (viewer && stage && media && prev && next) {
   const DOUBLE_TAP_DISTANCE = 44;
   const TAP_TRAVEL = 14;
   const PAN_START = 22;
-  const MAX_SCALE = 4;
+  const MAX_NATIVE_SCALE = 4;
 
   const pointers = new Map();
   let zoom = { scale: 1, x: 0, y: 0 };
@@ -28,6 +28,36 @@ if (viewer && stage && media && prev && next) {
   const image = () => media.querySelector('img');
   const zoomed = () => zoom.scale > 1.01;
 
+  function pixelMetrics(current) {
+    if (!current || current.dataset.fullSrc || !current.naturalWidth || !current.naturalHeight) return null;
+    const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
+    const nativeWidth = current.naturalWidth / dpr;
+    const nativeHeight = current.naturalHeight / dpr;
+    const viewportWidth = stage.clientWidth || innerWidth;
+    const viewportHeight = stage.clientHeight || innerHeight;
+    if (!nativeWidth || !nativeHeight || !viewportWidth || !viewportHeight) return null;
+    const fit = Math.min(1, viewportWidth / nativeWidth, viewportHeight / nativeHeight);
+    return { nativeWidth, nativeHeight, fit };
+  }
+
+  function preparePixelImage(current) {
+    const metrics = pixelMetrics(current);
+    if (!metrics) return null;
+    current.style.width = `${metrics.nativeWidth}px`;
+    current.style.height = `${metrics.nativeHeight}px`;
+    current.style.maxWidth = 'none';
+    current.style.maxHeight = 'none';
+    current.style.objectFit = 'fill';
+    current.style.transformOrigin = '50% 50%';
+    current.style.imageRendering = 'auto';
+    return metrics;
+  }
+
+  function relativeMax(current) {
+    const metrics = pixelMetrics(current);
+    return metrics?.fit ? Math.max(1, MAX_NATIVE_SCALE / metrics.fit) : MAX_NATIVE_SCALE;
+  }
+
   function clearTap() {
     clearTimeout(tapTimer);
     tapTimer = 0;
@@ -38,11 +68,12 @@ if (viewer && stage && media && prev && next) {
     window.mochimonoViewerControls?.toggle();
   }
 
-  function clampPan(scale = zoom.scale, x = zoom.x, y = zoom.y) {
+  function clampPan(scale = zoom.scale, x = zoom.x, y = zoom.y, metrics = null) {
     const current = image();
     if (!current || scale <= 1) return { x: 0, y: 0 };
-    const maxX = Math.max(0, (current.clientWidth * scale - innerWidth) / 2);
-    const maxY = Math.max(0, (current.clientHeight * scale - innerHeight) / 2);
+    const displayScale = metrics ? metrics.fit * scale : scale;
+    const maxX = Math.max(0, (current.clientWidth * displayScale - innerWidth) / 2);
+    const maxY = Math.max(0, (current.clientHeight * displayScale - innerHeight) / 2);
     return {
       x: Math.max(-maxX, Math.min(maxX, x)),
       y: Math.max(-maxY, Math.min(maxY, y))
@@ -54,13 +85,19 @@ if (viewer && stage && media && prev && next) {
     const active = zoomed();
     stage.classList.toggle('viewer-touch-zoomed', active);
     if (!current) return;
-    const clamped = clampPan();
+    const metrics = preparePixelImage(current);
+    const clamped = clampPan(zoom.scale, zoom.x, zoom.y, metrics);
     zoom.x = clamped.x;
     zoom.y = clamped.y;
     current.style.transition = animate ? 'transform 160ms ease-out' : 'none';
-    current.style.transform = active
-      ? `translate3d(${zoom.x}px,${zoom.y}px,0) scale(${zoom.scale})`
-      : '';
+    if (metrics) {
+      const displayScale = metrics.fit * zoom.scale;
+      current.style.transform = `translate3d(${zoom.x}px,${zoom.y}px,0) scale(${displayScale})`;
+    } else {
+      current.style.transform = active
+        ? `translate3d(${zoom.x}px,${zoom.y}px,0) scale(${zoom.scale})`
+        : '';
+    }
     if (animate) setTimeout(() => {
       if (current.isConnected) current.style.transition = '';
     }, 180);
@@ -77,16 +114,24 @@ if (viewer && stage && media && prev && next) {
 
   function resetInteractionState() {
     consumedPointer = null;
-    if (!zoomed() && !zoom.x && !zoom.y && !pan && !pinch && !pointers.size && !lastTap && !tapTimer) return;
+    if (!zoomed() && !zoom.x && !zoom.y && !pan && !pinch && !pointers.size && !lastTap && !tapTimer) {
+      applyZoom();
+      return;
+    }
     resetZoom();
   }
 
   function naturalScale(current) {
+    const metrics = preparePixelImage(current);
+    if (metrics) {
+      const nativeRelative = 1 / metrics.fit;
+      return nativeRelative > 1.01 ? nativeRelative : Math.min(relativeMax(current), 2.25);
+    }
     const scale = Math.max(
       Number(current.naturalWidth || 0) / Math.max(1, current.clientWidth),
       Number(current.naturalHeight || 0) / Math.max(1, current.clientHeight)
     );
-    return Math.max(2.25, Math.min(MAX_SCALE, scale || 2.25));
+    return Math.max(2.25, Math.min(MAX_NATIVE_SCALE, scale || 2.25));
   }
 
   function zoomIn(clientX, clientY) {
@@ -154,7 +199,7 @@ if (viewer && stage && media && prev && next) {
     const [a, b] = values;
     const cx = (a.x + b.x) / 2;
     const cy = (a.y + b.y) / 2;
-    zoom.scale = Math.max(1, Math.min(MAX_SCALE, pinch.scale * pointDistance(a, b) / pinch.distance));
+    zoom.scale = Math.max(1, Math.min(relativeMax(image()), pinch.scale * pointDistance(a, b) / pinch.distance));
     zoom.x = cx - innerWidth / 2 - pinch.anchorX * zoom.scale;
     zoom.y = cy - innerHeight / 2 - pinch.anchorY * zoom.scale;
     applyZoom();
@@ -245,9 +290,6 @@ if (viewer && stage && media && prev && next) {
     if (point.startedZoomed && pan?.id === event.pointerId) {
       if (!pan.active && travel < PAN_START) return;
       if (!pan.active) {
-        // Crossing the pan threshold should not move the image. Start the pan
-        // from this exact position so normal tap jitter cannot produce a small
-        // visible jump before the second tap of a double-tap-to-zoom-out.
         pan.active = true;
         pan.startX = event.clientX;
         pan.startY = event.clientY;
@@ -315,11 +357,8 @@ if (viewer && stage && media && prev && next) {
     }
 
     if (point.startedZoomed) {
-      if (travel >= PAN_START) {
-        clearTap();
-      } else {
-        rememberTap(event.clientX, event.clientY);
-      }
+      if (travel >= PAN_START) clearTap();
+      else rememberTap(event.clientX, event.clientY);
       event.preventDefault();
       event.stopImmediatePropagation();
       return;
@@ -359,9 +398,6 @@ if (viewer && stage && media && prev && next) {
       return;
     }
 
-    // A normal tap only toggles viewer chrome. Left/right position no longer
-    // has any navigation meaning on touch devices; swiping is the gesture for
-    // previous/next.
     rememberTap(event.clientX, event.clientY);
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -375,14 +411,33 @@ if (viewer && stage && media && prev && next) {
     clearTap();
   }, true);
 
-  new MutationObserver(resetInteractionState).observe(media, { childList: true });
+  function bindCurrentImage() {
+    const current = image();
+    if (!current || current.dataset.pixelTouchBound === '1') return;
+    current.dataset.pixelTouchBound = '1';
+    current.addEventListener('load', () => {
+      if (!current.isConnected || current.dataset.fullSrc) return;
+      applyZoom();
+    });
+    if (current.complete && current.naturalWidth && !current.dataset.fullSrc) requestAnimationFrame(() => applyZoom());
+  }
+
+  new MutationObserver(() => {
+    resetInteractionState();
+    bindCurrentImage();
+  }).observe(media, { childList: true });
 
   new MutationObserver(() => {
     if (viewer.hidden) resetInteractionState();
+    else {
+      bindCurrentImage();
+      if (!zoomed()) applyZoom();
+    }
   }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 
+  bindCurrentImage();
   window.addEventListener('resize', () => {
-    if (zoomed()) applyZoom();
+    if (!viewer.hidden) applyZoom();
   }, { passive: true });
 
   document.addEventListener('keydown', event => {
