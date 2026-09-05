@@ -43,15 +43,15 @@ if (viewer && compare && original && tuning && qualitySlider) {
     <button class="image-optimize-choice image-optimize-quality-reset" type="button" data-quality-reset>Who cares · whole image</button>
     <div class="image-optimize-slider">
       <div class="image-optimize-tune-head"><span>High AVIF quality</span><output data-quality-high-label>${initialHigh}</output></div>
-      <input data-quality-high type="range" min="1" max="100" value="${initialHigh}" aria-label="AVIF quality for high-priority regions">
+      <input data-quality-high type="range" min="1" max="100" value="${initialHigh}" aria-label="Final AVIF quality for high-priority regions">
     </div>
     <div class="image-optimize-slider">
-      <div class="image-optimize-tune-head"><span>Normal AVIF quality</span><output data-quality-normal-label>${DEFAULT_NORMAL_QUALITY}</output></div>
-      <input data-quality-normal type="range" min="1" max="100" value="${DEFAULT_NORMAL_QUALITY}" aria-label="AVIF quality for normal-priority regions">
+      <div class="image-optimize-tune-head"><span>Normal quality</span><output data-quality-normal-label>${DEFAULT_NORMAL_QUALITY}</output></div>
+      <input data-quality-normal type="range" min="1" max="100" value="${DEFAULT_NORMAL_QUALITY}" aria-label="Simplification quality for normal-priority regions">
     </div>
     <div class="image-optimize-slider">
-      <div class="image-optimize-tune-head"><span>Who cares AVIF quality</span><output data-quality-low-label>${DEFAULT_LOW_QUALITY}</output></div>
-      <input data-quality-low type="range" min="1" max="50" value="${DEFAULT_LOW_QUALITY}" aria-label="AVIF quality for who-cares regions">
+      <div class="image-optimize-tune-head"><span>Who cares quality</span><output data-quality-low-label>${DEFAULT_LOW_QUALITY}</output></div>
+      <input data-quality-low type="range" min="1" max="100" value="${DEFAULT_LOW_QUALITY}" aria-label="Simplification quality for who-cares regions">
     </div>
     <div class="image-optimize-slider">
       <div class="image-optimize-tune-head"><span>Brush</span><output data-quality-brush-label>32</output></div>
@@ -111,6 +111,8 @@ if (viewer && compare && original && tuning && qualitySlider) {
     highQuality = Math.max(1, Math.min(100, Math.round(Number(highQuality) || 69)));
     normalQuality = Math.max(1, Math.min(highQuality, Math.round(Number(normalQuality) || DEFAULT_NORMAL_QUALITY)));
     lowQuality = Math.max(1, Math.min(normalQuality, Math.round(Number(lowQuality) || DEFAULT_LOW_QUALITY)));
+    normalInput.max = String(highQuality);
+    lowInput.max = String(normalQuality);
     highInput.value = highLabel.textContent = String(highQuality);
     normalInput.value = normalLabel.textContent = String(normalQuality);
     lowInput.value = lowLabel.textContent = String(lowQuality);
@@ -144,7 +146,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
     if (!enabled || !initialized || !cursorPoint || sliderPreviewActive) return;
     const [r, g, b, a] = toolColor(activePointer?.button === 2 ? 'low' : tool);
     cursorContext.save();
-    cursorContext.fillStyle = `rgba(${r},${g},${b},${Math.max(0.10, a / 255 * 0.32)})`;
+    cursorContext.fillStyle = `rgba(${r},${g},${b},${Math.max(0.16, a / 255 * 0.6)})`;
     cursorContext.beginPath();
     cursorContext.arc(cursorPoint.x, cursorPoint.y, Math.max(1, brush / 2), 0, Math.PI * 2);
     cursorContext.fill();
@@ -189,10 +191,26 @@ if (viewer && compare && original && tuning && qualitySlider) {
     if (refresh) requestPreview();
   }
 
+  function displayedImageRect() {
+    const box = original.getBoundingClientRect();
+    if (!box.width || !box.height || !original.naturalWidth || !original.naturalHeight) return box;
+    const scale = Math.min(box.width / original.naturalWidth, box.height / original.naturalHeight);
+    const width = original.naturalWidth * scale;
+    const height = original.naturalHeight * scale;
+    return {
+      left:box.left + (box.width - width) / 2,
+      top:box.top + (box.height - height) / 2,
+      width,
+      height,
+      right:box.left + (box.width + width) / 2,
+      bottom:box.top + (box.height + height) / 2
+    };
+  }
+
   function syncGeometry() {
     geometryFrame = 0;
     if (!initialized || !optimizerActive()) return;
-    const imageRect = original.getBoundingClientRect();
+    const imageRect = displayedImageRect();
     const compareRect = compare.getBoundingClientRect();
     if (!imageRect.width || !imageRect.height || !compareRect.width || !compareRect.height) return;
     const left = imageRect.left - compareRect.left;
@@ -266,7 +284,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
 
   function pointForEvent(event, allowOutside = false) {
     if (!initializeMask()) return null;
-    const rect = original.getBoundingClientRect();
+    const rect = displayedImageRect();
     if (!rect.width || !rect.height) return null;
     let x = (event.clientX - rect.left) / rect.width;
     let y = (event.clientY - rect.top) / rect.height;
@@ -300,8 +318,12 @@ if (viewer && compare && original && tuning && qualitySlider) {
 
   function blockedTarget(event) {
     return event.composedPath().some(node =>
-      node instanceof Element && node.matches?.('input,button,select,textarea,label,a,.image-optimize-controls,.viewer-optimize-trigger,.viewer-bar,.viewer-info')
+      node instanceof Element && node.matches?.('input,button,select,textarea,label,a,.image-optimize-controls,.image-optimize-divider,.viewer-optimize-trigger,.viewer-bar,.viewer-info')
     );
+  }
+
+  function overPaintSurface(event) {
+    return event.composedPath().includes(compare) && !blockedTarget(event) && Boolean(pointForEvent(event));
   }
 
   window.addEventListener('pointerdown', event => {
@@ -310,7 +332,8 @@ if (viewer && compare && original && tuning && qualitySlider) {
   }, true);
 
   window.addEventListener('pointerdown', event => {
-    if (!enabled || !optimizerActive() || sliderPreviewActive || blockedTarget(event) || (event.button !== 0 && event.button !== 2)) return;
+    if (!enabled || !optimizerActive() || sliderPreviewActive || (event.button !== 0 && event.button !== 2)) return;
+    if (!overPaintSurface(event)) return;
     const point = pointForEvent(event);
     if (!point) return;
     activePointer = { id:event.pointerId, button:event.button };
@@ -322,6 +345,11 @@ if (viewer && compare && original && tuning && qualitySlider) {
 
   window.addEventListener('pointermove', event => {
     if (!enabled || !optimizerActive()) return;
+    if (activePointer?.id !== event.pointerId && (!event.composedPath().includes(compare) || blockedTarget(event))) {
+      cursorPoint = null;
+      clearCursor();
+      return;
+    }
     const point = pointForEvent(event, activePointer?.id === event.pointerId);
     cursorPoint = point;
     renderCursor();
@@ -350,15 +378,17 @@ if (viewer && compare && original && tuning && qualitySlider) {
   window.addEventListener('pointerup', endSliderPreview, true);
   window.addEventListener('pointercancel', endSliderPreview, true);
 
-  compare.addEventListener('contextmenu', event => { if (enabled) event.preventDefault(); });
+  compare.addEventListener('contextmenu', event => {
+    if (enabled && pointForEvent(event)) event.preventDefault();
+  });
   compare.addEventListener('pointerleave', () => {
     if (activePointer) return;
     cursorPoint = null;
     clearCursor();
   });
   compare.addEventListener('pointerenter', event => {
-    if (!enabled) return;
-    cursorPoint = pointForEvent(event, true);
+    if (!enabled || blockedTarget(event)) return;
+    cursorPoint = pointForEvent(event);
     renderCursor();
   });
 
