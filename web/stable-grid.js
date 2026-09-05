@@ -1,6 +1,5 @@
 const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
-const viewerOpen = document.querySelector('#viewer-open');
 const commandbar = document.querySelector('.commandbar');
 const rail = document.querySelector('#dateRail');
 const typeSelect = document.querySelector('#typeFilter');
@@ -11,15 +10,15 @@ const collectionSelect = document.querySelector('#collectionFilter');
 const searchInput = document.querySelector('#search');
 const mediaSize = document.querySelector('#mediaSize');
 const views = document.querySelector('#views');
-const folderbar = document.querySelector('#folderbar');
-const folderStrip = document.querySelector('#gridFolderStrip');
 
-const RENDER_AHEAD_SCREENS = 4.5;
-const RENDER_BEHIND_SCREENS = 3;
-const PREFETCH_AHEAD_SCREENS = 10;
-const PREFETCH_BEHIND_SCREENS = 6;
-const ROW_CACHE_LIMIT = 520;
 const ROW_GAP = 4;
+const RENDER_AHEAD = 10;
+const RENDER_BEHIND = 8;
+const PREFETCH_AHEAD = 18;
+const PREFETCH_BEHIND = 12;
+const IDLE_KEEP_AHEAD = 12;
+const IDLE_KEEP_BEHIND = 10;
+const ROW_CACHE_LIMIT = 1400;
 const SUPPORTED_SORTS = new Set(['date-desc','date-added','date-asc','size-desc']);
 const SUPPORTED_TYPES = new Set(['media','image','video']);
 const SUPPORTED_LOCATIONS = new Set(['','server','backup','unbacked']);
@@ -29,48 +28,52 @@ let library = null;
 let nativeState = null;
 let nativeExtend = null;
 let nativeEnsureIndex = null;
+let nativeRemove = null;
 let generation = 0;
-let buildTimer = 0;
-let owned = false;
-let activating = false;
 let layout = null;
-let plane = null;
-let rowLayer = null;
-let dayLayer = null;
 let rowData = new Map();
 let renderedRows = new Map();
+let plane = null;
+let rowLayer = null;
+let headerLayer = null;
+let dayLayer = null;
+let owned = false;
+let activating = false;
+let forceBuild = false;
+let buildTimer = 0;
+let renderFrame = 0;
+let trimTimer = 0;
 let requestId = 0;
 let requestWaiters = new Map();
-let renderFrame = 0;
-let visibleUpdateRunning = false;
-let visibleUpdateQueued = false;
-let queuedLayout = null;
-let railScrub = false;
-let lastRailScrubAt = 0;
+let fetchRunning = false;
+let fetchAgain = false;
 let lastScrollY = scrollY;
 let lastScrollAt = 0;
 let scrollDirection = 1;
 let filesDocumentTop = 0;
 let viewportTop = 0;
-let viewportPixels = Math.max(240, innerHeight);
+let viewportHeight = Math.max(240, innerHeight);
+let allowFilesMutation = false;
+let railScrub = false;
+let lastRailScrubAt = 0;
+let pendingCatalogRefresh = false;
 
 const style = document.createElement('style');
 style.textContent = `
+html.stable-grid-owned{overflow-anchor:none}
 html.stable-grid-owned #top-scroll-sentinel,html.stable-grid-owned #scroll-sentinel{display:none!important}
 html.stable-grid-owned #files{position:relative!important;display:block!important;min-height:0!important;overflow:visible!important}
 html.stable-grid-owned #files>:not(.stable-media-plane){display:none!important}
-.files.stable-grid-files{display:block!important}
-.stable-media-plane{position:absolute;left:0;right:0;top:0;height:100%;contain:layout style}
+.stable-media-plane{position:absolute;inset:0;contain:layout style}
 .stable-grid-rows,.stable-grid-headings,.stable-grid-days{position:absolute;inset:0;pointer-events:none}
-.stable-grid-row{position:absolute;left:0;right:0;margin:0;padding:0;overflow:hidden;contain:layout paint style;pointer-events:auto}
+.stable-grid-row{position:absolute;left:0;right:0;overflow:hidden;contain:layout paint style;pointer-events:auto}
 .stable-grid-row>.file-card{position:absolute!important;top:0!important;margin:0!important;min-width:0!important;max-width:none!important;flex:none!important}
-.stable-grid-row>.file-card.media-card{border-radius:3px}
 .stable-grid-heading{position:absolute;left:2px;right:0;margin:0!important;pointer-events:none}
 .stable-grid-heading.year-heading{height:31px;display:flex;align-items:center;color:#f1e9e5;font-size:19px;font-weight:760;letter-spacing:-.025em}
 .stable-grid-heading.date-heading{height:27px;display:flex;align-items:flex-start;padding-top:2px;color:#cfc5c1;font-size:13px!important;font-weight:700}
 .stable-grid-days>.day-group-control{position:absolute;z-index:5;pointer-events:auto}
-.stable-grid-files .geometry-pending{visibility:visible!important}
-.stable-grid-files .media-thumb.thumb-decoding::after{display:none!important}
+.stable-grid-row .geometry-pending{visibility:visible!important}
+.stable-grid-row .media-thumb.thumb-decoding::after{display:none!important}
 `;
 document.head.append(style);
 
@@ -111,23 +114,21 @@ function currentConfig() {
 }
 
 function geometryKey(config) {
-  return config
-    ? [config.expectedCount,config.type,config.sort,config.sourceId,config.locationFilter,config.width,config.target].join('|')
-    : '';
+  return config ? [config.type,config.sort,config.sourceId,config.locationFilter,config.width,config.target].join('|') : '';
 }
 
 function interactionActive() {
-  return Boolean(window.mochimonoGridInteraction?.active?.()) || performance.now() - lastScrollAt < 220;
+  return Boolean(window.mochimonoGridInteraction?.active?.()) || performance.now() - lastScrollAt < 260;
 }
 
 function measureViewport() {
   viewportTop = Math.max(0, commandbar?.getBoundingClientRect().bottom || 0);
-  viewportPixels = Math.max(240, innerHeight - viewportTop);
+  viewportHeight = Math.max(240, innerHeight - viewportTop);
   filesDocumentTop = files ? files.getBoundingClientRect().top + scrollY : 0;
 }
 
-function localViewportY() {
-  return Math.max(0, scrollY + viewportTop - filesDocumentTop);
+function localYForScroll(scrollTop = scrollY) {
+  return Math.max(0, Number(scrollTop) + viewportTop - filesDocumentTop);
 }
 
 function findFirstRow(targetLayout, y) {
@@ -155,12 +156,12 @@ function rowRange(targetLayout, startY, endY) {
   return result;
 }
 
-function windowRows(targetLayout, aheadScreens, behindScreens) {
-  const top = localViewportY();
-  const ahead = viewportPixels * aheadScreens;
-  const behind = viewportPixels * behindScreens;
-  const start = scrollDirection >= 0 ? top - behind : top - ahead;
-  const end = scrollDirection >= 0 ? top + viewportPixels + ahead : top + viewportPixels + behind;
+function rowsForScroll(targetLayout, scrollTop, aheadScreens, behindScreens) {
+  const top = localYForScroll(scrollTop);
+  const forward = viewportHeight * aheadScreens;
+  const backward = viewportHeight * behindScreens;
+  const start = scrollDirection >= 0 ? top - backward : top - forward;
+  const end = scrollDirection >= 0 ? top + viewportHeight + forward : top + viewportHeight + backward;
   const range = {
     start:Math.max(0, start),
     end:Math.min(targetLayout?.totalHeight || 0, end)
@@ -168,18 +169,50 @@ function windowRows(targetLayout, aheadScreens, behindScreens) {
   return { range, rows:rowRange(targetLayout, range.start, range.end) };
 }
 
+function internalFilesMutation(callback) {
+  allowFilesMutation = true;
+  try { return callback(); }
+  finally { allowFilesMutation = false; }
+}
+
+function installMutationFirewall() {
+  if (!files || files.dataset.stableMutationFirewall) return;
+  files.dataset.stableMutationFirewall = '1';
+  const inner = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+  if (inner?.get && inner?.set) {
+    Object.defineProperty(files, 'innerHTML', {
+      configurable:true,
+      get() { return inner.get.call(files); },
+      set(value) {
+        if (owned && !allowFilesMutation) return;
+        inner.set.call(files, value);
+      }
+    });
+  }
+  const replaceChildren = files.replaceChildren.bind(files);
+  files.replaceChildren = (...nodes) => {
+    if (owned && !allowFilesMutation) return;
+    return replaceChildren(...nodes);
+  };
+  const insertAdjacentHTML = files.insertAdjacentHTML.bind(files);
+  files.insertAdjacentHTML = (...args) => {
+    if (owned && !allowFilesMutation) return;
+    return insertAdjacentHTML(...args);
+  };
+}
+
 function workerRequest(type, detail = {}, targetLayout = layout) {
   if (!worker || !targetLayout) return Promise.resolve(null);
   const id = ++requestId;
   return new Promise(resolve => {
-    requestWaiters.set(id, { resolve, generation:targetLayout.generation });
+    requestWaiters.set(id, resolve);
     worker.postMessage({ type, generation:targetLayout.generation, requestId:id, ...detail });
     setTimeout(() => {
       const pending = requestWaiters.get(id);
       if (!pending) return;
       requestWaiters.delete(id);
-      pending.resolve(null);
-    }, 1800);
+      pending(null);
+    }, 1600);
   });
 }
 
@@ -221,8 +254,8 @@ function createRow(data) {
 function insertRow(row, id) {
   if (!rowLayer) return;
   for (const sibling of rowLayer.children) {
-    const nextId = Number(sibling.dataset.stableRow);
-    if (Number.isInteger(nextId) && nextId > id) {
+    const next = Number(sibling.dataset.stableRow);
+    if (Number.isInteger(next) && next > id) {
       rowLayer.insertBefore(row, sibling);
       return;
     }
@@ -230,34 +263,47 @@ function insertRow(row, id) {
   rowLayer.append(row);
 }
 
-function renderRows(data) {
-  if (!rowLayer || !data?.length) return;
-  for (const item of [...data].sort((a, b) => Number(a.row) - Number(b.row))) {
-    const id = Number(item.row);
-    if (!item || renderedRows.has(id)) continue;
-    const row = createRow(item);
+function renderRows(rows) {
+  if (!rowLayer || !rows?.length) return;
+  for (const data of [...rows].sort((a, b) => Number(a.row) - Number(b.row))) {
+    const id = Number(data?.row);
+    if (!data || renderedRows.has(id)) continue;
+    const row = createRow(data);
     renderedRows.set(id, row);
     insertRow(row, id);
   }
 }
 
-function pruneRows(wanted) {
+function renderCached(rowIds) {
+  renderRows(rowIds.map(row => rowData.get(row)).filter(Boolean));
+}
+
+function trimRows() {
+  trimTimer = 0;
+  if (!owned || !layout || interactionActive()) {
+    scheduleTrim();
+    return;
+  }
+  const keep = new Set(rowsForScroll(layout, scrollY, IDLE_KEEP_AHEAD, IDLE_KEEP_BEHIND).rows);
   for (const [row, element] of renderedRows) {
-    if (wanted.has(row)) continue;
+    if (keep.has(row)) continue;
     element.remove();
     renderedRows.delete(row);
   }
-}
-
-function trimCache(keep) {
-  if (rowData.size <= ROW_CACHE_LIMIT) return;
-  for (const row of [...rowData.keys()]) {
-    if (rowData.size <= ROW_CACHE_LIMIT) break;
-    if (!keep.has(row)) rowData.delete(row);
+  if (rowData.size > ROW_CACHE_LIMIT) {
+    for (const row of [...rowData.keys()]) {
+      if (rowData.size <= ROW_CACHE_LIMIT) break;
+      if (!keep.has(row)) rowData.delete(row);
+    }
   }
 }
 
-function headerLayerFor(targetLayout) {
+function scheduleTrim() {
+  clearTimeout(trimTimer);
+  trimTimer = setTimeout(trimRows, 650);
+}
+
+function buildHeaderLayer(targetLayout) {
   const layer = document.createElement('div');
   layer.className = 'stable-grid-headings';
   const fragment = document.createDocumentFragment();
@@ -274,11 +320,11 @@ function headerLayerFor(targetLayout) {
   return layer;
 }
 
-function syncDayButtons(startY, endY) {
-  if (!dayLayer || !layout) return;
+function syncDayButtons(range) {
+  if (!dayLayer || !layout || interactionActive()) return;
   const wanted = new Set();
   for (const day of layout.dayStarts || []) {
-    if (day.top < startY - 30 || day.top > endY + 30) continue;
+    if (day.top < range.start - 30 || day.top > range.end + 30) continue;
     const key = `${day.year}-${String(day.month + 1).padStart(2,'0')}-${String(day.day).padStart(2,'0')}`;
     wanted.add(key);
     let button = dayLayer.querySelector(`[data-period-key="${CSS.escape(key)}"]`);
@@ -303,122 +349,111 @@ function syncDayButtons(startY, endY) {
   }
 }
 
-function makePlane(targetLayout, initialRows) {
-  const nextPlane = document.createElement('div');
-  nextPlane.className = 'stable-media-plane';
-  const nextRows = document.createElement('div');
-  nextRows.className = 'stable-grid-rows';
-  const nextDays = document.createElement('div');
-  nextDays.className = 'stable-grid-days';
-  nextPlane.append(nextRows, headerLayerFor(targetLayout), nextDays);
-
-  const previousRowLayer = rowLayer;
-  const previousRendered = renderedRows;
-  rowLayer = nextRows;
-  renderedRows = new Map();
-  renderRows(initialRows);
-  const nextRendered = renderedRows;
-  rowLayer = previousRowLayer;
-  renderedRows = previousRendered;
-  return { plane:nextPlane, rowLayer:nextRows, dayLayer:nextDays, renderedRows:nextRendered };
-}
-
-function ensurePlaneConnected() {
-  if (!owned || !plane || plane.isConnected || !files) return;
-  files.className = 'files grid stable-grid-files';
-  files.style.height = `${Math.ceil(layout?.totalHeight || 1)}px`;
-  files.replaceChildren(plane);
-  measureViewport();
-}
-
-function updateRailFromScroll() {
+function updateRail() {
   if (!layout?.rowStarts?.length || !rail || rail.hidden) return;
   const state = rawState();
   const thumb = document.querySelector('#railThumb');
   if (!state?.filtered || !thumb) return;
-  const row = findFirstRow(layout, localViewportY());
+  const row = findFirstRow(layout, localYForScroll());
   const index = Number(layout.rowStarts[Math.max(0, row)]) || 0;
   const safe = Math.max(0, Math.min(state.filtered - 1, index));
   thumb.style.top = `${(state.filtered === 1 ? 0 : safe / (state.filtered - 1)) * 100}%`;
 }
 
-async function updateVisibleRows() {
+async function updateRows() {
   renderFrame = 0;
-  if (!owned || !plane?.isConnected || !layout) return;
-  if (visibleUpdateRunning) {
-    visibleUpdateQueued = true;
+  if (!owned || !layout || !plane?.isConnected) return;
+  if (fetchRunning) {
+    fetchAgain = true;
     return;
   }
-
-  visibleUpdateRunning = true;
+  fetchRunning = true;
   try {
     do {
-      visibleUpdateQueued = false;
-      if (!owned || !plane?.isConnected || !layout) break;
+      fetchAgain = false;
+      const visible = rowsForScroll(layout, scrollY, RENDER_AHEAD, RENDER_BEHIND);
+      renderCached(visible.rows);
+      updateRail();
 
-      const visible = windowRows(layout, RENDER_AHEAD_SCREENS, RENDER_BEHIND_SCREENS);
-      renderRows(visible.rows.map(row => rowData.get(row)).filter(Boolean));
-      updateRailFromScroll();
-
-      const prefetch = windowRows(layout, PREFETCH_AHEAD_SCREENS, PREFETCH_BEHIND_SCREENS);
+      const prefetch = rowsForScroll(layout, scrollY, PREFETCH_AHEAD, PREFETCH_BEHIND);
       await fetchRows(prefetch.rows);
-      if (!owned || !plane?.isConnected || !layout) break;
+      if (!owned || !layout || !plane?.isConnected) break;
 
-      const latest = windowRows(layout, RENDER_AHEAD_SCREENS, RENDER_BEHIND_SCREENS);
-      const wanted = new Set(latest.rows);
-      renderRows(latest.rows.map(row => rowData.get(row)).filter(Boolean));
-      pruneRows(wanted);
-      syncDayButtons(latest.range.start, latest.range.end);
-      trimCache(new Set(windowRows(layout, PREFETCH_AHEAD_SCREENS, PREFETCH_BEHIND_SCREENS).rows));
-      updateRailFromScroll();
-    } while (visibleUpdateQueued);
+      const latest = rowsForScroll(layout, scrollY, RENDER_AHEAD, RENDER_BEHIND);
+      renderCached(latest.rows);
+      syncDayButtons(latest.range);
+      updateRail();
+    } while (fetchAgain);
   } finally {
-    visibleUpdateRunning = false;
-    if (visibleUpdateQueued) scheduleVisibleRows();
+    fetchRunning = false;
+    if (fetchAgain) scheduleRows();
+    scheduleTrim();
   }
 }
 
-function scheduleVisibleRows() {
-  if (visibleUpdateRunning) {
-    visibleUpdateQueued = true;
+function scheduleRows() {
+  if (fetchRunning) {
+    fetchAgain = true;
     return;
   }
-  if (!renderFrame) renderFrame = requestAnimationFrame(updateVisibleRows);
+  if (!renderFrame) renderFrame = requestAnimationFrame(updateRows);
+}
+
+function makePlane(targetLayout, initialRows) {
+  const nextPlane = document.createElement('div');
+  nextPlane.className = 'stable-media-plane';
+  const nextRows = document.createElement('div');
+  nextRows.className = 'stable-grid-rows';
+  const nextHeaders = buildHeaderLayer(targetLayout);
+  const nextDays = document.createElement('div');
+  nextDays.className = 'stable-grid-days';
+  nextPlane.append(nextRows, nextHeaders, nextDays);
+
+  const oldLayer = rowLayer;
+  const oldRows = renderedRows;
+  rowLayer = nextRows;
+  renderedRows = new Map();
+  renderRows(initialRows);
+  const nextRendered = renderedRows;
+  rowLayer = oldLayer;
+  renderedRows = oldRows;
+  return { plane:nextPlane, rows:nextRows, headers:nextHeaders, days:nextDays, rendered:nextRendered };
+}
+
+function showLegacy() {
+  if (!owned) return;
+  owned = false;
+  document.documentElement.classList.remove('stable-grid-owned');
+  files.style.removeProperty('height');
+  plane = null;
+  rowLayer = null;
+  headerLayer = null;
+  dayLayer = null;
+  renderedRows.clear();
+  rowData.clear();
 }
 
 async function activate(nextLayout) {
-  if (!nextLayout || activating) {
-    if (nextLayout) queuedLayout = nextLayout;
+  if (!nextLayout || activating || interactionActive()) {
+    if (nextLayout) setTimeout(() => activate(nextLayout), 300);
     return;
   }
-  if (interactionActive()) {
-    queuedLayout = nextLayout;
-    setTimeout(runQueuedLayout, 260);
-    return;
-  }
-
   const config = currentConfig();
-  if (!config || nextLayout.key !== geometryKey(config) || nextLayout.count !== config.expectedCount) return;
+  if (!config || nextLayout.key !== geometryKey(config)) return;
   activating = true;
   measureViewport();
 
-  const localTop = localViewportY();
-  const anchorRow = Math.max(0, Math.min(nextLayout.rowTops.length - 1, findFirstRow(nextLayout, localTop)));
-  const margin = viewportPixels * RENDER_AHEAD_SCREENS;
-  const initialIds = rowRange(nextLayout, Math.max(0, Number(nextLayout.rowTops[anchorRow] || 0) - margin), Number(nextLayout.rowTops[anchorRow] || 0) + viewportPixels + margin);
+  const targetRows = rowsForScroll(nextLayout, scrollY, RENDER_AHEAD, RENDER_BEHIND).rows;
   const nextCache = new Map();
-  const initialRows = await fetchRows(initialIds, nextLayout, nextCache);
-
+  const initialRows = await fetchRows(targetRows, nextLayout, nextCache);
   const latest = currentConfig();
-  if (!latest || nextLayout.key !== geometryKey(latest) || nextLayout.count !== latest.expectedCount) {
+  if (!latest || nextLayout.key !== geometryKey(latest)) {
     activating = false;
-    runQueuedLayout();
     return;
   }
   if (interactionActive()) {
     activating = false;
-    queuedLayout = nextLayout;
-    setTimeout(runQueuedLayout, 260);
+    setTimeout(() => activate(nextLayout), 300);
     return;
   }
 
@@ -426,78 +461,43 @@ async function activate(nextLayout) {
   layout = nextLayout;
   rowData = nextCache;
   plane = built.plane;
-  rowLayer = built.rowLayer;
-  dayLayer = built.dayLayer;
-  renderedRows = built.renderedRows;
+  rowLayer = built.rows;
+  headerLayer = built.headers;
+  dayLayer = built.days;
+  renderedRows = built.rendered;
   owned = true;
   document.documentElement.classList.add('stable-grid-owned');
   files.className = 'files grid stable-grid-files';
   files.style.height = `${Math.ceil(layout.totalHeight)}px`;
-  files.replaceChildren(plane);
-  const topSentinel = document.querySelector('#top-scroll-sentinel');
-  const bottomSentinel = document.querySelector('#scroll-sentinel');
-  if (topSentinel) topSentinel.hidden = true;
-  if (bottomSentinel) bottomSentinel.hidden = true;
+  internalFilesMutation(() => files.replaceChildren(plane));
+  document.querySelector('#top-scroll-sentinel')?.setAttribute('hidden','');
+  document.querySelector('#scroll-sentinel')?.setAttribute('hidden','');
   measureViewport();
   activating = false;
-  scheduleVisibleRows();
-  runQueuedLayout();
+  scheduleRows();
 }
 
-function runQueuedLayout() {
-  if (activating || interactionActive()) {
-    if (queuedLayout) setTimeout(runQueuedLayout, 260);
-    return;
-  }
-  const next = queuedLayout;
-  queuedLayout = null;
-  if (next) activate(next);
-}
-
-function release() {
-  owned = false;
-  activating = false;
-  queuedLayout = null;
-  visibleUpdateQueued = false;
-  if (renderFrame) cancelAnimationFrame(renderFrame);
-  renderFrame = 0;
-  document.documentElement.classList.remove('stable-grid-owned');
-  files?.style.removeProperty('height');
-  files?.classList.remove('stable-grid-files');
-  if (plane?.isConnected) plane.remove();
-  plane = null;
-  rowLayer = null;
-  dayLayer = null;
-  renderedRows.clear();
-}
-
-function scheduleBuild(delay = 120) {
+function scheduleBuild(delay = 100, force = false) {
+  if (force) forceBuild = true;
   clearTimeout(buildTimer);
   buildTimer = setTimeout(build, delay);
 }
 
 function build() {
   buildTimer = 0;
-  if (!worker || !library) return;
+  if (!worker || !library || activating) return;
   const config = currentConfig();
   if (!config || !config.expectedCount) {
-    if (owned) release();
+    showLegacy();
     return;
   }
-
-  // Geometry is immutable for the life of a layout. Metadata/thumbnail updates
-  // with the same item count never get to move rows underneath the user.
   const key = geometryKey(config);
-  if (owned && layout?.key === key) {
-    ensurePlaneConnected();
-    return;
-  }
-
+  if (owned && layout?.key === key && !forceBuild) return;
   if (interactionActive()) {
-    scheduleBuild(320);
+    scheduleBuild(320, forceBuild);
     return;
   }
-
+  forceBuild = false;
   const nextGeneration = ++generation;
   worker.postMessage({ type:'build', generation:nextGeneration, config });
 }
@@ -507,19 +507,13 @@ function rowForIndex(index) {
   return Number(layout.itemRows[index]);
 }
 
-function materializeCachedRow(row) {
-  if (!owned || row < 0) return false;
-  const data = rowData.get(row);
-  if (!data) return false;
-  renderRows([data]);
-  return true;
-}
-
 function ensureIndex(index) {
   if (!owned || !layout) return false;
   const row = rowForIndex(Number(index));
   if (row < 0) return false;
-  if (!materializeCachedRow(row)) fetchRows([row]).then(() => materializeCachedRow(row));
+  const data = rowData.get(row);
+  if (data) renderRows([data]);
+  else fetchRows([row]).then(rows => renderRows(rows));
   return true;
 }
 
@@ -527,58 +521,64 @@ async function scrollToIndex(index, block = 'center') {
   if (!owned || !layout) return false;
   const row = rowForIndex(Number(index));
   if (row < 0) return false;
-  await fetchRows([row]);
-  if (!owned) return false;
-  materializeCachedRow(row);
+  const rows = await fetchRows([row]);
+  if (!owned || !rows.length) return false;
+  renderRows(rows);
+  measureViewport();
   const top = filesDocumentTop + Number(layout.rowTops[row] || 0);
   const height = Number(layout.rowHeights[row] || 0);
   let target = top - viewportTop;
-  if (block === 'center') target -= Math.max(0, (viewportPixels - height) / 2);
-  else if (block === 'end') target -= Math.max(0, viewportPixels - height);
+  if (block === 'center') target -= Math.max(0, (viewportHeight - height) / 2);
+  else if (block === 'end') target -= Math.max(0, viewportHeight - height);
   scrollTo({ top:Math.max(0, target), left:0, behavior:'auto' });
-  scheduleVisibleRows();
+  scheduleRows();
   return true;
 }
 
-function railIndex(event) {
-  const state = rawState();
-  if (!rail || !state?.filtered) return 0;
-  const rect = rail.getBoundingClientRect();
-  return Math.round(Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height))) * (state.filtered - 1));
-}
-
-function setRailThumb(index) {
-  const state = rawState();
-  const thumb = document.querySelector('#railThumb');
-  if (!thumb || !state?.filtered) return;
-  const safe = Math.max(0, Math.min(state.filtered - 1, Number(index) || 0));
-  thumb.style.top = `${(state.filtered === 1 ? 0 : safe / (state.filtered - 1)) * 100}%`;
-}
-
-function handleRailPointer(event, final = false) {
-  const index = railIndex(event);
-  setRailThumb(index);
-  const now = performance.now();
-  if (final || now - lastRailScrubAt > 55) {
-    lastRailScrubAt = now;
-    scrollToIndex(index, 'center');
+async function warmViewport(scrollTop) {
+  if (!owned || !layout) return;
+  const local = localYForScroll(scrollTop);
+  const rows = rowRange(layout, Math.max(0, local - viewportHeight * 2), Math.min(layout.totalHeight, local + viewportHeight * 4));
+  const data = await fetchRows(rows);
+  if (!owned) return;
+  renderRows(data);
+  const cards = [];
+  for (const row of rows) {
+    const element = renderedRows.get(row);
+    if (element) cards.push(...element.querySelectorAll('[data-hash]'));
   }
+  if (cards.length) window.mochimonoThumbnails?.prioritize?.(cards);
 }
 
 function installRail() {
-  if (!rail) return;
+  if (!rail || rail.dataset.stableRail) return;
+  rail.dataset.stableRail = '1';
+  const indexFromEvent = event => {
+    const state = rawState();
+    if (!state?.filtered) return 0;
+    const rect = rail.getBoundingClientRect();
+    return Math.round(Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height))) * (state.filtered - 1));
+  };
+  const move = (event, final = false) => {
+    const index = indexFromEvent(event);
+    const now = performance.now();
+    if (final || now - lastRailScrubAt > 45) {
+      lastRailScrubAt = now;
+      scrollToIndex(index, 'center');
+    }
+  };
   rail.addEventListener('pointerdown', event => {
     if (!owned || rail.hidden) return;
     railScrub = true;
-    try { rail.setPointerCapture(event.pointerId); } catch {}
     rail.classList.add('dragging');
-    handleRailPointer(event);
+    try { rail.setPointerCapture(event.pointerId); } catch {}
+    move(event);
     event.preventDefault();
     event.stopImmediatePropagation();
   }, true);
   rail.addEventListener('pointermove', event => {
     if (!owned || !railScrub) return;
-    handleRailPointer(event);
+    move(event);
     event.preventDefault();
     event.stopImmediatePropagation();
   }, true);
@@ -586,22 +586,13 @@ function installRail() {
     if (!owned || !railScrub) return;
     railScrub = false;
     rail.classList.remove('dragging');
-    handleRailPointer(event, true);
-    try { rail.releasePointerCapture(event.pointerId); } catch {}
+    move(event, true);
     event.preventDefault();
     event.stopImmediatePropagation();
   }, true);
   rail.addEventListener('pointercancel', () => {
     railScrub = false;
     rail.classList.remove('dragging');
-  }, true);
-  rail.addEventListener('click', event => {
-    if (!owned) return;
-    const tick = event.target.closest('[data-index]');
-    if (!tick) return;
-    scrollToIndex(Number(tick.dataset.index), 'center');
-    event.preventDefault();
-    event.stopImmediatePropagation();
   }, true);
 }
 
@@ -615,36 +606,45 @@ function installLibrary() {
   nativeState = library.state.bind(library);
   nativeExtend = library.extend.bind(library);
   nativeEnsureIndex = library.ensureIndex.bind(library);
+  nativeRemove = library.remove?.bind(library);
+
   library.state = () => {
     const state = nativeState();
     return owned ? { ...state, offset:0, loaded:state.filtered, hasMore:false, hasPrevious:false, stableGrid:true } : state;
   };
   library.extend = direction => owned ? false : nativeExtend(direction);
   library.ensureIndex = index => owned ? ensureIndex(Number(index)) : nativeEnsureIndex(index);
+  if (nativeRemove) library.remove = hashes => {
+    const result = nativeRemove(hashes);
+    scheduleBuild(80, true);
+    return result;
+  };
   installRail();
-  scheduleBuild(0);
+  scheduleBuild(0, true);
 }
 
 worker?.addEventListener('message', event => {
   const message = event.data || {};
   if (message.type === 'rows' || message.type === 'located') {
-    const pending = requestWaiters.get(Number(message.requestId));
-    if (pending) {
+    const resolve = requestWaiters.get(Number(message.requestId));
+    if (resolve) {
       requestWaiters.delete(Number(message.requestId));
-      pending.resolve(message);
+      resolve(message);
     }
     return;
   }
   if (Number(message.generation) !== generation) return;
   if (message.type === 'unavailable' || message.type === 'error') {
-    scheduleBuild(450);
+    scheduleBuild(500, true);
     return;
   }
   if (message.type !== 'ready') return;
-
   const config = currentConfig();
-  if (!config || Number(message.count) !== config.expectedCount) return;
-  const nextLayout = {
+  if (!config || message.version !== config.version) {
+    scheduleBuild(500, true);
+    return;
+  }
+  activate({
     generation:Number(message.generation),
     key:geometryKey(config),
     version:String(message.version),
@@ -657,106 +657,83 @@ worker?.addEventListener('message', event => {
     itemRows:message.itemRows,
     headers:message.headers || [],
     dayStarts:message.dayStarts || []
-  };
-  activate(nextLayout);
+  });
 });
 
-function respondToConfigurationChange() {
-  setTimeout(() => {
-    const config = currentConfig();
-    if (!config) {
-      if (owned) release();
-      return;
-    }
-    scheduleBuild(20);
-  }, 0);
+function releaseBeforeUnsupportedChange() {
+  if (!owned) return;
+  showLegacy();
 }
 
-for (const control of [typeSelect,sortSelect,sourceSelect,locationSelect,collectionSelect]) {
-  control?.addEventListener('change', respondToConfigurationChange);
-}
 searchInput?.addEventListener('input', () => {
-  if (String(searchInput.value || '').trim()) {
-    if (owned) release();
-    return;
-  }
-  scheduleBuild(100);
-});
+  if (String(searchInput.value || '').trim()) releaseBeforeUnsupportedChange();
+  else scheduleBuild(80, true);
+}, true);
+collectionSelect?.addEventListener('change', () => {
+  if (String(collectionSelect.value || '')) releaseBeforeUnsupportedChange();
+  else scheduleBuild(30, true);
+}, true);
 views?.addEventListener('click', event => {
   const button = event.target.closest('[data-view]');
-  if (button?.dataset.view !== 'grid') {
-    if (owned) release();
-    return;
-  }
-  setTimeout(() => scheduleBuild(20), 0);
-});
+  if (button?.dataset.view && button.dataset.view !== 'grid') releaseBeforeUnsupportedChange();
+  else if (button?.dataset.view === 'grid') setTimeout(() => scheduleBuild(20, true), 0);
+}, true);
+for (const control of [typeSelect,sortSelect,sourceSelect,locationSelect]) {
+  control?.addEventListener('change', () => setTimeout(() => scheduleBuild(20, true), 0));
+}
 
-window.addEventListener('mochimono:media-size', () => scheduleBuild(80));
-window.addEventListener('mochimono:catalog-updated', () => scheduleBuild(420));
-window.addEventListener('mochimono:catalog-cache-restored', () => scheduleBuild(30));
-window.addEventListener('mochimono:folder-changed', respondToConfigurationChange);
+window.addEventListener('mochimono:media-size', () => scheduleBuild(70, true));
+window.addEventListener('mochimono:catalog-cache-restored', () => scheduleBuild(30, true));
+window.addEventListener('mochimono:catalog-updated', () => {
+  pendingCatalogRefresh = true;
+  measureViewport();
+  if (localYForScroll() < viewportHeight * .65 && !interactionActive()) {
+    pendingCatalogRefresh = false;
+    scheduleBuild(180, true);
+  }
+});
+window.addEventListener('mochimono:folder-changed', () => {
+  const config = currentConfig();
+  if (!config) showLegacy();
+  else scheduleBuild(50, true);
+});
 window.addEventListener('mochimono:grid-interaction-end', () => {
-  if (queuedLayout) runQueuedLayout();
-  if (buildTimer) scheduleBuild(40);
+  scheduleRows();
+  scheduleTrim();
+  if (pendingCatalogRefresh && localYForScroll() < viewportHeight * .65) {
+    pendingCatalogRefresh = false;
+    scheduleBuild(120, true);
+  }
 });
 window.addEventListener('scroll', () => {
   const y = scrollY;
   if (Math.abs(y - lastScrollY) > 1) scrollDirection = y > lastScrollY ? 1 : -1;
   lastScrollY = y;
   lastScrollAt = performance.now();
-  if (owned) scheduleVisibleRows();
+  if (owned) scheduleRows();
 }, { passive:true });
 window.addEventListener('resize', () => {
   measureViewport();
-  scheduleBuild(180);
+  scheduleBuild(180, true);
 }, { passive:true });
-
-for (const element of [commandbar,folderbar,folderStrip]) {
-  if (element && typeof ResizeObserver === 'function') new ResizeObserver(() => {
-    measureViewport();
-    if (owned) scheduleVisibleRows();
-  }).observe(element);
-}
-
-new MutationObserver(() => {
-  if (!owned) {
-    scheduleBuild(90);
-    return;
-  }
-  const config = currentConfig();
-  if (!config) {
-    release();
-    return;
-  }
-  if (!plane?.isConnected) ensurePlaneConnected();
-  if (geometryKey(config) !== layout?.key) scheduleBuild(260);
-}).observe(files, { childList:true });
-
-if (viewer && viewerOpen) {
-  new MutationObserver(() => {
-    if (!viewer.hidden || !owned) return;
-    const hash = viewerOpen.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
-    const state = rawState();
-    if (!hash || !state?.filtered) return;
-  }).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
-}
 
 window.mochimonoStableGrid = {
   active:() => owned,
   owns:() => owned,
   state:() => ({
     active:owned,
-    activating,
     generation,
     rows:layout?.rowTops?.length || 0,
     rendered:renderedRows.size,
     cached:rowData.size,
-    fetching:visibleUpdateRunning,
+    fetching:fetchRunning,
     key:layout?.key || ''
   }),
   ensureIndex,
-  scrollToIndex
+  scrollToIndex,
+  warmViewport
 };
 
+installMutationFirewall();
 measureViewport();
 installLibrary();
