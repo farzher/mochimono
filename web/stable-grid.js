@@ -12,7 +12,11 @@ const searchInput = document.querySelector('#search');
 const mediaSize = document.querySelector('#mediaSize');
 const views = document.querySelector('#views');
 
-const OVERSCAN_SCREENS = 3.25;
+const RENDER_AHEAD_SCREENS = 4.5;
+const RENDER_BEHIND_SCREENS = 2;
+const PREFETCH_AHEAD_SCREENS = 8;
+const PREFETCH_BEHIND_SCREENS = 4;
+const ROW_CACHE_LIMIT = 360;
 const ROW_GAP = 4;
 const SUPPORTED_SORTS = new Set(['date-desc','date-added','date-asc','size-desc']);
 const SUPPORTED_TYPES = new Set(['media','image','video']);
@@ -34,23 +38,28 @@ let renderedRows = new Map();
 let requestId = 0;
 let requestWaiters = new Map();
 let renderFrame = 0;
-let renderToken = 0;
+let visibleUpdateRunning = false;
+let visibleUpdateQueued = false;
 let railScrub = false;
 let lastRailScrubAt = 0;
 let reattachHash = '';
 let queuedActivation = null;
+let lastScrollY = scrollY;
+let scrollDirection = 1;
 
 const style = document.createElement('style');
 style.textContent = `
 html.stable-grid-owned #top-scroll-sentinel,html.stable-grid-owned #scroll-sentinel{display:none!important}
 .files.grid.stable-grid-files{position:relative;display:block!important;min-height:0!important}
 .stable-media-plane{position:relative;width:100%;contain:layout style}
-.stable-grid-row{position:absolute;left:0;right:0;margin:0;padding:0}
+.stable-grid-row{position:absolute;left:0;right:0;margin:0;padding:0;contain:layout style}
 .stable-grid-row>.file-card{position:absolute!important;top:0;margin:0!important;flex:none!important}
 .stable-grid-heading{position:absolute;left:2px;right:0;margin:0!important;pointer-events:none}
 .stable-grid-heading.year-heading{height:31px;display:flex;align-items:center;color:#f1e9e5;font-size:19px;font-weight:760;letter-spacing:-.025em}
 .stable-grid-heading.date-heading{height:27px;display:flex;align-items:flex-start;padding-top:2px;color:#cfc5c1;font-size:13px!important;font-weight:700}
 .stable-media-plane>.day-group-control{position:absolute;z-index:5}
+.stable-grid-files .geometry-pending{visibility:visible!important}
+.stable-grid-files .media-thumb.thumb-decoding::after{display:none!important}
 `;
 document.head.append(style);
 
@@ -65,6 +74,10 @@ function pageTop() {
 
 function viewportHeight() {
   return Math.max(240, innerHeight - pageTop());
+}
+
+function interacting() {
+  return Boolean(window.mochimonoGridInteraction?.active?.());
 }
 
 function rawState() {
@@ -106,7 +119,8 @@ function topVisibleCard() {
   if (!files || !files.querySelector('[data-hash]')) return null;
   const top = pageTop();
   const bounds = files.getBoundingClientRect();
-  const xs = [bounds.left + 8, (bounds.left + bounds.right) / 2, bounds.right - 8].map(x => Math.max(1, Math.min(innerWidth - 2, x)));
+  const xs = [bounds.left + 8, (bounds.left + bounds.right) / 2, bounds.right - 8]
+    .map(x => Math.max(1, Math.min(innerWidth - 2, x)));
   for (const y of [top + 2, top + 40, top + 80, top + 120]) {
     if (y >= innerHeight) break;
     for (const x of xs) {
@@ -117,35 +131,37 @@ function topVisibleCard() {
   return null;
 }
 
-function findFirstRowAt(y) {
-  const tops = layout?.rowTops;
-  const heights = layout?.rowHeights;
+function findFirstRowFor(targetLayout, y) {
+  const tops = targetLayout?.rowTops;
+  const heights = targetLayout?.rowHeights;
   if (!tops?.length) return 0;
   let lo = 0;
   let hi = tops.length - 1;
   let answer = hi;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (tops[mid] + heights[mid] >= y) { answer = mid; hi = mid - 1; }
-    else lo = mid + 1;
+    if (tops[mid] + heights[mid] >= y) {
+      answer = mid;
+      hi = mid - 1;
+    } else lo = mid + 1;
   }
   return answer;
 }
 
-function rowRange(startY, endY) {
-  if (!layout?.rowTops?.length) return [];
-  const first = findFirstRowAt(Math.max(0, startY));
+function rowRangeFor(targetLayout, startY, endY) {
+  if (!targetLayout?.rowTops?.length) return [];
+  const first = findFirstRowFor(targetLayout, Math.max(0, startY));
   const result = [];
-  for (let row = first; row < layout.rowTops.length && layout.rowTops[row] <= endY; row++) result.push(row);
+  for (let row = first; row < targetLayout.rowTops.length && targetLayout.rowTops[row] <= endY; row++) result.push(row);
   return result;
 }
 
-function rowsAroundRow(row, screens = OVERSCAN_SCREENS) {
-  if (!layout?.rowTops?.length) return [];
-  const top = layout.rowTops[Math.max(0, row)] || 0;
-  const height = layout.rowHeights[Math.max(0, row)] || viewportHeight();
+function rowsAroundRowForLayout(targetLayout, row, screens = RENDER_AHEAD_SCREENS) {
+  if (!targetLayout?.rowTops?.length) return [];
+  const top = targetLayout.rowTops[Math.max(0, row)] || 0;
+  const height = targetLayout.rowHeights[Math.max(0, row)] || viewportHeight();
   const margin = viewportHeight() * screens;
-  return rowRange(top - margin, top + height + margin);
+  return rowRangeFor(targetLayout, top - margin, top + height + margin);
 }
 
 function workerRequest(type, detail = {}, targetLayout = layout) {
@@ -153,7 +169,7 @@ function workerRequest(type, detail = {}, targetLayout = layout) {
   const id = ++requestId;
   return new Promise(resolve => {
     requestWaiters.set(id, resolve);
-    worker.postMessage({ type, generation: targetLayout.generation, requestId: id, ...detail });
+    worker.postMessage({ type, generation:targetLayout.generation, requestId:id, ...detail });
     setTimeout(() => {
       const waiter = requestWaiters.get(id);
       if (!waiter) return;
@@ -164,10 +180,11 @@ function workerRequest(type, detail = {}, targetLayout = layout) {
 }
 
 async function fetchRows(rows, targetLayout = layout, cache = rowData) {
-  const wanted = [...new Set(rows)].filter(row => Number.isInteger(row) && row >= 0 && row < (targetLayout?.rowTops?.length || 0));
+  const wanted = [...new Set(rows)]
+    .filter(row => Number.isInteger(row) && row >= 0 && row < (targetLayout?.rowTops?.length || 0));
   const missing = wanted.filter(row => !cache.has(row));
   if (missing.length) {
-    const result = await workerRequest('rows', { rows: missing }, targetLayout);
+    const result = await workerRequest('rows', { rows:missing }, targetLayout);
     for (const item of result?.rows || []) cache.set(Number(item.row), item);
   }
   return wanted.map(row => cache.get(row)).filter(Boolean);
@@ -186,20 +203,38 @@ function cardMarkup(file, rowHeight) {
   const dayLabel = date.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
   const sw = Number(file.sourceWidth) || 0;
   const sh = Number(file.sourceHeight) || 0;
-  const ratio = sw && sh ? Math.max(.65, Math.min(2.1, sw / sh)) : Math.max(.65, Math.min(2.1, Number(file.width) / Math.max(1, rowHeight)));
-  return `<button class="file-card media-card ${video ? 'video-card' : ''}" data-hash="${escapeHtml(file.hash)}" data-filename="${escapeHtml(file.filename)}" data-day="${day}" data-day-label="${escapeHtml(dayLabel)}" data-width="${sw}" data-height="${sh}" style="left:${Number(file.x).toFixed(2)}px;width:${Number(file.width).toFixed(2)}px;height:${Number(rowHeight).toFixed(2)}px;flex-basis:${Number(file.width).toFixed(2)}px;--ratio:${ratio}" title="${escapeHtml(file.filename)}"><div class="thumb media-thumb"><span class="video-thumb-pending" data-video-thumb="${escapeHtml(file.hash)}"></span>${video ? '<span class="play-badge">▶</span>' : ''}</div></button>`;
+  const fallbackWidth = Math.max(1, Number(file.width) || rowHeight * 4 / 3);
+  const fallbackHeight = Math.max(1, Number(rowHeight) || 1);
+  const dataWidth = sw || fallbackWidth;
+  const dataHeight = sh || fallbackHeight;
+  const ratio = Math.max(.65, Math.min(2.1, dataWidth / dataHeight));
+  return `<button class="file-card media-card ${video ? 'video-card' : ''}" data-hash="${escapeHtml(file.hash)}" data-filename="${escapeHtml(file.filename)}" data-day="${day}" data-day-label="${escapeHtml(dayLabel)}" data-width="${Number(dataWidth).toFixed(2)}" data-height="${Number(dataHeight).toFixed(2)}" style="left:${Number(file.x).toFixed(2)}px;width:${Number(file.width).toFixed(2)}px;height:${Number(rowHeight).toFixed(2)}px;flex-basis:${Number(file.width).toFixed(2)}px;--ratio:${ratio}" title="${escapeHtml(file.filename)}"><div class="thumb media-thumb"><span class="video-thumb-pending" data-video-thumb="${escapeHtml(file.hash)}"></span>${video ? '<span class="play-badge">▶</span>' : ''}</div></button>`;
 }
 
-function renderRow(data) {
-  if (!plane || !data || renderedRows.has(data.row)) return;
+function createRow(data) {
   const row = document.createElement('div');
   row.className = 'stable-grid-row';
   row.dataset.stableRow = String(data.row);
   row.style.top = `${Number(data.top).toFixed(2)}px`;
   row.style.height = `${Number(data.height).toFixed(2)}px`;
   row.innerHTML = data.items.map(item => cardMarkup(item, data.height)).join('');
-  plane.append(row);
-  renderedRows.set(data.row, row);
+  return row;
+}
+
+function renderRows(data) {
+  if (!plane || !data?.length) return;
+  const fragment = document.createDocumentFragment();
+  for (const item of data) {
+    if (!item || renderedRows.has(item.row)) continue;
+    const row = createRow(item);
+    renderedRows.set(item.row, row);
+    fragment.append(row);
+  }
+  if (fragment.childNodes.length) plane.append(fragment);
+}
+
+function renderRow(data) {
+  renderRows(data ? [data] : []);
 }
 
 function renderHeaders() {
@@ -250,34 +285,107 @@ function planeDocumentTop() {
   return files.getBoundingClientRect().top + scrollY;
 }
 
-function visibleLocalRange() {
-  const top = scrollY + pageTop() - planeDocumentTop();
-  const height = viewportHeight();
-  const margin = height * OVERSCAN_SCREENS;
-  return { start: Math.max(0, top - margin), end: Math.min(layout?.totalHeight || 0, top + height + margin) };
+function localViewportTop() {
+  return scrollY + pageTop() - planeDocumentTop();
 }
 
-async function updateVisibleRows() {
-  renderFrame = 0;
-  if (!active || !plane?.isConnected || !layout) return;
-  const token = ++renderToken;
-  const range = visibleLocalRange();
-  const rows = rowRange(range.start, range.end);
-  const wanted = new Set(rows);
-  const data = await fetchRows(rows);
-  if (!active || token !== renderToken || !plane?.isConnected) return;
-  for (const item of data) renderRow(item);
+function localRange(aheadScreens, behindScreens) {
+  const top = localViewportTop();
+  const height = viewportHeight();
+  const ahead = height * aheadScreens;
+  const behind = height * behindScreens;
+  const start = scrollDirection >= 0 ? top - behind : top - ahead;
+  const end = scrollDirection >= 0 ? top + height + ahead : top + height + behind;
+  return {
+    start: Math.max(0, start),
+    end: Math.min(layout?.totalHeight || 0, end)
+  };
+}
+
+function visibleWindow() {
+  const range = localRange(RENDER_AHEAD_SCREENS, RENDER_BEHIND_SCREENS);
+  return { range, rows:rowRangeFor(layout, range.start, range.end) };
+}
+
+function prefetchWindow() {
+  const range = localRange(PREFETCH_AHEAD_SCREENS, PREFETCH_BEHIND_SCREENS);
+  return { range, rows:rowRangeFor(layout, range.start, range.end) };
+}
+
+function renderCachedRows(rows) {
+  const data = [];
+  for (const row of rows) {
+    const item = rowData.get(row);
+    if (item && !renderedRows.has(row)) data.push(item);
+  }
+  renderRows(data);
+}
+
+function pruneRenderedRows(wanted) {
   for (const [row, element] of renderedRows) {
     if (wanted.has(row)) continue;
     element.remove();
     renderedRows.delete(row);
   }
-  const lastRow = Math.max(0, (layout.rowTops?.length || 1) - 1);
-  for (const row of rowData.keys()) if (!wanted.has(row) && row !== 0 && row !== lastRow) rowData.delete(row);
-  syncDayButtons(range.start, range.end);
+}
+
+function trimRowCache(keep) {
+  if (rowData.size <= ROW_CACHE_LIMIT) return;
+  for (const row of [...rowData.keys()]) {
+    if (rowData.size <= ROW_CACHE_LIMIT) break;
+    if (keep.has(row)) continue;
+    rowData.delete(row);
+  }
+}
+
+async function updateVisibleRows() {
+  renderFrame = 0;
+  if (!active || !plane?.isConnected || !layout) return;
+  if (visibleUpdateRunning) {
+    visibleUpdateQueued = true;
+    return;
+  }
+
+  visibleUpdateRunning = true;
+  try {
+    do {
+      visibleUpdateQueued = false;
+      if (!active || !plane?.isConnected || !layout) break;
+
+      // First paint anything already cached. Scrolling never waits for the worker.
+      const firstVisible = visibleWindow();
+      renderCachedRows(firstVisible.rows);
+
+      // Fetch a much larger directional guard band into lightweight JS memory.
+      // Only the smaller visible guard band is mounted in the DOM.
+      const prefetch = prefetchWindow();
+      await fetchRows(prefetch.rows);
+      if (!active || !plane?.isConnected || !layout) break;
+
+      // The user may have moved while that request was in flight. Always render
+      // the latest viewport instead of throwing the response away.
+      const latest = visibleWindow();
+      const latestWanted = new Set(latest.rows);
+      renderCachedRows(latest.rows);
+      pruneRenderedRows(latestWanted);
+      syncDayButtons(latest.range.start, latest.range.end);
+      trimRowCache(new Set(prefetchWindow().rows));
+
+      // If a scroll happened while awaiting rows, loop once with the newest
+      // position. This serializes worker traffic instead of creating one request
+      // per high-refresh-rate scroll frame.
+    } while (visibleUpdateQueued);
+  } finally {
+    visibleUpdateRunning = false;
+    if (visibleUpdateQueued) scheduleVisibleRows();
+  }
 }
 
 function scheduleVisibleRows() {
+  if (visibleUpdateRunning) {
+    visibleUpdateQueued = true;
+    return;
+  }
   if (!renderFrame) renderFrame = requestAnimationFrame(updateVisibleRows);
 }
 
@@ -295,35 +403,50 @@ function installPlane(initialRows) {
   if (topSentinel) topSentinel.hidden = true;
   if (bottomSentinel) bottomSentinel.hidden = true;
   renderHeaders();
-  for (const row of initialRows) renderRow(row);
+  renderRows(initialRows);
   active = true;
 }
 
 async function activate(nextLayout, preferredHash = '') {
   if (!nextLayout) return;
   if (activating) {
-    queuedActivation = { layout: nextLayout, hash: preferredHash };
+    queuedActivation = { layout:nextLayout, hash:preferredHash };
     return;
   }
-  if (window.mochimonoGridInteraction?.active?.()) {
-    setTimeout(() => activate(nextLayout, preferredHash), 90);
+  if (interacting()) {
+    queuedActivation = { layout:nextLayout, hash:preferredHash };
+    setTimeout(runQueuedActivation, 160);
     return;
   }
+
   const config = currentConfig();
   const state = rawState();
   if (!config || !state || nextLayout.version !== config.version || nextLayout.count !== state.filtered || nextLayout.key !== configKey(config)) return;
+
   activating = true;
-  const anchor = preferredHash ? { hash: preferredHash, top: pageTop() + 2 } : topVisibleCard();
+  const anchor = preferredHash ? { hash:preferredHash, top:pageTop() + 2 } : topVisibleCard();
   const anchorIndex = anchor?.hash ? await locate(anchor.hash, nextLayout) : -1;
   const nextRowData = nextLayout === layout ? rowData : new Map();
-  const fallbackRow = Math.max(0, Math.min(nextLayout.rowTops.length - 1, findFirstRowForLayout(nextLayout, Math.max(0, scrollY + pageTop() - (files.getBoundingClientRect().top + scrollY)))));
+  const localTop = Math.max(0, scrollY + pageTop() - (files.getBoundingClientRect().top + scrollY));
+  const fallbackRow = Math.max(0, Math.min(nextLayout.rowTops.length - 1, findFirstRowFor(nextLayout, localTop)));
   const anchorRow = anchorIndex >= 0 ? Number(nextLayout.itemRows[anchorIndex]) : fallbackRow;
-  const rows = [...new Set([...rowsAroundRowForLayout(nextLayout, anchorRow), 0, Math.max(0, nextLayout.rowTops.length - 1)])];
+  const rows = [...new Set([
+    ...rowsAroundRowForLayout(nextLayout, anchorRow, RENDER_AHEAD_SCREENS),
+    0,
+    Math.max(0, nextLayout.rowTops.length - 1)
+  ])];
   const initialRows = await fetchRows(rows, nextLayout, nextRowData);
+
   const latest = currentConfig();
   if (!latest || nextLayout.key !== configKey(latest)) {
     activating = false;
     runQueuedActivation();
+    return;
+  }
+  if (interacting()) {
+    activating = false;
+    queuedActivation = { layout:nextLayout, hash:preferredHash };
+    setTimeout(runQueuedActivation, 160);
     return;
   }
 
@@ -332,46 +455,22 @@ async function activate(nextLayout, preferredHash = '') {
   rowData = nextRowData;
   installPlane(initialRows);
   const newFilesTop = files.getBoundingClientRect().top + scrollY;
+
   if (anchorIndex >= 0 && anchor?.top != null) {
     const row = Number(layout.itemRows[anchorIndex]);
     const target = newFilesTop + Number(layout.rowTops[row] || 0) - anchor.top;
-    scrollTo({ top: Math.max(0, target), left: 0, behavior: 'auto' });
+    scrollTo({ top:Math.max(0, target), left:0, behavior:'auto' });
   } else if (Math.abs(newFilesTop - oldFilesTop) > .5) {
-    scrollBy({ top: newFilesTop - oldFilesTop, left: 0, behavior: 'auto' });
+    scrollBy({ top:newFilesTop - oldFilesTop, left:0, behavior:'auto' });
   }
+
   activating = false;
   scheduleVisibleRows();
   runQueuedActivation();
 }
 
-function findFirstRowForLayout(targetLayout, y) {
-  const tops = targetLayout?.rowTops;
-  const heights = targetLayout?.rowHeights;
-  if (!tops?.length) return 0;
-  let lo = 0;
-  let hi = tops.length - 1;
-  let answer = hi;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (tops[mid] + heights[mid] >= y) { answer = mid; hi = mid - 1; }
-    else lo = mid + 1;
-  }
-  return answer;
-}
-
-function rowsAroundRowForLayout(targetLayout, row, screens = OVERSCAN_SCREENS) {
-  if (!targetLayout?.rowTops?.length) return [];
-  const top = targetLayout.rowTops[Math.max(0, row)] || 0;
-  const height = targetLayout.rowHeights[Math.max(0, row)] || viewportHeight();
-  const margin = viewportHeight() * screens;
-  const first = findFirstRowForLayout(targetLayout, Math.max(0, top - margin));
-  const end = top + height + margin;
-  const result = [];
-  for (let index = first; index < targetLayout.rowTops.length && targetLayout.rowTops[index] <= end; index++) result.push(index);
-  return result;
-}
-
 function runQueuedActivation() {
+  if (activating) return;
   const next = queuedActivation;
   queuedActivation = null;
   if (next) queueMicrotask(() => activate(next.layout, next.hash));
@@ -382,7 +481,7 @@ function deactivate() {
   activating = false;
   plane = null;
   renderedRows.clear();
-  renderToken++;
+  visibleUpdateQueued = false;
   document.documentElement.classList.remove('stable-grid-owned');
 }
 
@@ -396,10 +495,10 @@ function persistLearned(items) {
       try { window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height); } catch {}
     }
     if (offset >= items.length) return;
-    if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout: 500 });
+    if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout:500 });
     else setTimeout(run, 0);
   };
-  if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout: 500 });
+  if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout:500 });
   else setTimeout(run, 0);
 }
 
@@ -411,6 +510,15 @@ function scheduleBuild(delay = 80) {
 function build() {
   buildTimer = 0;
   if (!worker || !library) return;
+
+  // Catalog/index churn is allowed to continue in the background, but rebuilding
+  // the whole grid competes with row delivery. Keep the current fixed plane solid
+  // until scrolling/keyboard interaction has actually stopped.
+  if (interacting()) {
+    scheduleBuild(180);
+    return;
+  }
+
   const config = currentConfig();
   if (!config || !config.expectedCount) {
     deactivate();
@@ -445,7 +553,7 @@ async function scrollToIndex(index, block = 'center') {
   let target = top - pageTop();
   if (block === 'center') target -= Math.max(0, (viewportHeight() - height) / 2);
   else if (block === 'end') target -= Math.max(0, viewportHeight() - height);
-  scrollTo({ top: Math.max(0, target), left: 0, behavior:'auto' });
+  scrollTo({ top:Math.max(0, target), left:0, behavior:'auto' });
   scheduleVisibleRows();
   return true;
 }
@@ -469,7 +577,10 @@ function updateRailThumb(index) {
   let distance = Infinity;
   for (const tick of ticks) {
     const next = Math.abs(Number(tick.dataset.index) - safe);
-    if (next < distance) { distance = next; nearest = tick; }
+    if (next < distance) {
+      distance = next;
+      nearest = tick;
+    }
   }
   const label = nearest?.getAttribute('title') || nearest?.textContent?.trim() || '';
   const span = thumb.querySelector('span');
@@ -504,12 +615,14 @@ function installRailInterception() {
     event.preventDefault();
     event.stopImmediatePropagation();
   }, true);
+
   rail.addEventListener('pointermove', event => {
     if (!active || !railScrub) return;
     handleRailPointer(event);
     event.preventDefault();
     event.stopImmediatePropagation();
   }, true);
+
   rail.addEventListener('pointerup', event => {
     if (!active || !railScrub) return;
     railScrub = false;
@@ -519,12 +632,14 @@ function installRailInterception() {
     event.preventDefault();
     event.stopImmediatePropagation();
   }, true);
+
   rail.addEventListener('pointercancel', event => {
     if (!active || !railScrub) return;
     railScrub = false;
     rail.classList.remove('dragging');
     event.stopImmediatePropagation();
   }, true);
+
   rail.addEventListener('click', event => {
     if (!active) return;
     const tick = event.target.closest('[data-index]');
@@ -564,15 +679,18 @@ worker?.addEventListener('message', event => {
     }
     return;
   }
+
   if (Number(message.generation) !== generation) return;
   if (message.type === 'unavailable' || message.type === 'error') {
     scheduleBuild(500);
     return;
   }
   if (message.type !== 'ready') return;
+
   const config = currentConfig();
   const state = rawState();
   if (!config || !state || message.version !== config.version || Number(message.count) !== Number(state.filtered)) return;
+
   const nextLayout = {
     generation:Number(message.generation),
     key:configKey(config),
@@ -589,6 +707,7 @@ worker?.addEventListener('message', event => {
     headers:message.headers || [],
     dayStarts:message.dayStarts || []
   };
+
   persistLearned(message.learned || []);
   const preferred = reattachHash;
   reattachHash = '';
@@ -601,27 +720,42 @@ for (const control of [typeSelect,sortSelect,sourceSelect,locationSelect,collect
     setTimeout(() => scheduleBuild(20), 0);
   }, true);
 }
+
 searchInput?.addEventListener('input', () => {
   if (active) deactivate();
   scheduleBuild(100);
 }, true);
+
 views?.addEventListener('click', () => {
   if (active) deactivate();
   setTimeout(() => scheduleBuild(20), 0);
 }, true);
-window.addEventListener('mochimono:media-size', () => scheduleBuild(30));
-window.addEventListener('mochimono:catalog-updated', () => scheduleBuild(80));
-window.addEventListener('mochimono:catalog-cache-restored', () => scheduleBuild(20));
-window.addEventListener('mochimono:folder-changed', () => scheduleBuild(40));
-window.addEventListener('scroll', scheduleVisibleRows, { passive:true });
-window.addEventListener('resize', () => scheduleBuild(100), { passive:true });
+
+window.addEventListener('mochimono:media-size', () => scheduleBuild(60));
+window.addEventListener('mochimono:catalog-updated', () => scheduleBuild(240));
+window.addEventListener('mochimono:catalog-cache-restored', () => scheduleBuild(30));
+window.addEventListener('mochimono:folder-changed', () => scheduleBuild(60));
+window.addEventListener('mochimono:grid-interaction-end', () => {
+  if (queuedActivation) runQueuedActivation();
+  if (buildTimer) scheduleBuild(30);
+});
+
+window.addEventListener('scroll', () => {
+  const y = scrollY;
+  if (Math.abs(y - lastScrollY) > 1) scrollDirection = y > lastScrollY ? 1 : -1;
+  lastScrollY = y;
+  scheduleVisibleRows();
+}, { passive:true });
+
+window.addEventListener('resize', () => scheduleBuild(160), { passive:true });
 
 new MutationObserver(() => {
   if (active && plane && !plane.isConnected) {
     const hash = topVisibleCard()?.hash || reattachHash;
     deactivate();
     reattachHash = hash || '';
-    if (layout && currentConfig() && layout.key === configKey(currentConfig())) activate(layout, reattachHash);
+    const config = currentConfig();
+    if (layout && config && layout.key === configKey(config)) activate(layout, reattachHash);
     else scheduleBuild(20);
   }
 }).observe(files, { childList:true });
@@ -631,13 +765,23 @@ if (viewer && viewerOpen) {
     if (!viewer.hidden) return;
     const hash = viewerOpen.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
     if (hash) reattachHash = hash;
-    if (!active && layout && currentConfig() && layout.key === configKey(currentConfig())) activate(layout, hash);
+    const config = currentConfig();
+    if (!active && layout && config && layout.key === configKey(config)) activate(layout, hash);
   }).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
 }
 
 window.mochimonoStableGrid = {
   active:() => active,
-  state:() => ({ active, activating, generation, rows:layout?.rowTops?.length || 0, rendered:renderedRows.size, unresolved:layout?.unresolved || 0 }),
+  state:() => ({
+    active,
+    activating,
+    generation,
+    rows:layout?.rowTops?.length || 0,
+    rendered:renderedRows.size,
+    cached:rowData.size,
+    unresolved:layout?.unresolved || 0,
+    fetching:visibleUpdateRunning
+  }),
   ensureIndex,
   scrollToIndex
 };
