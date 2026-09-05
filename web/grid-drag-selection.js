@@ -110,7 +110,6 @@ function finishDrag(event, canceled = false) {
     event.preventDefault();
     if (!canceled && hits.length) window.mochimonoSelection?.add?.(hits);
   } else cleanupDrag();
-  try { files.releasePointerCapture?.(event.pointerId); } catch {}
 }
 
 files.addEventListener('dragstart', event => {
@@ -129,10 +128,9 @@ files.addEventListener('pointerdown', event => {
     cards:[],
     hits:new Set()
   };
-  try { files.setPointerCapture?.(event.pointerId); } catch {}
 });
 
-files.addEventListener('pointermove', event => {
+window.addEventListener('pointermove', event => {
   if (!drag || event.pointerId !== drag.pointerId) return;
   drag.x = event.clientX;
   drag.y = event.clientY;
@@ -141,10 +139,10 @@ files.addEventListener('pointermove', event => {
     beginDragSelection(event);
   } else event.preventDefault();
   schedulePaint();
-});
+}, { passive:false });
 
-files.addEventListener('pointerup', event => finishDrag(event, false));
-files.addEventListener('pointercancel', event => finishDrag(event, true));
+window.addEventListener('pointerup', event => finishDrag(event, false));
+window.addEventListener('pointercancel', event => finishDrag(event, true));
 window.addEventListener('blur', () => {
   if (!drag) return;
   if (drag.active) suppressClickUntil = performance.now() + CLICK_SUPPRESS_MS;
