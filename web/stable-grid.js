@@ -12,41 +12,40 @@ const mediaSize = document.querySelector('#mediaSize');
 const views = document.querySelector('#views');
 
 const ROW_GAP = 4;
-const RENDER_AHEAD = 10;
-const RENDER_BEHIND = 8;
-const PREFETCH_AHEAD = 18;
-const PREFETCH_BEHIND = 12;
-const IDLE_KEEP_AHEAD = 12;
-const IDLE_KEEP_BEHIND = 10;
-const ROW_CACHE_LIMIT = 1400;
+const MOUNT_AHEAD = 8;
+const MOUNT_BEHIND = 6;
+const KEEP_AHEAD = 13;
+const KEEP_BEHIND = 11;
+const THUMB_AHEAD = 3.5;
+const THUMB_BEHIND = 2.5;
+const HARD_ROW_LIMIT = 900;
 const SUPPORTED_SORTS = new Set(['date-desc','date-added','date-asc','size-desc']);
 const SUPPORTED_TYPES = new Set(['media','image','video']);
 const SUPPORTED_LOCATIONS = new Set(['','server','backup','unbacked']);
 
 const worker = typeof Worker === 'function' ? new Worker('/grid-layout-worker.js') : null;
+const nativeScrollBy = window.scrollBy.bind(window);
 let library = null;
 let nativeState = null;
 let nativeExtend = null;
 let nativeEnsureIndex = null;
 let nativeRemove = null;
+let nativeFilteredHashes = null;
 let generation = 0;
 let layout = null;
-let rowData = new Map();
-let renderedRows = new Map();
+let pendingLayout = null;
 let plane = null;
 let rowLayer = null;
 let headerLayer = null;
 let dayLayer = null;
+let renderedRows = new Map();
 let owned = false;
-let activating = false;
-let forceBuild = false;
 let buildTimer = 0;
 let renderFrame = 0;
 let trimTimer = 0;
-let requestId = 0;
-let requestWaiters = new Map();
-let fetchRunning = false;
-let fetchAgain = false;
+let thumbWarmTimer = 0;
+let thumbClearTimer = 0;
+let lastWarmKey = '';
 let lastScrollY = scrollY;
 let lastScrollAt = 0;
 let scrollDirection = 1;
@@ -57,6 +56,7 @@ let allowFilesMutation = false;
 let railScrub = false;
 let lastRailScrubAt = 0;
 let pendingCatalogRefresh = false;
+const dayLabelCache = new Map();
 
 const style = document.createElement('style');
 style.textContent = `
@@ -78,9 +78,6 @@ html.stable-grid-owned #files>:not(.stable-media-plane){display:none!important}
 document.head.append(style);
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
-const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
-const videoExtensions = new Set(['m4v','mp4','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
-const isVideo = file => String(file.kind || '').toLowerCase() === 'video' || String(file.mime || '').startsWith('video/') || videoExtensions.has(extension(file.filename));
 
 function rawState() {
   try { return nativeState?.() || library?.state?.() || null; }
@@ -89,7 +86,7 @@ function rawState() {
 
 function currentConfig() {
   const state = rawState();
-  if (!state || state.view !== 'grid' || !state.version || !files) return null;
+  if (!state || state.view !== 'grid' || !files) return null;
   const type = String(typeSelect?.value || '');
   const sort = String(sortSelect?.value || state.sort || 'date-desc');
   const sourceId = Number(sourceSelect?.value) || 0;
@@ -101,7 +98,7 @@ function currentConfig() {
   const width = Math.round(files.clientWidth || files.getBoundingClientRect().width || 0);
   if (width < 200) return null;
   return {
-    version:String(state.version),
+    version:String(state.version || ''),
     expectedCount:Number(state.filtered) || 0,
     type,
     sort,
@@ -118,7 +115,7 @@ function geometryKey(config) {
 }
 
 function interactionActive() {
-  return Boolean(window.mochimonoGridInteraction?.active?.()) || performance.now() - lastScrollAt < 260;
+  return Boolean(window.mochimonoGridInteraction?.active?.()) || performance.now() - lastScrollAt < 220;
 }
 
 function measureViewport() {
@@ -156,12 +153,12 @@ function rowRange(targetLayout, startY, endY) {
   return result;
 }
 
-function rowsForScroll(targetLayout, scrollTop, aheadScreens, behindScreens) {
-  const top = localYForScroll(scrollTop);
-  const forward = viewportHeight * aheadScreens;
-  const backward = viewportHeight * behindScreens;
-  const start = scrollDirection >= 0 ? top - backward : top - forward;
-  const end = scrollDirection >= 0 ? top + viewportHeight + forward : top + viewportHeight + backward;
+function rowsForScroll(targetLayout, scrollTop, aheadScreens, behindScreens, directional = true) {
+  const top = Math.max(0, Number(scrollTop) + viewportTop - filesDocumentTop);
+  const ahead = viewportHeight * aheadScreens;
+  const behind = viewportHeight * behindScreens;
+  const start = directional && scrollDirection < 0 ? top - ahead : top - behind;
+  const end = directional && scrollDirection < 0 ? top + viewportHeight + behind : top + viewportHeight + ahead;
   const range = {
     start:Math.max(0, start),
     end:Math.min(targetLayout?.totalHeight || 0, end)
@@ -201,106 +198,70 @@ function installMutationFirewall() {
   };
 }
 
-function workerRequest(type, detail = {}, targetLayout = layout) {
-  if (!worker || !targetLayout) return Promise.resolve(null);
-  const id = ++requestId;
-  return new Promise(resolve => {
-    requestWaiters.set(id, resolve);
-    worker.postMessage({ type, generation:targetLayout.generation, requestId:id, ...detail });
-    setTimeout(() => {
-      const pending = requestWaiters.get(id);
-      if (!pending) return;
-      requestWaiters.delete(id);
-      pending(null);
-    }, 1600);
-  });
-}
+// The old virtual grid still schedules anchor repairs after background upserts.
+// Once this grid owns a fixed-height plane those repairs are always wrong. Native
+// wheel/touch scrolling does not call window.scrollBy, so suppress only scripted
+// repairs while owned.
+window.scrollBy = (...args) => owned ? undefined : nativeScrollBy(...args);
 
-async function fetchRows(rows, targetLayout = layout, cache = rowData) {
-  const wanted = [...new Set(rows)].filter(row => Number.isInteger(row) && row >= 0 && row < (targetLayout?.rowTops?.length || 0));
-  const missing = wanted.filter(row => !cache.has(row));
-  if (missing.length) {
-    const result = await workerRequest('rows', { rows:missing }, targetLayout);
-    if (Number(result?.generation) === Number(targetLayout?.generation)) {
-      for (const item of result?.rows || []) cache.set(Number(item.row), item);
-    }
+function dayInfo(ms) {
+  const date = new Date(Number(ms) || 0);
+  const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+  let label = dayLabelCache.get(key);
+  if (!label) {
+    label = date.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
+    dayLabelCache.set(key, label);
   }
-  return wanted.map(row => cache.get(row)).filter(Boolean);
+  return { key, label };
 }
 
-function cardMarkup(file, rowHeight) {
-  const video = isVideo(file);
-  const date = new Date(Number(file.dateMs) || 0);
-  const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
-  const dayLabel = date.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
-  const sourceWidth = Number(file.sourceWidth) || 0;
-  const sourceHeight = Number(file.sourceHeight) || 0;
-  const dataWidth = sourceWidth || Math.max(1, Number(file.width) || rowHeight * 4 / 3);
-  const dataHeight = sourceHeight || Math.max(1, rowHeight);
+function cardMarkup(targetLayout, index, rowHeight) {
+  const item = targetLayout.items[index];
+  if (!item) return '';
+  const [hash, filename, video, sourceWidth, sourceHeight, dateMs] = item;
+  const width = Number(targetLayout.itemW[index]) || 1;
+  const x = Number(targetLayout.itemX[index]) || 0;
+  const dataWidth = Number(sourceWidth) || Math.max(1, width);
+  const dataHeight = Number(sourceHeight) || Math.max(1, rowHeight);
   const ratio = Math.max(.65, Math.min(2.1, dataWidth / dataHeight));
-  return `<button class="file-card media-card ${video ? 'video-card' : ''}" data-hash="${escapeHtml(file.hash)}" data-filename="${escapeHtml(file.filename)}" data-day="${day}" data-day-label="${escapeHtml(dayLabel)}" data-width="${Number(dataWidth).toFixed(2)}" data-height="${Number(dataHeight).toFixed(2)}" style="left:${Number(file.x).toFixed(2)}px;width:${Number(file.width).toFixed(2)}px;height:${Number(rowHeight).toFixed(2)}px;flex-basis:${Number(file.width).toFixed(2)}px;--ratio:${ratio}" title="${escapeHtml(file.filename)}"><div class="thumb media-thumb"><span class="video-thumb-pending" data-video-thumb="${escapeHtml(file.hash)}"></span>${video ? '<span class="play-badge">▶</span>' : ''}</div></button>`;
+  const day = dayInfo(dateMs);
+  return `<button class="file-card media-card ${video ? 'video-card' : ''}" data-hash="${escapeHtml(hash)}" data-filename="${escapeHtml(filename)}" data-day="${day.key}" data-day-label="${escapeHtml(day.label)}" data-width="${dataWidth}" data-height="${dataHeight}" style="left:${x.toFixed(2)}px;width:${width.toFixed(2)}px;height:${Number(rowHeight).toFixed(2)}px;flex-basis:${width.toFixed(2)}px;--ratio:${ratio}" title="${escapeHtml(filename)}"><div class="thumb media-thumb"><span class="video-thumb-pending" data-video-thumb="${escapeHtml(hash)}"></span>${video ? '<span class="play-badge">▶</span>' : ''}</div></button>`;
 }
 
-function createRow(data) {
+function createRow(targetLayout, rowId) {
+  const start = Number(targetLayout.rowStarts[rowId]);
+  const count = Number(targetLayout.rowCounts[rowId]);
+  const height = Number(targetLayout.rowHeights[rowId]) || 1;
   const row = document.createElement('div');
   row.className = 'stable-grid-row';
-  row.dataset.stableRow = String(data.row);
-  row.style.top = `${Number(data.top).toFixed(2)}px`;
-  row.style.height = `${Number(data.height).toFixed(2)}px`;
-  row.innerHTML = data.items.map(item => cardMarkup(item, data.height)).join('');
+  row.dataset.stableRow = String(rowId);
+  row.style.top = `${Number(targetLayout.rowTops[rowId]).toFixed(2)}px`;
+  row.style.height = `${height.toFixed(2)}px`;
+  let html = '';
+  for (let index = start; index < start + count; index++) html += cardMarkup(targetLayout, index, height);
+  row.innerHTML = html;
   return row;
 }
 
-function insertRow(row, id) {
-  if (!rowLayer) return;
-  for (const sibling of rowLayer.children) {
+function insertRow(layer, row, id) {
+  for (const sibling of layer.children) {
     const next = Number(sibling.dataset.stableRow);
     if (Number.isInteger(next) && next > id) {
-      rowLayer.insertBefore(row, sibling);
+      layer.insertBefore(row, sibling);
       return;
     }
   }
-  rowLayer.append(row);
+  layer.append(row);
 }
 
-function renderRows(rows) {
-  if (!rowLayer || !rows?.length) return;
-  for (const data of [...rows].sort((a, b) => Number(a.row) - Number(b.row))) {
-    const id = Number(data?.row);
-    if (!data || renderedRows.has(id)) continue;
-    const row = createRow(data);
-    renderedRows.set(id, row);
-    insertRow(row, id);
+function materializeRows(rowIds, targetLayout = layout, layer = rowLayer, mounted = renderedRows) {
+  if (!targetLayout || !layer) return;
+  for (const id of rowIds) {
+    if (!Number.isInteger(id) || id < 0 || id >= targetLayout.rowTops.length || mounted.has(id)) continue;
+    const row = createRow(targetLayout, id);
+    mounted.set(id, row);
+    insertRow(layer, row, id);
   }
-}
-
-function renderCached(rowIds) {
-  renderRows(rowIds.map(row => rowData.get(row)).filter(Boolean));
-}
-
-function trimRows() {
-  trimTimer = 0;
-  if (!owned || !layout || interactionActive()) {
-    scheduleTrim();
-    return;
-  }
-  const keep = new Set(rowsForScroll(layout, scrollY, IDLE_KEEP_AHEAD, IDLE_KEEP_BEHIND).rows);
-  for (const [row, element] of renderedRows) {
-    if (keep.has(row)) continue;
-    element.remove();
-    renderedRows.delete(row);
-  }
-  if (rowData.size > ROW_CACHE_LIMIT) {
-    for (const row of [...rowData.keys()]) {
-      if (rowData.size <= ROW_CACHE_LIMIT) break;
-      if (!keep.has(row)) rowData.delete(row);
-    }
-  }
-}
-
-function scheduleTrim() {
-  clearTimeout(trimTimer);
-  trimTimer = setTimeout(trimRows, 650);
 }
 
 function buildHeaderLayer(targetLayout) {
@@ -351,55 +312,93 @@ function syncDayButtons(range) {
 
 function updateRail() {
   if (!layout?.rowStarts?.length || !rail || rail.hidden) return;
-  const state = rawState();
   const thumb = document.querySelector('#railThumb');
-  if (!state?.filtered || !thumb) return;
+  if (!thumb || !layout.count) return;
   const row = findFirstRow(layout, localYForScroll());
   const index = Number(layout.rowStarts[Math.max(0, row)]) || 0;
-  const safe = Math.max(0, Math.min(state.filtered - 1, index));
-  thumb.style.top = `${(state.filtered === 1 ? 0 : safe / (state.filtered - 1)) * 100}%`;
+  thumb.style.top = `${(layout.count === 1 ? 0 : index / (layout.count - 1)) * 100}%`;
 }
 
-async function updateRows() {
-  renderFrame = 0;
-  if (!owned || !layout || !plane?.isConnected) return;
-  if (fetchRunning) {
-    fetchAgain = true;
+function cardsForRows(rows) {
+  const cards = [];
+  for (const row of rows) {
+    const element = renderedRows.get(row);
+    if (element) cards.push(...element.querySelectorAll('[data-hash]'));
+  }
+  return cards;
+}
+
+function warmRows(scrollTop) {
+  if (!owned || !layout || !window.mochimonoThumbnails?.prioritize) return;
+  const rows = rowsForScroll(layout, scrollTop, THUMB_AHEAD, THUMB_BEHIND).rows;
+  if (!rows.length) return;
+  const key = `${rows[0]}:${rows.at(-1)}`;
+  if (key === lastWarmKey) return;
+  lastWarmKey = key;
+  clearTimeout(thumbWarmTimer);
+  thumbWarmTimer = setTimeout(() => {
+    thumbWarmTimer = 0;
+    if (!owned || !layout) return;
+    const current = rowsForScroll(layout, scrollTop, THUMB_AHEAD, THUMB_BEHIND).rows;
+    materializeRows(current);
+    const cards = cardsForRows(current);
+    if (cards.length) window.mochimonoThumbnails?.prioritize?.(cards);
+    clearTimeout(thumbClearTimer);
+    thumbClearTimer = setTimeout(() => window.mochimonoThumbnails?.clearPriority?.(), 180);
+  }, 0);
+}
+
+function trimRows(force = false) {
+  trimTimer = 0;
+  if (!owned || !layout) return;
+  if (!force && interactionActive() && renderedRows.size < HARD_ROW_LIMIT) {
+    scheduleTrim();
     return;
   }
-  fetchRunning = true;
-  try {
-    do {
-      fetchAgain = false;
-      const visible = rowsForScroll(layout, scrollY, RENDER_AHEAD, RENDER_BEHIND);
-      renderCached(visible.rows);
-      updateRail();
-
-      const prefetch = rowsForScroll(layout, scrollY, PREFETCH_AHEAD, PREFETCH_BEHIND);
-      await fetchRows(prefetch.rows);
-      if (!owned || !layout || !plane?.isConnected) break;
-
-      const latest = rowsForScroll(layout, scrollY, RENDER_AHEAD, RENDER_BEHIND);
-      renderCached(latest.rows);
-      syncDayButtons(latest.range);
-      updateRail();
-    } while (fetchAgain);
-  } finally {
-    fetchRunning = false;
-    if (fetchAgain) scheduleRows();
-    scheduleTrim();
+  const keep = new Set(rowsForScroll(layout, scrollY, KEEP_AHEAD, KEEP_BEHIND).rows);
+  for (const [row, element] of renderedRows) {
+    if (keep.has(row)) continue;
+    element.remove();
+    renderedRows.delete(row);
   }
+}
+
+function scheduleTrim() {
+  clearTimeout(trimTimer);
+  trimTimer = setTimeout(() => trimRows(renderedRows.size >= HARD_ROW_LIMIT), 520);
+}
+
+function renderCurrent() {
+  renderFrame = 0;
+  if (!owned || !layout || !plane?.isConnected) return;
+  measureViewport();
+  const windowRows = rowsForScroll(layout, scrollY, MOUNT_AHEAD, MOUNT_BEHIND);
+  materializeRows(windowRows.rows);
+  updateRail();
+  syncDayButtons(windowRows.range);
+  warmRows(scrollY);
+  scheduleTrim();
 }
 
 function scheduleRows() {
-  if (fetchRunning) {
-    fetchAgain = true;
-    return;
-  }
-  if (!renderFrame) renderFrame = requestAnimationFrame(updateRows);
+  if (!renderFrame) renderFrame = requestAnimationFrame(renderCurrent);
 }
 
-function makePlane(targetLayout, initialRows) {
+function prepareViewport(scrollTop) {
+  if (!owned || !layout) return false;
+  measureViewport();
+  const target = rowsForScroll(layout, scrollTop, 2.5, 2.5, false);
+  materializeRows(target.rows);
+  const cards = cardsForRows(target.rows);
+  if (cards.length) {
+    window.mochimonoThumbnails?.prioritize?.(cards);
+    clearTimeout(thumbClearTimer);
+    thumbClearTimer = setTimeout(() => window.mochimonoThumbnails?.clearPriority?.(), 180);
+  }
+  return true;
+}
+
+function makePlane(targetLayout, scrollTop) {
   const nextPlane = document.createElement('div');
   nextPlane.className = 'stable-media-plane';
   const nextRows = document.createElement('div');
@@ -408,96 +407,74 @@ function makePlane(targetLayout, initialRows) {
   const nextDays = document.createElement('div');
   nextDays.className = 'stable-grid-days';
   nextPlane.append(nextRows, nextHeaders, nextDays);
-
-  const oldLayer = rowLayer;
-  const oldRows = renderedRows;
-  rowLayer = nextRows;
-  renderedRows = new Map();
-  renderRows(initialRows);
-  const nextRendered = renderedRows;
-  rowLayer = oldLayer;
-  renderedRows = oldRows;
+  const nextRendered = new Map();
+  const rows = rowsForScroll(targetLayout, scrollTop, MOUNT_AHEAD, MOUNT_BEHIND).rows;
+  materializeRows(rows, targetLayout, nextRows, nextRendered);
   return { plane:nextPlane, rows:nextRows, headers:nextHeaders, days:nextDays, rendered:nextRendered };
 }
 
 function showLegacy() {
   if (!owned) return;
   owned = false;
+  pendingLayout = null;
   document.documentElement.classList.remove('stable-grid-owned');
   files.style.removeProperty('height');
+  clearTimeout(trimTimer);
+  clearTimeout(thumbWarmTimer);
+  clearTimeout(thumbClearTimer);
+  window.mochimonoThumbnails?.clearPriority?.();
   plane = null;
   rowLayer = null;
   headerLayer = null;
   dayLayer = null;
   renderedRows.clear();
-  rowData.clear();
 }
 
-async function activate(nextLayout) {
-  if (!nextLayout || activating || interactionActive()) {
-    if (nextLayout) setTimeout(() => activate(nextLayout), 300);
-    return;
-  }
+function installLayout(nextLayout) {
   const config = currentConfig();
   if (!config || nextLayout.key !== geometryKey(config)) return;
-  activating = true;
+  if (owned && interactionActive()) {
+    pendingLayout = nextLayout;
+    return;
+  }
+
   measureViewport();
-
-  const targetRows = rowsForScroll(nextLayout, scrollY, RENDER_AHEAD, RENDER_BEHIND).rows;
-  const nextCache = new Map();
-  const initialRows = await fetchRows(targetRows, nextLayout, nextCache);
-  const latest = currentConfig();
-  if (!latest || nextLayout.key !== geometryKey(latest)) {
-    activating = false;
-    return;
-  }
-  if (interactionActive()) {
-    activating = false;
-    setTimeout(() => activate(nextLayout), 300);
-    return;
-  }
-
-  const built = makePlane(nextLayout, initialRows);
+  const savedY = scrollY;
+  const built = makePlane(nextLayout, savedY);
   layout = nextLayout;
-  rowData = nextCache;
   plane = built.plane;
   rowLayer = built.rows;
   headerLayer = built.headers;
   dayLayer = built.days;
   renderedRows = built.rendered;
   owned = true;
+  pendingLayout = null;
   document.documentElement.classList.add('stable-grid-owned');
   files.className = 'files grid stable-grid-files';
+  // Set the final document height before replacing children. There is never an
+  // intermediate short document that could clamp scrollY upward.
   files.style.height = `${Math.ceil(layout.totalHeight)}px`;
   internalFilesMutation(() => files.replaceChildren(plane));
   document.querySelector('#top-scroll-sentinel')?.setAttribute('hidden','');
   document.querySelector('#scroll-sentinel')?.setAttribute('hidden','');
   measureViewport();
-  activating = false;
+  prepareViewport(savedY);
   scheduleRows();
 }
 
-function scheduleBuild(delay = 100, force = false) {
-  if (force) forceBuild = true;
+function scheduleBuild(delay = 80) {
   clearTimeout(buildTimer);
   buildTimer = setTimeout(build, delay);
 }
 
 function build() {
   buildTimer = 0;
-  if (!worker || !library || activating) return;
+  if (!worker || !library) return;
   const config = currentConfig();
   if (!config || !config.expectedCount) {
-    showLegacy();
+    if (!config) showLegacy();
     return;
   }
-  const key = geometryKey(config);
-  if (owned && layout?.key === key && !forceBuild) return;
-  if (interactionActive()) {
-    scheduleBuild(320, forceBuild);
-    return;
-  }
-  forceBuild = false;
   const nextGeneration = ++generation;
   worker.postMessage({ type:'build', generation:nextGeneration, config });
 }
@@ -511,58 +488,39 @@ function ensureIndex(index) {
   if (!owned || !layout) return false;
   const row = rowForIndex(Number(index));
   if (row < 0) return false;
-  const data = rowData.get(row);
-  if (data) renderRows([data]);
-  else fetchRows([row]).then(rows => renderRows(rows));
+  materializeRows([row]);
   return true;
 }
 
-async function scrollToIndex(index, block = 'center') {
+function scrollToIndex(index, block = 'center') {
   if (!owned || !layout) return false;
   const row = rowForIndex(Number(index));
   if (row < 0) return false;
-  const rows = await fetchRows([row]);
-  if (!owned || !rows.length) return false;
-  renderRows(rows);
   measureViewport();
   const top = filesDocumentTop + Number(layout.rowTops[row] || 0);
   const height = Number(layout.rowHeights[row] || 0);
   let target = top - viewportTop;
   if (block === 'center') target -= Math.max(0, (viewportHeight - height) / 2);
   else if (block === 'end') target -= Math.max(0, viewportHeight - height);
-  scrollTo({ top:Math.max(0, target), left:0, behavior:'auto' });
+  target = Math.max(0, target);
+  prepareViewport(target);
+  scrollTo({ top:target, left:0, behavior:'auto' });
   scheduleRows();
   return true;
-}
-
-async function warmViewport(scrollTop) {
-  if (!owned || !layout) return;
-  const local = localYForScroll(scrollTop);
-  const rows = rowRange(layout, Math.max(0, local - viewportHeight * 2), Math.min(layout.totalHeight, local + viewportHeight * 4));
-  const data = await fetchRows(rows);
-  if (!owned) return;
-  renderRows(data);
-  const cards = [];
-  for (const row of rows) {
-    const element = renderedRows.get(row);
-    if (element) cards.push(...element.querySelectorAll('[data-hash]'));
-  }
-  if (cards.length) window.mochimonoThumbnails?.prioritize?.(cards);
 }
 
 function installRail() {
   if (!rail || rail.dataset.stableRail) return;
   rail.dataset.stableRail = '1';
   const indexFromEvent = event => {
-    const state = rawState();
-    if (!state?.filtered) return 0;
+    if (!layout?.count) return 0;
     const rect = rail.getBoundingClientRect();
-    return Math.round(Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height))) * (state.filtered - 1));
+    return Math.round(Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height))) * (layout.count - 1));
   };
   const move = (event, final = false) => {
     const index = indexFromEvent(event);
     const now = performance.now();
-    if (final || now - lastRailScrubAt > 45) {
+    if (final || now - lastRailScrubAt > 35) {
       lastRailScrubAt = now;
       scrollToIndex(index, 'center');
     }
@@ -607,104 +565,113 @@ function installLibrary() {
   nativeExtend = library.extend.bind(library);
   nativeEnsureIndex = library.ensureIndex.bind(library);
   nativeRemove = library.remove?.bind(library);
+  nativeFilteredHashes = library.filteredHashes?.bind(library);
 
   library.state = () => {
     const state = nativeState();
-    return owned ? { ...state, offset:0, loaded:state.filtered, hasMore:false, hasPrevious:false, stableGrid:true } : state;
+    return owned && layout
+      ? { ...state, offset:0, loaded:layout.count, filtered:layout.count, hasMore:false, hasPrevious:false, stableGrid:true }
+      : state;
   };
   library.extend = direction => owned ? false : nativeExtend(direction);
   library.ensureIndex = index => owned ? ensureIndex(Number(index)) : nativeEnsureIndex(index);
+  if (nativeFilteredHashes) library.filteredHashes = () => owned && layout ? layout.items.map(item => item[0]) : nativeFilteredHashes();
   if (nativeRemove) library.remove = hashes => {
     const result = nativeRemove(hashes);
-    scheduleBuild(80, true);
+    scheduleBuild(60);
     return result;
   };
   installRail();
-  scheduleBuild(0, true);
+  scheduleBuild(0);
 }
 
 worker?.addEventListener('message', event => {
   const message = event.data || {};
-  if (message.type === 'rows' || message.type === 'located') {
-    const resolve = requestWaiters.get(Number(message.requestId));
-    if (resolve) {
-      requestWaiters.delete(Number(message.requestId));
-      resolve(message);
-    }
-    return;
-  }
   if (Number(message.generation) !== generation) return;
-  if (message.type === 'unavailable' || message.type === 'error') {
-    scheduleBuild(500, true);
+  if (message.type === 'error') {
+    console.warn('Stable grid geometry build failed.', message.message || 'unknown error');
     return;
   }
   if (message.type !== 'ready') return;
   const config = currentConfig();
-  if (!config || message.version !== config.version) {
-    scheduleBuild(500, true);
-    return;
-  }
-  activate({
+  if (!config) return;
+  const nextLayout = {
     generation:Number(message.generation),
     key:geometryKey(config),
-    version:String(message.version),
-    count:Number(message.count),
+    version:String(message.version || ''),
+    count:Number(message.count) || 0,
     totalHeight:Number(message.totalHeight) || 1,
     rowStarts:message.rowStarts,
     rowCounts:message.rowCounts,
     rowTops:message.rowTops,
     rowHeights:message.rowHeights,
     itemRows:message.itemRows,
+    itemX:message.itemX,
+    itemW:message.itemW,
     headers:message.headers || [],
-    dayStarts:message.dayStarts || []
-  });
+    dayStarts:message.dayStarts || [],
+    items:message.items || []
+  };
+
+  // First ownership is installed immediately even if the user is already
+  // scrolling. Waiting for an "idle" gap meant holding PageDown could prevent
+  // the stable grid from ever activating. Refresh swaps can wait until idle.
+  if (!owned) installLayout(nextLayout);
+  else if (interactionActive()) pendingLayout = nextLayout;
+  else installLayout(nextLayout);
 });
 
 function releaseBeforeUnsupportedChange() {
-  if (!owned) return;
-  showLegacy();
+  if (owned) showLegacy();
 }
 
 searchInput?.addEventListener('input', () => {
   if (String(searchInput.value || '').trim()) releaseBeforeUnsupportedChange();
-  else scheduleBuild(80, true);
+  else scheduleBuild(60);
 }, true);
 collectionSelect?.addEventListener('change', () => {
   if (String(collectionSelect.value || '')) releaseBeforeUnsupportedChange();
-  else scheduleBuild(30, true);
+  else scheduleBuild(30);
 }, true);
 views?.addEventListener('click', event => {
   const button = event.target.closest('[data-view]');
   if (button?.dataset.view && button.dataset.view !== 'grid') releaseBeforeUnsupportedChange();
-  else if (button?.dataset.view === 'grid') setTimeout(() => scheduleBuild(20, true), 0);
+  else if (button?.dataset.view === 'grid') setTimeout(() => scheduleBuild(10), 0);
 }, true);
 for (const control of [typeSelect,sortSelect,sourceSelect,locationSelect]) {
-  control?.addEventListener('change', () => setTimeout(() => scheduleBuild(20, true), 0));
+  control?.addEventListener('change', () => setTimeout(() => scheduleBuild(10), 0));
 }
 
-window.addEventListener('mochimono:media-size', () => scheduleBuild(70, true));
-window.addEventListener('mochimono:catalog-cache-restored', () => scheduleBuild(30, true));
+window.addEventListener('mochimono:media-size', () => scheduleBuild(40));
+window.addEventListener('mochimono:catalog-cache-restored', () => scheduleBuild(10));
 window.addEventListener('mochimono:catalog-updated', () => {
   pendingCatalogRefresh = true;
   measureViewport();
-  if (localYForScroll() < viewportHeight * .65 && !interactionActive()) {
+  if (!owned || (localYForScroll() < viewportHeight * .65 && !interactionActive())) {
     pendingCatalogRefresh = false;
-    scheduleBuild(180, true);
+    scheduleBuild(100);
   }
 });
 window.addEventListener('mochimono:folder-changed', () => {
   const config = currentConfig();
   if (!config) showLegacy();
-  else scheduleBuild(50, true);
+  else scheduleBuild(30);
 });
 window.addEventListener('mochimono:grid-interaction-end', () => {
+  if (pendingLayout) installLayout(pendingLayout);
   scheduleRows();
   scheduleTrim();
   if (pendingCatalogRefresh && localYForScroll() < viewportHeight * .65) {
     pendingCatalogRefresh = false;
-    scheduleBuild(120, true);
+    scheduleBuild(80);
   }
 });
+window.addEventListener('wheel', event => {
+  if (!owned || !event.deltaY || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+  const unit = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? viewportHeight : 1;
+  const predicted = Math.max(0, scrollY + event.deltaY * unit);
+  prepareViewport(predicted);
+}, { passive:true, capture:true });
 window.addEventListener('scroll', () => {
   const y = scrollY;
   if (Math.abs(y - lastScrollY) > 1) scrollDirection = y > lastScrollY ? 1 : -1;
@@ -714,24 +681,24 @@ window.addEventListener('scroll', () => {
 }, { passive:true });
 window.addEventListener('resize', () => {
   measureViewport();
-  scheduleBuild(180, true);
+  scheduleBuild(120);
 }, { passive:true });
 
 window.mochimonoStableGrid = {
   active:() => owned,
   owns:() => owned,
+  count:() => layout?.count || 0,
   state:() => ({
     active:owned,
     generation,
     rows:layout?.rowTops?.length || 0,
     rendered:renderedRows.size,
-    cached:rowData.size,
-    fetching:fetchRunning,
     key:layout?.key || ''
   }),
   ensureIndex,
   scrollToIndex,
-  warmViewport
+  prepareViewport,
+  warmViewport:prepareViewport
 };
 
 installMutationFirewall();
