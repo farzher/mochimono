@@ -6,6 +6,7 @@ const CHECK_LIMIT = 320;
 const RECHECK_DELAY = CLIENT ? 140 : 500;
 const PRELOAD_MARGIN = Math.max(1600, Math.round(window.innerHeight * 4.75));
 const IMAGE_POOL_MAX = 1200;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 const states = new Map();
 const cardsByHash = new Map();
@@ -17,11 +18,17 @@ const preparedCards = new WeakSet();
 const imagePool = new Map();
 const externalQueue = new Map();
 const waitersByHash = new Map();
+const modelIndexes = new WeakMap();
 const browserFallback = CLIENT ? null : import('./browser-thumbnail-fallback.js').catch(() => null);
 
 let checkTimer = 0;
 let checkAt = 0;
 let checking = false;
+let geometryTimer = 0;
+let geometryAt = 0;
+let geometryDirty = false;
+let geometryAnchor = null;
+let lastScrollAt = 0;
 
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
@@ -66,6 +73,98 @@ function stateFor(hash) {
   return state;
 }
 
+function modelIndex(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.items)) return null;
+  let index = modelIndexes.get(snapshot);
+  if (!index) {
+    index = new Map(snapshot.items.map((item, position) => [String(item?.[0] || ''), position]));
+    modelIndexes.set(snapshot, index);
+  }
+  return index;
+}
+
+function applyKnownDimensions(snapshot) {
+  const index = modelIndex(snapshot);
+  if (!index) return 0;
+  let changed = 0;
+  for (const [hash, geometry] of dimensions) {
+    const position = index.get(hash);
+    if (!Number.isInteger(position)) continue;
+    const item = snapshot.items[position];
+    if (!item || (Number(item[3]) === geometry.width && Number(item[4]) === geometry.height)) continue;
+    item[3] = geometry.width;
+    item[4] = geometry.height;
+    changed++;
+  }
+  return changed;
+}
+
+function captureGeometryAnchor() {
+  if (!files || !window.mochimonoStableGrid?.active?.()) return null;
+  const top = (document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0) + 2;
+  let best = null;
+  let distance = Infinity;
+  for (const card of files.querySelectorAll('.stable-grid-row [data-hash]')) {
+    const rect = card.getBoundingClientRect();
+    if (rect.bottom <= top || rect.top >= innerHeight) continue;
+    const next = Math.abs(rect.top - top);
+    if (next >= distance) continue;
+    distance = next;
+    best = { hash:String(card.dataset.hash || ''), top:rect.top };
+  }
+  return best;
+}
+
+function geometryInteractionActive() {
+  return Boolean(window.mochimonoGridInteraction?.active?.()) ||
+    document.querySelector('#dateRail')?.classList.contains('dragging') ||
+    performance.now() - lastScrollAt < 420;
+}
+
+function scheduleGeometry(delay = 220) {
+  if (!geometryDirty) return;
+  const at = performance.now() + delay;
+  if (geometryTimer && geometryAt <= at) return;
+  if (geometryTimer) clearTimeout(geometryTimer);
+  geometryAt = at;
+  geometryTimer = setTimeout(flushGeometry, delay);
+}
+
+function flushGeometry() {
+  geometryTimer = 0;
+  geometryAt = 0;
+  if (!geometryDirty) return;
+  if (geometryInteractionActive()) {
+    scheduleGeometry(300);
+    return;
+  }
+
+  const snapshot = window.mochimonoGridModel;
+  const stable = window.mochimonoStableGrid;
+  if (!snapshot?.items?.length || !stable?.setModel) {
+    scheduleGeometry(300);
+    return;
+  }
+
+  applyKnownDimensions(snapshot);
+  geometryDirty = false;
+  geometryAnchor = captureGeometryAnchor();
+  stable.setModel(snapshot);
+}
+
+function updateGridDimensions(hash, width, height) {
+  const snapshot = window.mochimonoGridModel;
+  const position = modelIndex(snapshot)?.get(hash);
+  if (!Number.isInteger(position)) return false;
+  const item = snapshot.items[position];
+  if (!item || (Number(item[3]) === width && Number(item[4]) === height)) return false;
+  item[3] = width;
+  item[4] = height;
+  geometryDirty = true;
+  scheduleGeometry();
+  return true;
+}
+
 function applyDimensions(card, width, height) {
   width = Number(width) || 0;
   height = Number(height) || 0;
@@ -82,12 +181,15 @@ function rememberDimensions(hash, width, height) {
   if (!hash || width <= 0 || height <= 0) return;
 
   const previous = dimensions.get(hash);
-  if (previous?.width === width && previous?.height === height) return;
+  if (previous?.width === width && previous?.height === height) {
+    updateGridDimensions(hash, width, height);
+    return;
+  }
   dimensions.set(hash, { width, height });
 
   for (const card of cardsByHash.get(hash) || []) applyDimensions(card, width, height);
   try { window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height); } catch {}
-  try { window.mochimonoStableGrid?.updateDimensions?.(hash, width, height); } catch {}
+  updateGridDimensions(hash, width, height);
 }
 
 function indexCard(card) {
@@ -245,7 +347,7 @@ async function revealLoadedImage(hash, card, image, animate = true) {
   state.nextCheck = 0;
   state.nextTry = 0;
 
-  if (!animate || !visible(card) || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  if (!animate || !visible(card) || reduceMotion.matches) {
     image.style.removeProperty('transition');
     image.style.opacity = '1';
     return;
@@ -303,8 +405,6 @@ function paintCard(card, urgent = false) {
     return;
   }
 
-  // Never probe a thumbnail URL that the status endpoint has not declared ready.
-  // That old 404/retry path was one source of late wall-of-images flashes.
   if (!state.ready) {
     pending(card);
     state.nextCheck = Math.min(state.nextCheck || Infinity, now);
@@ -362,9 +462,6 @@ function cardCheckSet() {
   for (const card of prioritized) if (card?.isConnected) result.add(card);
   for (const card of nearby) if (card?.isConnected) result.add(card);
 
-  // Stable-grid has already paid to mount these rows. Start availability/generation
-  // for all of them, including while PageUp/PageDown is active, without allocating
-  // image nodes until the card enters the preload margin.
   if (viewer?.hidden !== false) {
     for (const card of mountedGridCards) if (card?.isConnected) result.add(card);
   }
@@ -652,7 +749,8 @@ window.mochimonoThumbnails = {
       pooled:imagePool.size,
       states:states.size,
       external:externalQueue.size,
-      checking
+      checking,
+      geometryDirty
     };
   }
 };
@@ -673,9 +771,39 @@ if (files) {
     }
   });
 
+  window.addEventListener('scroll', () => {
+    lastScrollAt = performance.now();
+    if (geometryDirty) scheduleGeometry(460);
+  }, { passive:true });
+
   window.addEventListener('mochimono:grid-interaction-end', () => {
     repairViewport();
     scheduleOutstanding();
+    if (geometryDirty) scheduleGeometry(220);
+  });
+
+  window.addEventListener('mochimono:grid-model', event => {
+    const snapshot = event.detail || window.mochimonoGridModel;
+    if (applyKnownDimensions(snapshot)) {
+      geometryDirty = true;
+      scheduleGeometry(220);
+    }
+  });
+
+  window.addEventListener('mochimono:stable-grid-installed', () => {
+    const restore = geometryAnchor;
+    geometryAnchor = null;
+    if (!restore?.hash) return;
+    const snapshot = window.mochimonoGridModel;
+    const index = modelIndex(snapshot)?.get(restore.hash);
+    if (!Number.isInteger(index)) return;
+    requestAnimationFrame(() => {
+      window.mochimonoStableGrid?.ensureIndex?.(index);
+      const card = files.querySelector(`[data-hash="${CSS.escape(restore.hash)}"]`);
+      if (!card) return;
+      const delta = card.getBoundingClientRect().top - restore.top;
+      if (Math.abs(delta) > .5) scrollBy(0, delta);
+    });
   });
 
   window.addEventListener('mochimono:catalog-updated', () => {
@@ -698,5 +826,6 @@ if (files) {
 
   addEventListener('beforeunload', () => {
     if (checkTimer) clearTimeout(checkTimer);
+    if (geometryTimer) clearTimeout(geometryTimer);
   }, { once:true });
 }
