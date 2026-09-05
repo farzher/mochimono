@@ -9,6 +9,9 @@ const MOUNT_BEHIND = 3.5;
 const KEEP_AHEAD = 8;
 const KEEP_BEHIND = 7;
 const RENDER_MARGIN = 1.35;
+const THUMB_AHEAD_SCREENS = 1.65;
+const THUMB_BEHIND_SCREENS = .35;
+const THUMB_PRIORITY_STEP = .28;
 
 const worker = typeof Worker === 'function'
   ? new Worker(new URL('./grid-layout-worker.js', import.meta.url))
@@ -27,6 +30,7 @@ let headerLayer = null;
 let dayLayer = null;
 let renderedRows = new Map();
 let renderFrame = 0;
+let thumbFrame = 0;
 let pendingTimer = 0;
 let resizeTimer = 0;
 let lastScrollY = scrollY;
@@ -37,6 +41,8 @@ let viewportHeight = Math.max(240, innerHeight);
 let filesDocumentTop = 0;
 let mountedStart = 0;
 let mountedEnd = 0;
+let lastThumbPriorityY = -Infinity;
+let lastThumbDirection = 1;
 let railScrub = false;
 let lastRailMove = 0;
 let railKey = '';
@@ -50,6 +56,7 @@ const metrics = {
   rowMounts:0,
   rowUnmounts:0,
   scrollFrames:0,
+  thumbPriorityUpdates:0,
   scrollCorrections:0,
   maxRenderedRows:0,
   lastWorkerBuildMs:0,
@@ -135,6 +142,49 @@ function rowsForScroll(targetLayout, scrollTop, aheadScreens, behindScreens, dir
     end:Math.min(targetLayout?.totalHeight || 0, end)
   };
   return { range, rows:rowRange(targetLayout, range.start, range.end) };
+}
+
+function thumbnailPriorityRange(scrollTop = scrollY) {
+  const top = localYForScroll(scrollTop);
+  const ahead = viewportHeight * THUMB_AHEAD_SCREENS;
+  const behind = viewportHeight * THUMB_BEHIND_SCREENS;
+  if (scrollDirection < 0) {
+    return {
+      top,
+      start:Math.max(0, top - ahead),
+      end:Math.min(layout?.totalHeight || 0, top + viewportHeight + behind)
+    };
+  }
+  return {
+    top,
+    start:Math.max(0, top - behind),
+    end:Math.min(layout?.totalHeight || 0, top + viewportHeight + ahead)
+  };
+}
+
+function syncThumbnailPriority(force = false) {
+  thumbFrame = 0;
+  if (!owned || !layout || !rowLayer?.isConnected) return;
+  const range = thumbnailPriorityRange();
+  if (!force && scrollDirection === lastThumbDirection && Math.abs(range.top - lastThumbPriorityY) < viewportHeight * THUMB_PRIORITY_STEP) return;
+
+  const cards = [];
+  for (const rowId of rowRange(layout, range.start, range.end)) {
+    const row = renderedRows.get(rowId);
+    if (!row) continue;
+    for (const card of row.querySelectorAll('.media-card[data-hash]')) cards.push(card);
+  }
+
+  window.mochimonoThumbnails?.prioritize?.(cards);
+  lastThumbPriorityY = range.top;
+  lastThumbDirection = scrollDirection;
+  metrics.thumbPriorityUpdates++;
+}
+
+function scheduleThumbnailPriority(force = false) {
+  if (!owned || !layout) return;
+  if (force && thumbFrame) cancelAnimationFrame(thumbFrame);
+  if (!thumbFrame) thumbFrame = requestAnimationFrame(() => syncThumbnailPriority(force));
 }
 
 function itemType(item) {
@@ -424,6 +474,7 @@ function renderCurrent() {
   materializeRows(windowRows.rows);
   mountedStart = windowRows.range.start;
   mountedEnd = windowRows.range.end;
+  syncThumbnailPriority(true);
   trimRows(scrollY);
   syncDayButtons(windowRows.range);
   updateRail();
@@ -497,6 +548,7 @@ function installLayout(nextLayout) {
   measureViewport();
   mountedStart = 0;
   mountedEnd = 0;
+  lastThumbPriorityY = -Infinity;
   ensureRailShell();
   scheduleRows(true);
   window.dispatchEvent(new CustomEvent('mochimono:stable-grid-installed'));
@@ -578,15 +630,19 @@ function release() {
   clearTimeout(pendingTimer);
   pendingTimer = 0;
   if (renderFrame) cancelAnimationFrame(renderFrame);
+  if (thumbFrame) cancelAnimationFrame(thumbFrame);
   renderFrame = 0;
+  thumbFrame = 0;
   owned = false;
   plane = null;
   rowLayer = null;
   headerLayer = null;
   dayLayer = null;
+  window.mochimonoThumbnails?.clearPriority?.();
   for (const element of renderedRows.values()) window.mochimonoThumbnails?.release?.(element);
   renderedRows.clear();
   railKey = '';
+  lastThumbPriorityY = -Infinity;
   document.documentElement.classList.remove('stable-grid-owned');
   files?.style.removeProperty('height');
   railScrub = false;
@@ -615,6 +671,7 @@ function scrollToIndex(index, block = 'center') {
   materializeRows(nearby.rows);
   window.scrollTo({ top:target, left:0, behavior:'auto' });
   scheduleRows(true);
+  scheduleThumbnailPriority(true);
   return true;
 }
 
@@ -714,6 +771,7 @@ window.addEventListener('scroll', () => {
   lastScrollY = y;
   lastScrollAt = performance.now();
   scheduleRows(false);
+  scheduleThumbnailPriority(false);
 }, { passive:true });
 
 window.addEventListener('resize', () => {
@@ -735,7 +793,10 @@ window.addEventListener('mochimono:grid-interaction-end', () => {
     pendingTimer = setTimeout(applyPendingLayout, 30);
   }
   scheduleRows(false);
+  scheduleThumbnailPriority(false);
 });
+
+window.addEventListener('mochimono:stable-grid-installed', () => scheduleThumbnailPriority(true));
 
 if (typeof ResizeObserver === 'function' && files) {
   new ResizeObserver(entries => {
@@ -758,6 +819,7 @@ window.mochimonoStableGrid = {
   ensureIndex,
   scrollToIndex,
   visibleIndex,
+  syncThumbnails:() => scheduleThumbnailPriority(true),
   state:() => ({
     active:owned,
     building,
