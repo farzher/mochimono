@@ -21,6 +21,7 @@ let filteredIndex = new Map();
 let imports = [];
 let sourceNames = new Map();
 let searchIndex = new Map();
+let searchIndexDirty = true;
 let locationSearch = new Map();
 let renderOffset = 0;
 let renderEnd = 0;
@@ -133,12 +134,17 @@ function viewerMedia(file, rapid = false) {
   return `<div class="viewer-file-icon">${preview(file)}</div>`;
 }
 
+function rememberFileDate(file) {
+  fileDates.set(file.hash, { fileDate: file.fileDate || file.createdAt, addedAt: file.addedAt || file.createdAt });
+  return file;
+}
+
 function normalizeFile(file) {
   const importIds = Array.isArray(file.importIds) ? file.importIds.map(Number).filter(Boolean) : String(file.importIds || '').split(',').map(Number).filter(Boolean);
   const exactImportIds = Array.isArray(file.exactImportIds) ? file.exactImportIds.map(Number).filter(Boolean) : String(file.exactImportIds || '').split(',').map(Number).filter(Boolean);
   const fileDate = new Date(file.fileDate || file.createdAt || 0);
   const addedDate = new Date(file.addedAt || file.createdAt || 0);
-  const normalized = {
+  return rememberFileDate({
     ...file,
     size: Number(file.size) || 0,
     width: Number(file.width) || 0,
@@ -149,18 +155,32 @@ function normalizeFile(file) {
     backupCount: Number(file.backupCount) || 0,
     dateMs: Number.isNaN(fileDate.getTime()) ? 0 : fileDate.getTime(),
     addedMs: Number.isNaN(addedDate.getTime()) ? 0 : addedDate.getTime()
-  };
-  fileDates.set(normalized.hash, { fileDate: normalized.fileDate || normalized.createdAt, addedAt: normalized.addedAt || normalized.createdAt });
-  return normalized;
+  });
+}
+
+function adoptCachedFile(file) {
+  if (!file || !Array.isArray(file.importIds) || !Array.isArray(file.exactImportIds) ||
+      !Number.isFinite(Number(file.dateMs)) || !Number.isFinite(Number(file.addedMs))) return normalizeFile(file || {});
+  return rememberFileDate(file);
+}
+
+function rebuildSearchIndex() {
+  searchIndex = new Map(catalog.map(file => [
+    file.hash,
+    `${buildSearchText(file, sourceNames)} ${locationSearch.get(file.hash) || ''}`.trim()
+  ]));
+  searchIndexDirty = false;
+}
+
+function ensureSearchIndex() {
+  if (searchIndexDirty) rebuildSearchIndex();
 }
 
 function rebuildIndexes() {
   catalogIndex = new Map(catalog.map((file, index) => [file.hash, index]));
   sourceNames = new Map(imports.map(item => [Number(item.id), String(item.sourceName || '')]));
-  searchIndex = new Map(catalog.map(file => [
-    file.hash,
-    `${buildSearchText(file, sourceNames)} ${locationSearch.get(file.hash) || ''}`.trim()
-  ]));
+  searchIndexDirty = true;
+  if (String($('#search')?.value || '').trim()) rebuildSearchIndex();
 }
 
 function catalogFile(hash) {
@@ -419,6 +439,7 @@ function sortFiles(items) {
 function applyFilters(reset = true, preserve = false, keepHash = '') {
   if (view === 'folders') return loadFolder();
   const terms = queryTerms($('#search').value, $('#source').options);
+  if (terms.length) ensureSearchIndex();
   const sourceId = Number(importId) || 0;
   const folderHashes = folderImportId && folderPath && folderData ? new Set(folderData.files.map(file => file.hash)) : null;
   filtered = sortFiles(catalog.filter(file => {
@@ -634,8 +655,9 @@ function installSnapshot(snapshot, preserve = false) {
   const anchor = preserve ? currentAnchor() : null;
   const keepHash = anchor?.hash || (!$('#viewer').hidden ? selected?.hash : '');
   const learned = new Map(catalog.filter(file => file.width && file.height).map(file => [file.hash, [file.width, file.height]]));
+  const cached = snapshot.normalized === true;
   catalog = (snapshot.files || []).map(raw => {
-    const file = normalizeFile(raw);
+    const file = cached ? adoptCachedFile(raw) : normalizeFile(raw);
     const dimensions = learned.get(file.hash);
     return dimensions && (!file.width || !file.height) ? { ...file, width: dimensions[0], height: dimensions[1] } : file;
   });
@@ -952,9 +974,10 @@ window.mochimonoLibrary = {
     applyFilters(true);
   },
   setLocationSearch(entries) {
-    const anchor = currentAnchor();
     locationSearch = entries instanceof Map ? entries : new Map(entries || []);
-    rebuildIndexes();
+    searchIndexDirty = true;
+    if (!String($('#search')?.value || '').trim()) return;
+    const anchor = currentAnchor();
     applyFilters(false, true, anchor?.hash || '');
   },
   upsert(file) { this.upsertMany(file ? [file] : []); },
@@ -1007,6 +1030,7 @@ window.mochimonoLibrary = {
     sort,
     locationFilter,
     version: catalogVersion,
+    searchIndexed:!searchIndexDirty,
     stableGrid:view === 'grid'
   })
 };
@@ -1019,7 +1043,7 @@ async function restoreLocalCatalog() {
     return null;
   });
   if (!snapshot?.files?.length) return false;
-  installSnapshot(snapshot, false);
+  installSnapshot({ ...snapshot, normalized:true }, false);
   window.dispatchEvent(new CustomEvent('mochimono:catalog-cache-restored', { detail: { count: catalog.length, version: catalogVersion } }));
   return true;
 }
