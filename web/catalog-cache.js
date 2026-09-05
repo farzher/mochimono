@@ -107,8 +107,9 @@ function quickSnapshot(value = meta) {
 async function readMeta(db) {
   if (!db) return null;
   const transaction = db.transaction('meta', 'readonly');
+  const done = transactionDone(transaction);
   const value = await requestResult(transaction.objectStore('meta').get(META_KEY)).catch(() => null);
-  await transactionDone(transaction).catch(() => {});
+  await done.catch(() => {});
   return validMeta(value) ? value : null;
 }
 
@@ -128,13 +129,14 @@ async function readFilesBatched(db, version) {
 
   while (true) {
     const transaction = db.transaction('files', 'readonly');
+    const done = transactionDone(transaction);
     const store = transaction.objectStore('files');
     const range = after == null ? undefined : IDBKeyRange.lowerBound(after, true);
     const [batch, keys] = await Promise.all([
       requestResult(store.getAll(range, READ_BATCH)),
       requestResult(store.getAllKeys(range, READ_BATCH))
     ]);
-    await transactionDone(transaction);
+    await done;
 
     for (const file of batch) {
       if (file?.__snapshot === version) files.push(publicFile(file));
@@ -220,9 +222,10 @@ async function saveNow(files, options = {}) {
 
   for (let offset = 0; offset < clean.length; offset += WRITE_BATCH) {
     const transaction = db.transaction('files', 'readwrite');
+    const done = transactionDone(transaction);
     const store = transaction.objectStore('files');
     for (const file of clean.slice(offset, offset + WRITE_BATCH)) store.put({ ...file, __snapshot: version });
-    await transactionDone(transaction);
+    await done;
     await idle();
   }
 
@@ -237,8 +240,9 @@ async function saveNow(files, options = {}) {
   };
   {
     const transaction = db.transaction('meta', 'readwrite');
+    const done = transactionDone(transaction);
     transaction.objectStore('meta').put(nextMeta);
-    await transactionDone(transaction);
+    await done;
   }
 
   meta = nextMeta;
@@ -255,6 +259,7 @@ async function cleanupOldSnapshots(version) {
   const db = await openDb();
   if (!db || meta?.version !== version) return;
   const transaction = db.transaction('files', 'readwrite');
+  const done = transactionDone(transaction);
   const store = transaction.objectStore('files');
   await new Promise((resolve, reject) => {
     const request = store.openCursor();
@@ -266,7 +271,7 @@ async function cleanupOldSnapshots(version) {
       cursor.continue();
     };
   });
-  await transactionDone(transaction);
+  await done;
 }
 
 function scheduleGeometryWrite() {
@@ -294,6 +299,7 @@ async function flushDimensionsNow() {
   if (!db) return;
 
   const transaction = db.transaction(['files', 'meta'], 'readwrite');
+  const done = transactionDone(transaction);
   const store = transaction.objectStore('files');
   const changed = new Map();
   for (const [hash, geometry] of batch) {
@@ -316,7 +322,7 @@ async function flushDimensionsNow() {
     transaction.objectStore('meta').put(meta);
   }
 
-  await transactionDone(transaction).catch(() => {});
+  await done.catch(() => {});
   if (pendingGeometry.size) scheduleGeometryWrite();
 }
 
@@ -347,9 +353,10 @@ async function clearNow() {
   const db = await openDb();
   if (!db) return;
   const transaction = db.transaction(['files', 'meta'], 'readwrite');
+  const done = transactionDone(transaction);
   transaction.objectStore('files').clear();
   transaction.objectStore('meta').clear();
-  await transactionDone(transaction);
+  await done;
   meta = null;
   records.clear();
 }
