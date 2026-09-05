@@ -541,12 +541,12 @@ async function commit(mode) {
   if (committing || !session?.selected || session.status !== 'ready') return;
   if (mode === 'replace' && !confirm(`Replace ${session.filename} with the compressed ${session.selected.format.toUpperCase()}?\
 \
-Mochimono will make a max-effort final encode, verify it, then replace the original.`)) return;
+Mochimono will verify the preview you approved, then replace the original.`)) return;
   committing = true;
   keep.disabled = true;
   replace.disabled = true;
   setWorking(true);
-  status.textContent = session.selected.effort === 'max' ? 'Verifying and saving…' : 'Finalizing at max effort…';
+  status.textContent = 'Verifying and saving…';
   try {
     const data = await api('/api/image-optimize/commit', {
       method:'POST',
