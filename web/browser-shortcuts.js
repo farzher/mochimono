@@ -18,6 +18,7 @@ window.mochimonoViewerControls = { show: showControls, toggle: toggleControls };
 const zoom = { scale: 1, x: 0, y: 0 };
 const WHEEL_NAV_STEP = 100;
 const ZOOM_EXIT_GRACE_MS = 180;
+const MAX_NATIVE_SCALE = 4;
 const viewerPageKeys = new Set(['PageUp', 'PageDown', 'Home', 'End']);
 let navState = null;
 let pan = null;
@@ -30,6 +31,41 @@ const image = () => viewerMedia?.querySelector('img') || null;
 const zoomed = () => zoom.scale > 1.01;
 const touchZoomed = () => stage?.classList.contains('viewer-touch-zoomed');
 const currentViewerHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
+
+function pixelMetrics(current) {
+  if (!current || current.dataset.fullSrc || !current.naturalWidth || !current.naturalHeight) return null;
+  const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
+  const nativeWidth = current.naturalWidth / dpr;
+  const nativeHeight = current.naturalHeight / dpr;
+  const viewportWidth = stage?.clientWidth || innerWidth;
+  const viewportHeight = stage?.clientHeight || innerHeight;
+  if (!nativeWidth || !nativeHeight || !viewportWidth || !viewportHeight) return null;
+  const fit = Math.min(1, viewportWidth / nativeWidth, viewportHeight / nativeHeight);
+  return { dpr, nativeWidth, nativeHeight, fit };
+}
+
+function preparePixelImage(current) {
+  const metrics = pixelMetrics(current);
+  if (!metrics) return null;
+  current.style.width = `${metrics.nativeWidth}px`;
+  current.style.height = `${metrics.nativeHeight}px`;
+  current.style.maxWidth = 'none';
+  current.style.maxHeight = 'none';
+  current.style.objectFit = 'fill';
+  current.style.transformOrigin = '50% 50%';
+  current.style.imageRendering = 'auto';
+  return metrics;
+}
+
+function relativeMax(current) {
+  const metrics = pixelMetrics(current);
+  return metrics?.fit ? Math.max(1, MAX_NATIVE_SCALE / metrics.fit) : MAX_NATIVE_SCALE;
+}
+
+function displayedScale(current, relativeScale = zoom.scale) {
+  const metrics = pixelMetrics(current);
+  return metrics ? metrics.fit * relativeScale : relativeScale;
+}
 
 function viewerHashes() {
   const library = window.mochimonoLibrary;
@@ -71,11 +107,12 @@ function lockNavigation(locked) {
   }
 }
 
-function clampPan() {
+function clampPan(metrics = null) {
   const current = image();
   if (!current || !zoomed()) return { x: 0, y: 0 };
-  const maxX = Math.max(0, (current.clientWidth * zoom.scale - innerWidth) / 2);
-  const maxY = Math.max(0, (current.clientHeight * zoom.scale - innerHeight) / 2);
+  const scale = metrics ? metrics.fit * zoom.scale : zoom.scale;
+  const maxX = Math.max(0, (current.clientWidth * scale - innerWidth) / 2);
+  const maxY = Math.max(0, (current.clientHeight * scale - innerHeight) / 2);
   return {
     x: Math.max(-maxX, Math.min(maxX, zoom.x)),
     y: Math.max(-maxY, Math.min(maxY, zoom.y))
@@ -88,14 +125,20 @@ function applyZoom(animate = false) {
   stage?.classList.toggle('viewer-desktop-zoomed', active);
   lockNavigation(active);
   if (!current) return;
-  Object.assign(zoom, clampPan());
+
+  const metrics = preparePixelImage(current);
+  Object.assign(zoom, clampPan(metrics));
   current.style.transition = animate ? 'transform 160ms ease-out' : 'none';
-  current.style.transform = active ? `translate3d(${zoom.x}px,${zoom.y}px,0) scale(${zoom.scale})` : '';
+  if (metrics) {
+    const scale = metrics.fit * zoom.scale;
+    current.style.transform = `translate3d(${zoom.x}px,${zoom.y}px,0) scale(${scale})`;
+  } else {
+    current.style.transform = active ? `translate3d(${zoom.x}px,${zoom.y}px,0) scale(${zoom.scale})` : '';
+  }
   if (animate) setTimeout(() => { if (current.isConnected) current.style.transition = ''; }, 180);
 }
 
 function resetZoom(animate = false) {
-  if (!zoomed() && !zoom.x && !zoom.y && !pan && !navState && !stage?.classList.contains('viewer-desktop-panning')) return;
   zoom.scale = 1;
   zoom.x = 0;
   zoom.y = 0;
@@ -105,18 +148,23 @@ function resetZoom(animate = false) {
 }
 
 function naturalZoom(current) {
+  const metrics = preparePixelImage(current);
+  if (metrics) {
+    const nativeRelative = 1 / metrics.fit;
+    return nativeRelative > 1.01 ? nativeRelative : Math.min(relativeMax(current), 2.25);
+  }
   const scale = Math.max(
     Number(current.naturalWidth || 0) / Math.max(1, current.clientWidth),
     Number(current.naturalHeight || 0) / Math.max(1, current.clientHeight)
   );
-  return Math.max(2.25, Math.min(4, scale || 2.25));
+  return Math.max(2.25, Math.min(MAX_NATIVE_SCALE, scale || 2.25));
 }
 
 function setScaleAt(nextScale, clientX, clientY, animate = false) {
   const current = image();
   if (!current) return;
   const oldScale = zoom.scale;
-  const scale = Math.max(1, Math.min(4, nextScale));
+  const scale = Math.max(1, Math.min(relativeMax(current), nextScale));
   if (scale <= 1.01) return resetZoom(animate);
 
   const offsetX = clientX - innerWidth / 2;
@@ -136,6 +184,32 @@ function toggleZoom(clientX, clientY) {
   if (zoomed()) resetZoom(true);
   else setScaleAt(naturalZoom(current), clientX, clientY, true);
 }
+
+function bindCurrentImage() {
+  const current = image();
+  if (!current || current.dataset.pixelViewerBound === '1') return;
+  current.dataset.pixelViewerBound = '1';
+  current.addEventListener('load', () => {
+    if (!current.isConnected || current.dataset.fullSrc) return;
+    applyZoom();
+  });
+  if (current.complete && current.naturalWidth && !current.dataset.fullSrc) requestAnimationFrame(() => applyZoom());
+}
+
+window.mochimonoViewerPixelZoom = {
+  state() {
+    const current = image();
+    const metrics = pixelMetrics(current);
+    return {
+      relativeScale: zoom.scale,
+      scale: metrics ? metrics.fit * zoom.scale : displayedScale(current),
+      fit: metrics?.fit || 1,
+      x: zoom.x,
+      y: zoom.y,
+      ready: Boolean(metrics)
+    };
+  }
+};
 
 const activeUi = target => target?.closest?.('.viewer-nav,.viewer-bar,.viewer-collections,.viewer-info,dialog,video');
 const wheelUi = target => target?.closest?.('.viewer-nav,.viewer-bar,.viewer-collections,.viewer-info,dialog');
@@ -204,15 +278,8 @@ if (stage && viewer) {
       setScaleAt(zoom.scale * Math.exp(-event.deltaY * multiplier * (event.ctrlKey ? .006 : .0015)), event.clientX, event.clientY);
       if (!zoomed()) wheelNavigationBlockedUntil = performance.now() + ZOOM_EXIT_GRACE_MS;
     } else if (performance.now() < wheelNavigationBlockedUntil) {
-      // Consume the tail of the same wheel/trackpad gesture that just zoomed back
-      // to 1x. Without this tiny grace window, momentum from zoom-out immediately
-      // becomes a Next navigation event.
       wheelNavigationDelta = 0;
     } else {
-      // Browser pixel-wheel events are commonly about 100px per mouse-wheel notch;
-      // line-mode wheels are commonly three lines. Normalize both into the same
-      // accumulator so every event contributes and no timer/debounce can discard
-      // fast scrolling or high-resolution trackpad deltas.
       const multiplier = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? innerHeight : 1;
       wheelNavigationDelta += event.deltaY * multiplier;
       while (Math.abs(wheelNavigationDelta) >= WHEEL_NAV_STEP) {
@@ -271,15 +338,23 @@ if (stage && viewer) {
     event.stopImmediatePropagation();
   });
 
-  new MutationObserver(resetZoom).observe(viewerMedia, { childList: true });
+  new MutationObserver(() => {
+    resetZoom();
+    bindCurrentImage();
+  }).observe(viewerMedia, { childList: true });
   new MutationObserver(() => {
     document.documentElement.classList.toggle('viewer-open', !viewer.hidden);
     wheelNavigationDelta = 0;
     wheelNavigationBlockedUntil = 0;
     if (viewer.hidden) resetZoom();
-    else showControls();
+    else {
+      showControls();
+      bindCurrentImage();
+      applyZoom();
+    }
   }).observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
 
+  bindCurrentImage();
   document.documentElement.classList.toggle('viewer-open', !viewer.hidden);
-  window.addEventListener('resize', () => { if (zoomed()) applyZoom(); }, { passive: true });
+  window.addEventListener('resize', () => { if (!viewer.hidden && !touchZoomed()) applyZoom(); }, { passive: true });
 }
