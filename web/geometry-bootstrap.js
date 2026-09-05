@@ -1,5 +1,5 @@
 const BATCH_SIZE = 500;
-const CHECK_WORKERS = 6;
+const CHECK_WORKERS = 2;
 const RETRY_DELAY_MS = 180;
 const MAX_RETRIES = 5;
 
@@ -24,47 +24,47 @@ function mediaItem(item) {
   return type === 'image' || type === 'video';
 }
 
-function validGeometry(width, height) {
-  width = Number(width) || 0;
-  height = Number(height) || 0;
-  return width > 0 && height > 0 ? { width, height } : null;
+function hasGeometry(width, height) {
+  return Number(width) > 0 && Number(height) > 0;
 }
 
 function remember(hash, width, height, persist = true) {
   hash = String(hash || '');
-  const value = validGeometry(width, height);
-  if (!hash || !value) return false;
+  width = Number(width) || 0;
+  height = Number(height) || 0;
+  if (!hash || width <= 0 || height <= 0) return false;
   const previous = geometry.get(hash);
-  if (previous?.width === value.width && previous?.height === value.height) return false;
-  geometry.set(hash, value);
+  if (previous?.width === width && previous?.height === height) return false;
+  geometry.set(hash, { width, height });
   learned++;
   if (persist) {
-    try { originalRememberDimensions?.(hash, value.width, value.height); } catch {}
+    try { originalRememberDimensions?.(hash, width, height); } catch {}
   }
   return true;
 }
 
 function enrich(snapshot) {
-  if (!snapshot || !Array.isArray(snapshot.items)) return snapshot;
-  let changed = false;
-  const items = snapshot.items.map(item => {
-    if (!mediaItem(item) || validGeometry(item?.[3], item?.[4])) return item;
+  if (!snapshot || !Array.isArray(snapshot.items) || !geometry.size) return snapshot;
+  let items = null;
+  for (let index = 0; index < snapshot.items.length; index++) {
+    const item = snapshot.items[index];
+    if (!mediaItem(item) || hasGeometry(item?.[3], item?.[4])) continue;
     const known = geometry.get(String(item?.[0] || ''));
-    if (!known) return item;
-    changed = true;
+    if (!known) continue;
+    items ||= snapshot.items.slice();
     const copy = [...item];
     copy[3] = known.width;
     copy[4] = known.height;
-    return copy;
-  });
-  return changed ? { ...snapshot, items } : snapshot;
+    items[index] = copy;
+  }
+  return items ? { ...snapshot, items } : snapshot;
 }
 
 function missingHashes(snapshot) {
   const hashes = [];
   const seen = new Set();
   for (const item of snapshot?.items || []) {
-    if (!mediaItem(item) || validGeometry(item?.[3], item?.[4])) continue;
+    if (!mediaItem(item) || hasGeometry(item?.[3], item?.[4])) continue;
     const hash = String(item?.[0] || '');
     if (!hash || geometry.has(hash) || seen.has(hash)) continue;
     seen.add(hash);
@@ -97,10 +97,7 @@ async function checkAll(hashes) {
   for (let offset = 0; offset < hashes.length; offset += BATCH_SIZE) batches.push(hashes.slice(offset, offset + BATCH_SIZE));
   let cursor = 0;
   const workers = Array.from({ length:Math.min(CHECK_WORKERS, batches.length) }, async () => {
-    while (cursor < batches.length) {
-      const batch = batches[cursor++];
-      await checkBatch(batch);
-    }
+    while (cursor < batches.length) await checkBatch(batches[cursor++]);
   });
   await Promise.all(workers);
 }
@@ -138,8 +135,8 @@ async function prime(snapshot, token) {
     return;
   }
 
-  // This is a migration path for old catalogs. Wait for one fast status pass so
-  // already-indexed local/server previews never enter the worker with fake geometry.
+  // Migration path for old catalogs: one status pass happens before layout so
+  // already-generated local/server previews never enter the worker with fake geometry.
   await checkAll(missing);
   if (token !== generation || snapshot !== currentSnapshot) return;
   apply(snapshot);
