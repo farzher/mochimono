@@ -5,6 +5,7 @@ const DB_VERSION = 1;
 const SCHEMA = 1;
 const META_KEY = 'catalog';
 const WRITE_BATCH = 1500;
+const READ_BATCH = 1800;
 const QUICK_FILES = 200;
 
 let dbPromise = null;
@@ -30,6 +31,8 @@ const idle = () => new Promise(resolve => {
   if ('requestIdleCallback' in window) requestIdleCallback(() => resolve(), { timeout: 500 });
   else setTimeout(resolve, 0);
 });
+
+const paintTurn = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
 function enqueueWrite(work) {
   const run = () => work();
@@ -75,6 +78,10 @@ function mergeGeometry(file) {
   return { ...file, width: Number(previous.width), height: Number(previous.height) };
 }
 
+function validMeta(value) {
+  return Boolean(value && value.schema === SCHEMA && value.version);
+}
+
 function memorySnapshot() {
   if (!meta?.version || records.size !== Number(meta.count || 0)) return null;
   return {
@@ -85,37 +92,103 @@ function memorySnapshot() {
   };
 }
 
-async function loadFromDb() {
+function quickSnapshot(value = meta) {
+  if (!validMeta(value) || !Array.isArray(value.quickFiles) || !value.quickFiles.length) return null;
+  return {
+    version: String(value.version),
+    imports: Array.isArray(value.imports) ? value.imports : [],
+    files: value.quickFiles.map(file => publicFile(mergeGeometry(file))),
+    totalCount: Number(value.count) || value.quickFiles.length,
+    savedAt: Number(value.savedAt) || 0,
+    partial: true
+  };
+}
+
+async function readMeta(db) {
+  if (!db) return null;
+  const transaction = db.transaction('meta', 'readonly');
+  const value = await requestResult(transaction.objectStore('meta').get(META_KEY)).catch(() => null);
+  await transactionDone(transaction).catch(() => {});
+  return validMeta(value) ? value : null;
+}
+
+async function loadQuick() {
+  const memory = quickSnapshot();
+  if (memory) return memory;
+  const db = await openDb();
+  const storedMeta = await readMeta(db);
+  if (!storedMeta) return null;
+  meta = storedMeta;
+  return quickSnapshot(storedMeta);
+}
+
+async function readFilesBatched(db, version) {
+  const files = [];
+  let after = null;
+
+  while (true) {
+    const transaction = db.transaction('files', 'readonly');
+    const store = transaction.objectStore('files');
+    const range = after == null ? undefined : IDBKeyRange.lowerBound(after, true);
+    const [batch, keys] = await Promise.all([
+      requestResult(store.getAll(range, READ_BATCH)),
+      requestResult(store.getAllKeys(range, READ_BATCH))
+    ]);
+    await transactionDone(transaction);
+
+    for (const file of batch) {
+      if (file?.__snapshot === version) files.push(publicFile(file));
+    }
+    if (batch.length < READ_BATCH || !keys.length) break;
+    after = keys.at(-1);
+    await idle();
+  }
+
+  return files;
+}
+
+async function loadFromDb(knownMeta = null) {
   const db = await openDb();
   if (!db) return null;
-  const transaction = db.transaction(['files', 'meta']);
-  const done = transactionDone(transaction);
-  const [storedMeta, all] = await Promise.all([
-    requestResult(transaction.objectStore('meta').get(META_KEY)),
-    requestResult(transaction.objectStore('files').getAll())
-  ]);
-  await done;
-  if (!storedMeta || storedMeta.schema !== SCHEMA || !storedMeta.version) return null;
-  const files = all.filter(file => file.__snapshot === storedMeta.version).map(publicFile);
+  const storedMeta = validMeta(knownMeta) ? knownMeta : await readMeta(db);
+  if (!storedMeta) return null;
+
+  const files = await readFilesBatched(db, String(storedMeta.version));
   if (files.length !== Number(storedMeta.count || 0)) return null;
   meta = storedMeta;
   records = new Map(files.map(file => [String(file.hash), file]));
   return memorySnapshot();
 }
 
-async function waitForInstantGrid() {
-  const ready = window.mochimonoInstantGridReady;
-  if (!ready?.then) return;
-  try { await ready; } catch {}
+async function installQuickPreview(snapshot) {
+  if (!snapshot?.files?.length || !document.documentElement.classList.contains('client-library')) return false;
+  const library = window.mochimonoLibrary;
+  if (!library?.upsertMany || Number(library.state?.().total) > 0) return false;
+
+  library.upsertMany(snapshot.files);
+  const login = document.querySelector('#login');
+  const app = document.querySelector('#app');
+  const logout = document.querySelector('#logout');
+  if (login) login.hidden = true;
+  if (app) app.hidden = false;
+  if (logout) logout.hidden = false;
+  window.dispatchEvent(new CustomEvent('mochimono:catalog-quick-restored', {
+    detail: { count:snapshot.files.length, totalCount:snapshot.totalCount, version:snapshot.version }
+  }));
+  await paintTurn();
+  return true;
 }
 
 async function load() {
   const memory = memorySnapshot();
   if (memory) return memory;
   if (!loadPromise) {
-    // Let instant-grid finish its tiny quick read and paint before a 50k–100k
-    // record IndexedDB getAll monopolizes the main thread.
-    loadPromise = waitForInstantGrid().then(loadFromDb).finally(() => { loadPromise = null; });
+    loadPromise = (async () => {
+      const quick = await loadQuick().catch(() => null);
+      const painted = await installQuickPreview(quick).catch(() => false);
+      if (painted) await idle();
+      return loadFromDb(meta);
+    })().finally(() => { loadPromise = null; });
   }
   return loadPromise;
 }
@@ -232,9 +305,8 @@ async function flushDimensionsNow() {
     store.put({ ...next, __snapshot: meta?.version || '' });
   }
 
-  // instant-grid reads meta.quickFiles before the full catalog. Keep geometry in
-  // that tiny snapshot current too, otherwise the fast first paint falls back to
-  // 4:3 on every reload even though the full cached records know the real ratio.
+  // The quick startup snapshot is the first geometry source on reload. Keep it
+  // current so a learned ratio never falls back again on the next first paint.
   if (changed.size && meta?.version && Array.isArray(meta.quickFiles)) {
     const nextQuick = meta.quickFiles.map(file => {
       const geometry = changed.get(String(file.hash || ''));
@@ -284,6 +356,7 @@ async function clearNow() {
 
 window.mochimonoCatalogCache = {
   load,
+  loadQuick,
   save,
   rememberDimensions,
   clear,
