@@ -26,6 +26,13 @@ registerHooks({
   }
 });
 
+// Older Mochimono builds stored provider previews directly in provider-thumbs/.
+// The current cache is hash-bucketed. Repair that local cache in the background
+// so offline drives can keep using previews that were already generated.
+import('./lib/provider-thumb-cache-migration.js')
+  .then(({ migrateLegacyProviderThumbCache }) => migrateLegacyProviderThumbCache())
+  .catch(error => console.warn('Legacy provider thumbnail migration failed', error));
+
 const [
   { startThumbnailAgent },
   { startMediaMetadataAgent },
