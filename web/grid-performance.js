@@ -9,6 +9,7 @@ const PAGE_KEYS = new Set(['PageUp', 'PageDown', 'Home', 'End']);
 const VERTICAL_ARROWS = new Set(['ArrowUp', 'ArrowDown']);
 const RAPID_SCROLL_PAGES_PER_SECOND = 3;
 const RAPID_SCROLL_SETTLE_MS = 95;
+const RAPID_KEY_WATCHDOG_MS = 900;
 
 let active = false;
 let until = 0;
@@ -17,6 +18,7 @@ let lastThumbnailActivity = 0;
 let rapid = false;
 let rapidMode = '';
 let rapidTimer = 0;
+let keyWatchdog = 0;
 let velocityUntil = 0;
 let lastScrollY = scrollY;
 let lastScrollAt = performance.now();
@@ -78,6 +80,15 @@ function scheduleRapidCheck() {
   if (wait > 0) rapidTimer = setTimeout(syncRapid, wait + 4);
 }
 
+function installThumbnailGate() {
+  const thumbnails = window.mochimonoThumbnails;
+  if (!thumbnails?.prioritize || thumbnails.__rapidGridGate) return thumbnails;
+  const prioritize = thumbnails.prioritize.bind(thumbnails);
+  thumbnails.prioritize = cards => rapid ? undefined : prioritize(cards);
+  thumbnails.__rapidGridGate = true;
+  return thumbnails;
+}
+
 function syncRapid() {
   const next = wantedRapidMode();
   if (next) {
@@ -85,7 +96,7 @@ function syncRapid() {
     if (!rapid) {
       rapid = true;
       document.documentElement.classList.add('grid-fast-scroll-active');
-      window.mochimonoThumbnails?.clearPriority?.();
+      installThumbnailGate()?.clearPriority?.();
       window.dispatchEvent(new CustomEvent('mochimono:grid-fast-scroll-start', { detail:{ mode:next } }));
     }
     scheduleRapidCheck();
@@ -99,6 +110,24 @@ function syncRapid() {
   window.dispatchEvent(new CustomEvent('mochimono:grid-fast-scroll-end'));
 }
 
+function clearHeldNavigation() {
+  heldPageKeys.clear();
+  heldArrowKeys.clear();
+  arrowRepeated = false;
+  clearTimeout(keyWatchdog);
+  keyWatchdog = 0;
+}
+
+function armKeyWatchdog() {
+  clearTimeout(keyWatchdog);
+  keyWatchdog = setTimeout(() => {
+    keyWatchdog = 0;
+    clearHeldNavigation();
+    velocityUntil = Math.max(velocityUntil, performance.now() + 40);
+    syncRapid();
+  }, RAPID_KEY_WATCHDOG_MS);
+}
+
 function release() {
   if (active) {
     until = Math.min(until, performance.now() + 40);
@@ -106,25 +135,14 @@ function release() {
     timer = 0;
     schedule();
   }
-  heldPageKeys.clear();
-  heldArrowKeys.clear();
-  arrowRepeated = false;
+  clearHeldNavigation();
   velocityUntil = 0;
   clearTimeout(rapidTimer);
   rapidTimer = 0;
   syncRapid();
 }
 
-// Thumbnail priority is valuable while browsing normally but becomes active
-// churn during a held page/arrow key. Gate every caller in one place so stale
-// image requests are canceled at rapid-mode entry and no subsystem restarts
-// them until the navigation settles.
-const thumbnails = window.mochimonoThumbnails;
-if (thumbnails?.prioritize && !thumbnails.__rapidGridGate) {
-  const prioritize = thumbnails.prioritize.bind(thumbnails);
-  thumbnails.prioritize = cards => rapid ? undefined : prioritize(cards);
-  thumbnails.__rapidGridGate = true;
-}
+installThumbnailGate();
 
 window.mochimonoGridInteraction = {
   active:() => active,
@@ -153,8 +171,12 @@ window.addEventListener('scroll', () => {
 window.addEventListener('wheel', () => pulse(170), { passive:true, capture:true });
 
 document.addEventListener('keydown', event => {
+  if (viewer && !viewer.hidden) return;
+  if (event.target?.closest?.('input,select,textarea,[contenteditable="true"]')) return;
+
   if (PAGE_KEYS.has(event.key)) {
     heldPageKeys.add(event.key);
+    armKeyWatchdog();
     pulse(180);
     syncRapid();
     return;
@@ -162,6 +184,7 @@ document.addEventListener('keydown', event => {
   if (VERTICAL_ARROWS.has(event.key)) {
     heldArrowKeys.add(event.key);
     if (event.repeat) arrowRepeated = true;
+    armKeyWatchdog();
     pulse(180);
     syncRapid();
   }
@@ -175,6 +198,10 @@ document.addEventListener('keyup', event => {
     if (!heldArrowKeys.size) arrowRepeated = false;
   }
   if (PAGE_KEYS.has(event.key) || VERTICAL_ARROWS.has(event.key)) {
+    if (!heldPageKeys.size && !heldArrowKeys.size) {
+      clearTimeout(keyWatchdog);
+      keyWatchdog = 0;
+    }
     velocityUntil = Math.max(velocityUntil, now + 55);
     syncRapid();
   }
