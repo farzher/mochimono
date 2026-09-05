@@ -33,6 +33,9 @@ const idle = () => new Promise(resolve => {
 });
 
 const paintTurn = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+const startupStyle = document.createElement('style');
+startupStyle.textContent = 'html.mochimono-quick-grid-pending #files>.empty{visibility:hidden!important}';
+document.head.append(startupStyle);
 
 function enqueueWrite(work) {
   const run = () => work();
@@ -115,21 +118,17 @@ async function readMeta(db) {
 
 async function hydrateQuickSnapshot(db, snapshot) {
   if (!db || !snapshot?.files?.length) return snapshot;
-  const missing = snapshot.files
-    .map((file, index) => ({ file, index }))
-    .filter(({ file }) => !(Number(file.width) > 0 && Number(file.height) > 0));
-  if (!missing.length) return snapshot;
-
+  const targets = snapshot.files.map((file, index) => ({ file, index }));
   const transaction = db.transaction('files', 'readonly');
   const done = transactionDone(transaction);
   const store = transaction.objectStore('files');
-  const rows = await Promise.all(missing.map(({ file }) => requestResult(store.get(String(file.hash || ''))).catch(() => null)));
+  const rows = await Promise.all(targets.map(({ file }) => requestResult(store.get(String(file.hash || ''))).catch(() => null)));
   await done.catch(() => {});
 
   const files = [...snapshot.files];
   rows.forEach((stored, position) => {
     if (!stored || stored.__snapshot !== snapshot.version) return;
-    const target = missing[position];
+    const target = targets[position];
     files[target.index] = publicFile(mergeGeometry({ ...target.file, ...stored }));
   });
   return { ...snapshot, files };
@@ -206,15 +205,21 @@ async function installQuickPreview(snapshot) {
   const library = window.mochimonoLibrary;
   if (!library?.upsertMany || Number(library.state?.().total) > 0) return false;
 
-  library.upsertMany(snapshot.files);
-  await waitForQuickGrid();
-
   const login = document.querySelector('#login');
   const app = document.querySelector('#app');
   const logout = document.querySelector('#logout');
+  document.documentElement.classList.add('mochimono-quick-grid-pending');
   if (login) login.hidden = true;
   if (app) app.hidden = false;
   if (logout) logout.hidden = false;
+
+  try {
+    library.upsertMany(snapshot.files);
+    await waitForQuickGrid();
+  } finally {
+    document.documentElement.classList.remove('mochimono-quick-grid-pending');
+  }
+
   window.dispatchEvent(new CustomEvent('mochimono:catalog-quick-restored', {
     detail: { count:snapshot.files.length, totalCount:snapshot.totalCount, version:snapshot.version }
   }));
