@@ -129,9 +129,18 @@ function visibleCard(card) {
   return rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
 }
 
-function revealImage(card, image, animate) {
-  if (image.dataset.mochimonoRevealed === '1') return;
+async function revealImage(card, image, animate) {
+  if (image.dataset.mochimonoRevealed === '1' || image.dataset.mochimonoRevealing === '1') return;
+  image.dataset.mochimonoRevealing = '1';
+
+  // `load` only means the bytes arrived. Chromium can still expose a black box
+  // until decode/raster catches up. Keep a late image transparent until decode
+  // completes, then release it into the paint path.
+  if (image.decode) await image.decode().catch(() => {});
+  if (!image.isConnected) return;
+
   image.dataset.mochimonoRevealed = '1';
+  delete image.dataset.mochimonoRevealing;
 
   if (!animate || reduceMotion.matches || !visibleCard(card)) {
     image.style.removeProperty('transition');
@@ -139,17 +148,19 @@ function revealImage(card, image, animate) {
     return;
   }
 
-  // The image has been held at opacity:0 since before its pixels arrived. Move
-  // to 1 only after load so a genuinely late thumbnail fades instead of flashing.
-  image.style.transition = 'opacity 140ms ease-out';
+  image.style.transition = 'opacity 150ms ease-out';
   requestAnimationFrame(() => {
     if (!image.isConnected) return;
     image.style.opacity = '1';
+    image.style.transform = 'translateZ(0)';
+    requestAnimationFrame(() => {
+      if (image.isConnected) image.style.removeProperty('transform');
+    });
     setTimeout(() => {
       if (!image.isConnected) return;
       image.style.removeProperty('transition');
       image.style.removeProperty('opacity');
-    }, 170);
+    }, 180);
   });
 }
 
@@ -193,8 +204,8 @@ function bindImage(card, image, hash, owned = false) {
   image.dataset.mochimonoWarmBound = '1';
   const alreadyLoaded = image.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
 
-  // Hide pixels before load. The old Web Animation started after the image had
-  // already flashed onto the black card, which is why it looked like no fade.
+  // This must happen before load. Starting an animation from opacity after load
+  // is too late: the decoded pixels can flash for one frame first.
   if (!alreadyLoaded) {
     image.style.transition = 'none';
     image.style.opacity = '0';
@@ -335,9 +346,9 @@ async function runAvailability() {
       }
     }
 
-    // The desktop client queues local provider generation inside /api/thumbs/check.
-    // A direct server reports `missing`, so tell its thumbnail agent to prioritize
-    // those same overscan hashes before they become visible.
+    // Desktop /api/thumbs/check queues local provider generation itself. A
+    // direct server instead reports `missing`, so ask its agent to prioritize
+    // those mounted overscan hashes before they can become visible.
     if (request.length) {
       fetch('/api/thumbs/request', {
         method:'POST',
@@ -351,9 +362,6 @@ async function runAvailability() {
       if (!mountedCards.has(hash)) continue;
       const state = availabilityState(hash);
       state.nextCheck = retry;
-      // If the check path is temporarily unavailable, let near rows still try
-      // the immutable thumbnail URL so an already-cached image is not withheld.
-      primeReadyHash(hash);
     }
   } finally {
     availabilityChecking = false;
@@ -415,6 +423,7 @@ function registerRow(row) {
 
 function unregisterRow(row) {
   if (!(row instanceof Element)) return;
+  registeredRows.delete(row);
   rowObserver?.unobserve(row);
   nearRows.delete(row);
   for (const card of row.querySelectorAll('.media-card[data-hash]')) unregisterCard(card);
