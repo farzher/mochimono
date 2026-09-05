@@ -2,14 +2,21 @@ const ROW_GAP = 4;
 
 let latestGeneration = 0;
 
-function mediaRatio(item) {
+function mediaRatio(item, diagnostics) {
   const type = String(item?.[2] || '');
   if (type !== 'image' && type !== 'video') return 4 / 3;
   const width = Number(item?.[3]) || 0;
   const height = Number(item?.[4]) || 0;
-  if (width <= 0 || height <= 0) return 4 / 3;
+  if (width <= 0 || height <= 0) {
+    diagnostics.missingMediaDimensions++;
+    return 4 / 3;
+  }
   const ratio = width / height;
-  return Number.isFinite(ratio) && ratio > 0 ? ratio : 4 / 3;
+  if (!Number.isFinite(ratio) || ratio <= 0) {
+    diagnostics.missingMediaDimensions++;
+    return 4 / 3;
+  }
+  return ratio;
 }
 
 function buildItemData(items) {
@@ -18,20 +25,21 @@ function buildItemData(items) {
   const years = new Int32Array(count);
   const months = new Uint8Array(count);
   const days = new Uint8Array(count);
+  const diagnostics = { missingMediaDimensions:0 };
 
   for (let index = 0; index < count; index++) {
-    ratios[index] = mediaRatio(items[index]);
+    ratios[index] = mediaRatio(items[index], diagnostics);
     const date = new Date(Number(items[index]?.[5]) || 0);
     years[index] = date.getFullYear();
     months[index] = date.getMonth();
     days[index] = date.getDate();
   }
-  return { ratios, years, months, days };
+  return { ratios, years, months, days, diagnostics };
 }
 
 function layoutItems(items, config) {
   const started = performance.now();
-  const { ratios, years, months, days } = buildItemData(items);
+  const { ratios, years, months, days, diagnostics } = buildItemData(items);
   const count = items.length;
   const width = Math.max(200, Number(config.width) || 1000);
   const target = Math.max(72, Number(config.target) || 170);
@@ -171,6 +179,7 @@ function layoutItems(items, config) {
     itemW,
     headers,
     dayStarts,
+    missingMediaDimensions:diagnostics.missingMediaDimensions,
     buildMs:performance.now() - started
   };
 }
@@ -206,6 +215,7 @@ self.onmessage = event => {
       itemW:geometry.itemW,
       headers:geometry.headers,
       dayStarts:geometry.dayStarts,
+      missingMediaDimensions:geometry.missingMediaDimensions,
       buildMs:geometry.buildMs
     }, transfer);
   } catch (error) {
