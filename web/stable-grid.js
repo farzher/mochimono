@@ -34,6 +34,7 @@ let nativeFilteredHashes = null;
 let generation = 0;
 let layout = null;
 let pendingLayout = null;
+let pendingLayoutTimer = 0;
 let plane = null;
 let rowLayer = null;
 let headerLayer = null;
@@ -41,6 +42,9 @@ let dayLayer = null;
 let renderedRows = new Map();
 let owned = false;
 let buildTimer = 0;
+let buildInFlight = false;
+let buildKey = '';
+let rebuildQueued = false;
 let renderFrame = 0;
 let trimTimer = 0;
 let thumbWarmTimer = 0;
@@ -198,10 +202,9 @@ function installMutationFirewall() {
   };
 }
 
-// The old virtual grid still schedules anchor repairs after background upserts.
-// Once this grid owns a fixed-height plane those repairs are always wrong. Native
-// wheel/touch scrolling does not call window.scrollBy, so suppress only scripted
-// repairs while owned.
+// Native wheel/touch scrolling never calls this API. While the fixed-height grid
+// owns the page, any scripted scrollBy is a legacy anchor repair and must not be
+// allowed to fight the user's scroll position.
 window.scrollBy = (...args) => owned ? undefined : nativeScrollBy(...args);
 
 function dayInfo(ms) {
@@ -417,6 +420,8 @@ function showLegacy() {
   if (!owned) return;
   owned = false;
   pendingLayout = null;
+  clearTimeout(pendingLayoutTimer);
+  pendingLayoutTimer = 0;
   document.documentElement.classList.remove('stable-grid-owned');
   files.style.removeProperty('height');
   clearTimeout(trimTimer);
@@ -430,11 +435,26 @@ function showLegacy() {
   renderedRows.clear();
 }
 
+function applyPendingLayout() {
+  pendingLayoutTimer = 0;
+  if (!pendingLayout) return;
+  const wait = 220 - (performance.now() - lastScrollAt);
+  if (window.mochimonoGridInteraction?.active?.() || wait > 0) {
+    pendingLayoutTimer = setTimeout(applyPendingLayout, Math.max(40, wait + 10));
+    return;
+  }
+  const next = pendingLayout;
+  pendingLayout = null;
+  installLayout(next);
+}
+
 function installLayout(nextLayout) {
   const config = currentConfig();
   if (!config || nextLayout.key !== geometryKey(config)) return;
   if (owned && interactionActive()) {
     pendingLayout = nextLayout;
+    clearTimeout(pendingLayoutTimer);
+    pendingLayoutTimer = setTimeout(applyPendingLayout, 240);
     return;
   }
 
@@ -451,8 +471,8 @@ function installLayout(nextLayout) {
   pendingLayout = null;
   document.documentElement.classList.add('stable-grid-owned');
   files.className = 'files grid stable-grid-files';
-  // Set the final document height before replacing children. There is never an
-  // intermediate short document that could clamp scrollY upward.
+  // Set final document height before replacing children, so the browser never
+  // sees a short intermediate document that can clamp scrollY upward.
   files.style.height = `${Math.ceil(layout.totalHeight)}px`;
   internalFilesMutation(() => files.replaceChildren(plane));
   document.querySelector('#top-scroll-sentinel')?.setAttribute('hidden','');
@@ -475,6 +495,13 @@ function build() {
     if (!config) showLegacy();
     return;
   }
+  if (buildInFlight) {
+    rebuildQueued = true;
+    return;
+  }
+  buildInFlight = true;
+  rebuildQueued = false;
+  buildKey = geometryKey(config);
   const nextGeneration = ++generation;
   worker.postMessage({ type:'build', generation:nextGeneration, config });
 }
@@ -588,16 +615,28 @@ function installLibrary() {
 worker?.addEventListener('message', event => {
   const message = event.data || {};
   if (Number(message.generation) !== generation) return;
+  buildInFlight = false;
+
+  const config = currentConfig();
+  const currentKey = geometryKey(config);
   if (message.type === 'error') {
     console.warn('Stable grid geometry build failed.', message.message || 'unknown error');
+    if (rebuildQueued) {
+      rebuildQueued = false;
+      scheduleBuild(120);
+    } else scheduleBuild(700);
     return;
   }
   if (message.type !== 'ready') return;
-  const config = currentConfig();
-  if (!config) return;
+  if (!config || buildKey !== currentKey) {
+    rebuildQueued = false;
+    scheduleBuild(0);
+    return;
+  }
+
   const nextLayout = {
     generation:Number(message.generation),
-    key:geometryKey(config),
+    key:buildKey,
     version:String(message.version || ''),
     count:Number(message.count) || 0,
     totalHeight:Number(message.totalHeight) || 1,
@@ -613,12 +652,25 @@ worker?.addEventListener('message', event => {
     items:message.items || []
   };
 
-  // First ownership is installed immediately even if the user is already
-  // scrolling. Waiting for an "idle" gap meant holding PageDown could prevent
-  // the stable grid from ever activating. Refresh swaps can wait until idle.
+  // First ownership is installed immediately even during active PageDown/wheel
+  // input. The old implementation waited for idle, so continuous input could
+  // prevent the stable grid from ever becoming active.
   if (!owned) installLayout(nextLayout);
-  else if (interactionActive()) pendingLayout = nextLayout;
-  else installLayout(nextLayout);
+  else if (interactionActive()) {
+    pendingLayout = nextLayout;
+    clearTimeout(pendingLayoutTimer);
+    pendingLayoutTimer = setTimeout(applyPendingLayout, 240);
+  } else installLayout(nextLayout);
+
+  if (rebuildQueued) {
+    rebuildQueued = false;
+    pendingCatalogRefresh = true;
+    measureViewport();
+    if (!owned || (localYForScroll() < viewportHeight * .65 && !interactionActive())) {
+      pendingCatalogRefresh = false;
+      scheduleBuild(220);
+    }
+  }
 });
 
 function releaseBeforeUnsupportedChange() {
@@ -658,7 +710,10 @@ window.addEventListener('mochimono:folder-changed', () => {
   else scheduleBuild(30);
 });
 window.addEventListener('mochimono:grid-interaction-end', () => {
-  if (pendingLayout) installLayout(pendingLayout);
+  if (pendingLayout) {
+    clearTimeout(pendingLayoutTimer);
+    pendingLayoutTimer = setTimeout(applyPendingLayout, 80);
+  }
   scheduleRows();
   scheduleTrim();
   if (pendingCatalogRefresh && localYForScroll() < viewportHeight * .65) {
@@ -669,8 +724,7 @@ window.addEventListener('mochimono:grid-interaction-end', () => {
 window.addEventListener('wheel', event => {
   if (!owned || !event.deltaY || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
   const unit = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? viewportHeight : 1;
-  const predicted = Math.max(0, scrollY + event.deltaY * unit);
-  prepareViewport(predicted);
+  prepareViewport(Math.max(0, scrollY + event.deltaY * unit));
 }, { passive:true, capture:true });
 window.addEventListener('scroll', () => {
   const y = scrollY;
@@ -690,6 +744,7 @@ window.mochimonoStableGrid = {
   count:() => layout?.count || 0,
   state:() => ({
     active:owned,
+    building:buildInFlight,
     generation,
     rows:layout?.rowTops?.length || 0,
     rendered:renderedRows.size,
