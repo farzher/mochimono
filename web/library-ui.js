@@ -334,9 +334,19 @@ new MutationObserver(syncMutationUi).observe(files, { childList: true });
 window.mochimonoSelection = {
   hashes: () => [...selected],
   clear: () => clearSelection(true),
-  count: () => selected.size
+  count: () => selected.size,
+  add(hashes) {
+    const values = [...new Set((hashes || []).map(String).filter(Boolean))];
+    if (!values.length) return selected.size;
+    selectionMode = true;
+    for (const hash of values) selected.add(hash);
+    anchorHash = '';
+    syncSelectionUi();
+    return selected.size;
+  }
 };
 
+import('./grid-drag-selection.js').catch(console.error);
 restoreUi();
 syncSelectionUi();
 scheduleTimeline();
