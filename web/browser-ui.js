@@ -5,6 +5,8 @@ import './viewer-grid-return.js';
 const files = document.querySelector('#files');
 const views = document.querySelector('#views');
 const folderbar = document.querySelector('#folderbar');
+const viewer = document.querySelector('#viewer');
+const commandbar = document.querySelector('.commandbar');
 
 const currentView = () => views.querySelector('[data-view].active')?.dataset.view || 'grid';
 const syncLayoutMode = () => document.documentElement.classList.toggle('library-grid-view', currentView() === 'grid');
@@ -23,6 +25,22 @@ folderbar.addEventListener('click', event => {
     folderbar.replaceChildren();
   });
 });
+
+// Grid paging is application-owned. The search box intentionally starts focused,
+// and native PageUp/PageDown do not scroll the document while an input owns focus.
+// Handle the keys explicitly so paging works from first paint just like it does
+// after clicking the grid. Keep normal editing controls untouched; the empty
+// startup search box is the one exception.
+document.addEventListener('keydown', event => {
+  if ((event.key !== 'PageUp' && event.key !== 'PageDown') || !viewer?.hidden || !files?.classList.contains('grid')) return;
+  const control = event.target?.closest?.('input,select,textarea,[contenteditable="true"]');
+  if (control && !(control.id === 'search' && !control.value)) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const top = Math.max(0, commandbar?.getBoundingClientRect().bottom || 0);
+  const page = Math.max(240, innerHeight - top);
+  window.scrollBy({ top:(event.key === 'PageDown' ? 1 : -1) * page, left:0, behavior:'auto' });
+}, true);
 
 // Escape closes the top-most dialog before the viewer/application sees it.
 document.addEventListener('keydown', event => {
