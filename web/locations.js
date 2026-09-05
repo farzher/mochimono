@@ -2,6 +2,8 @@ import { normalizeText } from './search-query.js';
 
 const CLIENT = document.documentElement.classList.contains('client-library');
 const locationFilter = document.querySelector('#locationFilter');
+const search = document.querySelector('#search');
+const BACKGROUND_HYDRATE_DELAY = 10000;
 let locationData = null;
 let loading = null;
 let hydrateTimer = 0;
@@ -70,13 +72,30 @@ async function applyFilter() {
 
 locationFilter?.addEventListener('change', () => applyFilter().catch(() => {}));
 
+function scheduleBackgroundHydrate() {
+  if (!CLIENT || locationData || loading || hydrateTimer) return;
+  hydrateTimer = setTimeout(() => {
+    hydrateTimer = 0;
+    if (window.mochimonoGridInteraction?.active?.()) {
+      scheduleBackgroundHydrate();
+      return;
+    }
+    loadLocations().catch(() => {});
+  }, BACKGROUND_HYDRATE_DELAY);
+}
+
 if (CLIENT) {
-  // /api/client/locations can be tens of MB for a large library. It is useful for
-  // location search/filtering but not needed to paint or navigate the initial
-  // grid, so hydrate it after startup instead of competing with the catalog.
-  const hydrate = () => loadLocations().catch(() => {});
-  if ('requestIdleCallback' in window) requestIdleCallback(hydrate, { timeout: 5000 });
-  else hydrateTimer = setTimeout(hydrate, 2200);
+  // This payload can be tens of MB. requestIdleCallback is not a startup barrier:
+  // Chrome can call it almost immediately while network/catalog work is still on
+  // the critical path. Load locations immediately only when the user actually
+  // asks for location-aware filtering/search. Otherwise wait until the complete
+  // catalog has landed, then give the grid a long quiet window first.
+  search?.addEventListener('input', () => {
+    if (String(search.value || '').trim()) loadLocations().catch(() => {});
+  }, { passive:true });
+
+  window.addEventListener('mochimono:catalog-cache-restored', scheduleBackgroundHydrate, { once:true });
+  window.addEventListener('mochimono:catalog-updated', scheduleBackgroundHydrate, { once:true });
 }
 
 addEventListener('beforeunload', () => {

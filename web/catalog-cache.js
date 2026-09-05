@@ -5,9 +5,12 @@ const DB_VERSION = 1;
 const SCHEMA = 1;
 const META_KEY = 'catalog';
 const WRITE_BATCH = 1500;
-const READ_BATCH = 5000;
-const QUICK_FILES = 200;
-const QUICK_MEDIA = 240;
+const READ_PARALLELISM = 4;
+const HASH_PREFIXES = '0123456789abcdef';
+const QUICK_VERSION = 2;
+const QUICK_FILES = 600;
+const QUICK_MEDIA = 5000;
+const QUICK_UPGRADE_DELAY = 8000;
 const CLIENT = document.documentElement.classList.contains('client-library');
 
 let dbPromise = null;
@@ -16,6 +19,7 @@ let meta = null;
 let records = new Map();
 let pendingGeometry = new Map();
 let geometryJob = 0;
+let quickUpgradeJob = 0;
 let writeChain = Promise.resolve();
 let lastQuickLoadMs = 0;
 let lastFullLoadMs = 0;
@@ -95,7 +99,7 @@ function memorySnapshot() {
   return {
     version: String(meta.version),
     imports: Array.isArray(meta.imports) ? meta.imports : [],
-    files: [...records.values()].map(file => publicFile(mergeGeometry(file))),
+    files: [...records.values()].map(file => mergeGeometry(file)),
     savedAt: Number(meta.savedAt) || 0
   };
 }
@@ -105,7 +109,7 @@ function quickSnapshot(value = meta) {
   return {
     version: String(value.version),
     imports: Array.isArray(value.imports) ? value.imports : [],
-    files: value.quickFiles.map(file => publicFile(mergeGeometry(file))),
+    files: value.quickFiles.map(file => mergeGeometry(file)),
     totalCount: Number(value.count) || value.quickFiles.length,
     savedAt: Number(value.savedAt) || 0,
     partial: true
@@ -121,24 +125,6 @@ async function readMeta(db) {
   return validMeta(value) ? value : null;
 }
 
-async function hydrateQuickSnapshot(db, snapshot) {
-  if (!db || !snapshot?.files?.length) return snapshot;
-  const targets = snapshot.files.map((file, index) => ({ file, index }));
-  const transaction = db.transaction('files', 'readonly');
-  const done = transactionDone(transaction);
-  const store = transaction.objectStore('files');
-  const rows = await Promise.all(targets.map(({ file }) => requestResult(store.get(String(file.hash || ''))).catch(() => null)));
-  await done.catch(() => {});
-
-  const files = [...snapshot.files];
-  rows.forEach((stored, position) => {
-    if (!stored || stored.__snapshot !== snapshot.version) return;
-    const target = targets[position];
-    files[target.index] = publicFile(mergeGeometry({ ...target.file, ...stored }));
-  });
-  return { ...snapshot, files };
-}
-
 async function loadQuick() {
   const started = performance.now();
   const db = await openDb();
@@ -146,35 +132,73 @@ async function loadQuick() {
   const storedMeta = validMeta(meta) ? meta : await readMeta(db);
   if (!storedMeta) return null;
   meta = storedMeta;
-  const snapshot = await hydrateQuickSnapshot(db, quickSnapshot(storedMeta));
+
+  // quickFiles is already a self-contained saved snapshot, and geometry writes
+  // update the same metadata record. Re-reading every quick hash individually
+  // added hundreds/thousands of IndexedDB requests before first paint for no gain.
+  const snapshot = quickSnapshot(storedMeta);
   lastQuickLoadMs = performance.now() - started;
   return snapshot;
 }
 
-async function readFilesBatched(db, version) {
+async function readPrefix(db, prefix, version) {
+  const transaction = db.transaction('files', 'readonly');
+  const done = transactionDone(transaction);
+  const store = transaction.objectStore('files');
+  const range = IDBKeyRange.bound(prefix, `${prefix}\uffff`);
+  const rows = await requestResult(store.getAll(range));
+  await done;
+
   const files = [];
-  let after = null;
-
-  while (true) {
-    const transaction = db.transaction('files', 'readonly');
-    const done = transactionDone(transaction);
-    const store = transaction.objectStore('files');
-    const range = after == null ? undefined : IDBKeyRange.lowerBound(after, true);
-    const batch = await requestResult(store.getAll(range, READ_BATCH));
-    await done;
-
-    for (const file of batch) {
-      if (file?.__snapshot === version) files.push(publicFile(file));
-    }
-    if (batch.length < READ_BATCH) break;
-    after = String(batch.at(-1)?.hash || '');
-    if (!after) break;
-    // IndexedDB requests are already asynchronous and yield to the event loop.
-    // Do not add requestIdleCallback sleeps here: on large libraries those waits
-    // turned an otherwise local cache read into several seconds of startup delay.
+  for (const file of rows) {
+    if (file?.__snapshot !== version) continue;
+    // IndexedDB returned a fresh mutable object. Strip the internal marker in
+    // place instead of allocating one complete duplicate of the whole catalog.
+    delete file.__snapshot;
+    files.push(file);
   }
-
   return files;
+}
+
+async function readFilesParallel(db, version) {
+  const files = [];
+  let cursor = 0;
+  const workers = Array.from({ length:READ_PARALLELISM }, async () => {
+    while (cursor < HASH_PREFIXES.length) {
+      const prefix = HASH_PREFIXES[cursor++];
+      files.push(...await readPrefix(db, prefix, version));
+    }
+  });
+  await Promise.all(workers);
+  return files;
+}
+
+function scheduleQuickUpgrade(files, storedMeta) {
+  if (!validMeta(storedMeta) || Number(storedMeta.quickVersion) === QUICK_VERSION || quickUpgradeJob) return;
+  const run = () => {
+    quickUpgradeJob = 0;
+    // This is a one-time local migration and sorts the complete catalog. Do not
+    // trust requestIdleCallback here: Chrome can call it during cold startup.
+    // Wait for a real quiet period and keep backing off while the user navigates.
+    if (window.mochimonoGridInteraction?.state?.().active) {
+      quickUpgradeJob = setTimeout(run, 2000);
+      return;
+    }
+    enqueueWrite(() => upgradeQuickMeta(files, storedMeta)).catch(() => {});
+  };
+  quickUpgradeJob = setTimeout(run, QUICK_UPGRADE_DELAY);
+}
+
+async function upgradeQuickMeta(files, expectedMeta) {
+  if (!validMeta(meta) || meta.version !== expectedMeta.version) return;
+  const db = await openDb();
+  if (!db || meta.version !== expectedMeta.version) return;
+  const nextMeta = { ...meta, quickVersion:QUICK_VERSION, quickFiles:quickFiles(files) };
+  const transaction = db.transaction('meta', 'readwrite');
+  const done = transactionDone(transaction);
+  transaction.objectStore('meta').put(nextMeta);
+  await done;
+  if (meta?.version === nextMeta.version) meta = nextMeta;
 }
 
 async function loadFromDb(knownMeta = null) {
@@ -184,12 +208,29 @@ async function loadFromDb(knownMeta = null) {
   const storedMeta = validMeta(knownMeta) ? knownMeta : await readMeta(db);
   if (!storedMeta) return null;
 
-  const files = await readFilesBatched(db, String(storedMeta.version));
+  const files = await readFilesParallel(db, String(storedMeta.version));
   if (files.length !== Number(storedMeta.count || 0)) return null;
   meta = storedMeta;
-  records = new Map(files.map(file => [String(file.hash), file]));
+
+  const nextRecords = new Map();
+  for (let index = 0; index < files.length; index++) {
+    const file = mergeGeometry(files[index]);
+    files[index] = file;
+    nextRecords.set(String(file.hash), file);
+  }
+  records = nextRecords;
   lastFullLoadMs = performance.now() - started;
-  return memorySnapshot();
+  scheduleQuickUpgrade(files, storedMeta);
+
+  // Return the already-loaded objects directly. The old path rebuilt another
+  // full array of cloned objects through memorySnapshot() immediately before
+  // library-app normalized them yet again.
+  return {
+    version:String(storedMeta.version),
+    imports:Array.isArray(storedMeta.imports) ? storedMeta.imports : [],
+    files,
+    savedAt:Number(storedMeta.savedAt) || 0
+  };
 }
 
 function waitForQuickGrid() {
@@ -205,7 +246,10 @@ function waitForQuickGrid() {
       paintTurn().then(resolve);
     };
     const onGrid = () => finish();
-    const timer = setTimeout(finish, 140);
+    // Keep the temporary startup empty state hidden long enough for the quick
+    // worker geometry to actually arrive. The old 140ms timeout exposed
+    // "No files" while a valid quick layout was still being built.
+    const timer = setTimeout(finish, 900);
     window.addEventListener('mochimono:stable-grid-installed', onGrid, { once:true });
   });
 }
@@ -255,8 +299,9 @@ async function load() {
         document.documentElement.classList.remove('mochimono-quick-grid-pending');
         return false;
       });
-      // waitForQuickGrid already guarantees the quick grid had a paint turn. Start
-      // restoring the full local catalog immediately instead of waiting for idle.
+      // The quick grid has had a paint turn. Hydrate the complete local catalog
+      // immediately, but do it with parallel readonly ranges rather than a long
+      // chain of sequential transactions.
       return loadFromDb(meta);
     })().finally(() => { loadPromise = null; });
   }
@@ -317,6 +362,7 @@ async function saveNow(files, options = {}) {
     version,
     imports: Array.isArray(options.imports) ? options.imports : [],
     count: clean.length,
+    quickVersion: QUICK_VERSION,
     quickFiles: quickFiles(clean),
     savedAt: Date.now()
   };
@@ -425,6 +471,10 @@ function clear() {
     else clearTimeout(geometryJob);
     geometryJob = 0;
   }
+  if (quickUpgradeJob) {
+    clearTimeout(quickUpgradeJob);
+    quickUpgradeJob = 0;
+  }
   pendingGeometry.clear();
   document.documentElement.classList.remove('mochimono-quick-grid-pending');
   return enqueueWrite(clearNow);
@@ -451,6 +501,8 @@ window.mochimonoCatalogCache = {
   state: () => ({
     version: meta?.version || '',
     count: records.size,
+    quickCount:Array.isArray(meta?.quickFiles) ? meta.quickFiles.length : 0,
+    quickVersion:Number(meta?.quickVersion) || 0,
     savedAt: Number(meta?.savedAt) || 0,
     quickLoadMs:Math.round(lastQuickLoadMs * 10) / 10,
     fullLoadMs:Math.round(lastFullLoadMs * 10) / 10
