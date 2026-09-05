@@ -5,7 +5,7 @@ const THUMB_VERSION = 3;
 const CHECK_LIMIT = 320;
 const RECHECK_DELAY = CLIENT ? 140 : 500;
 const PRELOAD_MARGIN = Math.max(1600, Math.round(window.innerHeight * 4.75));
-const IMAGE_POOL_MAX = 1200;
+const IMAGE_POOL_MAX = 512;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 const states = new Map();
@@ -459,12 +459,11 @@ function scheduleCheck(delay = 50) {
 
 function cardCheckSet() {
   const result = new Set();
+  if (viewer?.hidden === false) return result;
+
   for (const card of prioritized) if (card?.isConnected) result.add(card);
   for (const card of nearby) if (card?.isConnected) result.add(card);
-
-  if (viewer?.hidden !== false) {
-    for (const card of mountedGridCards) if (card?.isConnected) result.add(card);
-  }
+  for (const card of mountedGridCards) if (card?.isConnected) result.add(card);
   return result;
 }
 
