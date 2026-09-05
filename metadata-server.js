@@ -229,9 +229,11 @@ export async function handleMetadata(req, res, url) {
       INSERT INTO media_metadata(object_hash, captured_at, source, width, height, geometry_checked, checked_at)
       VALUES(?, ?, ?, ?, ?, 1, ?)
       ON CONFLICT(object_hash) DO UPDATE SET
-        captured_at=excluded.captured_at, source=excluded.source,
-        width=excluded.width, height=excluded.height, geometry_checked=1,
-        checked_at=excluded.checked_at
+        captured_at=COALESCE(excluded.captured_at, media_metadata.captured_at),
+        source=CASE WHEN excluded.captured_at IS NOT NULL THEN excluded.source ELSE media_metadata.source END,
+        width=CASE WHEN excluded.width > 0 THEN excluded.width ELSE media_metadata.width END,
+        height=CASE WHEN excluded.height > 0 THEN excluded.height ELSE media_metadata.height END,
+        geometry_checked=1, checked_at=excluded.checked_at
     `).run(hash, capturedAt, source, width, height, now());
     json(res, 200, { ok: true, hash, capturedAt, source, width, height });
     return true;
