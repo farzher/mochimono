@@ -1,5 +1,6 @@
+import './stable-grid.js';
+
 const files = document.querySelector('#files');
-const viewer = document.querySelector('#viewer');
 const sizeInput = document.querySelector('#mediaSize');
 const sizeButtons = [...document.querySelectorAll('[data-media-size]')];
 const sizes = sizeButtons.map(button => Number(button.dataset.mediaSize));
@@ -7,28 +8,23 @@ const pendingGrids = new Set();
 const deferredLabelGrids = new Set();
 const ROW_CLASS = 'justified-media-row';
 const GRID_CLASS = 'justified-row-grid';
-const GUARD_SCREENS = 2.25;
-const MIN_GUARD_PX = 900;
 let frame = 0;
 let fullLayout = false;
 let lastFilesWidth = 0;
-let guardFrame = 0;
-let guardDirection = 1;
-let lastScrollY = window.scrollY;
-let ignoreNextScrollDirection = false;
 
 const style = document.createElement('style');
 style.textContent = `
 .files.grid .date-grid.${GRID_CLASS}{display:block!important;position:relative}
-.files.grid .date-grid.${GRID_CLASS}>.${ROW_CLASS}{display:flex;align-items:flex-start;gap:var(--mochimono-row-gap,4px);width:100%;margin:0 0 var(--mochimono-row-gap,4px);padding:0}
+.files.grid .date-grid.${GRID_CLASS}>.${ROW_CLASS}{display:flex;align-items:flex-start;gap:var(--mochimono-row-gap,4px);width:100%;margin:0 0 var(--mochimono-row-gap,4px);padding:0;overflow:hidden}
 .files.grid .date-grid.${GRID_CLASS}>.${ROW_CLASS}.last-layout-row{margin-bottom:0}
-.files.grid .date-grid.${GRID_CLASS}>.${ROW_CLASS}>.file-card{flex:none}
+.files.grid .date-grid.${GRID_CLASS}>.${ROW_CLASS}>.file-card{flex:none;min-width:0;max-width:none}
 .files.grid .date-grid.${GRID_CLASS}>.${ROW_CLASS}>.day-start{position:relative;overflow:visible}
 .files.grid .date-grid.${GRID_CLASS}>.${ROW_CLASS}>.day-start>.thumb{overflow:hidden;border-radius:3px}
 `;
 document.head.append(style);
 
-const mediaSize = () => Number(sizeInput.value) || 170;
+const stableOwns = () => Boolean(window.mochimonoStableGrid?.owns?.());
+const mediaSize = () => Number(sizeInput?.value) || 170;
 const px = value => `${Math.round(value * 100) / 100}px`;
 
 function syncSizeButtons() {
@@ -37,162 +33,101 @@ function syncSizeButtons() {
 }
 
 function setMediaSize(size) {
-  sizeInput.value = size;
-  sizeInput.dispatchEvent(new Event('input', { bubbles: true }));
+  if (!sizeInput) return;
+  sizeInput.value = String(size);
+  sizeInput.dispatchEvent(new Event('input', { bubbles:true }));
 }
 
 function cardRatio(card) {
   const width = Number(card.dataset.width) || 0;
   const height = Number(card.dataset.height) || 0;
-  return width && height ? Math.max(.65, Math.min(2.1, width / height)) : 1;
+  return width && height ? Math.max(.65, Math.min(2.1, width / height)) : 4 / 3;
 }
 
-function setPx(card, property, value) {
-  const next = px(value);
-  if (card.style.getPropertyValue(property) !== next) card.style.setProperty(property, next);
-}
-
-function setRow(cards, width, target, fill, gap) {
-  if (!cards.length) return;
-  const ratios = cards.map(cardRatio);
-  const sum = ratios.reduce((total, ratio) => total + ratio, 0);
-  const filledHeight = (width - gap * (cards.length - 1)) / sum;
-  const height = fill ? filledHeight : target;
-  cards.forEach((card, index) => {
-    const itemWidth = ratios[index] * height;
-    setPx(card, 'width', itemWidth);
-    setPx(card, 'height', height);
-    setPx(card, 'flex-basis', itemWidth);
-  });
-}
-
-function shouldFillLastRow(cards, width, target, gap) {
-  if (cards.length < 2) return false;
-  const ratioSum = cards.reduce((sum, card) => sum + cardRatio(card), 0);
-  return (width - gap * (cards.length - 1)) / ratioSum <= target * 1.42;
+function idealHeight(cards, width, gap) {
+  const sum = cards.reduce((total, card) => total + cardRatio(card), 0);
+  return (width - gap * Math.max(0, cards.length - 1)) / Math.max(.001, sum);
 }
 
 function rowPlans(cards, width, target, gap) {
+  const MAX_ROW_HEIGHT = target * 1.28;
+  const LAST_ROW_FILL_MAX = target * 1.16;
   const plans = [];
-  let row = [];
-  let ratioSum = 0;
+  let start = 0;
 
-  const finish = fill => {
-    if (!row.length) return;
-    plans.push({ cards: row, fill });
-    row = [];
-    ratioSum = 0;
-  };
-
-  for (const card of cards) {
-    const ratio = cardRatio(card);
-    const nextWidth = (ratioSum + ratio) * target + gap * row.length;
-    if (row.length && nextWidth >= width) {
-      const currentWidth = ratioSum * target + gap * (row.length - 1);
-      if (Math.abs(width - currentWidth) < Math.abs(nextWidth - width)) {
-        finish(true);
-        row = [card];
-        ratioSum = ratio;
-        continue;
+  while (start < cards.length) {
+    let sum = 0;
+    let previousHeight = Infinity;
+    let end = cards.length;
+    for (let index = start; index < cards.length; index++) {
+      sum += cardRatio(cards[index]);
+      const count = index - start + 1;
+      const height = (width - gap * Math.max(0, count - 1)) / Math.max(.001, sum);
+      if (count >= 2 && height <= target) {
+        if (count > 2 && previousHeight <= MAX_ROW_HEIGHT && Math.abs(previousHeight - target) < Math.abs(height - target)) end = index;
+        else end = index + 1;
+        break;
       }
-      row.push(card);
-      ratioSum += ratio;
-      finish(true);
-      continue;
+      previousHeight = height;
     }
-    row.push(card);
-    ratioSum += ratio;
-  }
 
-  if (row.length) finish(shouldFillLastRow(row, width, target, gap));
+    if (end >= cards.length) {
+      const row = cards.slice(start);
+      const ideal = idealHeight(row, width, gap);
+      plans.push({ cards:row, fill:row.length >= 2 && ideal >= target && ideal <= LAST_ROW_FILL_MAX });
+      break;
+    }
+
+    plans.push({ cards:cards.slice(start, end), fill:true });
+    start = end;
+  }
   return plans;
 }
 
-function rowFragment(plans, width, target, gap) {
+function applyRow(cards, width, target, gap, fill) {
+  if (!cards.length) return;
+  const ideal = idealHeight(cards, width, gap);
+  const naturalTargetWidth = cards.reduce((sum, card) => sum + cardRatio(card) * target, 0) + gap * Math.max(0, cards.length - 1);
+  const height = fill ? ideal : naturalTargetWidth > width ? Math.min(target, ideal) : target;
+  const safeHeight = Math.max(1, Math.min(target * 1.28, height));
+  let x = 0;
+
+  cards.forEach((card, index) => {
+    const last = index === cards.length - 1;
+    const naturalWidth = cardRatio(card) * safeHeight;
+    const remaining = Math.max(1, width - x);
+    const itemWidth = fill && last ? remaining : Math.min(naturalWidth, remaining);
+    card.style.width = px(itemWidth);
+    card.style.height = px(safeHeight);
+    card.style.flexBasis = px(itemWidth);
+    x += itemWidth + gap;
+  });
+}
+
+function rebuildGrid(grid) {
+  if (!grid?.isConnected || stableOwns() || !files.classList.contains('grid')) return;
+  const cards = [...grid.querySelectorAll('.file-card')];
+  if (!cards.length) return;
+  const width = grid.clientWidth;
+  if (!width) return;
+  const gap = parseFloat(getComputedStyle(grid).columnGap) || 4;
+  const target = mediaSize();
+  const plans = rowPlans(cards, width, target, gap);
   const fragment = document.createDocumentFragment();
-  for (const plan of plans) {
-    setRow(plan.cards, width, target, plan.fill, gap);
+
+  plans.forEach((plan, index) => {
+    applyRow(plan.cards, width, target, gap, plan.fill);
     const row = document.createElement('div');
-    row.className = ROW_CLASS;
+    row.className = `${ROW_CLASS}${index === plans.length - 1 ? ' last-layout-row' : ''}`;
     row.append(...plan.cards);
     fragment.append(row);
-  }
-  return fragment;
-}
+  });
 
-function syncLastRow(grid) {
-  const rows = [...grid.querySelectorAll(`:scope > .${ROW_CLASS}`)];
-  for (const row of rows) row.classList.remove('last-layout-row');
-  rows.at(-1)?.classList.add('last-layout-row');
-}
-
-function rebuildGrid(grid, cards, width, target, gap) {
-  const plans = rowPlans(cards, width, target, gap);
-  grid.replaceChildren(rowFragment(plans, width, target, gap));
+  grid.replaceChildren(fragment);
   grid.classList.add(GRID_CLASS);
   grid.style.setProperty('--mochimono-row-gap', `${gap}px`);
-  syncLastRow(grid);
-}
-
-function directCards(grid) {
-  return [...grid.children].filter(child => child.classList?.contains('file-card'));
-}
-
-function rowsIn(grid) {
-  return [...grid.children].filter(child => child.classList?.contains(ROW_CLASS));
-}
-
-function cleanupRows(grid) {
-  for (const row of rowsIn(grid)) if (!row.querySelector(':scope > .file-card')) row.remove();
-}
-
-function repackEdge(grid, direction, loose, width, target, gap) {
-  if (!loose.length) return;
-  const rows = rowsIn(grid);
-  const edge = direction < 0 ? rows[0] : rows.at(-1);
-  if (!edge) return rebuildGrid(grid, [...grid.querySelectorAll('.file-card')], width, target, gap);
-
-  const edgeCards = [...edge.querySelectorAll(':scope > .file-card')];
-  const cards = direction < 0 ? [...loose, ...edgeCards] : [...edgeCards, ...loose];
-  const marker = edge.nextSibling;
-  const fragment = rowFragment(rowPlans(cards, width, target, gap), width, target, gap);
-  edge.remove();
-
-  if (direction < 0) {
-    const firstRow = rowsIn(grid)[0];
-    grid.insertBefore(fragment, firstRow || grid.firstChild);
-  } else {
-    const safeMarker = marker?.isConnected && marker.parentElement === grid ? marker : grid.querySelector(':scope > .day-group-control');
-    grid.insertBefore(fragment, safeMarker || null);
-  }
-}
-
-function incrementalGrid(grid, width, target, gap) {
-  cleanupRows(grid);
-  const rows = rowsIn(grid);
-  const loose = directCards(grid);
-  if (!rows.length) return rebuildGrid(grid, [...grid.querySelectorAll('.file-card')], width, target, gap);
-  if (!loose.length) return syncLastRow(grid);
-
-  const children = [...grid.children];
-  const firstRowIndex = children.indexOf(rows[0]);
-  const lastRowIndex = children.indexOf(rows.at(-1));
-  const leading = [];
-  const trailing = [];
-  const middle = [];
-  for (const card of loose) {
-    const index = children.indexOf(card);
-    if (index < firstRowIndex) leading.push(card);
-    else if (index > lastRowIndex) trailing.push(card);
-    else middle.push(card);
-  }
-
-  if (middle.length) return rebuildGrid(grid, [...grid.querySelectorAll('.file-card')], width, target, gap);
-  if (leading.length) repackEdge(grid, -1, leading, width, target, gap);
-  if (trailing.length) repackEdge(grid, 1, trailing, width, target, gap);
-  grid.classList.add(GRID_CLASS);
-  grid.style.setProperty('--mochimono-row-gap', `${gap}px`);
-  syncLastRow(grid);
+  if (window.mochimonoGridInteraction?.active?.()) deferredLabelGrids.add(grid);
+  else syncDayLabels(grid);
 }
 
 function dayButton(key, label) {
@@ -207,7 +142,9 @@ function dayButton(key, label) {
   return button;
 }
 
-function syncDayLabels(grid, cards) {
+function syncDayLabels(grid) {
+  if (!grid?.isConnected || stableOwns()) return;
+  const cards = [...grid.querySelectorAll('.file-card')];
   if (!cards.length) return;
   for (const card of cards) card.classList.remove('day-start');
 
@@ -235,65 +172,10 @@ function syncDayLabels(grid, cards) {
     }
     used.add(key);
     const rect = card.getBoundingClientRect();
-    const left = px(rect.left - gridRect.left);
-    const top = px(rect.top - gridRect.top - 19);
-    if (button.style.left !== left) button.style.left = left;
-    if (button.style.top !== top) button.style.top = top;
+    button.style.left = px(rect.left - gridRect.left);
+    button.style.top = px(rect.top - gridRect.top - 19);
   }
   for (const [key, button] of existing) if (!used.has(key)) button.remove();
-}
-
-function layoutGrid(grid, rebuild = false) {
-  if (!grid?.isConnected || !files.classList.contains('grid')) return;
-  const cards = [...grid.querySelectorAll('.file-card')];
-  if (!cards.length) return;
-  const width = grid.clientWidth;
-  if (!width) return;
-  const gap = parseFloat(getComputedStyle(grid).columnGap) || 4;
-  const target = mediaSize();
-
-  if (rebuild || !grid.classList.contains(GRID_CLASS) || !rowsIn(grid).length) rebuildGrid(grid, cards, width, target, gap);
-  else incrementalGrid(grid, width, target, gap);
-
-  const ordered = [...grid.querySelectorAll('.file-card')];
-  if (window.mochimonoGridInteraction?.active?.()) {
-    deferredLabelGrids.add(grid);
-    return;
-  }
-  syncDayLabels(grid, ordered);
-}
-
-function layout() {
-  frame = 0;
-  if (!files.classList.contains('grid')) {
-    pendingGrids.clear();
-    fullLayout = false;
-    return;
-  }
-  const rebuild = fullLayout;
-  const grids = rebuild ? [...files.querySelectorAll('.date-grid')] : [...pendingGrids];
-  fullLayout = false;
-  pendingGrids.clear();
-  for (const grid of grids) layoutGrid(grid, rebuild);
-  window.dispatchEvent(new CustomEvent('mochimono:grid-laid-out'));
-}
-
-function schedule(grid) {
-  if (grid?.isConnected) pendingGrids.add(grid);
-  if (!frame) frame = requestAnimationFrame(layout);
-}
-
-function scheduleAll() {
-  fullLayout = true;
-  if (!frame) frame = requestAnimationFrame(layout);
-}
-
-function flushDeferredLabels() {
-  for (const grid of deferredLabelGrids) if (grid.isConnected) {
-    const cards = [...grid.querySelectorAll('.file-card')];
-    syncDayLabels(grid, cards);
-  }
-  deferredLabelGrids.clear();
 }
 
 function changedGrids(records) {
@@ -302,100 +184,71 @@ function changedGrids(records) {
     const targetGrid = record.target instanceof Element ? record.target.closest?.('.date-grid') : null;
     for (const node of [...record.addedNodes, ...record.removedNodes]) {
       if (!(node instanceof Element)) continue;
-      if (node.matches(`.file-card,.date-grid,.${ROW_CLASS}`) || node.querySelector?.('.file-card')) {
-        if (node.matches('.date-grid')) result.add(node);
-        else if (targetGrid) result.add(targetGrid);
-        node.querySelectorAll?.('.date-grid').forEach(grid => result.add(grid));
-      }
+      if (node.matches('.date-grid')) result.add(node);
+      else if (targetGrid && (node.matches('.file-card,.justified-media-row') || node.querySelector?.('.file-card'))) result.add(targetGrid);
+      node.querySelectorAll?.('.date-grid').forEach(grid => result.add(grid));
     }
   }
   return result;
 }
 
+function layout() {
+  frame = 0;
+  if (stableOwns() || !files.classList.contains('grid')) {
+    pendingGrids.clear();
+    fullLayout = false;
+    return;
+  }
+  const grids = fullLayout ? [...files.querySelectorAll('.date-grid')] : [...pendingGrids];
+  fullLayout = false;
+  pendingGrids.clear();
+  for (const grid of grids) rebuildGrid(grid);
+  window.dispatchEvent(new CustomEvent('mochimono:grid-laid-out'));
+}
+
+function schedule(grid) {
+  if (stableOwns()) return;
+  if (grid?.isConnected) pendingGrids.add(grid);
+  if (!frame) frame = requestAnimationFrame(layout);
+}
+
+function scheduleAll() {
+  if (stableOwns()) return;
+  fullLayout = true;
+  if (!frame) frame = requestAnimationFrame(layout);
+}
+
 function layoutNow() {
+  if (stableOwns()) return false;
   for (const grid of changedGrids(gridObserver.takeRecords())) if (grid.isConnected) pendingGrids.add(grid);
   if (!pendingGrids.size && !fullLayout) return false;
-  if (frame) {
-    cancelAnimationFrame(frame);
-    frame = 0;
-  }
+  if (frame) cancelAnimationFrame(frame);
+  frame = 0;
   layout();
   return true;
 }
 
-function visibleGuardAnchor() {
-  if (!files?.isConnected || window.scrollY <= 1) return null;
-  const top = Math.max(0, document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0);
-  const bounds = files.getBoundingClientRect();
-  const xs = [bounds.left + 8, (bounds.left + bounds.right) / 2, bounds.right - 8]
-    .map(x => Math.max(1, Math.min(innerWidth - 2, x)));
-  for (const y of [top + 2, top + 40, top + 80]) {
-    if (y >= innerHeight) break;
-    for (const x of xs) {
-      const card = document.elementFromPoint(x, y)?.closest?.('#files [data-hash]');
-      if (card) return { hash: card.dataset.hash, top: card.getBoundingClientRect().top };
-    }
+function flushDeferredLabels() {
+  if (stableOwns()) {
+    deferredLabelGrids.clear();
+    return;
   }
-  return null;
-}
-
-function restoreGuardAnchor(anchor) {
-  if (!anchor?.hash) return;
-  const card = files.querySelector(`[data-hash="${CSS.escape(anchor.hash)}"]`);
-  if (!card) return;
-  const delta = card.getBoundingClientRect().top - anchor.top;
-  if (Math.abs(delta) <= .5) return;
-  ignoreNextScrollDirection = true;
-  window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
-}
-
-function guardMargin() {
-  const top = Math.max(0, document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0);
-  return Math.max(MIN_GUARD_PX, Math.max(300, innerHeight - top) * GUARD_SCREENS);
-}
-
-function needsGuard(direction) {
-  const library = window.mochimonoLibrary;
-  const state = library?.state?.();
-  if (!state || state.view !== 'grid' || !files.classList.contains('grid') || (viewer && !viewer.hidden)) return false;
-  const margin = guardMargin();
-  if (direction < 0) {
-    if (!state.hasPrevious) return false;
-    const sentinel = document.querySelector('#top-scroll-sentinel');
-    return Boolean(sentinel && !sentinel.hidden && sentinel.getBoundingClientRect().bottom >= -margin);
-  }
-  if (!state.hasMore) return false;
-  const sentinel = document.querySelector('#scroll-sentinel');
-  return Boolean(sentinel && !sentinel.hidden && sentinel.getBoundingClientRect().top <= innerHeight + margin);
-}
-
-function fillGuard() {
-  guardFrame = 0;
-  if (!needsGuard(guardDirection)) return;
-  const anchor = visibleGuardAnchor();
-  if (!window.mochimonoLibrary?.extend?.(guardDirection)) return;
-  layoutNow();
-  guardFrame = requestAnimationFrame(fillGuard);
-  restoreGuardAnchor(anchor);
-}
-
-function scheduleGuard(direction = guardDirection) {
-  guardDirection = direction < 0 ? -1 : 1;
-  if (!guardFrame) guardFrame = requestAnimationFrame(fillGuard);
+  for (const grid of deferredLabelGrids) syncDayLabels(grid);
+  deferredLabelGrids.clear();
 }
 
 sizeButtons.forEach(button => button.addEventListener('click', () => setMediaSize(Number(button.dataset.mediaSize))));
 window.addEventListener('mochimono:media-size', () => {
   syncSizeButtons();
   scheduleAll();
-  scheduleGuard(guardDirection);
 });
 window.addEventListener('mochimono:grid-interaction-end', flushDeferredLabels);
 
 const gridObserver = new MutationObserver(records => {
+  if (stableOwns()) return;
   for (const grid of changedGrids(records)) schedule(grid);
 });
-gridObserver.observe(files, { childList: true, subtree: true });
+gridObserver.observe(files, { childList:true, subtree:true });
 
 window.mochimonoGallery = { layoutNow };
 
@@ -404,33 +257,10 @@ new ResizeObserver(entries => {
   if (!width || width === lastFilesWidth) return;
   lastFilesWidth = width;
   scheduleAll();
-  scheduleGuard(guardDirection);
 }).observe(files);
 
-window.addEventListener('wheel', event => {
-  if (!event.deltaY || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-  scheduleGuard(event.deltaY < 0 ? -1 : 1);
-}, { passive: true, capture: true });
-
-window.addEventListener('scroll', () => {
-  const next = window.scrollY;
-  if (ignoreNextScrollDirection) ignoreNextScrollDirection = false;
-  else if (Math.abs(next - lastScrollY) > 1) guardDirection = next < lastScrollY ? -1 : 1;
-  lastScrollY = next;
-  scheduleGuard(guardDirection);
-}, { passive: true });
-
-document.addEventListener('keydown', event => {
-  if (event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home') scheduleGuard(-1);
-  else if (event.key === 'ArrowDown' || event.key === 'PageDown' || event.key === 'End') scheduleGuard(1);
-}, true);
-
-window.addEventListener('mochimono:catalog-cache-restored', () => scheduleGuard(1));
-window.addEventListener('mochimono:catalog-updated', () => scheduleGuard(guardDirection));
-
 const saved = Number(localStorage.getItem('mochimono-media-size')) || 170;
-const nearest = sizes.reduce((best, size) => Math.abs(size - saved) < Math.abs(best - saved) ? size : best, sizes[0]);
-sizeInput.value = nearest;
+const nearest = sizes.length ? sizes.reduce((best, size) => Math.abs(size - saved) < Math.abs(best - saved) ? size : best, sizes[0]) : saved;
+if (sizeInput) sizeInput.value = String(nearest);
 syncSizeButtons();
 scheduleAll();
-requestAnimationFrame(() => scheduleGuard(1));
