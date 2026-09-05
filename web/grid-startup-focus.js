@@ -20,6 +20,10 @@ function claimStartupGridFocus() {
   if (settled || userTookFocus || !startupViewer?.hidden || !startupGrid?.classList.contains('grid')) return;
   settled = true;
   startupGrid.tabIndex = -1;
+  // The grid is focused only to give native PageUp/PageDown a keyboard target.
+  // It is not an interactive control itself, so suppress the browser's default
+  // focus ring here. Individual cards/buttons keep their own focus treatment.
+  startupGrid.style.outline = 'none';
   startupGrid.focus({ preventScroll:true });
 }
 
