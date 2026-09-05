@@ -3,7 +3,6 @@ const CATALOG_META_KEY = 'catalog';
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const VIDEO_EXTENSIONS = new Set(['m4v','mp4','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
 
-const sessions = new Map();
 let latestBuildGeneration = 0;
 
 const requestResult = request => new Promise((resolve, reject) => {
@@ -31,7 +30,7 @@ function openCatalog() {
   });
 }
 
-async function loadCatalog(version = '') {
+async function loadCachedCatalog() {
   const db = await openCatalog();
   if (!db) return null;
   try {
@@ -43,14 +42,42 @@ async function loadCatalog(version = '') {
       requestResult(transaction.objectStore('files').getAll())
     ]);
     await done;
-    const wanted = String(version || meta?.version || '');
-    if (!wanted || !meta?.version || String(meta.version) !== wanted) return null;
-    const files = all.filter(file => file?.__snapshot === wanted);
+    const version = String(meta?.version || '');
+    if (!version) return null;
+    const files = all.filter(file => file?.__snapshot === version);
     if (files.length !== Number(meta.count || 0)) return null;
-    return { version:wanted, files };
+    return { version, files };
+  } catch {
+    return null;
   } finally {
     try { db.close(); } catch {}
   }
+}
+
+async function loadRemoteCatalog() {
+  const files = [];
+  let after = '';
+  do {
+    const response = await fetch(`/api/catalog?limit=5000&after=${encodeURIComponent(after)}`, {
+      credentials:'same-origin',
+      cache:'no-store'
+    });
+    if (!response.ok) throw new Error(`Catalog request failed (${response.status})`);
+    const page = await response.json();
+    files.push(...(page.files || []));
+    after = String(page.nextAfter || '');
+  } while (after);
+
+  let version = '';
+  try {
+    const response = await fetch('/api/catalog/version', { credentials:'same-origin', cache:'no-store' });
+    if (response.ok) version = String((await response.json()).version || '');
+  } catch {}
+  return { version, files };
+}
+
+async function loadCatalog() {
+  return await loadCachedCatalog() || await loadRemoteCatalog();
 }
 
 function extension(name) {
@@ -109,18 +136,41 @@ function filterAndSort(files, config) {
   return result;
 }
 
-function ratio(file) {
-  const width = Number(file.width) || 0;
-  const height = Number(file.height) || 0;
-  return width && height ? Math.max(.65, Math.min(2.1, width / height)) : 4 / 3;
+function buildItemData(files, config) {
+  const count = files.length;
+  const ratios = new Float32Array(count);
+  const dates = new Float64Array(count);
+  const years = new Int32Array(count);
+  const months = new Uint8Array(count);
+  const days = new Uint8Array(count);
+  const items = new Array(count);
+
+  for (let index = 0; index < count; index++) {
+    const file = files[index];
+    const width = Number(file.width) || 0;
+    const height = Number(file.height) || 0;
+    ratios[index] = width && height ? Math.max(.65, Math.min(2.1, width / height)) : 4 / 3;
+    const ms = timelineMs(file, config.sort);
+    dates[index] = ms;
+    const date = new Date(ms || 0);
+    years[index] = date.getFullYear();
+    months[index] = date.getMonth();
+    days[index] = date.getDate();
+    items[index] = [
+      String(file.hash || ''),
+      String(file.filename || ''),
+      kind(file) === 'video' ? 1 : 0,
+      width,
+      height,
+      ms
+    ];
+  }
+  return { ratios, dates, years, months, days, items };
 }
 
-function dateParts(ms) {
-  const date = new Date(Number(ms) || 0);
-  return { year:date.getFullYear(), month:date.getMonth(), day:date.getDate() };
-}
-
-function layoutFiles(files, config) {
+function layoutFiles(data, config) {
+  const { ratios, years, months, days } = data;
+  const count = ratios.length;
   const width = Math.max(200, Number(config.width) || 1000);
   const target = Math.max(72, Number(config.target) || 170);
   const gap = Math.max(0, Number(config.gap) || 4);
@@ -136,52 +186,56 @@ function layoutFiles(files, config) {
   const rowCounts = [];
   const rowTops = [];
   const rowHeights = [];
-  const itemRows = new Uint32Array(files.length);
-  const itemX = new Float32Array(files.length);
-  const itemW = new Float32Array(files.length);
+  const itemRows = new Uint32Array(count);
+  const itemX = new Float32Array(count);
+  const itemW = new Float32Array(count);
   const headers = [];
   const dayStarts = [];
   let y = grouped ? 0 : FLAT_TOP;
   let previousYear = null;
   let previousDayKey = '';
 
-  function idealHeight(start, end) {
-    const count = end - start;
+  function ratioSum(start, end) {
     let sum = 0;
-    for (let index = start; index < end; index++) sum += ratio(files[index]);
-    return (width - gap * Math.max(0, count - 1)) / Math.max(.001, sum);
+    for (let index = start; index < end; index++) sum += ratios[index];
+    return sum;
+  }
+
+  function idealHeight(start, end) {
+    const n = end - start;
+    return (width - gap * Math.max(0, n - 1)) / Math.max(.001, ratioSum(start, end));
   }
 
   function finishRow(start, end, fill) {
-    const count = end - start;
-    if (!count) return;
-    const ideal = idealHeight(start, end);
-    const naturalAtTarget = files.slice(start, end).reduce((sum, file) => sum + ratio(file) * target, 0) + gap * Math.max(0, count - 1);
-    const height = fill
-      ? ideal
-      : naturalAtTarget > width ? Math.min(target, ideal) : target;
+    const n = end - start;
+    if (!n) return;
+    const sum = ratioSum(start, end);
+    const ideal = (width - gap * Math.max(0, n - 1)) / Math.max(.001, sum);
+    const naturalAtTarget = sum * target + gap * Math.max(0, n - 1);
+    const height = fill ? ideal : naturalAtTarget > width ? Math.min(target, ideal) : target;
     const safeHeight = Math.max(1, Math.min(MAX_ROW_HEIGHT, height));
     const row = rowStarts.length;
     rowStarts.push(start);
-    rowCounts.push(count);
+    rowCounts.push(n);
     rowTops.push(y);
     rowHeights.push(safeHeight);
 
     let x = 0;
     for (let index = start; index < end; index++) {
-      const isLast = index === end - 1;
-      const naturalWidth = ratio(files[index]) * safeHeight;
+      const last = index === end - 1;
+      const naturalWidth = ratios[index] * safeHeight;
       const remaining = Math.max(1, width - x);
-      const itemWidth = fill && isLast ? remaining : Math.min(naturalWidth, remaining);
+      const itemWidth = fill && last ? remaining : Math.min(naturalWidth, remaining);
       itemRows[index] = row;
       itemX[index] = x;
       itemW[index] = itemWidth;
 
-      const parts = dateParts(timelineMs(files[index], config.sort));
-      const dayKey = `${parts.year}-${parts.month + 1}-${parts.day}`;
-      if (grouped && dayKey !== previousDayKey) {
-        dayStarts.push({ index, row, x, top:y, year:parts.year, month:parts.month, day:parts.day });
-        previousDayKey = dayKey;
+      if (grouped) {
+        const key = `${years[index]}-${months[index] + 1}-${days[index]}`;
+        if (key !== previousDayKey) {
+          dayStarts.push({ index, row, x, top:y, year:years[index], month:months[index], day:days[index] });
+          previousDayKey = key;
+        }
       }
       x += itemWidth + gap;
     }
@@ -192,12 +246,11 @@ function layoutFiles(files, config) {
     let sum = 0;
     let previousHeight = Infinity;
     for (let index = start; index < end; index++) {
-      const nextRatio = ratio(files[index]);
-      sum += nextRatio;
-      const count = index - start + 1;
-      const height = (width - gap * Math.max(0, count - 1)) / Math.max(.001, sum);
-      if (count >= 2 && height <= target) {
-        if (count > 2 && previousHeight <= MAX_ROW_HEIGHT && Math.abs(previousHeight - target) < Math.abs(height - target)) return index;
+      sum += ratios[index];
+      const n = index - start + 1;
+      const height = (width - gap * Math.max(0, n - 1)) / Math.max(.001, sum);
+      if (n >= 2 && height <= target) {
+        if (n > 2 && previousHeight <= MAX_ROW_HEIGHT && Math.abs(previousHeight - target) < Math.abs(height - target)) return index;
         return index + 1;
       }
       previousHeight = height;
@@ -210,10 +263,9 @@ function layoutFiles(files, config) {
     while (rowStart < end) {
       const rowEnd = chooseFullRowEnd(rowStart, end);
       if (rowEnd >= end) {
-        const count = end - rowStart;
+        const n = end - rowStart;
         const ideal = idealHeight(rowStart, end);
-        const fillLast = count >= 2 && ideal >= target && ideal <= LAST_ROW_FILL_MAX;
-        finishRow(rowStart, end, fillLast);
+        finishRow(rowStart, end, n >= 2 && ideal >= target && ideal <= LAST_ROW_FILL_MAX);
         break;
       }
       finishRow(rowStart, rowEnd, true);
@@ -223,27 +275,24 @@ function layoutFiles(files, config) {
 
   if (grouped) {
     let start = 0;
-    while (start < files.length) {
-      const first = dateParts(timelineMs(files[start], config.sort));
+    while (start < count) {
+      const year = years[start];
+      const month = months[start];
       let end = start + 1;
-      while (end < files.length) {
-        const next = dateParts(timelineMs(files[end], config.sort));
-        if (next.year !== first.year || next.month !== first.month) break;
-        end++;
-      }
+      while (end < count && years[end] === year && months[end] === month) end++;
       y += GROUP_GAP;
-      if (first.year !== previousYear) {
-        headers.push({ kind:'year', year:first.year, month:first.month, top:y });
+      if (year !== previousYear) {
+        headers.push({ kind:'year', year, month, top:y });
         y += YEAR_HEIGHT;
-        previousYear = first.year;
+        previousYear = year;
       }
-      headers.push({ kind:'month', year:first.year, month:first.month, top:y });
+      headers.push({ kind:'month', year, month, top:y });
       y += MONTH_HEIGHT;
       layoutRange(start, end);
       start = end;
     }
   } else {
-    layoutRange(0, files.length);
+    layoutRange(0, count);
   }
 
   if (rowStarts.length) y -= gap;
@@ -266,33 +315,24 @@ function layoutFiles(files, config) {
 async function build(message) {
   const generation = Number(message.generation) || 0;
   const config = message.config || {};
-  const snapshot = await loadCatalog(config.version);
-  if (generation !== latestBuildGeneration) return;
-  if (!snapshot) {
-    postMessage({ type:'unavailable', generation });
-    return;
-  }
+  const snapshot = await loadCatalog();
+  if (generation !== latestBuildGeneration || !snapshot) return;
 
   const files = filterAndSort(snapshot.files, config);
   if (generation !== latestBuildGeneration) return;
-  const geometry = layoutFiles(files, config);
+  const data = buildItemData(files, config);
+  const geometry = layoutFiles(data, config);
   if (generation !== latestBuildGeneration) return;
 
-  const hashIndex = new Map(files.map((file, index) => [String(file.hash || ''), index]));
-  sessions.set(generation, {
-    generation,
-    files,
-    config:{ ...config, version:snapshot.version },
-    layout:geometry,
-    hashIndex
-  });
-  while (sessions.size > 4) sessions.delete(sessions.keys().next().value);
-
-  const rowStarts = geometry.rowStarts.slice();
-  const rowCounts = geometry.rowCounts.slice();
-  const rowTops = geometry.rowTops.slice();
-  const rowHeights = geometry.rowHeights.slice();
-  const itemRows = geometry.itemRows.slice();
+  const transfer = [
+    geometry.rowStarts.buffer,
+    geometry.rowCounts.buffer,
+    geometry.rowTops.buffer,
+    geometry.rowHeights.buffer,
+    geometry.itemRows.buffer,
+    geometry.itemX.buffer,
+    geometry.itemW.buffer
+  ];
 
   postMessage({
     type:'ready',
@@ -300,69 +340,25 @@ async function build(message) {
     version:snapshot.version,
     count:files.length,
     totalHeight:geometry.totalHeight,
-    rowStarts,
-    rowCounts,
-    rowTops,
-    rowHeights,
-    itemRows,
+    rowStarts:geometry.rowStarts,
+    rowCounts:geometry.rowCounts,
+    rowTops:geometry.rowTops,
+    rowHeights:geometry.rowHeights,
+    itemRows:geometry.itemRows,
+    itemX:geometry.itemX,
+    itemW:geometry.itemW,
     headers:geometry.headers,
-    dayStarts:geometry.dayStarts
-  }, [rowStarts.buffer, rowCounts.buffer, rowTops.buffer, rowHeights.buffer, itemRows.buffer]);
-}
-
-function rowPayload(current, rowId) {
-  if (!current?.layout) return null;
-  const row = Number(rowId);
-  if (!Number.isInteger(row) || row < 0 || row >= current.layout.rowStarts.length) return null;
-  const start = current.layout.rowStarts[row];
-  const count = current.layout.rowCounts[row];
-  const items = [];
-
-  for (let index = start; index < start + count; index++) {
-    const file = current.files[index];
-    items.push({
-      index,
-      x:current.layout.itemX[index],
-      width:current.layout.itemW[index],
-      hash:String(file.hash || ''),
-      filename:String(file.filename || ''),
-      mime:String(file.mime || ''),
-      kind:kind(file),
-      sourceWidth:Number(file.width) || 0,
-      sourceHeight:Number(file.height) || 0,
-      dateMs:timelineMs(file, current.config.sort),
-      size:Number(file.size) || 0
-    });
-  }
-
-  return {
-    row,
-    top:current.layout.rowTops[row],
-    height:current.layout.rowHeights[row],
-    items
-  };
+    dayStarts:geometry.dayStarts,
+    items:data.items
+  }, transfer);
 }
 
 self.onmessage = event => {
   const message = event.data || {};
-  if (message.type === 'build') {
-    latestBuildGeneration = Number(message.generation) || 0;
-    build(message).catch(error => {
-      if (Number(message.generation) !== latestBuildGeneration) return;
-      postMessage({ type:'error', generation:message.generation, message:String(error?.message || error) });
-    });
-    return;
-  }
-
-  const current = sessions.get(Number(message.generation));
-  if (!current) return;
-  if (message.type === 'rows') {
-    const rows = (message.rows || []).map(row => rowPayload(current, row)).filter(Boolean);
-    postMessage({ type:'rows', generation:current.generation, requestId:message.requestId, rows });
-    return;
-  }
-  if (message.type === 'locate') {
-    const index = current.hashIndex.get(String(message.hash || ''));
-    postMessage({ type:'located', generation:current.generation, requestId:message.requestId, index:Number.isInteger(index) ? index : -1 });
-  }
+  if (message.type !== 'build') return;
+  latestBuildGeneration = Number(message.generation) || 0;
+  build(message).catch(error => {
+    if (Number(message.generation) !== latestBuildGeneration) return;
+    postMessage({ type:'error', generation:message.generation, message:String(error?.message || error) });
+  });
 };
