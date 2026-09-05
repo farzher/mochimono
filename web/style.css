@@ -23,9 +23,3 @@ input,select{border:0;border-radius:11px;padding:10px 12px;background:var(--surf
 @media(max-width:980px){.date-rail{width:72px}.rail-tick,.rail-thumb{width:72px}.rail-tick span{right:18px;max-width:52px}.rail-tick.major span{opacity:0}.rail-thumb span{right:18px}.date-rail:hover .rail-tick.major span{opacity:.6}}
 @media(max-width:840px){.shell{width:min(100% - 20px,1320px);padding-top:15px}.topbar{margin-bottom:12px}.storage-head{width:145px}.commandbar{position:relative;top:auto;flex-wrap:wrap}.commandbar .search{flex:1 1 100%;width:100%}.commandbar select{flex:1 1 auto;max-width:none}.active-filters{order:5}.media-sizes{margin-left:auto}.date-rail{right:2px;width:30px}.rail-tick,.rail-thumb{width:92px}.rail-tick span{display:block;right:18px;max-width:66px}.rail-tick.major span{opacity:.62}.rail-thumb span{display:block;right:18px}.date-rail:hover .rail-tick.major span{opacity:.8}.file-row{grid-template-columns:58px minmax(0,1fr) 74px}.refs{display:none}.viewer-title strong{max-width:32vw}.viewer-bar{height:54px;padding:4px 8px}.viewer-nav{width:82px;font-size:42px}.viewer-prev{padding-left:12px}.viewer-next{padding-right:12px}}
 @media(max-width:520px){.top-actions{gap:5px}.storage-head{width:115px}.storage-head span{font-size:10px}.commandbar select{min-width:0}.media-sizes button{width:27px}.views{margin-left:auto}.login form{flex-direction:column}.viewer-title span{display:none}.viewer-title strong{max-width:26vw}.viewer-action{padding:0 5px}.viewer-actions{gap:4px}}
-
-/* Late grid thumbnails stay at opacity 0 while loading/decoding in thumbs.js.
-   Keep the transition installed before the request begins so decode -> visible
-   is a real painted transition instead of a same-frame pop. */
-.stable-grid-row .cached-thumb{transition:opacity 180ms cubic-bezier(.22,1,.36,1)}
-@media(prefers-reduced-motion:reduce){.stable-grid-row .cached-thumb{transition:none}}
