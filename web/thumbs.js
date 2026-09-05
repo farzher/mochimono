@@ -6,7 +6,6 @@ const CHECK_LIMIT = 500;
 const RECHECK_DELAY = CLIENT ? 140 : 500;
 const PRELOAD_MARGIN = Math.max(900, Math.round(window.innerHeight * 2.25));
 const IMAGE_POOL_MAX = 512;
-const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 const states = new Map();
 const cardsByHash = new Map();
@@ -185,14 +184,28 @@ function stashImage(card) {
   const hash = String(card?.dataset?.hash || '');
   if (!hash) return;
   const image = card.querySelector('img.cached-thumb');
-  if (!image?.complete || !image.naturalWidth || image.dataset.thumbDecoded !== '1') return;
+  if (!image) return;
+
   image.onload = null;
   image.onerror = null;
   image.style.removeProperty('transition');
   image.style.removeProperty('transform');
-  image.style.opacity = '1';
+
+  if (image.complete && image.naturalWidth && image.dataset.thumbDecoded === '1') {
+    image.style.opacity = '1';
+    image.remove();
+    touchPool(hash, image);
+    return;
+  }
+
+  // A virtual row can disappear while its thumbnail is still fetching/decoding.
+  // Cancel that detached node and clear the per-hash loading latch so a later
+  // remount can immediately reuse cache bytes or start a fresh request.
+  image.removeAttribute('src');
   image.remove();
-  touchPool(hash, image);
+  const state = stateFor(hash);
+  state.loading = false;
+  state.nextCheck = 0;
 }
 
 function adoptPooledImage(card, hash, box) {
@@ -224,18 +237,23 @@ function adoptPooledImage(card, hash, box) {
   return true;
 }
 
-async function revealLoadedImage(hash, card, image, animate = true) {
-  if (!image.isConnected || image.dataset.thumbHash !== hash || !image.naturalWidth || !image.naturalHeight) return;
+async function revealLoadedImage(hash, card, image) {
+  if (!image.isConnected || image.dataset.thumbHash !== hash || image.dataset.thumbDecoded === '1') return;
   try { await image.decode?.(); } catch {}
-  if (!image.isConnected || image.dataset.thumbHash !== hash) return;
+  if (!image.isConnected || image.dataset.thumbHash !== hash || image.dataset.thumbDecoded === '1') return;
+
   image.dataset.thumbDecoded = '1';
   image.hidden = false;
   image.style.objectFit = 'cover';
+  image.style.removeProperty('transition');
+  image.style.opacity = '1';
   rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
+
   const box = mediaBox(card);
   box?.classList.remove('thumb-failed');
   box?.removeAttribute('title');
   box?.querySelector('.video-thumb-pending')?.remove();
+
   const state = stateFor(hash);
   state.ready = true;
   state.loading = false;
@@ -244,24 +262,12 @@ async function revealLoadedImage(hash, card, image, animate = true) {
   state.nextCheck = 0;
   state.nextTry = 0;
   settleHashWaiters(hash);
-  if (!animate || !visible(card) || reduceMotion.matches) {
-    image.style.removeProperty('transition');
-    image.style.opacity = '1';
-    return;
-  }
-  image.style.transition = 'opacity 120ms ease-out';
+
+  // Decode has completed. Force one paint invalidation, but do not add a fade or
+  // any artificial delay before the pixels become visible.
+  image.style.transform = 'translateZ(0)';
   requestAnimationFrame(() => {
-    if (!image.isConnected || image.dataset.thumbHash !== hash) return;
-    image.style.opacity = '1';
-    image.style.transform = 'translateZ(0)';
-    requestAnimationFrame(() => {
-      if (image.isConnected) image.style.removeProperty('transform');
-    });
-    setTimeout(() => {
-      if (!image.isConnected) return;
-      image.style.removeProperty('transition');
-      image.style.removeProperty('opacity');
-    }, 160);
+    if (image.isConnected) image.style.removeProperty('transform');
   });
 }
 
@@ -270,6 +276,7 @@ function paintCard(card, urgent = false) {
   const hash = String(card.dataset.hash || '');
   const box = hash && mediaBox(card);
   if (!hash || !box) return;
+
   const current = box.querySelector('img.cached-thumb');
   if (current?.dataset.thumbHash === hash) {
     if (urgent && !current.complete) {
@@ -285,11 +292,13 @@ function paintCard(card, urgent = false) {
         state.loading = false;
         rememberDimensions(hash, current.naturalWidth, current.naturalHeight);
         settleHashWaiters(hash);
-      } else revealLoadedImage(hash, card, current, false);
+      } else revealLoadedImage(hash, card, current);
     }
     return;
   }
+
   if (adoptPooledImage(card, hash, box)) return;
+
   const state = stateFor(hash);
   const now = performance.now();
   if (state.failed && now >= (state.nextTry || 0)) {
@@ -301,6 +310,7 @@ function paintCard(card, urgent = false) {
     pending(card);
     return;
   }
+
   const mountedGrid = mountedGridCards.has(card);
   if (!mountedGrid && !state.ready) {
     pending(card);
@@ -308,6 +318,7 @@ function paintCard(card, urgent = false) {
     scheduleCheck(0);
     return;
   }
+
   pending(card);
   const image = document.createElement('img');
   image.className = 'cached-thumb';
@@ -320,9 +331,10 @@ function paintCard(card, urgent = false) {
   image.style.transition = 'none';
   image.dataset.thumbHash = hash;
   try { image.fetchPriority = urgent || visible(card) || card.classList.contains('keyboard-cursor') ? 'high' : 'auto'; } catch {}
+
   state.loading = true;
   image.onload = () => {
-    if (image.isConnected && image.dataset.thumbHash === hash) revealLoadedImage(hash, card, image, true);
+    if (image.isConnected && image.dataset.thumbHash === hash) revealLoadedImage(hash, card, image);
   };
   image.onerror = () => {
     if (!image.isConnected || image.dataset.thumbHash !== hash) return;
@@ -335,8 +347,12 @@ function paintCard(card, urgent = false) {
     pending(card);
     scheduleCheck(0);
   };
+
   box.prepend(image);
   image.src = thumbUrl(hash);
+  image.decode?.().then(() => {
+    if (image.isConnected && image.dataset.thumbHash === hash) revealLoadedImage(hash, card, image);
+  }).catch(() => {});
 }
 
 function loadHash(hash) {
@@ -385,6 +401,7 @@ async function requestMissing(hashes) {
     headers:{ 'content-type':'application/json' },
     body:JSON.stringify({ hashes })
   }).catch(() => {});
+
   const fallback = await browserFallback;
   for (const hash of hashes) {
     const card = [...(cardsByHash.get(hash) || [])].find(item => item.isConnected && activeCard(item));
@@ -414,16 +431,19 @@ async function checkBatch(hashes, background) {
   });
   if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
   const data = await response.json();
+
   const ready = new Map((data.thumbnails || []).map(item => [String(item.hash), item]));
   const failures = new Map((data.failures || []).map(item => [String(item.hash), item]));
   const missingFromServer = new Set((data.missing || []).map(item => String(item.hash)));
   const request = [];
   const now = performance.now();
+
   for (const hash of hashes) {
     externalQueue.delete(hash);
     const item = ready.get(hash);
     const failure = failures.get(hash);
     const state = stateFor(hash);
+
     if (item) {
       state.ready = true;
       state.loading = false;
@@ -435,9 +455,13 @@ async function checkBatch(hashes, background) {
       rememberDimensions(hash, item.width, item.height);
       loadHash(hash);
     } else if (state.ready) {
-      // Direct thumbnail GET completed while this status request was in flight.
-    } else if (failure) markFailed(hash, failure);
-    else {
+      // A direct thumbnail GET completed while this status request was in flight.
+    } else if (state.loading) {
+      // Do not let a stale/missing status response cancel an in-flight direct GET.
+      state.nextCheck = now + RECHECK_DELAY;
+    } else if (failure) {
+      markFailed(hash, failure);
+    } else {
       state.ready = false;
       state.loading = false;
       state.failed = false;
@@ -448,12 +472,14 @@ async function checkBatch(hashes, background) {
     }
     settleHashWaiters(hash);
   }
+
   requestMissing(request);
 }
 
 function candidateHashes() {
   const now = performance.now();
   const byHash = new Map();
+
   for (const [hash, item] of externalQueue) {
     const state = stateFor(hash);
     if (state.ready || state.terminal) {
@@ -463,6 +489,7 @@ function candidateHashes() {
     }
     byHash.set(hash, { hash, urgent:item.background === false, due:0 });
   }
+
   for (const card of cardCheckSet()) {
     if (!kind(card)) continue;
     const hash = String(card.dataset.hash || '');
@@ -474,6 +501,7 @@ function candidateHashes() {
     if (!current) byHash.set(hash, { hash, urgent, due:state.nextCheck || 0 });
     else if (urgent) current.urgent = true;
   }
+
   return [...byHash.values()]
     .sort((a, b) => Number(b.urgent) - Number(a.urgent) || a.due - b.due)
     .slice(0, CHECK_LIMIT);
@@ -483,11 +511,13 @@ async function runChecks() {
   checkTimer = 0;
   checkAt = 0;
   if (checking || document.hidden) return;
+
   const candidates = candidateHashes();
   if (!candidates.length) {
     scheduleOutstanding();
     return;
   }
+
   const urgent = candidates.filter(item => item.urgent).map(item => item.hash);
   const background = candidates.filter(item => !item.urgent).map(item => item.hash);
   checking = true;
@@ -526,9 +556,11 @@ function prepare(node) {
     preparedCards.add(card);
     indexCard(card);
     if (!kind(card)) continue;
+
     const box = mediaBox(card);
     const hash = String(card.dataset.hash || '');
     if (box && !box.querySelector('img.cached-thumb')) adoptPooledImage(card, hash, box);
+
     const image = card.querySelector('img.cached-thumb');
     if (image?.complete && image.naturalWidth) {
       if (image.dataset.thumbDecoded === '1') {
@@ -536,8 +568,11 @@ function prepare(node) {
         state.ready = true;
         state.loading = false;
         rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
-      } else revealLoadedImage(hash, card, image, false);
+      } else revealLoadedImage(hash, card, image);
     }
+
+    // Stable-grid has already decided this row is worth keeping in overscan.
+    // That row mount itself is the preload boundary; there is no second IO gate.
     if (mountedGridCards.has(card)) paintCard(card, false);
     else observer?.observe(card);
   }
@@ -574,6 +609,7 @@ function ensureHashes(hashes, options = {}) {
   const background = options.background === true;
   const unique = [...new Set((Array.isArray(hashes) ? hashes : [hashes]).map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
   if (!unique.length) return Promise.resolve({ ready:[], failed:[] });
+
   return new Promise(resolve => {
     const waiter = { remaining:new Set(), ready:new Set(), failed:new Set(), resolve };
     for (const hash of unique) {
@@ -586,14 +622,17 @@ function ensureHashes(hashes, options = {}) {
         waiter.failed.add(hash);
         continue;
       }
+
       waiter.remaining.add(hash);
       let waiters = waitersByHash.get(hash);
       if (!waiters) waitersByHash.set(hash, waiters = new Set());
       waiters.add(waiter);
+
       const queued = externalQueue.get(hash);
       if (!queued) externalQueue.set(hash, { background });
       else if (!background) queued.background = false;
     }
+
     if (!waiter.remaining.size) {
       resolve({ ready:[...waiter.ready], failed:[...waiter.failed] });
       return;
@@ -633,26 +672,31 @@ window.mochimonoThumbnails = {
 if (files) {
   prepare(files);
   requestAnimationFrame(repairViewport);
+
   new MutationObserver(records => {
     for (const record of records) {
       for (const node of record.removedNodes) if (node instanceof Element) release(node);
       for (const node of record.addedNodes) if (node instanceof Element) prepare(node);
     }
   }).observe(files, { childList:true, subtree:true });
+
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       refreshVisible();
       requestAnimationFrame(repairViewport);
     }
   });
+
   window.addEventListener('mochimono:grid-interaction-end', () => {
     repairViewport();
     scheduleOutstanding();
   });
+
   window.addEventListener('mochimono:catalog-updated', () => {
     resetFailures();
     refreshVisible();
   });
+
   window.addEventListener('mochimono:browser-thumbnail-ready', event => {
     const hash = String(event.detail?.hash || '');
     if (!hash) return;
@@ -666,6 +710,7 @@ if (files) {
     setFailedVisual(hash, false);
     scheduleCheck(0);
   });
+
   addEventListener('beforeunload', () => {
     if (checkTimer) clearTimeout(checkTimer);
   }, { once:true });
