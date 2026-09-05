@@ -1,8 +1,16 @@
 const files = document.querySelector('#files');
+const CLIENT = document.documentElement.classList.contains('client-library');
 const THUMB_VERSION = 3;
-const PRELOAD_MARGIN = Math.max(1100, Math.round(innerHeight * 2.6));
+const CHECK_LIMIT = 320;
+const RECHECK_DELAY = CLIENT ? 140 : 450;
+const IMAGE_PRELOAD_MARGIN = Math.max(1200, Math.round(innerHeight * 3.2));
+
 const liveDimensions = new Map();
 const modelIndexes = new WeakMap();
+const mountedCards = new Map();
+const availability = new Map();
+const registeredRows = new WeakSet();
+const nearRows = new WeakSet();
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 let geometryTimer = 0;
@@ -10,6 +18,9 @@ let geometryAt = 0;
 let geometryDirty = false;
 let lastScrollAt = 0;
 let restoreAnchor = null;
+let availabilityTimer = 0;
+let availabilityAt = 0;
+let availabilityChecking = false;
 
 function modelIndex(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.items)) return null;
@@ -113,29 +124,101 @@ function rememberDimensions(hash, width, height) {
   scheduleGeometry();
 }
 
-function reveal(card, image) {
+function visibleCard(card) {
+  const rect = card.getBoundingClientRect();
+  return rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
+}
+
+function revealImage(card, image, animate) {
   if (image.dataset.mochimonoRevealed === '1') return;
   image.dataset.mochimonoRevealed = '1';
-  if (reduceMotion.matches || typeof image.animate !== 'function') return;
-  const rect = card.getBoundingClientRect();
-  if (rect.bottom <= 0 || rect.top >= innerHeight || rect.right <= 0 || rect.left >= innerWidth) return;
-  image.animate([{ opacity:.18 }, { opacity:1 }], { duration:80, easing:'ease-out' });
+
+  if (!animate || reduceMotion.matches || !visibleCard(card)) {
+    image.style.removeProperty('transition');
+    image.style.opacity = '1';
+    return;
+  }
+
+  // The image has been held at opacity:0 since before its pixels arrived. Move
+  // to 1 only after load so a genuinely late thumbnail fades instead of flashing.
+  image.style.transition = 'opacity 140ms ease-out';
+  requestAnimationFrame(() => {
+    if (!image.isConnected) return;
+    image.style.opacity = '1';
+    setTimeout(() => {
+      if (!image.isConnected) return;
+      image.style.removeProperty('transition');
+      image.style.removeProperty('opacity');
+    }, 170);
+  });
+}
+
+function availabilityState(hash) {
+  let state = availability.get(hash);
+  if (!state) availability.set(hash, state = { ready:false, terminal:false, nextCheck:0 });
+  return state;
+}
+
+function queueAvailability(hash, delay = 0) {
+  hash = String(hash || '');
+  if (!hash || !mountedCards.has(hash)) return;
+  const state = availabilityState(hash);
+  if (state.ready || state.terminal) return;
+  const at = performance.now() + delay;
+  if (!state.nextCheck || at < state.nextCheck) state.nextCheck = at;
+  scheduleAvailability(delay);
+}
+
+function scheduleAvailability(delay = 0) {
+  const at = performance.now() + Math.max(0, delay);
+  if (availabilityTimer && availabilityAt <= at) return;
+  if (availabilityTimer) clearTimeout(availabilityTimer);
+  availabilityAt = at;
+  availabilityTimer = setTimeout(runAvailability, Math.max(0, delay));
+}
+
+function scheduleNextAvailability() {
+  const now = performance.now();
+  let next = Infinity;
+  for (const [hash] of mountedCards) {
+    const state = availability.get(hash);
+    if (state?.ready || state?.terminal) continue;
+    next = Math.min(next, state?.nextCheck || now);
+  }
+  if (Number.isFinite(next)) scheduleAvailability(Math.max(0, next - now));
 }
 
 function bindImage(card, image, hash, owned = false) {
   if (!(image instanceof HTMLImageElement) || image.dataset.mochimonoWarmBound === '1') return;
   image.dataset.mochimonoWarmBound = '1';
   const alreadyLoaded = image.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
+
+  // Hide pixels before load. The old Web Animation started after the image had
+  // already flashed onto the black card, which is why it looked like no fade.
+  if (!alreadyLoaded) {
+    image.style.transition = 'none';
+    image.style.opacity = '0';
+  }
+
   const ready = animate => {
     if (!image.isConnected || image.dataset.thumbHash !== hash || !image.naturalWidth || !image.naturalHeight) return;
     card.querySelector('.video-thumb-pending')?.remove();
     rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
-    if (animate) reveal(card, image);
-    else image.dataset.mochimonoRevealed = '1';
+    const state = availabilityState(hash);
+    state.ready = true;
+    state.terminal = false;
+    state.nextCheck = 0;
+    revealImage(card, image, animate);
   };
+
   image.addEventListener('load', () => ready(true), { once:true });
   if (owned) image.addEventListener('error', () => {
-    if (image.isConnected && image.dataset.thumbHash === hash) image.remove();
+    if (!image.isConnected || image.dataset.thumbHash !== hash) return;
+    image.remove();
+    const state = availabilityState(hash);
+    state.ready = false;
+    state.nextCheck = performance.now() + 180;
+    scheduleAvailability(180);
   }, { once:true });
   if (alreadyLoaded) ready(false);
 }
@@ -152,6 +235,9 @@ function primeCard(card) {
     return;
   }
 
+  const state = availabilityState(hash);
+  if (!state.ready) return;
+
   const image = document.createElement('img');
   image.className = 'cached-thumb';
   image.alt = '';
@@ -159,8 +245,10 @@ function primeCard(card) {
   image.decoding = 'async';
   image.loading = 'eager';
   image.style.objectFit = 'cover';
+  image.style.opacity = '0';
+  image.style.transition = 'none';
   image.dataset.thumbHash = hash;
-  try { image.fetchPriority = 'auto'; } catch {}
+  try { image.fetchPriority = visibleCard(card) ? 'high' : 'auto'; } catch {}
   bindImage(card, image, hash, true);
   box.prepend(image);
   image.src = `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
@@ -169,13 +257,120 @@ function primeCard(card) {
 
 function primeRow(row) {
   if (!(row instanceof Element) || !row.isConnected) return;
-  for (const card of row.querySelectorAll('.media-card[data-hash]')) primeCard(card);
+  for (const card of row.querySelectorAll('.media-card[data-hash]')) {
+    const hash = String(card.dataset.hash || '');
+    const current = card.querySelector('img.cached-thumb');
+    if (current) bindImage(card, current, hash, false);
+    if (availability.get(hash)?.ready) primeCard(card);
+    else queueAvailability(hash, 0);
+  }
+}
+
+function primeReadyHash(hash) {
+  for (const card of mountedCards.get(hash) || []) {
+    const row = card.closest('.stable-grid-row');
+    if (row && nearRows.has(row)) primeCard(card);
+  }
+}
+
+async function runAvailability() {
+  availabilityTimer = 0;
+  availabilityAt = 0;
+  if (availabilityChecking || document.hidden) {
+    scheduleAvailability(80);
+    return;
+  }
+
+  const now = performance.now();
+  const hashes = [];
+  for (const [hash] of mountedCards) {
+    const state = availabilityState(hash);
+    if (state.ready || state.terminal || now < (state.nextCheck || 0)) continue;
+    hashes.push(hash);
+    if (hashes.length >= CHECK_LIMIT) break;
+  }
+  if (!hashes.length) {
+    scheduleNextAvailability();
+    return;
+  }
+
+  availabilityChecking = true;
+  try {
+    const response = await fetch('/api/thumbs/check', {
+      method:'POST',
+      headers:{ 'content-type':'application/json' },
+      body:JSON.stringify({ hashes, background:true })
+    });
+    if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
+    const data = await response.json();
+    const ready = new Map((data.thumbnails || []).map(item => [String(item.hash), item]));
+    const failures = new Map((data.failures || []).map(item => [String(item.hash), item]));
+    const serverMissing = new Set((data.missing || []).map(item => String(item.hash)));
+    const request = [];
+    const checkedAt = performance.now();
+
+    for (const hash of hashes) {
+      if (!mountedCards.has(hash)) {
+        availability.delete(hash);
+        continue;
+      }
+      const state = availabilityState(hash);
+      const item = ready.get(hash);
+      const failure = failures.get(hash);
+      if (item) {
+        state.ready = true;
+        state.terminal = false;
+        state.nextCheck = 0;
+        rememberDimensions(hash, item.width, item.height);
+        primeReadyHash(hash);
+      } else if (failure) {
+        state.ready = false;
+        state.terminal = failure.terminal === true;
+        state.nextCheck = state.terminal ? Infinity : checkedAt + Math.max(RECHECK_DELAY, Number(failure.retryAfterMs) || RECHECK_DELAY);
+      } else {
+        state.ready = false;
+        state.terminal = false;
+        state.nextCheck = checkedAt + RECHECK_DELAY;
+        if (serverMissing.has(hash)) request.push(hash);
+      }
+    }
+
+    // The desktop client queues local provider generation inside /api/thumbs/check.
+    // A direct server reports `missing`, so tell its thumbnail agent to prioritize
+    // those same overscan hashes before they become visible.
+    if (request.length) {
+      fetch('/api/thumbs/request', {
+        method:'POST',
+        headers:{ 'content-type':'application/json' },
+        body:JSON.stringify({ hashes:request })
+      }).catch(() => {});
+    }
+  } catch {
+    const retry = performance.now() + 900;
+    for (const hash of hashes) {
+      if (!mountedCards.has(hash)) continue;
+      const state = availabilityState(hash);
+      state.nextCheck = retry;
+      // If the check path is temporarily unavailable, let near rows still try
+      // the immutable thumbnail URL so an already-cached image is not withheld.
+      primeReadyHash(hash);
+    }
+  } finally {
+    availabilityChecking = false;
+    scheduleNextAvailability();
+  }
 }
 
 const rowObserver = files && typeof IntersectionObserver === 'function'
   ? new IntersectionObserver(entries => {
-      for (const entry of entries) if (entry.isIntersecting) primeRow(entry.target);
-    }, { rootMargin:`${PRELOAD_MARGIN}px 0px` })
+      for (const entry of entries) {
+        const row = entry.target;
+        if (entry.isIntersecting) {
+          nearRows.add(row);
+          primeRow(row);
+        } else nearRows.delete(row);
+      }
+    }, { rootMargin:`${IMAGE_PRELOAD_MARGIN}px 0px` })
   : null;
 
 function rowsIn(node) {
@@ -186,18 +381,51 @@ function rowsIn(node) {
   return rows;
 }
 
-function observeTree(node) {
-  for (const row of rowsIn(node)) {
-    if (row.dataset.mochimonoWarmObserved === '1') continue;
-    row.dataset.mochimonoWarmObserved = '1';
-    if (rowObserver) rowObserver.observe(row);
-    else primeRow(row);
+function registerCard(card) {
+  if (!card?.classList?.contains('media-card')) return;
+  const hash = String(card.dataset.hash || '');
+  if (!hash) return;
+  let cards = mountedCards.get(hash);
+  if (!cards) mountedCards.set(hash, cards = new Set());
+  cards.add(card);
+  queueAvailability(hash, 0);
+}
+
+function unregisterCard(card) {
+  const hash = String(card?.dataset?.hash || '');
+  const cards = hash && mountedCards.get(hash);
+  if (!cards) return;
+  cards.delete(card);
+  if (!cards.size) {
+    mountedCards.delete(hash);
+    availability.delete(hash);
   }
 }
 
-function forgetTree(node) {
-  if (!rowObserver) return;
-  for (const row of rowsIn(node)) rowObserver.unobserve(row);
+function registerRow(row) {
+  if (!(row instanceof Element) || registeredRows.has(row)) return;
+  registeredRows.add(row);
+  for (const card of row.querySelectorAll('.media-card[data-hash]')) registerCard(card);
+  if (rowObserver) rowObserver.observe(row);
+  else {
+    nearRows.add(row);
+    primeRow(row);
+  }
+}
+
+function unregisterRow(row) {
+  if (!(row instanceof Element)) return;
+  rowObserver?.unobserve(row);
+  nearRows.delete(row);
+  for (const card of row.querySelectorAll('.media-card[data-hash]')) unregisterCard(card);
+}
+
+function registerTree(node) {
+  for (const row of rowsIn(node)) registerRow(row);
+}
+
+function unregisterTree(node) {
+  for (const row of rowsIn(node)) unregisterRow(row);
 }
 
 const stable = window.mochimonoStableGrid;
@@ -211,10 +439,10 @@ if (stable?.setModel && stable.__mochimonoRatioSync !== true) {
 }
 
 if (files) {
-  observeTree(files);
+  registerTree(files);
   new MutationObserver(records => {
-    for (const record of records) for (const node of record.removedNodes) forgetTree(node);
-    for (const record of records) for (const node of record.addedNodes) observeTree(node);
+    for (const record of records) for (const node of record.removedNodes) unregisterTree(node);
+    for (const record of records) for (const node of record.addedNodes) registerTree(node);
   }).observe(files, { childList:true, subtree:true });
 
   window.addEventListener('scroll', () => {
@@ -227,8 +455,13 @@ if (files) {
     if (geometryDirty) scheduleGeometry(220);
   });
 
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) scheduleAvailability(0);
+  });
+
   window.addEventListener('mochimono:stable-grid-installed', () => {
-    observeTree(files);
+    registerTree(files);
+    scheduleAvailability(0);
     const anchor = restoreAnchor;
     restoreAnchor = null;
     if (!anchor?.hash) return;
@@ -243,4 +476,9 @@ if (files) {
       if (Math.abs(delta) > .5) scrollBy(0, delta);
     });
   });
+
+  addEventListener('beforeunload', () => {
+    if (geometryTimer) clearTimeout(geometryTimer);
+    if (availabilityTimer) clearTimeout(availabilityTimer);
+  }, { once:true });
 }
