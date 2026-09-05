@@ -1,6 +1,7 @@
 import './file-context-menu.js';
 import './random-sort.js';
 import './stable-grid.js';
+import './thumbnail-warmup.js';
 
 const files = document.querySelector('#files');
 const views = document.querySelector('#views');
