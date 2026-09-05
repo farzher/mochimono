@@ -113,14 +113,35 @@ async function readMeta(db) {
   return validMeta(value) ? value : null;
 }
 
+async function hydrateQuickSnapshot(db, snapshot) {
+  if (!db || !snapshot?.files?.length) return snapshot;
+  const missing = snapshot.files
+    .map((file, index) => ({ file, index }))
+    .filter(({ file }) => !(Number(file.width) > 0 && Number(file.height) > 0));
+  if (!missing.length) return snapshot;
+
+  const transaction = db.transaction('files', 'readonly');
+  const done = transactionDone(transaction);
+  const store = transaction.objectStore('files');
+  const rows = await Promise.all(missing.map(({ file }) => requestResult(store.get(String(file.hash || ''))).catch(() => null)));
+  await done.catch(() => {});
+
+  const files = [...snapshot.files];
+  rows.forEach((stored, position) => {
+    if (!stored || stored.__snapshot !== snapshot.version) return;
+    const target = missing[position];
+    files[target.index] = publicFile(mergeGeometry({ ...target.file, ...stored }));
+  });
+  return { ...snapshot, files };
+}
+
 async function loadQuick() {
-  const memory = quickSnapshot();
-  if (memory) return memory;
   const db = await openDb();
-  const storedMeta = await readMeta(db);
+  if (!db) return quickSnapshot();
+  const storedMeta = validMeta(meta) ? meta : await readMeta(db);
   if (!storedMeta) return null;
   meta = storedMeta;
-  return quickSnapshot(storedMeta);
+  return hydrateQuickSnapshot(db, quickSnapshot(storedMeta));
 }
 
 async function readFilesBatched(db, version) {
@@ -162,12 +183,32 @@ async function loadFromDb(knownMeta = null) {
   return memorySnapshot();
 }
 
+function waitForQuickGrid() {
+  const stable = window.mochimonoStableGrid;
+  if (stable?.active?.() && stable?.count?.() > 0) return paintTurn();
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('mochimono:stable-grid-installed', onGrid);
+      clearTimeout(timer);
+      paintTurn().then(resolve);
+    };
+    const onGrid = () => finish();
+    const timer = setTimeout(finish, 140);
+    window.addEventListener('mochimono:stable-grid-installed', onGrid, { once:true });
+  });
+}
+
 async function installQuickPreview(snapshot) {
   if (!snapshot?.files?.length || !document.documentElement.classList.contains('client-library')) return false;
   const library = window.mochimonoLibrary;
   if (!library?.upsertMany || Number(library.state?.().total) > 0) return false;
 
   library.upsertMany(snapshot.files);
+  await waitForQuickGrid();
+
   const login = document.querySelector('#login');
   const app = document.querySelector('#app');
   const logout = document.querySelector('#logout');
@@ -177,7 +218,6 @@ async function installQuickPreview(snapshot) {
   window.dispatchEvent(new CustomEvent('mochimono:catalog-quick-restored', {
     detail: { count:snapshot.files.length, totalCount:snapshot.totalCount, version:snapshot.version }
   }));
-  await paintTurn();
   return true;
 }
 
