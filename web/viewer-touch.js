@@ -26,7 +26,7 @@ if (viewer && stage && media && prev && next) {
   const image = () => media.querySelector('img');
   const pixelZoom = () => window.mochimonoViewerPixelZoom || null;
   const pixelState = () => pixelZoom()?.state?.() || { relativeScale:1, scale:1, fit:1, x:0, y:0, ready:false };
-  const zoomed = () => Boolean(pixelZoom()?.zoomed?.() || pixelState().relativeScale > 1.01);
+  const zoomed = () => Boolean(pixelZoom()?.zoomed?.() || Math.abs(pixelState().relativeScale - 1) > .01);
 
   function clearTap() {
     clearTimeout(tapTimer);
@@ -99,7 +99,7 @@ if (viewer && stage && media && prev && next) {
     const [a, b] = values;
     const cx = (a.x + b.x) / 2;
     const cy = (a.y + b.y) / 2;
-    const relativeScale = Math.max(1, Number(state.relativeScale) || 1);
+    const relativeScale = Math.max(.01, Number(state.relativeScale) || 1);
     pinch = {
       distance: Math.max(1, pointDistance(a, b)),
       scale: relativeScale,
@@ -118,7 +118,7 @@ if (viewer && stage && media && prev && next) {
     const [a, b] = values;
     const cx = (a.x + b.x) / 2;
     const cy = (a.y + b.y) / 2;
-    const relativeScale = Math.max(1, pinch.scale * pointDistance(a, b) / pinch.distance);
+    const relativeScale = Math.max(.01, pinch.scale * pointDistance(a, b) / pinch.distance);
     pixelZoom()?.set?.({
       relativeScale,
       x: cx - innerWidth / 2 - pinch.anchorX * relativeScale,
