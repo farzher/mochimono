@@ -6,8 +6,8 @@ const modelIndexes = new WeakMap();
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 let geometryTimer = 0;
+let geometryAt = 0;
 let geometryDirty = false;
-let dirtySince = 0;
 let lastScrollAt = 0;
 let restoreAnchor = null;
 
@@ -61,14 +61,16 @@ function interactionActive() {
 
 function scheduleGeometry(delay = 150) {
   if (!geometryDirty) return;
-  if (!dirtySince) dirtySince = performance.now();
-  clearTimeout(geometryTimer);
-  const age = performance.now() - dirtySince;
-  geometryTimer = setTimeout(flushGeometry, Math.max(35, Math.min(delay, Math.max(35, 900 - age))));
+  const at = performance.now() + delay;
+  if (geometryTimer && geometryAt <= at) return;
+  if (geometryTimer) clearTimeout(geometryTimer);
+  geometryAt = at;
+  geometryTimer = setTimeout(flushGeometry, delay);
 }
 
 function flushGeometry() {
   geometryTimer = 0;
+  geometryAt = 0;
   if (!geometryDirty) return;
   if (interactionActive()) {
     scheduleGeometry(300);
@@ -84,7 +86,6 @@ function flushGeometry() {
 
   applyKnownDimensions(snapshot);
   geometryDirty = false;
-  dirtySince = 0;
   restoreAnchor = captureAnchor();
   stable.setModel(snapshot);
 }
@@ -124,20 +125,19 @@ function reveal(card, image) {
 function bindImage(card, image, hash, owned = false) {
   if (!(image instanceof HTMLImageElement) || image.dataset.mochimonoWarmBound === '1') return;
   image.dataset.mochimonoWarmBound = '1';
-  const ready = () => {
+  const alreadyLoaded = image.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
+  const ready = animate => {
     if (!image.isConnected || image.dataset.thumbHash !== hash || !image.naturalWidth || !image.naturalHeight) return;
     card.querySelector('.video-thumb-pending')?.remove();
     rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
-    reveal(card, image);
+    if (animate) reveal(card, image);
+    else image.dataset.mochimonoRevealed = '1';
   };
-  image.addEventListener('load', ready, { once:true });
+  image.addEventListener('load', () => ready(true), { once:true });
   if (owned) image.addEventListener('error', () => {
     if (image.isConnected && image.dataset.thumbHash === hash) image.remove();
   }, { once:true });
-  if (image.complete) {
-    if (image.naturalWidth && image.naturalHeight) ready();
-    else if (owned) image.remove();
-  }
+  if (alreadyLoaded) ready(false);
 }
 
 function primeCard(card) {
@@ -182,7 +182,7 @@ function rowsIn(node) {
   if (!(node instanceof Element)) return [];
   const rows = [];
   if (node.matches('.stable-grid-row')) rows.push(node);
-  rows.push(...node.querySelectorAll?.('.stable-grid-row') || []);
+  rows.push(...(node.querySelectorAll?.('.stable-grid-row') || []));
   return rows;
 }
 
