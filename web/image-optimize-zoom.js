@@ -14,6 +14,7 @@ if (viewer && compare && original && optimized) {
 .image-optimize-compare{cursor:grab}
 .image-optimize-compare.image-optimize-panning{cursor:grabbing}
 .image-optimize-compare img{image-rendering:auto}
+.image-optimize-rendering .image-optimize-choice-grid{width:170px!important}
 `;
   document.head.append(style);
 
@@ -22,9 +23,22 @@ if (viewer && compare && original && optimized) {
   optimized.before(mask);
   mask.append(optimized);
 
+  const tuning = document.querySelector('.image-optimize-tuning');
+  const renderingRow = document.createElement('div');
+  renderingRow.className = 'image-optimize-segmented image-optimize-rendering';
+  renderingRow.innerHTML = `
+    <span class="image-optimize-tune-head">Rendering</span>
+    <div class="image-optimize-choice-grid two" data-opt-rendering>
+      <button class="image-optimize-choice active" type="button" data-rendering="smooth">Smooth</button>
+      <button class="image-optimize-choice" type="button" data-rendering="pixel">Pixel</button>
+    </div>`;
+  tuning?.append(renderingRow);
+
   const DIRECT_BROWSER = new Set(['jpg','jpeg','png','webp','avif','bmp','gif']);
   const MIN_SCALE = 0.01;
   const MAX_SCALE = 16;
+  const NATIVE_SCALE = 1;
+  const NATIVE_SNAP = 0.025;
   const PAN_START = 3;
   const pointers = new Map();
   let zoom = { scale: 1, x: 0, y: 0 };
@@ -34,6 +48,7 @@ if (viewer && compare && original && optimized) {
   let metrics = null;
   let pendingView = null;
   let fitLocked = true;
+  let rendering = 'smooth';
 
   const active = () => viewer.classList.contains('image-optimize-active');
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -54,6 +69,10 @@ if (viewer && compare && original && optimized) {
       viewportHeight: rect.height,
       fit: Math.min(1, rect.width / nativeWidth, rect.height / nativeHeight)
     };
+  }
+
+  function displayRendering() {
+    return Math.abs(zoom.scale - NATIVE_SCALE) < .0005 || rendering === 'smooth' ? 'auto' : 'pixelated';
   }
 
   function clearImageStyle(image) {
@@ -79,7 +98,7 @@ if (viewer && compare && original && optimized) {
     image.style.marginTop = `${-height / 2}px`;
     image.style.objectFit = 'fill';
     image.style.transformOrigin = '50% 50%';
-    image.style.imageRendering = 'auto';
+    image.style.imageRendering = displayRendering();
     image.style.transform = `translate3d(${zoom.x}px,${zoom.y}px,0)`;
   }
 
@@ -162,12 +181,21 @@ if (viewer && compare && original && optimized) {
     }
   }
 
+  function snapNative(previous, requested) {
+    const next = clamp(requested, MIN_SCALE, MAX_SCALE);
+    if (Math.abs(previous - NATIVE_SCALE) < .0005) return next;
+    if ((previous < NATIVE_SCALE && next >= NATIVE_SCALE) || (previous > NATIVE_SCALE && next <= NATIVE_SCALE)) return NATIVE_SCALE;
+    if (previous < NATIVE_SCALE - NATIVE_SNAP && next >= NATIVE_SCALE - NATIVE_SNAP) return NATIVE_SCALE;
+    if (previous > NATIVE_SCALE + NATIVE_SNAP && next <= NATIVE_SCALE + NATIVE_SNAP) return NATIVE_SCALE;
+    return next;
+  }
+
   function zoomAt(nextScale, clientX, clientY) {
     if (!metrics && !refreshMetrics()) return;
     const rect = compare.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
     const previous = zoom.scale;
-    const next = clamp(nextScale, MIN_SCALE, MAX_SCALE);
+    const next = snapNative(previous, nextScale);
     if (Math.abs(next - previous) < .0001) return;
     const px = clientX - (rect.left + rect.width / 2);
     const py = clientY - (rect.top + rect.height / 2);
@@ -222,9 +250,14 @@ if (viewer && compare && original && optimized) {
     const rect = compare.getBoundingClientRect();
     const cx = (a.x + b.x) / 2 - (rect.left + rect.width / 2);
     const cy = (a.y + b.y) / 2 - (rect.top + rect.height / 2);
-    zoom.scale = clamp(pinch.scale * distance(a, b) / pinch.distance, MIN_SCALE, MAX_SCALE);
-    zoom.x = cx - pinch.anchorX * zoom.scale;
-    zoom.y = cy - pinch.anchorY * zoom.scale;
+    const previous = zoom.scale;
+    const requested = pinch.scale * distance(a, b) / pinch.distance;
+    const next = snapNative(previous, requested);
+    const anchorX = pinch.anchorX;
+    const anchorY = pinch.anchorY;
+    zoom.scale = next;
+    zoom.x = cx - anchorX * next;
+    zoom.y = cy - anchorY * next;
     applyZoom();
   }
 
@@ -292,6 +325,14 @@ if (viewer && compare && original && optimized) {
   compare.addEventListener('pointerup', finishPointer, true);
   compare.addEventListener('pointercancel', finishPointer, true);
 
+  renderingRow.addEventListener('click', event => {
+    const button = event.target.closest('[data-rendering]');
+    if (!button) return;
+    rendering = button.dataset.rendering === 'pixel' ? 'pixel' : 'smooth';
+    for (const choice of renderingRow.querySelectorAll('[data-rendering]')) choice.classList.toggle('active', choice === button);
+    applyZoom(true);
+  });
+
   original.addEventListener('load', () => {
     if (!active()) return;
     if (pendingView) applyPendingView();
@@ -353,7 +394,7 @@ if (viewer && compare && original && optimized) {
   }, { passive:true });
 
   window.mochimonoImageOptimizeZoom = {
-    state: () => ({ ...zoom, fit:metrics?.fit || 1, native:true }),
+    state: () => ({ ...zoom, fit:metrics?.fit || 1, native:true, rendering }),
     set: setView,
     reset: () => resetZoom(false)
   };
