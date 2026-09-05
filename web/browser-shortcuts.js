@@ -19,6 +19,8 @@ const zoom = { scale: 1, x: 0, y: 0 };
 const WHEEL_NAV_STEP = 100;
 const ZOOM_EXIT_GRACE_MS = 180;
 const MAX_NATIVE_SCALE = 4;
+const NATIVE_SCALE = 1;
+const NATIVE_SNAP = 0.025;
 const viewerPageKeys = new Set(['PageUp', 'PageDown', 'Home', 'End']);
 let navState = null;
 let pan = null;
@@ -28,7 +30,7 @@ let wheelNavigationDelta = 0;
 let wheelNavigationBlockedUntil = 0;
 
 const image = () => viewerMedia?.querySelector('img') || null;
-const zoomed = () => zoom.scale > 1.01;
+const zoomed = () => Math.abs(zoom.scale - 1) > .01;
 const touchZoomed = () => stage?.classList.contains('viewer-touch-zoomed');
 const currentViewerHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 
@@ -40,7 +42,7 @@ function pixelMetrics(current = image()) {
   const viewportWidth = stage?.clientWidth || innerWidth;
   const viewportHeight = stage?.clientHeight || innerHeight;
   if (!nativeWidth || !nativeHeight || !viewportWidth || !viewportHeight) return null;
-  const fit = Math.min(1, viewportWidth / nativeWidth, viewportHeight / nativeHeight);
+  const fit = Math.min(viewportWidth / nativeWidth, viewportHeight / nativeHeight);
   return { dpr, nativeWidth, nativeHeight, viewportWidth, viewportHeight, fit };
 }
 
@@ -49,6 +51,38 @@ function clearPixelLayout(current) {
   for (const property of ['position','inset','left','top','width','height','maxWidth','maxHeight','marginLeft','marginTop','objectFit','transformOrigin','imageRendering']) {
     current.style[property] = '';
   }
+}
+
+function styleCentered(current, width, height) {
+  current.style.position = 'absolute';
+  current.style.inset = 'auto';
+  current.style.left = '50%';
+  current.style.top = '50%';
+  current.style.width = `${width}px`;
+  current.style.height = `${height}px`;
+  current.style.maxWidth = 'none';
+  current.style.maxHeight = 'none';
+  current.style.marginLeft = `${-width / 2}px`;
+  current.style.marginTop = `${-height / 2}px`;
+  current.style.objectFit = 'fill';
+  current.style.transformOrigin = '50% 50%';
+  current.style.imageRendering = 'auto';
+}
+
+function stylePreviewFit(current) {
+  if (!current?.dataset.fullSrc || !current.naturalWidth || !current.naturalHeight) return false;
+  const viewportWidth = stage?.clientWidth || innerWidth;
+  const viewportHeight = stage?.clientHeight || innerHeight;
+  if (!viewportWidth || !viewportHeight) return false;
+  const fit = Math.min(viewportWidth / current.naturalWidth, viewportHeight / current.naturalHeight);
+  styleCentered(current, current.naturalWidth * fit, current.naturalHeight * fit);
+  current.style.transform = '';
+  return true;
+}
+
+function relativeMin(current = image()) {
+  const metrics = pixelMetrics(current);
+  return metrics?.fit ? Math.min(1, NATIVE_SCALE / metrics.fit) : 1;
 }
 
 function relativeMax(current = image()) {
@@ -68,6 +102,18 @@ function displayedSize(metrics, relativeScale = zoom.scale) {
     height: metrics.nativeHeight * actualScale,
     actualScale
   };
+}
+
+function snapNative(metrics, previousRelative, requestedRelative) {
+  if (!metrics?.fit) return requestedRelative;
+  const nativeRelative = NATIVE_SCALE / metrics.fit;
+  const previous = previousRelative * metrics.fit;
+  const requested = requestedRelative * metrics.fit;
+  if (Math.abs(previous - NATIVE_SCALE) < .0005) return requestedRelative;
+  if ((previous < NATIVE_SCALE && requested >= NATIVE_SCALE) || (previous > NATIVE_SCALE && requested <= NATIVE_SCALE)) return nativeRelative;
+  if (previous < NATIVE_SCALE - NATIVE_SNAP && requested >= NATIVE_SCALE - NATIVE_SNAP) return nativeRelative;
+  if (previous > NATIVE_SCALE + NATIVE_SNAP && requested <= NATIVE_SCALE + NATIVE_SNAP) return nativeRelative;
+  return requestedRelative;
 }
 
 function viewerHashes() {
@@ -136,21 +182,9 @@ function applyZoom(animate = false) {
   if (metrics) {
     Object.assign(zoom, clampPan(metrics));
     const size = displayedSize(metrics);
-    current.style.position = 'absolute';
-    current.style.inset = 'auto';
-    current.style.left = '50%';
-    current.style.top = '50%';
-    current.style.width = `${size.width}px`;
-    current.style.height = `${size.height}px`;
-    current.style.maxWidth = 'none';
-    current.style.maxHeight = 'none';
-    current.style.marginLeft = `${-size.width / 2}px`;
-    current.style.marginTop = `${-size.height / 2}px`;
-    current.style.objectFit = 'fill';
-    current.style.transformOrigin = '50% 50%';
-    current.style.imageRendering = 'auto';
+    styleCentered(current, size.width, size.height);
     current.style.transform = `translate3d(${zoom.x}px,${zoom.y}px,0)`;
-  } else {
+  } else if (!stylePreviewFit(current)) {
     clearPixelLayout(current);
     current.style.transform = active ? `translate3d(${zoom.x}px,${zoom.y}px,0) scale(${zoom.scale})` : '';
   }
@@ -170,8 +204,9 @@ function resetZoom(animate = false) {
 function naturalZoom(current = image()) {
   const metrics = pixelMetrics(current);
   if (metrics) {
-    const nativeRelative = 1 / metrics.fit;
-    return nativeRelative > 1.01 ? nativeRelative : Math.min(relativeMax(current), 2.25);
+    const nativeRelative = NATIVE_SCALE / metrics.fit;
+    if (Math.abs(nativeRelative - 1) > .01) return nativeRelative;
+    return Math.min(relativeMax(current), 2.25);
   }
   if (!current) return 2.25;
   const scale = Math.max(
@@ -184,9 +219,13 @@ function naturalZoom(current = image()) {
 function setScaleAt(nextScale, clientX, clientY, animate = false) {
   const current = image();
   if (!current) return;
+  const metrics = pixelMetrics(current);
   const oldScale = zoom.scale;
-  const scale = Math.max(1, Math.min(relativeMax(current), Number(nextScale) || 1));
-  if (scale <= 1.01) return resetZoom(animate);
+  const min = relativeMin(current);
+  const max = relativeMax(current);
+  let scale = Math.max(min, Math.min(max, Number(nextScale) || 1));
+  scale = Math.max(min, Math.min(max, snapNative(metrics, oldScale, scale)));
+  if (Math.abs(scale - 1) <= .01) return resetZoom(animate);
 
   const offsetX = clientX - innerWidth / 2;
   const offsetY = clientY - innerHeight / 2;
@@ -206,10 +245,10 @@ function setView(view = {}, animate = false) {
     : metrics && Number.isFinite(Number(view.scale))
       ? Number(view.scale) / Math.max(.0001, metrics.fit)
       : zoom.scale;
-  zoom.scale = Math.max(1, Math.min(relativeMax(current), relative || 1));
+  zoom.scale = Math.max(relativeMin(current), Math.min(relativeMax(current), relative || 1));
   zoom.x = Number(view.x) || 0;
   zoom.y = Number(view.y) || 0;
-  if (zoom.scale <= 1.01) {
+  if (Math.abs(zoom.scale - 1) <= .01) {
     zoom.scale = 1;
     zoom.x = 0;
     zoom.y = 0;
@@ -230,10 +269,10 @@ function bindCurrentImage() {
   if (!current || current.dataset.pixelViewerBound === '1') return;
   current.dataset.pixelViewerBound = '1';
   current.addEventListener('load', () => {
-    if (!current.isConnected || current.dataset.fullSrc) return;
-    requestAnimationFrame(() => applyZoom());
+    if (!current.isConnected) return;
+    applyZoom();
   });
-  if (current.complete && current.naturalWidth && !current.dataset.fullSrc) requestAnimationFrame(() => applyZoom());
+  if (current.complete && current.naturalWidth) applyZoom();
 }
 
 window.mochimonoViewerPixelZoom = {
