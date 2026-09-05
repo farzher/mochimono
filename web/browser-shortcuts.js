@@ -32,7 +32,7 @@ const zoomed = () => zoom.scale > 1.01;
 const touchZoomed = () => stage?.classList.contains('viewer-touch-zoomed');
 const currentViewerHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
 
-function pixelMetrics(current) {
+function pixelMetrics(current = image()) {
   if (!current || current.dataset.fullSrc || !current.naturalWidth || !current.naturalHeight) return null;
   const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
   const nativeWidth = current.naturalWidth / dpr;
@@ -41,30 +41,33 @@ function pixelMetrics(current) {
   const viewportHeight = stage?.clientHeight || innerHeight;
   if (!nativeWidth || !nativeHeight || !viewportWidth || !viewportHeight) return null;
   const fit = Math.min(1, viewportWidth / nativeWidth, viewportHeight / nativeHeight);
-  return { dpr, nativeWidth, nativeHeight, fit };
+  return { dpr, nativeWidth, nativeHeight, viewportWidth, viewportHeight, fit };
 }
 
-function preparePixelImage(current) {
-  const metrics = pixelMetrics(current);
-  if (!metrics) return null;
-  current.style.width = `${metrics.nativeWidth}px`;
-  current.style.height = `${metrics.nativeHeight}px`;
-  current.style.maxWidth = 'none';
-  current.style.maxHeight = 'none';
-  current.style.objectFit = 'fill';
-  current.style.transformOrigin = '50% 50%';
-  current.style.imageRendering = 'auto';
-  return metrics;
+function clearPixelLayout(current) {
+  if (!current) return;
+  for (const property of ['position','inset','left','top','width','height','maxWidth','maxHeight','marginLeft','marginTop','objectFit','transformOrigin','imageRendering']) {
+    current.style[property] = '';
+  }
 }
 
-function relativeMax(current) {
+function relativeMax(current = image()) {
   const metrics = pixelMetrics(current);
   return metrics?.fit ? Math.max(1, MAX_NATIVE_SCALE / metrics.fit) : MAX_NATIVE_SCALE;
 }
 
-function displayedScale(current, relativeScale = zoom.scale) {
+function displayedScale(current = image(), relativeScale = zoom.scale) {
   const metrics = pixelMetrics(current);
   return metrics ? metrics.fit * relativeScale : relativeScale;
+}
+
+function displayedSize(metrics, relativeScale = zoom.scale) {
+  const actualScale = metrics.fit * relativeScale;
+  return {
+    width: metrics.nativeWidth * actualScale,
+    height: metrics.nativeHeight * actualScale,
+    actualScale
+  };
 }
 
 function viewerHashes() {
@@ -108,11 +111,10 @@ function lockNavigation(locked) {
 }
 
 function clampPan(metrics = null) {
-  const current = image();
-  if (!current || !zoomed()) return { x: 0, y: 0 };
-  const scale = metrics ? metrics.fit * zoom.scale : zoom.scale;
-  const maxX = Math.max(0, (current.clientWidth * scale - innerWidth) / 2);
-  const maxY = Math.max(0, (current.clientHeight * scale - innerHeight) / 2);
+  if (!metrics || !zoomed()) return { x: 0, y: 0 };
+  const size = displayedSize(metrics);
+  const maxX = Math.max(0, (size.width - metrics.viewportWidth) / 2);
+  const maxY = Math.max(0, (size.height - metrics.viewportHeight) / 2);
   return {
     x: Math.max(-maxX, Math.min(maxX, zoom.x)),
     y: Math.max(-maxY, Math.min(maxY, zoom.y))
@@ -126,15 +128,33 @@ function applyZoom(animate = false) {
   lockNavigation(active);
   if (!current) return;
 
-  const metrics = preparePixelImage(current);
-  Object.assign(zoom, clampPan(metrics));
-  current.style.transition = animate ? 'transform 160ms ease-out' : 'none';
+  const metrics = pixelMetrics(current);
+  current.style.transition = animate
+    ? 'width 160ms ease-out,height 160ms ease-out,margin 160ms ease-out,transform 160ms ease-out'
+    : 'none';
+
   if (metrics) {
-    const scale = metrics.fit * zoom.scale;
-    current.style.transform = `translate3d(${zoom.x}px,${zoom.y}px,0) scale(${scale})`;
+    Object.assign(zoom, clampPan(metrics));
+    const size = displayedSize(metrics);
+    current.style.position = 'absolute';
+    current.style.inset = 'auto';
+    current.style.left = '50%';
+    current.style.top = '50%';
+    current.style.width = `${size.width}px`;
+    current.style.height = `${size.height}px`;
+    current.style.maxWidth = 'none';
+    current.style.maxHeight = 'none';
+    current.style.marginLeft = `${-size.width / 2}px`;
+    current.style.marginTop = `${-size.height / 2}px`;
+    current.style.objectFit = 'fill';
+    current.style.transformOrigin = '50% 50%';
+    current.style.imageRendering = 'auto';
+    current.style.transform = `translate3d(${zoom.x}px,${zoom.y}px,0)`;
   } else {
+    clearPixelLayout(current);
     current.style.transform = active ? `translate3d(${zoom.x}px,${zoom.y}px,0) scale(${zoom.scale})` : '';
   }
+
   if (animate) setTimeout(() => { if (current.isConnected) current.style.transition = ''; }, 180);
 }
 
@@ -147,12 +167,13 @@ function resetZoom(animate = false) {
   applyZoom(animate);
 }
 
-function naturalZoom(current) {
-  const metrics = preparePixelImage(current);
+function naturalZoom(current = image()) {
+  const metrics = pixelMetrics(current);
   if (metrics) {
     const nativeRelative = 1 / metrics.fit;
     return nativeRelative > 1.01 ? nativeRelative : Math.min(relativeMax(current), 2.25);
   }
+  if (!current) return 2.25;
   const scale = Math.max(
     Number(current.naturalWidth || 0) / Math.max(1, current.clientWidth),
     Number(current.naturalHeight || 0) / Math.max(1, current.clientHeight)
@@ -164,7 +185,7 @@ function setScaleAt(nextScale, clientX, clientY, animate = false) {
   const current = image();
   if (!current) return;
   const oldScale = zoom.scale;
-  const scale = Math.max(1, Math.min(relativeMax(current), nextScale));
+  const scale = Math.max(1, Math.min(relativeMax(current), Number(nextScale) || 1));
   if (scale <= 1.01) return resetZoom(animate);
 
   const offsetX = clientX - innerWidth / 2;
@@ -174,6 +195,25 @@ function setScaleAt(nextScale, clientX, clientY, animate = false) {
   zoom.scale = scale;
   zoom.x = offsetX - anchorX * scale;
   zoom.y = offsetY - anchorY * scale;
+  applyZoom(animate);
+}
+
+function setView(view = {}, animate = false) {
+  const current = image();
+  const metrics = pixelMetrics(current);
+  const relative = Number.isFinite(Number(view.relativeScale))
+    ? Number(view.relativeScale)
+    : metrics && Number.isFinite(Number(view.scale))
+      ? Number(view.scale) / Math.max(.0001, metrics.fit)
+      : zoom.scale;
+  zoom.scale = Math.max(1, Math.min(relativeMax(current), relative || 1));
+  zoom.x = Number(view.x) || 0;
+  zoom.y = Number(view.y) || 0;
+  if (zoom.scale <= 1.01) {
+    zoom.scale = 1;
+    zoom.x = 0;
+    zoom.y = 0;
+  }
   applyZoom(animate);
 }
 
@@ -191,7 +231,7 @@ function bindCurrentImage() {
   current.dataset.pixelViewerBound = '1';
   current.addEventListener('load', () => {
     if (!current.isConnected || current.dataset.fullSrc) return;
-    applyZoom();
+    requestAnimationFrame(() => applyZoom());
   });
   if (current.complete && current.naturalWidth && !current.dataset.fullSrc) requestAnimationFrame(() => applyZoom());
 }
@@ -208,7 +248,13 @@ window.mochimonoViewerPixelZoom = {
       y: zoom.y,
       ready: Boolean(metrics)
     };
-  }
+  },
+  zoomed,
+  set: setView,
+  setScaleAt,
+  naturalScale: naturalZoom,
+  reset: resetZoom,
+  render: applyZoom
 };
 
 const activeUi = target => target?.closest?.('.viewer-nav,.viewer-bar,.viewer-collections,.viewer-info,dialog,video');
