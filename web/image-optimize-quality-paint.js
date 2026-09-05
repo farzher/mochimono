@@ -16,8 +16,9 @@ if (viewer && compare && original && tuning && qualitySlider) {
 .image-optimize-quality-map-panel{display:grid;gap:9px;padding-top:1px}.image-optimize-quality-map-panel[hidden]{display:none!important}
 .image-optimize-quality-tools{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.image-optimize-quality-tools .image-optimize-choice{min-height:32px}.image-optimize-quality-reset{min-height:30px!important;font-size:10.5px!important}
 .image-optimize-quality-map-panel .image-optimize-slider{gap:5px}.image-optimize-quality-map-panel .image-optimize-tune-head{font-size:10.5px}
-.image-optimize-quality-mask{position:absolute;z-index:2;display:none;pointer-events:none;user-select:none;-webkit-user-select:none;image-rendering:auto}
-.image-optimize-compare.image-optimize-quality-painting{cursor:crosshair}.image-optimize-compare.image-optimize-quality-painting .image-optimize-quality-mask{display:block}
+.image-optimize-quality-mask,.image-optimize-quality-cursor{position:absolute;z-index:2;display:none;pointer-events:none;user-select:none;-webkit-user-select:none;image-rendering:auto}
+.image-optimize-quality-cursor{z-index:3;opacity:.95}
+.image-optimize-compare.image-optimize-quality-painting{cursor:none}.image-optimize-compare.image-optimize-quality-painting .image-optimize-quality-mask,.image-optimize-compare.image-optimize-quality-painting .image-optimize-quality-cursor{display:block}
 `;
   document.head.append(style);
 
@@ -60,6 +61,12 @@ if (viewer && compare && original && tuning && qualitySlider) {
   compare.append(paintCanvas);
   const paintContext = paintCanvas.getContext('2d');
 
+  const cursorCanvas = document.createElement('canvas');
+  cursorCanvas.className = 'image-optimize-quality-cursor';
+  cursorCanvas.setAttribute('aria-hidden', 'true');
+  compare.append(cursorCanvas);
+  const cursorContext = cursorCanvas.getContext('2d');
+
   const maskCanvas = document.createElement('canvas');
   const maskContext = maskCanvas.getContext('2d');
 
@@ -72,8 +79,15 @@ if (viewer && compare && original && tuning && qualitySlider) {
   let lastPoint = null;
   let previewTimer = 0;
   let geometryFrame = 0;
+  let cursorPoint = null;
 
   const optimizerActive = () => viewer.classList.contains('image-optimize-active');
+
+  function toolColor(name) {
+    if (name === 'high') return [92, 178, 255, 96];
+    if (name === 'normal') return [255, 190, 92, 82];
+    return [255, 92, 92, 72];
+  }
 
   // Rebuild the display overlay from the mask instead of painting translucent
   // strokes onto translucent strokes. Overpainting can therefore never become
@@ -104,13 +118,34 @@ if (viewer && compare && original && tuning && qualitySlider) {
     paintContext.putImageData(image, 0, 0);
   }
 
+  function clearCursor() {
+    cursorContext.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+  }
+
+  function renderCursor() {
+    clearCursor();
+    if (!enabled || !initialized || !cursorPoint) return;
+    const radius = Math.max(1, brush / 2);
+    const activeTool = activePointer?.button === 2 ? 'low' : tool;
+    const [r, g, b, a] = toolColor(activeTool);
+    cursorContext.save();
+    cursorContext.lineWidth = 2;
+    cursorContext.strokeStyle = `rgba(${r},${g},${b},0.95)`;
+    cursorContext.fillStyle = `rgba(${r},${g},${b},${Math.max(0.08, a / 255 * 0.22)})`;
+    cursorContext.beginPath();
+    cursorContext.arc(cursorPoint.x, cursorPoint.y, radius, 0, Math.PI * 2);
+    cursorContext.fill();
+    cursorContext.stroke();
+    cursorContext.restore();
+  }
+
   function initializeMask(force = false) {
     if ((!force && initialized) || !original.naturalWidth || !original.naturalHeight) return initialized;
     const scale = Math.min(1, MASK_MAX_EDGE / Math.max(original.naturalWidth, original.naturalHeight));
     const width = Math.max(1, Math.round(original.naturalWidth * scale));
     const height = Math.max(1, Math.round(original.naturalHeight * scale));
-    paintCanvas.width = maskCanvas.width = width;
-    paintCanvas.height = maskCanvas.height = height;
+    paintCanvas.width = maskCanvas.width = cursorCanvas.width = width;
+    paintCanvas.height = maskCanvas.height = cursorCanvas.height = height;
     initialized = true;
     lowAll(false);
     queueGeometry();
@@ -125,6 +160,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
     maskContext.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
     maskContext.restore();
     renderOverlay();
+    renderCursor();
     if (refresh) requestPreview();
   }
 
@@ -134,10 +170,15 @@ if (viewer && compare && original && tuning && qualitySlider) {
     const imageRect = original.getBoundingClientRect();
     const compareRect = compare.getBoundingClientRect();
     if (!imageRect.width || !imageRect.height || !compareRect.width || !compareRect.height) return;
-    paintCanvas.style.left = `${imageRect.left - compareRect.left}px`;
-    paintCanvas.style.top = `${imageRect.top - compareRect.top}px`;
-    paintCanvas.style.width = `${imageRect.width}px`;
-    paintCanvas.style.height = `${imageRect.height}px`;
+    const left = imageRect.left - compareRect.left;
+    const top = imageRect.top - compareRect.top;
+    for (const canvas of [paintCanvas, cursorCanvas]) {
+      canvas.style.left = `${left}px`;
+      canvas.style.top = `${top}px`;
+      canvas.style.width = `${imageRect.width}px`;
+      canvas.style.height = `${imageRect.height}px`;
+    }
+    renderCursor();
   }
 
   function queueGeometry() {
@@ -169,16 +210,19 @@ if (viewer && compare && original && tuning && qualitySlider) {
     for (const button of panel.querySelectorAll('[data-quality-tool]')) {
       button.classList.toggle('active', button.dataset.qualityTool === tool);
     }
+    renderCursor();
   }
 
   function setEnabled(next, refresh = true) {
     enabled = Boolean(next);
     activePointer = null;
     lastPoint = null;
+    cursorPoint = null;
     toggle.classList.toggle('active', enabled);
     toggle.textContent = enabled ? 'Painting' : 'Paint';
     panel.hidden = !enabled;
     compare.classList.toggle('image-optimize-quality-painting', enabled);
+    clearCursor();
     if (enabled) {
       initializeMask();
       queueGeometry();
@@ -199,9 +243,9 @@ if (viewer && compare && original && tuning && qualitySlider) {
     return { x:x * maskCanvas.width, y:y * maskCanvas.height };
   }
 
-  function drawSegment(from, to) {
+  function drawSegment(from, to, levelName = tool) {
     if (!from || !to) return;
-    const value = LEVELS[tool];
+    const value = LEVELS[levelName] ?? LEVELS.high;
     const color = `rgb(${value},${value},${value})`;
     maskContext.save();
     maskContext.globalCompositeOperation = 'source-over';
@@ -221,6 +265,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
     }
     maskContext.restore();
     renderOverlay();
+    renderCursor();
   }
 
   function blockedTarget(event) {
@@ -228,21 +273,25 @@ if (viewer && compare && original && tuning && qualitySlider) {
   }
 
   window.addEventListener('pointerdown', event => {
-    if (!enabled || !optimizerActive() || blockedTarget(event) || event.button !== 0) return;
+    if (!enabled || !optimizerActive() || blockedTarget(event) || (event.button !== 0 && event.button !== 2)) return;
     const point = pointForEvent(event);
     if (!point) return;
-    activePointer = event.pointerId;
+    activePointer = { id:event.pointerId, button:event.button };
     lastPoint = point;
-    drawSegment(point, point);
+    cursorPoint = point;
+    drawSegment(point, point, event.button === 2 ? 'low' : tool);
     event.preventDefault();
     event.stopImmediatePropagation();
   }, true);
 
   window.addEventListener('pointermove', event => {
-    if (activePointer !== event.pointerId) return;
-    const point = pointForEvent(event, true);
+    if (!enabled || !optimizerActive()) return;
+    const point = pointForEvent(event, activePointer?.id === event.pointerId);
+    cursorPoint = point;
+    renderCursor();
+    if (activePointer?.id !== event.pointerId) return;
     if (point) {
-      drawSegment(lastPoint || point, point);
+      drawSegment(lastPoint || point, point, activePointer.button === 2 ? 'low' : tool);
       lastPoint = point;
     }
     event.preventDefault();
@@ -250,17 +299,35 @@ if (viewer && compare && original && tuning && qualitySlider) {
   }, true);
 
   function finishPaint(event) {
-    if (activePointer !== event.pointerId) return;
+    if (activePointer?.id !== event.pointerId) return;
     const point = pointForEvent(event, true);
-    if (point) drawSegment(lastPoint || point, point);
+    if (point) {
+      cursorPoint = point;
+      drawSegment(lastPoint || point, point, activePointer.button === 2 ? 'low' : tool);
+    }
     activePointer = null;
     lastPoint = null;
+    renderCursor();
     requestPreview();
     event.preventDefault();
     event.stopImmediatePropagation();
   }
   window.addEventListener('pointerup', finishPaint, true);
   window.addEventListener('pointercancel', finishPaint, true);
+
+  compare.addEventListener('contextmenu', event => {
+    if (enabled) event.preventDefault();
+  });
+  compare.addEventListener('pointerleave', () => {
+    if (activePointer) return;
+    cursorPoint = null;
+    clearCursor();
+  });
+  compare.addEventListener('pointerenter', event => {
+    if (!enabled) return;
+    cursorPoint = pointForEvent(event, true);
+    renderCursor();
+  });
 
   toggle.addEventListener('click', () => setEnabled(!enabled));
   panel.addEventListener('click', event => {
@@ -276,6 +343,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
   brushInput.addEventListener('input', () => {
     brush = Math.max(6, Math.min(96, Number(brushInput.value) || 32));
     brushLabel.textContent = String(brush);
+    renderCursor();
   });
 
   formats?.addEventListener('click', event => {
@@ -310,6 +378,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
     initialized = false;
     activePointer = null;
     lastPoint = null;
+    cursorPoint = null;
     lowQuality = DEFAULT_LOW_QUALITY;
     lowInput.value = String(lowQuality);
     lowLabel.textContent = String(lowQuality);
@@ -321,6 +390,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
     toggle.textContent = 'Paint';
     panel.hidden = true;
     compare.classList.remove('image-optimize-quality-painting');
+    clearCursor();
     setTimeout(() => { initializeMask(true); queueGeometry(); }, 0);
   });
   window.addEventListener('mochimono:optimize-close', () => {
@@ -329,10 +399,12 @@ if (viewer && compare && original && tuning && qualitySlider) {
     enabled = false;
     activePointer = null;
     lastPoint = null;
+    cursorPoint = null;
     compare.classList.remove('image-optimize-quality-painting');
     panel.hidden = true;
     toggle.classList.remove('active');
     toggle.textContent = 'Paint';
     paintContext.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
+    clearCursor();
   });
 }
