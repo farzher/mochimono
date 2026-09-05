@@ -12,6 +12,8 @@ const RENDER_MARGIN = 1.35;
 const THUMB_AHEAD_SCREENS = 1.65;
 const THUMB_BEHIND_SCREENS = .35;
 const THUMB_PRIORITY_STEP = .28;
+const RAPID_ARROW_AHEAD = 1.25;
+const RAPID_ARROW_BEHIND = .55;
 
 const worker = typeof Worker === 'function'
   ? new Worker(new URL('./grid-layout-worker.js', import.meta.url))
@@ -56,6 +58,8 @@ const metrics = {
   rowMounts:0,
   rowUnmounts:0,
   scrollFrames:0,
+  rapidScrollFrames:0,
+  rapidArrowFrames:0,
   thumbPriorityUpdates:0,
   scrollCorrections:0,
   maxRenderedRows:0,
@@ -86,6 +90,10 @@ const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '
 
 function interactionActive() {
   return Boolean(window.mochimonoGridInteraction?.active?.()) || performance.now() - lastScrollAt < 180;
+}
+
+function rapidMode() {
+  return String(window.mochimonoGridInteraction?.rapidMode?.() || '');
 }
 
 function currentWidth() {
@@ -164,7 +172,7 @@ function thumbnailPriorityRange(scrollTop = scrollY) {
 
 function syncThumbnailPriority(force = false) {
   thumbFrame = 0;
-  if (!owned || !layout || !rowLayer?.isConnected) return;
+  if (rapidMode() || !owned || !layout || !rowLayer?.isConnected) return;
   const range = thumbnailPriorityRange();
   if (!force && scrollDirection === lastThumbDirection && Math.abs(range.top - lastThumbPriorityY) < viewportHeight * THUMB_PRIORITY_STEP) return;
 
@@ -182,7 +190,7 @@ function syncThumbnailPriority(force = false) {
 }
 
 function scheduleThumbnailPriority(force = false) {
-  if (!owned || !layout) return;
+  if (rapidMode() || !owned || !layout) return;
   if (force && thumbFrame) cancelAnimationFrame(thumbFrame);
   if (!thumbFrame) thumbFrame = requestAnimationFrame(() => syncThumbnailPriority(force));
 }
@@ -470,10 +478,33 @@ function renderCurrent() {
   renderFrame = 0;
   if (!owned || !layout || !plane?.isConnected) return;
   metrics.scrollFrames++;
-  const windowRows = rowsForScroll(layout, scrollY, MOUNT_AHEAD, MOUNT_BEHIND);
+
+  const rapid = rapidMode();
+  if (rapid === 'page' || rapid === 'scroll') {
+    metrics.rapidScrollFrames++;
+    updateRail();
+    return;
+  }
+
+  const rapidArrow = rapid === 'arrow';
+  const windowRows = rowsForScroll(
+    layout,
+    scrollY,
+    rapidArrow ? RAPID_ARROW_AHEAD : MOUNT_AHEAD,
+    rapidArrow ? RAPID_ARROW_BEHIND : MOUNT_BEHIND
+  );
   materializeRows(windowRows.rows);
   mountedStart = windowRows.range.start;
   mountedEnd = windowRows.range.end;
+
+  if (rapidArrow) {
+    metrics.rapidScrollFrames++;
+    metrics.rapidArrowFrames++;
+    trimRows(scrollY);
+    updateRail();
+    return;
+  }
+
   syncThumbnailPriority(true);
   trimRows(scrollY);
   syncDayButtons(windowRows.range);
@@ -802,6 +833,20 @@ window.addEventListener('mochimono:media-size', () => {
   resizeTimer = setTimeout(build, 40);
 });
 
+window.addEventListener('mochimono:grid-fast-scroll-start', () => {
+  if (thumbFrame) cancelAnimationFrame(thumbFrame);
+  thumbFrame = 0;
+  window.mochimonoThumbnails?.clearPriority?.();
+});
+
+window.addEventListener('mochimono:grid-fast-scroll-end', () => {
+  mountedStart = 0;
+  mountedEnd = 0;
+  lastThumbPriorityY = -Infinity;
+  scheduleRows(true);
+  scheduleThumbnailPriority(true);
+});
+
 window.addEventListener('mochimono:grid-interaction-end', () => {
   if (pendingLayout) {
     clearTimeout(pendingTimer);
@@ -843,6 +888,7 @@ window.mochimonoStableGrid = {
     rendered:renderedRows.size,
     totalHeight:layout?.totalHeight || 0,
     width:buildConfig?.width || 0,
+    rapidMode:rapidMode(),
     metrics:{ ...metrics }
   })
 };
