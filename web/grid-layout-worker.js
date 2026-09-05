@@ -7,7 +7,9 @@ function mediaRatio(item) {
   if (type !== 'image' && type !== 'video') return 4 / 3;
   const width = Number(item?.[3]) || 0;
   const height = Number(item?.[4]) || 0;
-  return width > 0 && height > 0 ? Math.max(.65, Math.min(2.1, width / height)) : 4 / 3;
+  if (width <= 0 || height <= 0) return 4 / 3;
+  const ratio = width / height;
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : 4 / 3;
 }
 
 function buildItemData(items) {
