@@ -8,12 +8,13 @@ const formats = document.querySelector('[data-opt-formats]');
 if (viewer && compare && original && tuning && qualitySlider) {
   const MASK_MAX_EDGE = 256;
   const DEFAULT_LOW_QUALITY = 12;
+  const LEVELS = { high:255, normal:128, low:0 };
 
   const style = document.createElement('style');
   style.textContent = `
 .image-optimize-quality-map-row{grid-template-columns:auto 1fr}.image-optimize-quality-map-row>.image-optimize-choice{justify-self:end;width:110px}
 .image-optimize-quality-map-panel{display:grid;gap:9px;padding-top:1px}.image-optimize-quality-map-panel[hidden]{display:none!important}
-.image-optimize-quality-tools{display:grid;grid-template-columns:1fr 1fr auto;gap:6px}.image-optimize-quality-tools .image-optimize-choice{min-height:32px}
+.image-optimize-quality-tools{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.image-optimize-quality-tools .image-optimize-choice{min-height:32px}.image-optimize-quality-reset{min-height:30px!important;font-size:10.5px!important}
 .image-optimize-quality-map-panel .image-optimize-slider{gap:5px}.image-optimize-quality-map-panel .image-optimize-tune-head{font-size:10.5px}
 .image-optimize-quality-mask{position:absolute;z-index:2;display:none;pointer-events:none;user-select:none;-webkit-user-select:none;image-rendering:auto}
 .image-optimize-compare.image-optimize-quality-painting{cursor:crosshair}.image-optimize-compare.image-optimize-quality-painting .image-optimize-quality-mask{display:block}
@@ -31,13 +32,14 @@ if (viewer && compare && original && tuning && qualitySlider) {
   panel.hidden = true;
   panel.innerHTML = `
     <div class="image-optimize-quality-tools">
-      <button class="image-optimize-choice active" type="button" data-quality-tool="protect">Protect</button>
-      <button class="image-optimize-choice" type="button" data-quality-tool="compress">Compress</button>
-      <button class="image-optimize-choice" type="button" data-quality-reset>Compress all</button>
+      <button class="image-optimize-choice active" type="button" data-quality-tool="high">High</button>
+      <button class="image-optimize-choice" type="button" data-quality-tool="normal">Normal</button>
+      <button class="image-optimize-choice" type="button" data-quality-tool="low">Who cares</button>
     </div>
+    <button class="image-optimize-choice image-optimize-quality-reset" type="button" data-quality-reset>Who cares · whole image</button>
     <div class="image-optimize-slider">
-      <div class="image-optimize-tune-head"><span>Background AVIF quality</span><output data-quality-low-label>${DEFAULT_LOW_QUALITY}</output></div>
-      <input data-quality-low type="range" min="1" max="40" value="${DEFAULT_LOW_QUALITY}" aria-label="AVIF quality outside protected regions">
+      <div class="image-optimize-tune-head"><span>Who cares AVIF quality</span><output data-quality-low-label>${DEFAULT_LOW_QUALITY}</output></div>
+      <input data-quality-low type="range" min="1" max="40" value="${DEFAULT_LOW_QUALITY}" aria-label="AVIF quality for who-cares regions">
     </div>
     <div class="image-optimize-slider">
       <div class="image-optimize-tune-head"><span>Brush</span><output data-quality-brush-label>32</output></div>
@@ -63,7 +65,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
 
   let enabled = false;
   let initialized = false;
-  let tool = 'protect';
+  let tool = 'high';
   let brush = 32;
   let lowQuality = DEFAULT_LOW_QUALITY;
   let activePointer = null;
@@ -73,6 +75,35 @@ if (viewer && compare && original && tuning && qualitySlider) {
 
   const optimizerActive = () => viewer.classList.contains('image-optimize-active');
 
+  // Rebuild the display overlay from the mask instead of painting translucent
+  // strokes onto translucent strokes. Overpainting can therefore never become
+  // more opaque. High is blue, Normal is amber, and Who cares is unpainted.
+  function renderOverlay() {
+    if (!initialized) return;
+    const width = maskCanvas.width;
+    const height = maskCanvas.height;
+    const mask = maskContext.getImageData(0, 0, width, height).data;
+    const image = paintContext.createImageData(width, height);
+    const output = image.data;
+
+    for (let index = 0; index < width * height; index++) {
+      const level = mask[index * 4];
+      const offset = index * 4;
+      if (level >= 192) {
+        output[offset] = 92;
+        output[offset + 1] = 178;
+        output[offset + 2] = 255;
+        output[offset + 3] = 96;
+      } else if (level >= 64) {
+        output[offset] = 255;
+        output[offset + 1] = 190;
+        output[offset + 2] = 92;
+        output[offset + 3] = 82;
+      }
+    }
+    paintContext.putImageData(image, 0, 0);
+  }
+
   function initializeMask(force = false) {
     if ((!force && initialized) || !original.naturalWidth || !original.naturalHeight) return initialized;
     const scale = Math.min(1, MASK_MAX_EDGE / Math.max(original.naturalWidth, original.naturalHeight));
@@ -81,19 +112,19 @@ if (viewer && compare && original && tuning && qualitySlider) {
     paintCanvas.width = maskCanvas.width = width;
     paintCanvas.height = maskCanvas.height = height;
     initialized = true;
-    compressAll(false);
+    lowAll(false);
     queueGeometry();
     return true;
   }
 
-  function compressAll(refresh = true) {
+  function lowAll(refresh = true) {
     if (!initialized) return;
     maskContext.save();
     maskContext.globalCompositeOperation = 'source-over';
     maskContext.fillStyle = '#000';
     maskContext.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
     maskContext.restore();
-    paintContext.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
+    renderOverlay();
     if (refresh) requestPreview();
   }
 
@@ -134,7 +165,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
   }
 
   function setTool(next) {
-    tool = next === 'compress' ? 'compress' : 'protect';
+    tool = Object.hasOwn(LEVELS, next) ? next : 'high';
     for (const button of panel.querySelectorAll('[data-quality-tool]')) {
       button.classList.toggle('active', button.dataset.qualityTool === tool);
     }
@@ -170,30 +201,26 @@ if (viewer && compare && original && tuning && qualitySlider) {
 
   function drawSegment(from, to) {
     if (!from || !to) return;
-    const contexts = [
-      { context:maskContext, color:tool === 'protect' ? '#fff' : '#000', composite:'source-over' },
-      { context:paintContext, color:'rgba(92,178,255,.40)', composite:tool === 'protect' ? 'source-over' : 'destination-out' }
-    ];
-    for (const item of contexts) {
-      const context = item.context;
-      context.save();
-      context.globalCompositeOperation = item.composite;
-      context.strokeStyle = item.color;
-      context.fillStyle = item.color;
-      context.lineWidth = brush;
-      context.lineCap = 'round';
-      context.lineJoin = 'round';
-      context.beginPath();
-      context.moveTo(from.x, from.y);
-      context.lineTo(to.x, to.y);
-      context.stroke();
-      if (Math.abs(from.x - to.x) < .01 && Math.abs(from.y - to.y) < .01) {
-        context.beginPath();
-        context.arc(to.x, to.y, brush / 2, 0, Math.PI * 2);
-        context.fill();
-      }
-      context.restore();
+    const value = LEVELS[tool];
+    const color = `rgb(${value},${value},${value})`;
+    maskContext.save();
+    maskContext.globalCompositeOperation = 'source-over';
+    maskContext.strokeStyle = color;
+    maskContext.fillStyle = color;
+    maskContext.lineWidth = brush;
+    maskContext.lineCap = 'round';
+    maskContext.lineJoin = 'round';
+    maskContext.beginPath();
+    maskContext.moveTo(from.x, from.y);
+    maskContext.lineTo(to.x, to.y);
+    maskContext.stroke();
+    if (Math.abs(from.x - to.x) < .01 && Math.abs(from.y - to.y) < .01) {
+      maskContext.beginPath();
+      maskContext.arc(to.x, to.y, brush / 2, 0, Math.PI * 2);
+      maskContext.fill();
     }
+    maskContext.restore();
+    renderOverlay();
   }
 
   function blockedTarget(event) {
@@ -240,7 +267,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
     const button = event.target.closest('[data-quality-tool]');
     if (button) setTool(button.dataset.qualityTool);
   });
-  resetButton.addEventListener('click', () => compressAll());
+  resetButton.addEventListener('click', () => lowAll());
   lowInput.addEventListener('input', () => {
     lowQuality = Math.max(1, Math.min(40, Number(lowInput.value) || DEFAULT_LOW_QUALITY));
     lowLabel.textContent = String(lowQuality);
@@ -289,7 +316,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
     brush = 32;
     brushInput.value = String(brush);
     brushLabel.textContent = String(brush);
-    setTool('protect');
+    setTool('high');
     toggle.classList.remove('active');
     toggle.textContent = 'Paint';
     panel.hidden = true;
