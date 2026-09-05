@@ -8,6 +8,8 @@ const CARD_PRELOAD_MARGIN = Math.max(900, Math.round(innerHeight * 2.25));
 const ROW_PRELOAD_MARGIN = Math.max(1200, Math.round(innerHeight * 2.75));
 const IMAGE_POOL_MAX = 512;
 const MAX_IMAGE_LOADS = 48;
+const NEAR_LOAD_LIMIT = 40;
+const WARM_LOAD_LIMIT = 24;
 const ROW_WORK_BUDGET_MS = 4;
 
 const states = new Map();
@@ -277,7 +279,9 @@ function queueCard(card, tier = 1) {
 }
 
 function nextQueuedCard() {
+  const limits = [MAX_IMAGE_LOADS, NEAR_LOAD_LIMIT, WARM_LOAD_LIMIT];
   for (let tier = 0; tier < loadWork.length; tier++) {
+    if (activeImageLoads >= limits[tier]) continue;
     while (loadWork[tier].length) {
       const card = loadWork[tier].shift();
       if (queuedCards.get(card) !== tier) continue;
