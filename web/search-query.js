@@ -48,10 +48,14 @@ const typeAlias = value => {
   return TYPE_ALIASES.get(normalized) || normalized;
 };
 
-function appendField(result, field, normalized) {
-  if (!normalized) return result;
-  for (const word of normalized.split(' ')) if (word) result += ` __${field}__${word}`;
-  return result;
+// Catalog hydration calls buildSearchText once per file. The old appendField()
+// loop repeatedly grew one large string word-by-word, which dominated the cold
+// start CPU profile on large libraries. Build each tagged field in one native
+// replacement and join a small set of chunks once instead.
+function fieldText(field, normalized) {
+  if (!normalized) return '';
+  const prefix = `__${field}__`;
+  return `${prefix}${normalized.replaceAll(' ', ` ${prefix}`)}`;
 }
 
 function pathQuery(text) {
@@ -95,33 +99,29 @@ export function buildSearchText(file, sourceNames = new Map()) {
   const name = normalizeText(file.filename || '');
   const path = normalizeText(`${file.originalPath || ''} ${file.searchText || ''}`);
   const ext = extension(file.filename);
+  const parts = [];
 
-  // This function runs once per catalog file during hydration. Build the string
-  // directly instead of allocating several arrays/spreads for every file.
-  let result = name;
-  if (path) result += `${result ? ' ' : ''}${path}`;
-  result = appendField(result, 'name', name);
-  result = appendField(result, 'path', path);
-  result += ` __type__${kind}`;
-  if (kind === 'image' || kind === 'video') result += ' __type__media';
-  if (kind === 'application' || kind === 'text') result += ' __type__application';
-  result += ` __ext__${ext}`;
-  if (Number.isFinite(year)) result += ` __year__${year}`;
-  result += ' __location__server __location__mochimono';
-  if (Number(file.backupCount) > 0) result += ' __location__backup';
-  if (local.length) result += ' __location__local';
+  if (name) parts.push(name, fieldText('name', name));
+  if (path) parts.push(path, fieldText('path', path));
+  parts.push(`__type__${kind}`);
+  if (kind === 'image' || kind === 'video') parts.push('__type__media');
+  if (kind === 'application' || kind === 'text') parts.push('__type__application');
+  parts.push(`__ext__${ext}`);
+  if (Number.isFinite(year)) parts.push(`__year__${year}`);
+  parts.push('__location__server', '__location__mochimono');
+  if (Number(file.backupCount) > 0) parts.push('__location__backup');
+  if (local.length) parts.push('__location__local');
 
   for (const location of local) {
     const text = normalizeText(`${location.name || ''} ${location.deviceName || ''} ${location.rootPath || ''}`);
-    result = appendField(result, 'location', text);
-    if (text) result += ` ${text}`;
+    if (text) parts.push(fieldText('location', text), text);
   }
   for (const id of file.importIds || []) {
-    result += ` __sourceid__${id}`;
+    parts.push(`__sourceid__${id}`);
     const source = normalizedSource(sourceNames, id);
-    if (source) result += ` ${source}`;
+    if (source) parts.push(source);
   }
-  return result.trim();
+  return parts.join(' ');
 }
 
 export function queryTerms(raw, sourceOptions = []) {
