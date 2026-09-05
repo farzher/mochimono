@@ -264,11 +264,6 @@ async function revealLoadedImage(hash, card, image) {
   state.nextCheck = 0;
   state.nextTry = 0;
   settleHashWaiters(hash);
-
-  image.style.transform = 'translateZ(0)';
-  requestAnimationFrame(() => {
-    if (image.isConnected) image.style.removeProperty('transform');
-  });
 }
 
 function queueCard(card, tier = 1) {
@@ -498,6 +493,7 @@ function mountRow(row) {
 function unmountRow(row) {
   if (!(row instanceof Element) || !mountedRows.has(row)) return;
   rowObserver?.unobserve(row);
+  mountedRows.delete(row);
   activeRows.delete(row);
   queuedRows.delete(row);
   cleanupRows.push(row);
