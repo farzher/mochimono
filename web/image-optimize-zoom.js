@@ -67,7 +67,7 @@ if (viewer && compare && original && optimized) {
       nativeHeight,
       viewportWidth: rect.width,
       viewportHeight: rect.height,
-      fit: Math.min(1, rect.width / nativeWidth, rect.height / nativeHeight)
+      fit: Math.min(rect.width / nativeWidth, rect.height / nativeHeight)
     };
   }
 
