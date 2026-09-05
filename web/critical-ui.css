@@ -27,9 +27,9 @@ html.grid-interaction-active #files .file-context-badge{opacity:0!important;tran
 .stable-grid-row .media-thumb{background:#242326}
 .stable-grid-row .video-thumb-pending{background:#242326!important}
 
-/* Fast loading feedback: opacity only, no persistent layer hint or fill state. */
+/* Newly decoded thumbnails reveal quickly; decoded nodes reused from the pool are already ready and stay instant. */
 .stable-grid-row .cached-thumb{transition:none!important}
-.stable-grid-row .cached-thumb[data-thumb-decoded="1"]{animation:grid-thumb-reveal 120ms cubic-bezier(.2,.8,.2,1)!important}
+.stable-grid-row .cached-thumb[data-thumb-decoded="1"]:not([data-thumb-pooled="1"]){animation:grid-thumb-reveal 120ms cubic-bezier(.2,.8,.2,1)!important}
 @keyframes grid-thumb-reveal{from{opacity:.12}to{opacity:1}}
 
 .file-card{position:relative}

@@ -5,12 +5,9 @@ const THUMB_VERSION = 3;
 const CHECK_LIMIT = 160;
 const RECHECK_DELAY = CLIENT ? 140 : 500;
 const CARD_PRELOAD_MARGIN = Math.max(900, Math.round(innerHeight * 2.25));
-const ROW_PRELOAD_MARGIN = Math.max(180, Math.round(innerHeight * .4));
 const IMAGE_POOL_MAX = 512;
 const MAX_IMAGE_LOADS = 48;
 const NEAR_LOAD_LIMIT = 36;
-const WARM_LOAD_LIMIT = 16;
-const ROW_WORK_BUDGET_MS = 4;
 
 const states = new Map();
 const cardsByHash = new Map();
@@ -18,20 +15,14 @@ const dimensions = new Map();
 const nearby = new Set();
 const prioritized = new Set();
 const preparedCards = new WeakSet();
-const mountedRows = new WeakSet();
-const activeRows = new Set();
 const imagePool = new Map();
 const externalQueue = new Map();
 const waitersByHash = new Map();
 const browserFallback = CLIENT ? null : import('./browser-thumbnail-fallback.js').catch(() => null);
 
-const rowWork = [[], [], []];
-const queuedRows = new WeakMap();
-const loadWork = [[], [], []];
+const loadWork = [[], []];
 const queuedCards = new WeakMap();
-const cleanupRows = [];
 
-let rowWorkTimer = 0;
 let activeImageLoads = 0;
 let checkTimer = 0;
 let checkAt = 0;
@@ -43,7 +34,7 @@ const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mp
 const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
 const filename = card => card.dataset.filename || card.title || card.querySelector('strong')?.textContent || '';
 const thumbUrl = hash => `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
-const clampTier = value => Math.max(0, Math.min(2, Number(value) || 0));
+const clampTier = value => Math.max(0, Math.min(1, Number(value) || 0));
 
 function kind(card) {
   if (card.classList.contains('video-card')) return 'video';
@@ -214,10 +205,10 @@ function stashImage(card) {
   if (!image) return;
   image.onload = null;
   image.onerror = null;
-  image.style.removeProperty('transform');
 
   if (image.complete && image.naturalWidth && image.dataset.thumbDecoded === '1') {
     image.style.opacity = '1';
+    image.dataset.thumbPooled = '1';
     image.remove();
     touchPool(hash, image);
     return;
@@ -242,7 +233,6 @@ function adoptPooledImage(card, hash, box) {
   image.onerror = null;
   image.hidden = false;
   image.style.objectFit = 'cover';
-  image.style.removeProperty('transform');
   image.style.opacity = '1';
   image.dataset.thumbHash = hash;
   box.querySelector('.video-thumb-pending')?.remove();
@@ -298,7 +288,7 @@ function queueCard(card, tier = 1) {
 }
 
 function nextQueuedCard() {
-  const limits = [MAX_IMAGE_LOADS, NEAR_LOAD_LIMIT, WARM_LOAD_LIMIT];
+  const limits = [MAX_IMAGE_LOADS, NEAR_LOAD_LIMIT];
   for (let tier = 0; tier < loadWork.length; tier++) {
     if (activeImageLoads >= limits[tier]) continue;
     while (loadWork[tier].length) {
@@ -306,8 +296,6 @@ function nextQueuedCard() {
       if (queuedCards.get(card) !== tier) continue;
       queuedCards.delete(card);
       if (!card?.isConnected) continue;
-      const row = card.closest('.stable-grid-row');
-      if (row && !activeRows.has(row) && !prioritized.has(card)) continue;
       return { card, tier };
     }
   }
@@ -420,78 +408,6 @@ function cleanupCard(card) {
   preparedCards.delete(card);
 }
 
-function queueRow(row, tier = 1) {
-  if (!row?.isConnected || !mountedRows.has(row)) return;
-  tier = clampTier(tier);
-  const previous = queuedRows.get(row);
-  if (previous != null && previous <= tier) return;
-  queuedRows.set(row, tier);
-  rowWork[tier].push(row);
-  scheduleRowWork();
-}
-
-function rowTier(entry) {
-  const rect = entry.boundingClientRect;
-  if (rect.bottom > 0 && rect.top < innerHeight) return 0;
-  const distance = rect.bottom <= 0 ? -rect.bottom : Math.max(0, rect.top - innerHeight);
-  return distance <= innerHeight * .35 ? 1 : 2;
-}
-
-function prepareRow(row, tier) {
-  if (!row?.isConnected || !activeRows.has(row)) return;
-  for (const card of row.querySelectorAll('[data-hash]')) {
-    nearby.add(card);
-    prepareCard(card, tier, true);
-  }
-}
-
-function cleanupRow(row) {
-  activeRows.delete(row);
-  queuedRows.delete(row);
-  for (const card of row.querySelectorAll('[data-hash]')) cleanupCard(card);
-}
-
-function scheduleRowWork() {
-  if (rowWorkTimer) return;
-  rowWorkTimer = setTimeout(flushRowWork, 0);
-}
-
-function flushRowWork() {
-  rowWorkTimer = 0;
-  const started = performance.now();
-
-  while (cleanupRows.length && performance.now() - started < ROW_WORK_BUDGET_MS) {
-    cleanupRow(cleanupRows.shift());
-  }
-
-  for (let tier = 0; tier < rowWork.length && performance.now() - started < ROW_WORK_BUDGET_MS; tier++) {
-    while (rowWork[tier].length && performance.now() - started < ROW_WORK_BUDGET_MS) {
-      const row = rowWork[tier].shift();
-      if (queuedRows.get(row) !== tier) continue;
-      queuedRows.delete(row);
-      prepareRow(row, tier);
-    }
-  }
-
-  if (cleanupRows.length || rowWork.some(queue => queue.length)) scheduleRowWork();
-  pumpImageLoads();
-}
-
-const rowObserver = files && typeof IntersectionObserver === 'function'
-  ? new IntersectionObserver(entries => {
-      for (const entry of entries) {
-        const row = entry.target;
-        if (!entry.isIntersecting) {
-          activeRows.delete(row);
-          for (const card of row.querySelectorAll('[data-hash]')) nearby.delete(card);
-          continue;
-        }
-        activeRows.add(row);
-        queueRow(row, rowTier(entry));
-      }
-    }, { rootMargin:`${ROW_PRELOAD_MARGIN}px 0px` })
-  : null;
-
 const cardObserver = files && typeof IntersectionObserver === 'function'
   ? new IntersectionObserver(entries => {
       for (const entry of entries) {
@@ -507,33 +423,8 @@ const cardObserver = files && typeof IntersectionObserver === 'function'
     }, { rootMargin:`${CARD_PRELOAD_MARGIN}px 0px` })
   : null;
 
-function mountRow(row) {
-  if (!(row instanceof Element) || mountedRows.has(row)) return;
-  mountedRows.add(row);
-  rowObserver?.observe(row);
-}
-
-function unmountRow(row) {
-  if (!(row instanceof Element) || !mountedRows.has(row)) return;
-  rowObserver?.unobserve(row);
-  mountedRows.delete(row);
-  activeRows.delete(row);
-  queuedRows.delete(row);
-  cleanupRows.push(row);
-  scheduleRowWork();
-}
-
 function prepare(node) {
-  if (!(node instanceof Element)) return;
-  if (node.matches('.stable-grid-row')) {
-    mountRow(node);
-    return;
-  }
-  const stableRows = node.querySelectorAll('.stable-grid-row');
-  if (stableRows.length) {
-    for (const row of stableRows) mountRow(row);
-    return;
-  }
+  if (!(node instanceof Element) || node.matches('.stable-grid-row')) return;
   for (const card of cardsIn(node)) {
     if (card.closest('.stable-grid-row')) continue;
     if (!preparedCards.has(card)) {
@@ -546,15 +437,6 @@ function prepare(node) {
 
 function release(node) {
   if (!(node instanceof Element)) return;
-  if (node.matches('.stable-grid-row')) {
-    unmountRow(node);
-    return;
-  }
-  const stableRows = node.querySelectorAll('.stable-grid-row');
-  if (stableRows.length) {
-    for (const row of stableRows) unmountRow(row);
-    return;
-  }
   for (const card of cardsIn(node)) cleanupCard(card);
 }
 
@@ -815,7 +697,6 @@ window.mochimonoThumbnails = {
       cards:[...cardsByHash.values()].reduce((sum, group) => sum + group.size, 0),
       nearby:nearby.size,
       prioritized:prioritized.size,
-      activeRows:activeRows.size,
       pooled:imagePool.size,
       queuedImages:loadWork.reduce((sum, queue) => sum + queue.length, 0),
       activeImageLoads,
@@ -875,6 +756,5 @@ if (files) {
 
   addEventListener('beforeunload', () => {
     if (checkTimer) clearTimeout(checkTimer);
-    if (rowWorkTimer) clearTimeout(rowWorkTimer);
   }, { once:true });
 }
