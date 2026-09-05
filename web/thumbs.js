@@ -1,22 +1,34 @@
 const files = document.querySelector('#files');
+const viewer = document.querySelector('#viewer');
 const CLIENT = document.documentElement.classList.contains('client-library');
 const THUMB_VERSION = 3;
 const CHECK_LIMIT = 320;
-const RECHECK_DELAY = CLIENT ? 120 : 500;
-const PRELOAD_MARGIN = Math.max(900, Math.round(window.innerHeight * 2.25));
+const RECHECK_DELAY = CLIENT ? 140 : 500;
+const PRELOAD_MARGIN = Math.max(1600, Math.round(window.innerHeight * 4.75));
+const IMAGE_POOL_MAX = 512;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 const states = new Map();
 const cardsByHash = new Map();
 const dimensions = new Map();
 const nearby = new Set();
 const prioritized = new Set();
-const pendingTrees = new Set();
-const decodePrimed = new WeakSet();
+const mountedGridCards = new Set();
+const preparedCards = new WeakSet();
+const imagePool = new Map();
+const externalQueue = new Map();
+const waitersByHash = new Map();
+const modelIndexes = new WeakMap();
 const browserFallback = CLIENT ? null : import('./browser-thumbnail-fallback.js').catch(() => null);
-let observeFrame = 0;
+
 let checkTimer = 0;
 let checkAt = 0;
 let checking = false;
+let geometryTimer = 0;
+let geometryAt = 0;
+let geometryDirty = false;
+let geometryAnchor = null;
+let lastScrollAt = 0;
 
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
@@ -24,10 +36,6 @@ const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mp
 const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
 const filename = card => card.dataset.filename || card.title || card.querySelector('strong')?.textContent || '';
 const thumbUrl = hash => `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
-const activeCard = card => nearby.has(card) || prioritized.has(card);
-const activeCards = () => prioritized.size ? new Set([...nearby, ...prioritized]) : nearby;
-const interacting = () => Boolean(window.mochimonoGridInteraction?.active?.());
-const checkCards = () => interacting() ? prioritized : activeCards();
 
 function kind(card) {
   if (card.classList.contains('video-card')) return 'video';
@@ -46,10 +54,121 @@ function cardsIn(node) {
   return cards;
 }
 
+function visible(card) {
+  if (!card?.isConnected) return false;
+  const rect = card.getBoundingClientRect();
+  return rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth;
+}
+
+function activeCard(card) {
+  return nearby.has(card) || prioritized.has(card) || visible(card);
+}
+
+function stateFor(hash) {
+  let state = states.get(hash);
+  if (!state) {
+    state = { ready:false, failed:false, terminal:false, nextTry:0, nextCheck:0 };
+    states.set(hash, state);
+  }
+  return state;
+}
+
+function modelIndex(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.items)) return null;
+  let index = modelIndexes.get(snapshot);
+  if (!index) {
+    index = new Map(snapshot.items.map((item, position) => [String(item?.[0] || ''), position]));
+    modelIndexes.set(snapshot, index);
+  }
+  return index;
+}
+
+function applyKnownDimensions(snapshot) {
+  const index = modelIndex(snapshot);
+  if (!index) return 0;
+  let changed = 0;
+  for (const [hash, geometry] of dimensions) {
+    const position = index.get(hash);
+    if (!Number.isInteger(position)) continue;
+    const item = snapshot.items[position];
+    if (!item || (Number(item[3]) === geometry.width && Number(item[4]) === geometry.height)) continue;
+    item[3] = geometry.width;
+    item[4] = geometry.height;
+    changed++;
+  }
+  return changed;
+}
+
+function captureGeometryAnchor() {
+  if (!files || !window.mochimonoStableGrid?.active?.()) return null;
+  const top = (document.querySelector('.commandbar')?.getBoundingClientRect().bottom || 0) + 2;
+  let best = null;
+  let distance = Infinity;
+  for (const card of files.querySelectorAll('.stable-grid-row [data-hash]')) {
+    const rect = card.getBoundingClientRect();
+    if (rect.bottom <= top || rect.top >= innerHeight) continue;
+    const next = Math.abs(rect.top - top);
+    if (next >= distance) continue;
+    distance = next;
+    best = { hash:String(card.dataset.hash || ''), top:rect.top };
+  }
+  return best;
+}
+
+function geometryInteractionActive() {
+  return Boolean(window.mochimonoGridInteraction?.active?.()) ||
+    document.querySelector('#dateRail')?.classList.contains('dragging') ||
+    performance.now() - lastScrollAt < 420;
+}
+
+function scheduleGeometry(delay = 220) {
+  if (!geometryDirty) return;
+  const at = performance.now() + delay;
+  if (geometryTimer && geometryAt <= at) return;
+  if (geometryTimer) clearTimeout(geometryTimer);
+  geometryAt = at;
+  geometryTimer = setTimeout(flushGeometry, delay);
+}
+
+function flushGeometry() {
+  geometryTimer = 0;
+  geometryAt = 0;
+  if (!geometryDirty) return;
+  if (geometryInteractionActive()) {
+    scheduleGeometry(300);
+    return;
+  }
+
+  const snapshot = window.mochimonoGridModel;
+  const stable = window.mochimonoStableGrid;
+  if (!snapshot?.items?.length || !stable?.setModel) {
+    scheduleGeometry(300);
+    return;
+  }
+
+  applyKnownDimensions(snapshot);
+  geometryDirty = false;
+  geometryAnchor = captureGeometryAnchor();
+  stable.setModel(snapshot);
+}
+
+function updateGridDimensions(hash, width, height) {
+  const snapshot = window.mochimonoGridModel;
+  const position = modelIndex(snapshot)?.get(hash);
+  if (!Number.isInteger(position)) return false;
+  const item = snapshot.items[position];
+  if (!item || (Number(item[3]) === width && Number(item[4]) === height)) return false;
+  item[3] = width;
+  item[4] = height;
+  geometryDirty = true;
+  scheduleGeometry();
+  return true;
+}
+
 function applyDimensions(card, width, height) {
   width = Number(width) || 0;
   height = Number(height) || 0;
-  if (!card || !width || !height) return;
+  if (!card || width <= 0 || height <= 0) return;
   card.dataset.width = String(width);
   card.dataset.height = String(height);
   if (card.classList.contains('media-card')) card.style.setProperty('--ratio', String(width / height));
@@ -59,10 +178,18 @@ function rememberDimensions(hash, width, height) {
   hash = String(hash || '');
   width = Number(width) || 0;
   height = Number(height) || 0;
-  if (!hash || !width || !height) return;
+  if (!hash || width <= 0 || height <= 0) return;
+
+  const previous = dimensions.get(hash);
+  if (previous?.width === width && previous?.height === height) {
+    updateGridDimensions(hash, width, height);
+    return;
+  }
   dimensions.set(hash, { width, height });
+
   for (const card of cardsByHash.get(hash) || []) applyDimensions(card, width, height);
   try { window.mochimonoCatalogCache?.rememberDimensions?.(hash, width, height); } catch {}
+  updateGridDimensions(hash, width, height);
 }
 
 function indexCard(card) {
@@ -71,6 +198,7 @@ function indexCard(card) {
   let group = cardsByHash.get(hash);
   if (!group) cardsByHash.set(hash, group = new Set());
   group.add(card);
+  if (card.closest('.stable-grid-row')) mountedGridCards.add(card);
   const known = dimensions.get(hash);
   if (known) applyDimensions(card, known.width, known.height);
 }
@@ -78,14 +206,12 @@ function indexCard(card) {
 function unindexCard(card) {
   prioritized.delete(card);
   nearby.delete(card);
+  mountedGridCards.delete(card);
   const hash = String(card?.dataset?.hash || '');
   const group = hash && cardsByHash.get(hash);
   if (!group) return;
   group.delete(card);
-  if (!group.size) {
-    cardsByHash.delete(hash);
-    states.delete(hash);
-  }
+  if (!group.size) cardsByHash.delete(hash);
 }
 
 function mediaBox(card, mediaKind = kind(card)) {
@@ -127,13 +253,12 @@ function markFailed(hash, failure) {
   const now = performance.now();
   const terminal = failure?.terminal === true;
   const retryAt = terminal ? Infinity : now + Math.max(RECHECK_DELAY, Number(failure?.retryAfterMs) || RECHECK_DELAY);
-  const state = states.get(hash) || {};
+  const state = stateFor(hash);
   state.ready = false;
   state.failed = true;
   state.terminal = terminal;
   state.nextTry = retryAt;
   state.nextCheck = retryAt;
-  states.set(hash, state);
   setFailedVisual(hash, true, terminal);
 }
 
@@ -144,47 +269,104 @@ function resetFailures() {
     state.terminal = false;
     state.nextCheck = 0;
     state.nextTry = 0;
-    states.set(hash, state);
     setFailedVisual(hash, false);
   }
 }
 
-// Chromium can have a complete <img> with a valid naturalWidth while postponing
-// pixel decode/upload until an unrelated hover causes a style/paint invalidation.
-// Explicitly start decode, but never gate visibility on it. When decode finishes,
-// a one-frame no-op transform guarantees a paint invalidation without the old
-// opacity/hidden lifecycle that made thumbnails visibly slower.
-function primePaint(image) {
-  if (!image?.decode || decodePrimed.has(image)) return;
-  decodePrimed.add(image);
-  image.decode().then(() => {
-    if (!image.isConnected) return;
-    image.style.transform = 'translateZ(0)';
-    requestAnimationFrame(() => {
-      if (image.isConnected) image.style.removeProperty('transform');
-    });
-  }).catch(() => {});
+function touchPool(hash, image) {
+  imagePool.delete(hash);
+  imagePool.set(hash, image);
+  while (imagePool.size > IMAGE_POOL_MAX) {
+    const oldest = imagePool.keys().next().value;
+    imagePool.delete(oldest);
+  }
 }
 
-function markLoaded(hash, card, image) {
-  const state = states.get(hash) || {};
+function stashImage(card) {
+  const hash = String(card?.dataset?.hash || '');
+  if (!hash) return;
+  const image = card.querySelector('img.cached-thumb');
+  if (!image?.complete || !image.naturalWidth || image.dataset.thumbDecoded !== '1') return;
+  image.onload = null;
+  image.onerror = null;
+  image.style.removeProperty('transition');
+  image.style.removeProperty('transform');
+  image.style.opacity = '1';
+  image.remove();
+  touchPool(hash, image);
+}
+
+function adoptPooledImage(card, hash, box) {
+  const image = imagePool.get(hash);
+  if (!image?.complete || !image.naturalWidth) {
+    if (image) imagePool.delete(hash);
+    return false;
+  }
+  imagePool.delete(hash);
+  image.onload = null;
+  image.onerror = null;
+  image.hidden = false;
+  image.style.objectFit = 'cover';
+  image.style.removeProperty('transition');
+  image.style.removeProperty('transform');
+  image.style.opacity = '1';
+  image.dataset.thumbHash = hash;
+  box.querySelector('.video-thumb-pending')?.remove();
+  box.prepend(image);
+
+  const state = stateFor(hash);
   state.ready = true;
   state.failed = false;
   state.terminal = false;
   state.nextCheck = 0;
   state.nextTry = 0;
-  states.set(hash, state);
+  rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
+  return true;
+}
+
+async function revealLoadedImage(hash, card, image, animate = true) {
+  if (!image.isConnected || image.dataset.thumbHash !== hash || !image.naturalWidth || !image.naturalHeight) return;
+
+  try { await image.decode?.(); } catch {}
+  if (!image.isConnected || image.dataset.thumbHash !== hash) return;
+
+  image.dataset.thumbDecoded = '1';
+  image.hidden = false;
+  image.style.objectFit = 'cover';
+  rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
+
   const box = mediaBox(card);
   box?.classList.remove('thumb-failed');
   box?.removeAttribute('title');
   box?.querySelector('.video-thumb-pending')?.remove();
-  image.hidden = false;
-  image.style.objectFit = 'cover';
-  rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
-  primePaint(image);
-  // Keep loaded cards observed. Previously we unobserved them immediately after
-  // load, which meant a card could be visibly black with no future viewport
-  // callback capable of repairing it until pointer interaction repainted it.
+
+  const state = stateFor(hash);
+  state.ready = true;
+  state.failed = false;
+  state.terminal = false;
+  state.nextCheck = 0;
+  state.nextTry = 0;
+
+  if (!animate || !visible(card) || reduceMotion.matches) {
+    image.style.removeProperty('transition');
+    image.style.opacity = '1';
+    return;
+  }
+
+  image.style.transition = 'opacity 150ms ease-out';
+  requestAnimationFrame(() => {
+    if (!image.isConnected || image.dataset.thumbHash !== hash) return;
+    image.style.opacity = '1';
+    image.style.transform = 'translateZ(0)';
+    requestAnimationFrame(() => {
+      if (image.isConnected) image.style.removeProperty('transform');
+    });
+    setTimeout(() => {
+      if (!image.isConnected) return;
+      image.style.removeProperty('transition');
+      image.style.removeProperty('opacity');
+    }, 190);
+  });
 }
 
 function paintCard(card, urgent = false) {
@@ -193,28 +375,40 @@ function paintCard(card, urgent = false) {
   const box = hash && mediaBox(card);
   if (!hash || !box) return;
 
-  const state = states.get(hash) || {};
   const current = box.querySelector('img.cached-thumb');
   if (current?.dataset.thumbHash === hash) {
-    current.style.objectFit = 'cover';
-    if (urgent && !state.ready) {
-      current.loading = 'eager';
-      try { current.fetchPriority = 'high'; } catch {}
+    if (current.complete && current.naturalWidth) {
+      if (current.dataset.thumbDecoded === '1') {
+        current.style.opacity = '1';
+        current.style.objectFit = 'cover';
+        const state = stateFor(hash);
+        state.ready = true;
+        rememberDimensions(hash, current.naturalWidth, current.naturalHeight);
+      } else {
+        revealLoadedImage(hash, card, current, false);
+      }
     }
-    if (current.complete && current.naturalWidth) markLoaded(hash, card, current);
-    else if (urgent) primePaint(current);
     return;
   }
 
+  if (adoptPooledImage(card, hash, box)) return;
+
+  const state = stateFor(hash);
   const now = performance.now();
   if (state.failed && now >= (state.nextTry || 0)) {
     state.failed = false;
     state.terminal = false;
-    states.set(hash, state);
     setFailedVisual(hash, false);
   }
-  if (now < (state.nextTry || 0)) {
+  if (state.terminal || now < (state.nextTry || 0)) {
     pending(card);
+    return;
+  }
+
+  if (!state.ready) {
+    pending(card);
+    state.nextCheck = Math.min(state.nextCheck || Infinity, now);
+    scheduleCheck(0);
     return;
   }
 
@@ -226,186 +420,199 @@ function paintCard(card, urgent = false) {
   image.decoding = 'async';
   image.loading = 'eager';
   image.style.objectFit = 'cover';
+  image.style.opacity = '0';
+  image.style.transition = 'none';
   image.dataset.thumbHash = hash;
-  try { image.fetchPriority = urgent || card.classList.contains('keyboard-cursor') ? 'high' : 'auto'; } catch {}
+  try { image.fetchPriority = urgent || visible(card) || card.classList.contains('keyboard-cursor') ? 'high' : 'auto'; } catch {}
+
   image.onload = () => {
-    if (image.isConnected && image.dataset.thumbHash === hash) markLoaded(hash, card, image);
+    if (image.isConnected && image.dataset.thumbHash === hash) revealLoadedImage(hash, card, image, true);
   };
   image.onerror = () => {
     if (!image.isConnected || image.dataset.thumbHash !== hash) return;
     image.remove();
-    const failed = states.get(hash) || {};
+    const failed = stateFor(hash);
     failed.ready = false;
-    failed.nextTry = performance.now() + 500;
+    failed.nextTry = performance.now() + 350;
     failed.nextCheck = Math.min(failed.nextCheck || Infinity, performance.now() + 80);
-    states.set(hash, failed);
     pending(card);
-    if (activeCard(card)) scheduleCheck(80);
+    scheduleCheck(80);
   };
+
   box.prepend(image);
   image.src = thumbUrl(hash);
-  // Starting decode here also covers memory/disk-cache hits where load can happen
-  // before the browser chooses to raster the image.
-  primePaint(image);
 }
 
 function loadHash(hash) {
-  for (const card of cardsByHash.get(String(hash || '')) || []) paintCard(card, activeCard(card));
+  for (const card of cardsByHash.get(String(hash || '')) || []) {
+    if (nearby.has(card) || prioritized.has(card) || visible(card)) paintCard(card, prioritized.has(card) || visible(card));
+  }
 }
 
-function scheduleCheck(delay = 80) {
-  if (interacting() && !prioritized.size) return;
-  const at = performance.now() + delay;
+function scheduleCheck(delay = 50) {
+  const at = performance.now() + Math.max(0, delay);
   if (checkTimer && checkAt <= at) return;
   if (checkTimer) clearTimeout(checkTimer);
   checkAt = at;
-  checkTimer = setTimeout(checkNearby, delay);
+  checkTimer = setTimeout(runChecks, Math.max(0, delay));
 }
 
-function pauseChecks() {
-  if (!checkTimer) return;
-  clearTimeout(checkTimer);
-  checkTimer = 0;
-  checkAt = 0;
+function cardCheckSet() {
+  const result = new Set();
+  if (viewer?.hidden === false) return result;
+
+  for (const card of prioritized) if (card?.isConnected) result.add(card);
+  for (const card of nearby) if (card?.isConnected) result.add(card);
+  for (const card of mountedGridCards) if (card?.isConnected) result.add(card);
+  return result;
 }
 
 function scheduleOutstanding() {
   const now = performance.now();
   let next = Infinity;
-  for (const card of checkCards()) {
+
+  if (externalQueue.size) next = now;
+  for (const card of cardCheckSet()) {
     if (!kind(card)) continue;
-    const state = states.get(card.dataset.hash || '');
-    if (state?.ready) continue;
-    const at = state?.nextCheck || now;
-    if (at < next) next = at;
+    const hash = String(card.dataset.hash || '');
+    const state = stateFor(hash);
+    if (state.ready || state.terminal) continue;
+    next = Math.min(next, state.nextCheck || now);
   }
   if (Number.isFinite(next)) scheduleCheck(Math.max(0, next - now));
-}
-
-function refreshVisible() {
-  for (const card of activeCards()) paintCard(card, true);
-  scheduleCheck(0);
-}
-
-function repairViewport() {
-  if (!files || document.hidden) return;
-  for (const card of files.querySelectorAll('[data-hash]')) {
-    if (!kind(card)) continue;
-    const rect = card.getBoundingClientRect();
-    if (rect.bottom <= 0 || rect.top >= innerHeight || rect.right <= 0 || rect.left >= innerWidth) continue;
-    indexCard(card);
-    nearby.add(card);
-    paintCard(card, true);
-  }
-  scheduleCheck(0);
 }
 
 async function requestMissing(hashes) {
   if (!hashes.length || CLIENT) return;
   fetch('/api/thumbs/request', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ hashes })
+    method:'POST',
+    headers:{ 'content-type':'application/json' },
+    body:JSON.stringify({ hashes })
   }).catch(() => {});
 
   const fallback = await browserFallback;
   for (const hash of hashes) {
     const card = [...(cardsByHash.get(hash) || [])].find(item => item.isConnected && activeCard(item));
-    if (card) fallback?.queueBrowserThumbnail?.({ hash, filename: filename(card), kind: kind(card) });
+    if (card) fallback?.queueBrowserThumbnail?.({ hash, filename:filename(card), kind:kind(card) });
   }
 }
 
-async function checkNearby() {
-  checkTimer = 0;
-  checkAt = 0;
-  const active = checkCards();
-  if (checking || document.hidden || !active.size) return;
+function settleHashWaiters(hash) {
+  const waiters = waitersByHash.get(hash);
+  if (!waiters?.size) return;
+  waitersByHash.delete(hash);
+  const state = stateFor(hash);
+  for (const waiter of waiters) {
+    waiter.remaining.delete(hash);
+    if (state.ready) waiter.ready.add(hash);
+    else if (state.terminal || state.failed) waiter.failed.add(hash);
+    if (!waiter.remaining.size) waiter.resolve({ ready:[...waiter.ready], failed:[...waiter.failed] });
+  }
+}
 
+async function checkBatch(hashes, background) {
+  if (!hashes.length) return;
+  const response = await fetch('/api/thumbs/check', {
+    method:'POST',
+    headers:{ 'content-type':'application/json' },
+    body:JSON.stringify({ hashes, background })
+  });
+  if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
+  const data = await response.json();
+
+  const ready = new Map((data.thumbnails || []).map(item => [String(item.hash), item]));
+  const failures = new Map((data.failures || []).map(item => [String(item.hash), item]));
+  const missingFromServer = new Set((data.missing || []).map(item => String(item.hash)));
+  const request = [];
   const now = performance.now();
-  const cursor = files.querySelector('.keyboard-cursor[data-hash]');
-  const cursorHash = cursor && active.has(cursor) ? String(cursor.dataset.hash || '') : '';
-  const candidates = [];
-  const seen = new Set();
 
-  for (const card of active) {
+  for (const hash of hashes) {
+    externalQueue.delete(hash);
+    const item = ready.get(hash);
+    const failure = failures.get(hash);
+    const state = stateFor(hash);
+
+    if (item) {
+      state.ready = true;
+      state.failed = false;
+      state.terminal = false;
+      state.nextCheck = 0;
+      state.nextTry = 0;
+      setFailedVisual(hash, false);
+      rememberDimensions(hash, item.width, item.height);
+      loadHash(hash);
+    } else if (failure) {
+      markFailed(hash, failure);
+    } else {
+      state.ready = false;
+      state.failed = false;
+      state.terminal = false;
+      state.nextCheck = now + RECHECK_DELAY;
+      setFailedVisual(hash, false);
+      if (missingFromServer.has(hash)) request.push(hash);
+    }
+    settleHashWaiters(hash);
+  }
+
+  requestMissing(request);
+}
+
+function candidateHashes() {
+  const now = performance.now();
+  const byHash = new Map();
+
+  for (const [hash, item] of externalQueue) {
+    const state = stateFor(hash);
+    if (state.ready || state.terminal) {
+      settleHashWaiters(hash);
+      externalQueue.delete(hash);
+      continue;
+    }
+    byHash.set(hash, { hash, urgent:item.background === false, due:0 });
+  }
+
+  for (const card of cardCheckSet()) {
     if (!kind(card)) continue;
     const hash = String(card.dataset.hash || '');
-    const state = states.get(hash) || {};
-    const due = state.nextCheck || 0;
-    if (!hash || seen.has(hash) || state.ready || now < due) continue;
-    seen.add(hash);
-    candidates.push({ hash, due });
+    if (!hash) continue;
+    const state = stateFor(hash);
+    if (state.ready || state.terminal || now < (state.nextCheck || 0)) continue;
+    const urgent = prioritized.has(card) || visible(card);
+    const current = byHash.get(hash);
+    if (!current) byHash.set(hash, { hash, urgent, due:state.nextCheck || 0 });
+    else if (urgent) current.urgent = true;
   }
-  candidates.sort((a, b) => a.due - b.due);
 
-  const hashes = [];
-  if (cursorHash) {
-    const index = candidates.findIndex(item => item.hash === cursorHash);
-    if (index >= 0) hashes.push(candidates.splice(index, 1)[0].hash);
-  }
-  for (const item of candidates) {
-    if (hashes.length >= CHECK_LIMIT) break;
-    hashes.push(item.hash);
-  }
-  if (!hashes.length) {
+  return [...byHash.values()]
+    .sort((a, b) => Number(b.urgent) - Number(a.urgent) || a.due - b.due)
+    .slice(0, CHECK_LIMIT);
+}
+
+async function runChecks() {
+  checkTimer = 0;
+  checkAt = 0;
+  if (checking || document.hidden) return;
+
+  const candidates = candidateHashes();
+  if (!candidates.length) {
     scheduleOutstanding();
     return;
   }
 
+  const urgent = candidates.filter(item => item.urgent).map(item => item.hash);
+  const background = candidates.filter(item => !item.urgent).map(item => item.hash);
   checking = true;
   try {
-    const response = await fetch('/api/thumbs/check', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ hashes })
-    });
-    if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
-    const data = await response.json();
-    const ready = new Map((data.thumbnails || []).map(item => [String(item.hash), item]));
-    const failures = new Map((data.failures || []).map(item => [String(item.hash), item]));
-    const missing = [];
-
-    for (const hash of hashes) {
-      if (!cardsByHash.has(hash)) {
-        states.delete(hash);
-        continue;
-      }
-      const state = states.get(hash) || {};
-      const item = ready.get(hash);
-      const failure = failures.get(hash);
-      if (item) {
-        state.ready = true;
-        state.failed = false;
-        state.terminal = false;
-        state.nextCheck = 0;
-        state.nextTry = 0;
-        states.set(hash, state);
-        setFailedVisual(hash, false);
-        rememberDimensions(hash, item.width, item.height);
-        loadHash(hash);
-      } else if (failure) {
-        markFailed(hash, failure);
-      } else {
-        state.ready = false;
-        state.failed = false;
-        state.terminal = false;
-        state.nextCheck = performance.now() + RECHECK_DELAY;
-        states.set(hash, state);
-        setFailedVisual(hash, false);
-        missing.push(hash);
-      }
-    }
-    requestMissing(missing);
+    await Promise.all([
+      urgent.length ? checkBatch(urgent, false) : null,
+      background.length ? checkBatch(background, true) : null
+    ]);
   } catch {
-    const retry = performance.now() + 1200;
-    for (const hash of hashes) {
-      if (!cardsByHash.has(hash)) {
-        states.delete(hash);
-        continue;
-      }
-      const state = states.get(hash) || {};
+    const retry = performance.now() + 900;
+    for (const item of candidates) {
+      const state = stateFor(item.hash);
       state.nextCheck = retry;
-      states.set(hash, state);
+      settleHashWaiters(item.hash);
     }
   } finally {
     checking = false;
@@ -421,102 +628,140 @@ const observer = files ? new IntersectionObserver(entries => {
       continue;
     }
     nearby.add(card);
-    const visible = entry.boundingClientRect.bottom > 0 && entry.boundingClientRect.top < innerHeight;
-    paintCard(card, visible);
+    paintCard(card, visible(card));
   }
-  scheduleCheck(40);
-}, { rootMargin: `${PRELOAD_MARGIN}px 0px` }) : null;
+  scheduleCheck(0);
+}, { rootMargin:`${PRELOAD_MARGIN}px 0px` }) : null;
 
-function observeTree(node) {
+function prepare(node) {
   if (!observer) return;
   for (const card of cardsIn(node)) {
+    if (preparedCards.has(card)) continue;
+    preparedCards.add(card);
     indexCard(card);
     if (!kind(card)) continue;
+
+    const box = mediaBox(card);
+    const hash = String(card.dataset.hash || '');
+    if (box && !box.querySelector('img.cached-thumb')) adoptPooledImage(card, hash, box);
+
     const image = card.querySelector('img.cached-thumb');
-    if (image?.complete && image.naturalWidth) markLoaded(String(card.dataset.hash || ''), card, image);
+    if (image?.complete && image.naturalWidth) {
+      if (image.dataset.thumbDecoded === '1') {
+        const state = stateFor(hash);
+        state.ready = true;
+        rememberDimensions(hash, image.naturalWidth, image.naturalHeight);
+      } else revealLoadedImage(hash, card, image, false);
+    }
     observer.observe(card);
+  }
+  scheduleCheck(0);
+}
+
+function release(node) {
+  if (!observer) return;
+  for (const card of cardsIn(node)) {
+    if (!preparedCards.has(card)) continue;
+    stashImage(card);
+    observer.unobserve(card);
+    unindexCard(card);
+    preparedCards.delete(card);
   }
 }
 
-function queueObserveTree(node) {
-  if (!(node instanceof Element)) return;
-  pendingTrees.add(node);
-  if (observeFrame) return;
-  observeFrame = requestAnimationFrame(() => {
-    observeFrame = 0;
-    for (const tree of pendingTrees) if (tree.isConnected) observeTree(tree);
-    pendingTrees.clear();
-    repairViewport();
+function refreshVisible() {
+  for (const card of cardCheckSet()) if (visible(card)) paintCard(card, true);
+  scheduleCheck(0);
+}
+
+function repairViewport() {
+  if (!files || document.hidden) return;
+  for (const card of files.querySelectorAll('[data-hash]')) {
+    if (!kind(card) || !visible(card)) continue;
+    if (!preparedCards.has(card)) prepare(card);
+    nearby.add(card);
+    paintCard(card, true);
+  }
+  scheduleCheck(0);
+}
+
+function ensureHashes(hashes, options = {}) {
+  const background = options.background === true;
+  const unique = [...new Set((Array.isArray(hashes) ? hashes : [hashes])
+    .map(String)
+    .filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
+  if (!unique.length) return Promise.resolve({ ready:[], failed:[] });
+
+  return new Promise(resolve => {
+    const waiter = { remaining:new Set(), ready:new Set(), failed:new Set(), resolve };
+    for (const hash of unique) {
+      const state = stateFor(hash);
+      if (state.ready) {
+        waiter.ready.add(hash);
+        continue;
+      }
+      if (state.terminal || state.failed) {
+        waiter.failed.add(hash);
+        continue;
+      }
+
+      waiter.remaining.add(hash);
+      let waiters = waitersByHash.get(hash);
+      if (!waiters) waitersByHash.set(hash, waiters = new Set());
+      waiters.add(waiter);
+
+      const queued = externalQueue.get(hash);
+      if (!queued) externalQueue.set(hash, { background });
+      else if (!background) queued.background = false;
+    }
+
+    if (!waiter.remaining.size) {
+      resolve({ ready:[...waiter.ready], failed:[...waiter.failed] });
+      return;
+    }
+    scheduleCheck(0);
   });
 }
 
-function forgetTree(node) {
-  if (!observer) return;
-  for (const card of cardsIn(node)) {
-    unindexCard(card);
-    observer.unobserve(card);
-  }
-}
-
-function reusableImages(records) {
-  const images = new Map();
-  for (const record of records) {
-    for (const node of record.removedNodes) {
-      for (const card of cardsIn(node)) {
-        const image = card.querySelector('img.cached-thumb');
-        if (image?.complete && image.naturalWidth) images.set(String(card.dataset.hash || ''), image);
-      }
-    }
-  }
-  return images;
-}
-
-function reuseImages(node, images) {
-  for (const card of cardsIn(node)) {
-    const image = images.get(String(card.dataset.hash || ''));
-    const box = image && mediaBox(card);
-    if (!box || box.querySelector('img.cached-thumb')) continue;
-    box.querySelector('.video-thumb-pending')?.remove();
-    box.prepend(image);
-    image.style.objectFit = 'cover';
-    markLoaded(String(card.dataset.hash || ''), card, image);
-  }
-}
-
 window.mochimonoThumbnails = {
+  prepare,
+  release,
+  ensureHashes,
   prioritize(cards) {
     prioritized.clear();
-    let needsCheck = false;
-    const now = performance.now();
     for (const card of Array.isArray(cards) ? cards : [cards]) {
       if (!card?.isConnected || !kind(card)) continue;
+      if (!preparedCards.has(card)) prepare(card);
       prioritized.add(card);
-      indexCard(card);
       paintCard(card, true);
-      const state = states.get(String(card.dataset.hash || ''));
-      if (!state?.ready && !state?.terminal && now >= (state?.nextCheck || 0)) needsCheck = true;
     }
-    if (needsCheck) scheduleCheck(0);
+    scheduleCheck(0);
   },
   clearPriority() {
     prioritized.clear();
+  },
+  state() {
+    return {
+      cards:[...cardsByHash.values()].reduce((sum, group) => sum + group.size, 0),
+      nearby:nearby.size,
+      mountedGrid:mountedGridCards.size,
+      pooled:imagePool.size,
+      states:states.size,
+      external:externalQueue.size,
+      checking,
+      geometryDirty
+    };
   }
 };
 
 if (files) {
-  observeTree(files);
+  prepare(files);
   requestAnimationFrame(repairViewport);
+
   new MutationObserver(records => {
-    const reusable = reusableImages(records);
-    for (const record of records) for (const node of record.removedNodes) forgetTree(node);
-    for (const record of records) {
-      for (const node of record.addedNodes) {
-        if (!(node instanceof Element)) continue;
-        reuseImages(node, reusable);
-        queueObserveTree(node);
-      }
-    }
-  }).observe(files, { childList: true, subtree: true });
+    for (const record of records) for (const node of record.removedNodes) if (node instanceof Element) release(node);
+    for (const record of records) for (const node of record.addedNodes) if (node instanceof Element) prepare(node);
+  }).observe(files, { childList:true, subtree:true });
 
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
@@ -524,32 +769,62 @@ if (files) {
       requestAnimationFrame(repairViewport);
     }
   });
-  window.addEventListener('mochimono:grid-interaction-start', pauseChecks);
+
+  window.addEventListener('scroll', () => {
+    lastScrollAt = performance.now();
+    if (geometryDirty) scheduleGeometry(460);
+  }, { passive:true });
+
   window.addEventListener('mochimono:grid-interaction-end', () => {
     repairViewport();
     scheduleOutstanding();
+    if (geometryDirty) scheduleGeometry(220);
   });
+
+  window.addEventListener('mochimono:grid-model', event => {
+    const snapshot = event.detail || window.mochimonoGridModel;
+    if (applyKnownDimensions(snapshot)) {
+      geometryDirty = true;
+      scheduleGeometry(220);
+    }
+  });
+
+  window.addEventListener('mochimono:stable-grid-installed', () => {
+    const restore = geometryAnchor;
+    geometryAnchor = null;
+    if (!restore?.hash) return;
+    const snapshot = window.mochimonoGridModel;
+    const index = modelIndex(snapshot)?.get(restore.hash);
+    if (!Number.isInteger(index)) return;
+    requestAnimationFrame(() => {
+      window.mochimonoStableGrid?.ensureIndex?.(index);
+      const card = files.querySelector(`[data-hash="${CSS.escape(restore.hash)}"]`);
+      if (!card) return;
+      const delta = card.getBoundingClientRect().top - restore.top;
+      if (Math.abs(delta) > .5) scrollBy(0, delta);
+    });
+  });
+
   window.addEventListener('mochimono:catalog-updated', () => {
     resetFailures();
     refreshVisible();
-    requestAnimationFrame(repairViewport);
   });
+
   window.addEventListener('mochimono:browser-thumbnail-ready', event => {
     const hash = String(event.detail?.hash || '');
     if (!hash) return;
-    const state = states.get(hash) || {};
+    const state = stateFor(hash);
     state.ready = false;
     state.failed = false;
     state.terminal = false;
     state.nextCheck = 0;
     state.nextTry = 0;
-    states.set(hash, state);
     setFailedVisual(hash, false);
-    loadHash(hash);
-    scheduleCheck(50);
+    scheduleCheck(0);
   });
+
   addEventListener('beforeunload', () => {
     if (checkTimer) clearTimeout(checkTimer);
-    if (observeFrame) cancelAnimationFrame(observeFrame);
-  }, { once: true });
+    if (geometryTimer) clearTimeout(geometryTimer);
+  }, { once:true });
 }

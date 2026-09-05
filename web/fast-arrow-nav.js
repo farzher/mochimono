@@ -291,17 +291,9 @@ function preloadViewerThumb(hash) {
 
 async function checkViewerThumbs(hashes, background = false) {
   if (!hashes.length) return { ready: [], failed: [] };
-  const response = await fetch('/api/thumbs/check', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ hashes, background })
-  });
-  if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
-  const data = await response.json();
-  return {
-    ready: (data.thumbnails || []).map(item => String(item.hash || '')),
-    failed: (data.failures || []).map(item => String(item.hash || ''))
-  };
+  const thumbnails = window.mochimonoThumbnails;
+  if (!thumbnails?.ensureHashes) return { ready: [], failed: [] };
+  return thumbnails.ensureHashes(hashes, { background });
 }
 
 function scheduleViewerWarm(hash, delay = 0) {

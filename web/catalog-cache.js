@@ -118,38 +118,13 @@ async function readMeta(db) {
   return validMeta(value) ? value : null;
 }
 
-async function thumbnailGeometry(files) {
-  const hashes = files.map(file => String(file.hash || '')).filter(Boolean);
-  if (!hashes.length) return new Map();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 80);
-  try {
-    const response = await fetch('/api/thumbs/check', {
-      method:'POST',
-      headers:{ 'content-type':'application/json' },
-      body:JSON.stringify({ hashes }),
-      signal:controller.signal
-    });
-    if (!response.ok) return new Map();
-    const data = await response.json();
-    return new Map((data.thumbnails || []).map(item => [String(item.hash || ''), item]));
-  } catch {
-    return new Map();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function hydrateQuickSnapshot(db, snapshot) {
   if (!db || !snapshot?.files?.length) return snapshot;
   const targets = snapshot.files.map((file, index) => ({ file, index }));
   const transaction = db.transaction('files', 'readonly');
   const done = transactionDone(transaction);
   const store = transaction.objectStore('files');
-  const [rows, geometry] = await Promise.all([
-    Promise.all(targets.map(({ file }) => requestResult(store.get(String(file.hash || ''))).catch(() => null))),
-    thumbnailGeometry(snapshot.files)
-  ]);
+  const rows = await Promise.all(targets.map(({ file }) => requestResult(store.get(String(file.hash || ''))).catch(() => null)));
   await done.catch(() => {});
 
   const files = [...snapshot.files];
@@ -158,12 +133,6 @@ async function hydrateQuickSnapshot(db, snapshot) {
     const target = targets[position];
     files[target.index] = publicFile(mergeGeometry({ ...target.file, ...stored }));
   });
-  for (let index = 0; index < files.length; index++) {
-    const item = geometry.get(String(files[index].hash || ''));
-    const width = Number(item?.width) || 0;
-    const height = Number(item?.height) || 0;
-    if (width > 0 && height > 0) files[index] = { ...files[index], width, height };
-  }
   return { ...snapshot, files };
 }
 
