@@ -10,6 +10,8 @@ function catalogPage(url) {
            COALESCE(MIN(s.original_path), '') AS originalPath,
            COALESCE(MAX(s.mtime), o.created_at) AS fileDate,
            COALESCE(MAX(s.created_at), o.created_at) AS addedAt,
+           COALESCE(MAX(t.width), 0) AS width,
+           COALESCE(MAX(t.height), 0) AS height,
            GROUP_CONCAT(DISTINCT (SELECT MIN(i2.id) FROM imports i2 WHERE i2.source_name = i.source_name)) AS importIds,
            GROUP_CONCAT(DISTINCT s.import_id) AS exactImportIds,
            COALESCE(GROUP_CONCAT(DISTINCT s.filename || ' ' || s.original_path || ' ' || COALESCE(ir.root_path, '')), '') AS searchText,
@@ -21,6 +23,7 @@ function catalogPage(url) {
     LEFT JOIN sources s ON s.object_hash = o.hash
     LEFT JOIN imports i ON i.id = s.import_id
     LEFT JOIN import_roots ir ON ir.import_id = s.import_id
+    LEFT JOIN thumbnails t ON t.object_hash = o.hash
     WHERE o.state = 'active' AND o.hash > ?
     GROUP BY o.hash
     ORDER BY o.hash
