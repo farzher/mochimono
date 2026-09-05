@@ -131,6 +131,28 @@ async function hydrateQuickSnapshot(db, snapshot) {
     const target = targets[position];
     files[target.index] = publicFile(mergeGeometry({ ...target.file, ...stored }));
   });
+
+  try {
+    const hashes = files.map(file => String(file.hash || '')).filter(Boolean);
+    if (hashes.length) {
+      const response = await fetch('/api/thumbs/check', {
+        method:'POST',
+        headers:{ 'content-type':'application/json' },
+        body:JSON.stringify({ hashes })
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const geometry = new Map((data.thumbnails || []).map(item => [String(item.hash || ''), item]));
+        for (let index = 0; index < files.length; index++) {
+          const item = geometry.get(String(files[index].hash || ''));
+          const width = Number(item?.width) || 0;
+          const height = Number(item?.height) || 0;
+          if (width > 0 && height > 0) files[index] = { ...files[index], width, height };
+        }
+      }
+    }
+  } catch {}
+
   return { ...snapshot, files };
 }
 
