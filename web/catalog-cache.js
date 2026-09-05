@@ -5,8 +5,9 @@ const DB_VERSION = 1;
 const SCHEMA = 1;
 const META_KEY = 'catalog';
 const WRITE_BATCH = 1500;
-const READ_BATCH = 1800;
+const READ_BATCH = 5000;
 const QUICK_FILES = 200;
+const QUICK_MEDIA = 240;
 const CLIENT = document.documentElement.classList.contains('client-library');
 
 let dbPromise = null;
@@ -16,6 +17,8 @@ let records = new Map();
 let pendingGeometry = new Map();
 let geometryJob = 0;
 let writeChain = Promise.resolve();
+let lastQuickLoadMs = 0;
+let lastFullLoadMs = 0;
 
 const requestResult = request => new Promise((resolve, reject) => {
   request.onsuccess = () => resolve(request.result);
@@ -137,12 +140,15 @@ async function hydrateQuickSnapshot(db, snapshot) {
 }
 
 async function loadQuick() {
+  const started = performance.now();
   const db = await openDb();
   if (!db) return quickSnapshot();
   const storedMeta = validMeta(meta) ? meta : await readMeta(db);
   if (!storedMeta) return null;
   meta = storedMeta;
-  return hydrateQuickSnapshot(db, quickSnapshot(storedMeta));
+  const snapshot = await hydrateQuickSnapshot(db, quickSnapshot(storedMeta));
+  lastQuickLoadMs = performance.now() - started;
+  return snapshot;
 }
 
 async function readFilesBatched(db, version) {
@@ -154,24 +160,25 @@ async function readFilesBatched(db, version) {
     const done = transactionDone(transaction);
     const store = transaction.objectStore('files');
     const range = after == null ? undefined : IDBKeyRange.lowerBound(after, true);
-    const [batch, keys] = await Promise.all([
-      requestResult(store.getAll(range, READ_BATCH)),
-      requestResult(store.getAllKeys(range, READ_BATCH))
-    ]);
+    const batch = await requestResult(store.getAll(range, READ_BATCH));
     await done;
 
     for (const file of batch) {
       if (file?.__snapshot === version) files.push(publicFile(file));
     }
-    if (batch.length < READ_BATCH || !keys.length) break;
-    after = keys.at(-1);
-    await idle();
+    if (batch.length < READ_BATCH) break;
+    after = String(batch.at(-1)?.hash || '');
+    if (!after) break;
+    // IndexedDB requests are already asynchronous and yield to the event loop.
+    // Do not add requestIdleCallback sleeps here: on large libraries those waits
+    // turned an otherwise local cache read into several seconds of startup delay.
   }
 
   return files;
 }
 
 async function loadFromDb(knownMeta = null) {
+  const started = performance.now();
   const db = await openDb();
   if (!db) return null;
   const storedMeta = validMeta(knownMeta) ? knownMeta : await readMeta(db);
@@ -181,6 +188,7 @@ async function loadFromDb(knownMeta = null) {
   if (files.length !== Number(storedMeta.count || 0)) return null;
   meta = storedMeta;
   records = new Map(files.map(file => [String(file.hash), file]));
+  lastFullLoadMs = performance.now() - started;
   return memorySnapshot();
 }
 
@@ -243,26 +251,41 @@ async function load() {
     loadPromise = (async () => {
       const quick = await loadQuick().catch(() => null);
       if (!quick) document.documentElement.classList.remove('mochimono-quick-grid-pending');
-      const painted = await installQuickPreview(quick).catch(() => {
+      await installQuickPreview(quick).catch(() => {
         document.documentElement.classList.remove('mochimono-quick-grid-pending');
         return false;
       });
-      if (painted) await idle();
+      // waitForQuickGrid already guarantees the quick grid had a paint turn. Start
+      // restoring the full local catalog immediately instead of waiting for idle.
       return loadFromDb(meta);
     })().finally(() => { loadPromise = null; });
   }
   return loadPromise;
 }
 
+const MEDIA_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff','mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
+function isMediaFile(file) {
+  const mime = String(file?.mime || '').toLowerCase();
+  if (mime.startsWith('image/') || mime.startsWith('video/')) return true;
+  const extension = String(file?.filename || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
+  return MEDIA_EXTENSIONS.has(extension);
+}
+
 function quickFiles(files) {
-  return [...files]
-    .sort((a, b) => {
-      const aDate = Number(a.dateMs) || Date.parse(a.fileDate || a.createdAt || 0) || 0;
-      const bDate = Number(b.dateMs) || Date.parse(b.fileDate || b.createdAt || 0) || 0;
-      return bDate - aDate || String(a.hash || '').localeCompare(String(b.hash || ''));
-    })
-    .slice(0, QUICK_FILES)
-    .map(publicFile);
+  const sorted = [...files].sort((a, b) => {
+    const aDate = Number(a.dateMs) || Date.parse(a.fileDate || a.createdAt || 0) || 0;
+    const bDate = Number(b.dateMs) || Date.parse(b.fileDate || b.createdAt || 0) || 0;
+    return bDate - aDate || String(a.hash || '').localeCompare(String(b.hash || ''));
+  });
+  const selected = new Map();
+  for (const file of sorted.slice(0, QUICK_FILES)) selected.set(String(file.hash), file);
+  let media = 0;
+  for (const file of sorted) {
+    if (!isMediaFile(file)) continue;
+    selected.set(String(file.hash), file);
+    if (++media >= QUICK_MEDIA) break;
+  }
+  return [...selected.values()].map(publicFile);
 }
 
 function save(files, options = {}) {
@@ -425,5 +448,11 @@ window.mochimonoCatalogCache = {
   save,
   rememberDimensions,
   clear,
-  state: () => ({ version: meta?.version || '', count: records.size, savedAt: Number(meta?.savedAt) || 0 })
+  state: () => ({
+    version: meta?.version || '',
+    count: records.size,
+    savedAt: Number(meta?.savedAt) || 0,
+    quickLoadMs:Math.round(lastQuickLoadMs * 10) / 10,
+    fullLoadMs:Math.round(lastFullLoadMs * 10) / 10
+  })
 };
