@@ -7,6 +7,8 @@ const CLIENT = document.documentElement.classList.contains('client-library');
 const SUPPORTED = new Set(['jpg','jpeg','png','webp','avif','bmp','gif','tif','tiff']);
 const DIRECT_BROWSER = new Set(['jpg','jpeg','png','webp','avif','bmp','gif']);
 const AUTO_MAX_EDGE = 2560;
+const WEBP_DEFAULT_QUALITY = 90;
+const AVIF_DEFAULT_QUALITY = 69;
 const MAX_SIZE_STEPS = [720,1080,1440,1920,2560,3072,3840,5120,8192];
 const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
 const currentHash = () => viewerOpen?.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
@@ -98,8 +100,8 @@ layer.innerHTML = `
         <input data-opt-max-size type="range" min="0" max="8" value="4" aria-label="Maximum image size">
       </div>
       <div class="image-optimize-slider">
-        <div class="image-optimize-tune-head"><span>Quality</span><output data-opt-quality-label>94</output></div>
-        <input data-opt-quality type="range" min="50" max="100" value="94" aria-label="Image quality">
+        <div class="image-optimize-tune-head"><span>Quality</span><output data-opt-quality-label>90</output></div>
+        <input data-opt-quality type="range" min="1" max="100" value="90" aria-label="Image quality">
       </div>
       <div class="image-optimize-segmented">
         <span class="image-optimize-tune-head">Content</span>
@@ -177,6 +179,7 @@ const bytes = number => {
   while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
   return `${value < 10 && unit ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 };
+const defaultQuality = () => format === 'avif' ? AVIF_DEFAULT_QUALITY : WEBP_DEFAULT_QUALITY;
 
 function captureViewerView(image) {
   if (!image) return { scale:1, x:0, y:0 };
@@ -286,7 +289,7 @@ function togglePane(name, button) {
 function options() {
   return {
     format,
-    quality: Number(quality.value) || (format === 'avif' ? 92 : 94),
+    quality: Number(quality.value) || defaultQuality(),
     content: contentMode,
     effort,
     lossless: format === 'webp' && lossless.checked,
@@ -472,7 +475,7 @@ function schedulePreview(delay = 180) {
 function setFormat(next) {
   if (!['auto','webp','avif'].includes(next) || next === format) return closeDrawer();
   format = next;
-  if (quality.dataset.userChanged !== '1') quality.value = format === 'avif' ? '92' : '94';
+  if (quality.dataset.userChanged !== '1') quality.value = String(defaultQuality());
   if (format !== 'webp') lossless.checked = false;
   syncControls();
   closeDrawer();
@@ -578,7 +581,7 @@ function openOptimizer(hash = currentHash()) {
   effort = 'normal';
   sizeMode = { kind:'auto', value:AUTO_MAX_EDGE };
   quality.dataset.userChanged = '';
-  quality.value = '94';
+  quality.value = String(WEBP_DEFAULT_QUALITY);
   lossless.checked = false;
   displayedCandidate = '';
   renderingCandidate = '';
