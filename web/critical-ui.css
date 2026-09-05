@@ -23,6 +23,18 @@ html.grid-interaction-active #files .file-context-badge{opacity:0!important;tran
 .media-thumb>img.cached-thumb{position:relative;z-index:1;object-fit:contain!important}.media-thumb>.play-badge{z-index:2}
 .thumb-failed .video-thumb-pending{background:repeating-linear-gradient(135deg,#0d0c0e 0,#0d0c0e 8px,#131115 8px,#131115 16px)!important}
 
+/* A missing grid thumbnail should read as a quiet loading surface, not a black flash. */
+.stable-grid-row .media-thumb{background:#262529}
+.stable-grid-row .video-thumb-pending{background:#262529!important}
+
+/* thumbs.js sets data-thumb-decoded only after img.decode() completes. Triggering
+   a compositor-only keyframe from that discrete state does not depend on a
+   previously painted opacity:0 frame, unlike the old transition approach. */
+.stable-grid-row .cached-thumb{transition:none!important}
+.stable-grid-row .cached-thumb[data-thumb-decoded="1"]{animation:grid-thumb-reveal 220ms cubic-bezier(.16,1,.3,1) both}
+@keyframes grid-thumb-reveal{from{opacity:0}to{opacity:1}}
+@media(prefers-reduced-motion:reduce){.stable-grid-row .cached-thumb[data-thumb-decoded="1"]{animation:none!important}}
+
 .file-card{position:relative}
 .protection-badge{pointer-events:none;white-space:nowrap;font-weight:750;letter-spacing:.01em}
 .file-card .protection-badge{position:absolute;z-index:4;right:6px;bottom:6px;padding:3px 6px;border-radius:6px;background:rgba(54,27,28,.9);box-shadow:0 1px 5px rgba(0,0,0,.35);backdrop-filter:blur(6px);font-size:8px;color:#efaaa3}
