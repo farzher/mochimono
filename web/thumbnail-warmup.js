@@ -56,7 +56,7 @@ function captureAnchor() {
 function interactionActive() {
   return Boolean(window.mochimonoGridInteraction?.active?.()) ||
     document.querySelector('#dateRail')?.classList.contains('dragging') ||
-    performance.now() - lastScrollAt < 170;
+    performance.now() - lastScrollAt < 420;
 }
 
 function scheduleGeometry(delay = 150) {
@@ -64,21 +64,21 @@ function scheduleGeometry(delay = 150) {
   if (!dirtySince) dirtySince = performance.now();
   clearTimeout(geometryTimer);
   const age = performance.now() - dirtySince;
-  geometryTimer = setTimeout(flushGeometry, Math.max(35, Math.min(delay, Math.max(35, 650 - age))));
+  geometryTimer = setTimeout(flushGeometry, Math.max(35, Math.min(delay, Math.max(35, 900 - age))));
 }
 
 function flushGeometry() {
   geometryTimer = 0;
   if (!geometryDirty) return;
   if (interactionActive()) {
-    scheduleGeometry(180);
+    scheduleGeometry(300);
     return;
   }
 
   const snapshot = window.mochimonoGridModel;
   const stable = window.mochimonoStableGrid;
   if (!snapshot?.items?.length || !stable?.setModel) {
-    scheduleGeometry(180);
+    scheduleGeometry(250);
     return;
   }
 
@@ -220,11 +220,11 @@ if (files) {
   window.addEventListener('scroll', () => {
     lastScrollAt = performance.now();
     if (restoreAnchor) restoreAnchor = captureAnchor() || restoreAnchor;
-    if (geometryDirty) scheduleGeometry(190);
+    if (geometryDirty) scheduleGeometry(460);
   }, { passive:true });
 
   window.addEventListener('mochimono:grid-interaction-end', () => {
-    if (geometryDirty) scheduleGeometry(90);
+    if (geometryDirty) scheduleGeometry(220);
   });
 
   window.addEventListener('mochimono:stable-grid-installed', () => {
