@@ -92,7 +92,7 @@ layer.innerHTML = `
       <div class="image-optimize-status-row"><div class="image-optimize-status" data-opt-status>Starting preview…</div><div class="image-optimize-zoom" data-opt-zoom>100%</div></div>
     </div>
     <div class="image-optimize-quick">
-      <button type="button" data-opt-format-button>Format · Auto</button>
+      <button type="button" data-opt-format-button>Format · AVIF</button>
       <button type="button" data-opt-size-button>Size · Auto</button>
     </div>
     <div class="image-optimize-tuning">
@@ -101,8 +101,8 @@ layer.innerHTML = `
         <input data-opt-max-size type="range" min="0" max="8" value="4" aria-label="Maximum image size">
       </div>
       <div class="image-optimize-slider">
-        <div class="image-optimize-tune-head"><span>Quality</span><output data-opt-quality-label>90</output></div>
-        <input data-opt-quality type="range" min="1" max="100" value="90" aria-label="Image quality">
+        <div class="image-optimize-tune-head"><span>Quality</span><output data-opt-quality-label>69</output></div>
+        <input data-opt-quality type="range" min="1" max="100" value="69" aria-label="Image quality">
       </div>
       <div class="image-optimize-segmented">
         <span class="image-optimize-tune-head">Content</span>
@@ -161,7 +161,7 @@ let pollTimer = 0;
 let previewDebounce = 0;
 let requestSerial = 0;
 let renderSerial = 0;
-let format = 'auto';
+let format = 'avif';
 let contentMode = 'auto';
 let effort = 'normal';
 let sizeMode = { kind:'auto', value:AUTO_MAX_EDGE };
@@ -579,12 +579,12 @@ function openOptimizer(hash = currentHash()) {
   activeHash = hash;
   activeId = '';
   session = null;
-  format = 'auto';
+  format = 'avif';
   contentMode = 'auto';
   effort = 'normal';
   sizeMode = { kind:'auto', value:AUTO_MAX_EDGE };
   quality.dataset.userChanged = '';
-  quality.value = String(WEBP_DEFAULT_QUALITY);
+  quality.value = String(AVIF_DEFAULT_QUALITY);
   lossless.checked = false;
   displayedCandidate = '';
   renderingCandidate = '';
