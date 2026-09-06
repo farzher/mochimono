@@ -97,10 +97,10 @@ if (viewer && stage) {
 }
 
 // Correct video dimensions from the actual loaded media rather than thumbnail
-// metadata, then load video compression after the image Compress action is placed.
+// metadata, then load one comparison controller. Playback sync, frame pairing,
+// zoom and pan intentionally live together so separate controllers cannot fight.
 import('./viewer-video-resolution.js').catch(error => console.error('Could not load video resolution correction', error));
 import('./video-optimize.js')
   .then(() => import('./video-optimize-polish.js'))
-  .then(() => import('./video-optimize-zoom.js'))
-  .then(() => import('./video-optimize-sync.js'))
+  .then(() => import('./video-optimize-compare.js'))
   .catch(error => console.error('Could not load video compression UI', error));
