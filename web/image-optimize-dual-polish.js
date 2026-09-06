@@ -8,6 +8,7 @@ const viewerName = document.querySelector('#viewer-name');
 
 if (compare && leftImage && rightImage && leftControls && rightControls) {
   const DIRECT_BROWSER = new Set(['jpg','jpeg','png','webp','avif','bmp','gif']);
+  const DEFAULT_EFFORT = 4;
   const extension = value => String(value || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
   const active = () => document.querySelector('#viewer')?.classList.contains('image-optimize-active');
 
@@ -24,7 +25,7 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
 .image-optimize-effort-native{display:none!important}
 .image-optimize-effort-control{justify-self:end;width:170px;display:grid;grid-template-columns:1fr auto;align-items:center;gap:9px}
 .image-optimize-effort-control input{width:100%;margin:0;accent-color:#eee9e5}
-.image-optimize-effort-control output{min-width:44px;color:#aaa29e;font-size:11px;font-weight:700;text-align:right}
+.image-optimize-effort-control output{min-width:34px;color:#aaa29e;font-size:11px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
 @media(max-width:760px){.image-optimize-divider-handle{width:38px!important;height:38px!important}.image-optimize-controls-left.is-original .image-optimize-saving{font-size:32px!important}.image-optimize-effort-control{width:140px}}
 `;
   document.head.append(style);
@@ -55,36 +56,98 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     rightFormats.classList.add('four');
   }
 
+  const effortControls = new Map();
+  let lastControl = rightControls;
+
+  function effortMax(format) {
+    return format === 'avif' ? 9 : 6;
+  }
+
+  function effortValue(control) {
+    const value = Number(control?.dataset.optEffortValue);
+    return Number.isFinite(value) ? value : DEFAULT_EFFORT;
+  }
+
+  function refreshEffort(control, format) {
+    const setup = effortControls.get(control);
+    if (!setup) return;
+    if (format && format !== 'original') control.dataset.optEffortFormat = format;
+    const codec = format && format !== 'original'
+      ? format
+      : control.dataset.optEffortFormat || 'avif';
+    const max = effortMax(codec);
+    const value = Math.max(0, Math.min(max, Math.round(effortValue(control))));
+    control.dataset.optEffortValue = String(value);
+    setup.input.max = String(max);
+    setup.input.value = String(value);
+    setup.output.textContent = `${value} / ${max}`;
+    setup.input.title = `${codec === 'avif' ? 'AVIF' : codec === 'webp' ? 'WebP' : 'Auto'} effort ${value} of ${max}`;
+  }
+
+  function forceEffortPreview(control) {
+    const setup = effortControls.get(control);
+    if (!setup || control.classList.contains('is-original')) return;
+    lastControl = control;
+    const activeMode = setup.native.querySelector('[data-effort].active')?.dataset.effort === 'max' ? 'max' : 'normal';
+    const triggerMode = activeMode === 'max' ? 'normal' : 'max';
+    setup.native.querySelector(`[data-effort="${triggerMode}"]`)?.click();
+  }
+
   function setupEffortSlider(control) {
     const row = control.querySelector('.image-optimize-segmented.effort');
     const native = row?.querySelector('[data-opt-efforts]');
     if (!row || !native || row.querySelector('.image-optimize-effort-control')) return;
     native.classList.add('image-optimize-effort-native');
+    control.dataset.optEffortValue = String(DEFAULT_EFFORT);
     const slider = document.createElement('label');
     slider.className = 'image-optimize-effort-control';
-    slider.innerHTML = '<input type="range" min="0" max="1" step="1" value="0" aria-label="Compression effort"><output>Normal</output>';
+    slider.innerHTML = '<input type="range" min="0" max="9" step="1" value="4" aria-label="Compression effort"><output>4 / 9</output>';
     row.append(slider);
     const input = slider.querySelector('input');
     const output = slider.querySelector('output');
-    const sync = () => {
-      const mode = native.querySelector('[data-effort].active')?.dataset.effort === 'max' ? 'max' : 'normal';
-      input.value = mode === 'max' ? '1' : '0';
-      output.textContent = mode === 'max' ? 'Max' : 'Normal';
-    };
+    effortControls.set(control, { native, input, output });
+
     input.addEventListener('input', () => {
-      output.textContent = input.value === '1' ? 'Max' : 'Normal';
+      lastControl = control;
+      control.dataset.optEffortValue = input.value;
+      refreshEffort(control);
     });
-    input.addEventListener('change', () => {
-      const mode = input.value === '1' ? 'max' : 'normal';
-      native.querySelector(`[data-effort="${mode}"]`)?.click();
-      sync();
-    });
-    new MutationObserver(sync).observe(native, { attributes:true, subtree:true, attributeFilter:['class'] });
-    sync();
+    input.addEventListener('change', () => forceEffortPreview(control));
+
+    control.addEventListener('click', event => {
+      lastControl = control;
+      const format = event.target.closest('[data-format]')?.dataset.format;
+      if (format && format !== 'original') refreshEffort(control, format);
+    }, true);
+    control.addEventListener('input', () => { lastControl = control; }, true);
+    control.addEventListener('focusin', () => { lastControl = control; }, true);
+    control.addEventListener('pointerdown', () => { lastControl = control; }, true);
+
+    refreshEffort(control, control === rightControls ? 'avif' : 'avif');
   }
 
   setupEffortSlider(leftControls);
   setupEffortSlider(rightControls);
+
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, init = {}) => {
+    const url = typeof input === 'string' ? input : String(input?.url || input || '');
+    if (!url.includes('/api/image-optimize/start') || !init?.body) return nativeFetch(input, init);
+    try {
+      const body = JSON.parse(init.body);
+      if (body?.options) {
+        const stack = String(new Error().stack || '');
+        const control = stack.includes('image-optimize-dual.js')
+          ? leftControls
+          : stack.includes('image-optimize.js')
+            ? rightControls
+            : lastControl;
+        body.options.effort = effortValue(control);
+        return nativeFetch(input, { ...init, body:JSON.stringify(body) });
+      }
+    } catch {}
+    return nativeFetch(input, init);
+  };
 
   let sourceUrl = '';
   let rightOriginalMode = false;
@@ -238,6 +301,10 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     rightOriginalMode = false;
     rightShadow = null;
     rightControls.classList.remove('is-original');
+    leftControls.dataset.optEffortValue = String(DEFAULT_EFFORT);
+    rightControls.dataset.optEffortValue = String(DEFAULT_EFFORT);
+    refreshEffort(leftControls, 'avif');
+    refreshEffort(rightControls, 'avif');
     const avif = rightFormats?.querySelector('[data-format="avif"]');
     if (avif && !avif.classList.contains('active')) avif.click();
     setTimeout(syncLeftOriginal, 0);
