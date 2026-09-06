@@ -27,22 +27,30 @@ if (viewer && stage) {
   text-shadow:0 1px 4px rgba(0,0,0,.9);
 }
 .viewer-actions>.viewer-optimize-trigger:hover{background:transparent!important;color:#fff!important}
-.viewer:not(.viewer-zoomed-ui):not(.image-optimize-active) .viewer-bar,
-.viewer:not(.viewer-zoomed-ui):not(.image-optimize-active) .viewer-collections{
+.viewer:not(.viewer-zoomed-ui):not(.image-optimize-active):not(.video-optimize-active) .viewer-bar,
+.viewer:not(.viewer-zoomed-ui):not(.image-optimize-active):not(.video-optimize-active) .viewer-collections,
+.viewer.image-optimize-active .viewer-bar,
+.viewer.image-optimize-active .viewer-collections,
+.viewer.video-optimize-active .viewer-bar,
+.viewer.video-optimize-active .viewer-collections{
   opacity:1!important;
   pointer-events:auto!important;
 }
-.viewer:not(.viewer-zoomed-ui):not(.image-optimize-active) .viewer-bar *,
-.viewer:not(.viewer-zoomed-ui):not(.image-optimize-active) .viewer-collections *{
+.viewer:not(.viewer-zoomed-ui):not(.image-optimize-active):not(.video-optimize-active) .viewer-bar *,
+.viewer:not(.viewer-zoomed-ui):not(.image-optimize-active):not(.video-optimize-active) .viewer-collections *,
+.viewer.image-optimize-active .viewer-bar *,
+.viewer.image-optimize-active .viewer-collections *,
+.viewer.video-optimize-active .viewer-bar *,
+.viewer.video-optimize-active .viewer-collections *{
   pointer-events:auto!important;
 }
-.viewer.viewer-zoomed-ui:not(.image-optimize-active) .viewer-bar,
-.viewer.viewer-zoomed-ui:not(.image-optimize-active) .viewer-collections{
+.viewer.viewer-zoomed-ui:not(.image-optimize-active):not(.video-optimize-active) .viewer-bar,
+.viewer.viewer-zoomed-ui:not(.image-optimize-active):not(.video-optimize-active) .viewer-collections{
   opacity:0!important;
   pointer-events:none!important;
 }
-.viewer.viewer-zoomed-ui:not(.image-optimize-active) .viewer-bar *,
-.viewer.viewer-zoomed-ui:not(.image-optimize-active) .viewer-collections *{
+.viewer.viewer-zoomed-ui:not(.image-optimize-active):not(.video-optimize-active) .viewer-bar *,
+.viewer.viewer-zoomed-ui:not(.image-optimize-active):not(.video-optimize-active) .viewer-collections *{
   pointer-events:none!important;
 }
 `;
@@ -62,12 +70,14 @@ if (viewer && stage) {
     );
   }
 
+  function optimizing() {
+    return viewer.classList.contains('image-optimize-active') || viewer.classList.contains('video-optimize-active');
+  }
+
   function syncChrome() {
-    const hide = !viewer.hidden && !viewer.classList.contains('image-optimize-active') && zoomed();
+    const hide = !viewer.hidden && !optimizing() && zoomed();
     viewer.classList.toggle('viewer-zoomed-ui', hide);
-    if (!hide && !viewer.classList.contains('image-optimize-active')) {
-      viewer.classList.remove('viewer-controls-hidden');
-    }
+    if (!hide) viewer.classList.remove('viewer-controls-hidden');
   }
 
   // These observers cannot recurse: syncChrome changes only viewer classes,
@@ -91,4 +101,5 @@ if (viewer && stage) {
 import('./video-optimize.js')
   .then(() => import('./video-optimize-polish.js'))
   .then(() => import('./video-optimize-zoom.js'))
+  .then(() => import('./video-optimize-sync.js'))
   .catch(error => console.error('Could not load video compression UI', error));
