@@ -34,6 +34,39 @@ function setRetention(locationId, mediaType, allow) {
   `).run(locationId, mediaType, allow ? 1 : 0, now());
 }
 
+function verifiedOriginalSafety(hash, locationId) {
+  const currentDrive = locationId.startsWith('backup:') ? locationId.slice('backup:'.length) : '';
+  const currentVerified = currentDrive
+    ? Boolean(db.prepare('SELECT 1 FROM replicas WHERE object_hash=? AND drive_id=? AND verified_at IS NOT NULL').get(hash, currentDrive))
+    : Boolean(db.prepare('SELECT 1 FROM representation_presence WHERE original_hash=? AND location_id=? AND representation=\'original\'').get(hash, locationId));
+  if (!currentVerified) return { safe:false, currentVerified:false, alternatives:[] };
+
+  const alternatives = [];
+  const healthyServer = db.prepare(`
+    SELECT 1 FROM objects o
+    WHERE o.hash=? AND o.state='active'
+      AND NOT EXISTS (SELECT 1 FROM object_integrity oi WHERE oi.hash=o.hash AND oi.status!='healthy')
+  `).get(hash);
+  if (healthyServer && locationId !== 'server') alternatives.push({ locationId:'server', source:'primary' });
+
+  for (const row of db.prepare('SELECT drive_id AS driveId,verified_at AS verifiedAt FROM replicas WHERE object_hash=? AND verified_at IS NOT NULL').all(hash)) {
+    const id = `backup:${row.driveId}`;
+    if (id !== locationId) alternatives.push({ locationId:id, source:'backup', verifiedAt:row.verifiedAt });
+  }
+
+  for (const row of db.prepare(`
+    SELECT location_id AS locationId,verified_at AS verifiedAt
+    FROM representation_presence
+    WHERE original_hash=? AND representation='original'
+  `).all(hash)) {
+    if (row.locationId !== locationId && !alternatives.some(item => item.locationId === row.locationId)) {
+      alternatives.push({ locationId:row.locationId, source:'agent', verifiedAt:row.verifiedAt });
+    }
+  }
+
+  return { safe:alternatives.length > 0, currentVerified:true, alternatives };
+}
+
 export async function handleRepresentationPolicyServer(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/compression/retention') {
     return json(res, 200, { retention:rows() });
@@ -89,6 +122,13 @@ export async function handleRepresentationPolicyServer(req, res, url) {
 
     setRetention(locationId, mediaType, allow);
     return json(res, 200, { ok:true, allowOriginalRemoval:allow });
+  }
+
+  const safety = /^\/api\/representations\/([a-f0-9]{64})\/safe-remove$/.exec(url.pathname);
+  if (safety && req.method === 'GET') {
+    const locationId = String(url.searchParams.get('locationId') || '').trim().slice(0, 240);
+    if (!locationId) return json(res, 400, { error:'Location is required' });
+    return json(res, 200, verifiedOriginalSafety(safety[1], locationId));
   }
 
   const removePresence = /^\/api\/representations\/([a-f0-9]{64})\/presence$/.exec(url.pathname);
