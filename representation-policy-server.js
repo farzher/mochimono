@@ -67,5 +67,16 @@ export async function handleRepresentationPolicyServer(req, res, url) {
     return json(res, 200, { ok:true, allowOriginalRemoval:allow });
   }
 
+  const removePresence = /^\/api\/representations\/([a-f0-9]{64})\/presence$/.exec(url.pathname);
+  if (removePresence && req.method === 'DELETE') {
+    const locationId = String(url.searchParams.get('locationId') || '').trim().slice(0, 240);
+    const representation = ['original','compact'].includes(String(url.searchParams.get('representation') || ''))
+      ? String(url.searchParams.get('representation')) : '';
+    if (!locationId || !representation) return json(res, 400, { error:'Location and representation are required' });
+    db.prepare('DELETE FROM representation_presence WHERE original_hash=? AND location_id=? AND representation=?')
+      .run(removePresence[1], locationId, representation);
+    return json(res, 200, { ok:true });
+  }
+
   return false;
 }
