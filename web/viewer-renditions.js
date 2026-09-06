@@ -17,13 +17,13 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
   const switcher = document.createElement('div');
   switcher.className = 'viewer-renditions';
   switcher.hidden = true;
-  switcher.innerHTML = '<button type="button" data-rendition="original" class="active">Original</button><button type="button" data-rendition="compact">Compact</button>';
+  switcher.innerHTML = '<button type="button" data-rendition="original" class="active">Original</button><button type="button" data-rendition="compact">Squished</button>';
   viewerOpen.before(switcher);
 
   const removeCompact = document.createElement('button');
   removeCompact.type = 'button';
   removeCompact.className = 'viewer-menu-action';
-  removeCompact.textContent = 'Remove compact';
+  removeCompact.textContent = 'Remove squished';
   removeCompact.hidden = true;
   menuActions?.prepend(removeCompact);
 
@@ -71,7 +71,7 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
   function compactMeta() {
     if (!rendition) return originalMeta;
     const resolution = rendition.width && rendition.height ? `${Number(rendition.width).toLocaleString()}×${Number(rendition.height).toLocaleString()}` : '';
-    return [bytes(rendition.size), resolution, 'Compact', rendition.presetName].filter(Boolean).join(' · ');
+    return [bytes(rendition.size), resolution, 'Squished', rendition.presetName].filter(Boolean).join(' · ');
   }
 
   function rememberOriginalImage(image) {
@@ -161,7 +161,7 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
     const button = event.target.closest('[data-rendition]');
     if (button) show(button.dataset.rendition).catch(error => console.warn('Could not switch rendition', error));
   });
-  removeCompact.addEventListener('click', () => removeCurrentCompact().catch(error => console.warn('Could not remove compact rendition', error)));
+  removeCompact.addEventListener('click', () => removeCurrentCompact().catch(error => console.warn('Could not remove squished rendition', error)));
 
   document.addEventListener('click', event => {
     const trigger = event.target.closest('.viewer-optimize-trigger');
