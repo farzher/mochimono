@@ -80,30 +80,17 @@ if (viewer && stage) {
     if (!hide) viewer.classList.remove('viewer-controls-hidden');
   }
 
-  // These observers cannot recurse: syncChrome changes only viewer classes,
-  // while we observe only stage classes and viewer.hidden.
-  new MutationObserver(syncChrome).observe(stage, {
-    attributes:true,
-    attributeFilter:['class']
-  });
-  new MutationObserver(syncChrome).observe(viewer, {
-    attributes:true,
-    attributeFilter:['hidden']
-  });
-
+  new MutationObserver(syncChrome).observe(stage, { attributes:true, attributeFilter:['class'] });
+  new MutationObserver(syncChrome).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
   window.addEventListener('mochimono:optimize-open', syncChrome);
   window.addEventListener('mochimono:optimize-close', syncChrome);
   syncChrome();
 }
 
-// Image compression is already initialized before this module. Apply the same
-// compact label / slider / value treatment used by video without changing its
-// encoder state or preview lifecycle.
 import('./image-optimize-compact.js').catch(error => console.error('Could not compact image compression UI', error));
+import('./compression-work-ui.js').catch(error => console.error('Could not load compression work UI', error));
+import('./viewer-renditions.js').catch(error => console.error('Could not load rendition viewer', error));
 
-// Correct video dimensions from the actual loaded media rather than thumbnail
-// metadata, then load one comparison controller. Playback sync, frame pairing,
-// zoom and pan intentionally live together so separate controllers cannot fight.
 import('./viewer-video-resolution.js').catch(error => console.error('Could not load video resolution correction', error));
 import('./video-optimize.js')
   .then(() => import('./video-optimize-presets.js'))
@@ -114,4 +101,5 @@ import('./video-optimize.js')
   .then(() => import('./video-optimize-compare-loader.js'))
   .then(() => import('./video-optimize-live-settings.js'))
   .then(() => import('./video-optimize-transport.js'))
+  .then(() => import('./compression-presets-ui.js'))
   .catch(error => console.error('Could not load video compression UI', error));
