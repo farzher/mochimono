@@ -172,7 +172,7 @@ if (viewer && compare && leftImage && rightControls && !document.querySelector('
     saving.textContent = 'Original';
     resultSize.textContent = '';
     originalInfo.textContent = rightOriginalInfo?.textContent || 'Original';
-    status.textContent = 'Uncompressed source';
+    status.textContent = 'Original source';
     keep.disabled = true;
     replace.disabled = true;
     leftLabel.textContent = 'Original';
@@ -289,7 +289,7 @@ if (viewer && compare && leftImage && rightControls && !document.querySelector('
 
   function showError(message) {
     setWorking(false);
-    status.textContent = message || 'Could not compress this image';
+    status.textContent = message || 'Could not squish this image';
     keep.disabled = true;
     replace.disabled = true;
   }
@@ -399,7 +399,7 @@ if (viewer && compare && leftImage && rightControls && !document.querySelector('
 
   async function commit(mode) {
     if (committing || format === 'original' || !session?.selected || session.status !== 'ready') return;
-    if (mode === 'replace' && !confirm(`Replace ${session.filename} with the compressed ${session.selected.format.toUpperCase()}?\n\nMochimono will verify the preview you approved, then replace the original.`)) return;
+    if (mode === 'replace' && !confirm(`Replace ${session.filename} with the squished ${session.selected.format.toUpperCase()}?\n\nMochimono will verify the preview you approved, then replace the original.`)) return;
     committing = true;
     keep.disabled = true;
     replace.disabled = true;
