@@ -103,4 +103,5 @@ import('./viewer-video-resolution.js').catch(error => console.error('Could not l
 import('./video-optimize.js')
   .then(() => import('./video-optimize-polish.js'))
   .then(() => import('./video-optimize-compare.js'))
+  .then(() => import('./video-optimize-transport.js'))
   .catch(error => console.error('Could not load video compression UI', error));
