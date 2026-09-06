@@ -58,6 +58,7 @@ startThumbnailAgent();
 startMediaMetadataAgent();
 startProtectionAgent().catch(error => console.error('Protection agent failed', error));
 await import('./agent.js');
+await import('./lib/squish-defaults-migration.js');
 const [{ startCompressionServerSync }, { startRepresentationReconciler }] = await Promise.all([
   import('./lib/compression-server-sync.js'),
   import('./lib/representation-reconciler.js')
