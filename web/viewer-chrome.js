@@ -96,8 +96,9 @@ if (viewer && stage) {
   syncChrome();
 }
 
-// Load video compression after the existing image compression trigger has been
-// adopted into the viewer action row, so each media type gets one Compress action.
+// Correct video dimensions from the actual loaded media rather than thumbnail
+// metadata, then load video compression after the image Compress action is placed.
+import('./viewer-video-resolution.js').catch(error => console.error('Could not load video resolution correction', error));
 import('./video-optimize.js')
   .then(() => import('./video-optimize-polish.js'))
   .then(() => import('./video-optimize-zoom.js'))
