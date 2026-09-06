@@ -96,6 +96,11 @@ if (viewer && stage) {
   syncChrome();
 }
 
+// Image compression is already initialized before this module. Apply the same
+// compact label / slider / value treatment used by video without changing its
+// encoder state or preview lifecycle.
+import('./image-optimize-compact.js').catch(error => console.error('Could not compact image compression UI', error));
+
 // Correct video dimensions from the actual loaded media rather than thumbnail
 // metadata, then load one comparison controller. Playback sync, frame pairing,
 // zoom and pan intentionally live together so separate controllers cannot fight.
