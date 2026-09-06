@@ -175,7 +175,13 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
 
   new MutationObserver(() => {
     if (!rightOriginalMode || syncing || !rightNeedsSync()) return;
-    rightShadow = captureRight();
+    const next = captureRight();
+    if (rightShadow) {
+      next.imageSrc = rightShadow.imageSrc;
+      next.label = rightShadow.label;
+      next.activeFormat = rightShadow.activeFormat;
+    }
+    rightShadow = next;
     syncRightOriginal();
   }).observe(rightControls, { childList:true, characterData:true, subtree:true, attributes:true, attributeFilter:['class','disabled'] });
 
