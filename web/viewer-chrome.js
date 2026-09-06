@@ -103,6 +103,7 @@ import('./viewer-video-resolution.js').catch(error => console.error('Could not l
 import('./video-optimize.js')
   .then(() => import('./video-optimize-presets.js'))
   .then(() => import('./video-optimize-audio.js'))
+  .then(() => import('./video-optimize-bitrate.js'))
   .then(() => import('./video-optimize-polish.js'))
   .then(() => import('./video-optimize-compare-loader.js'))
   .then(() => import('./video-optimize-transport.js'))
