@@ -114,17 +114,17 @@ export async function handleRepresentationPolicyServer(req, res, url) {
 
     if (allow) {
       if (body.confirmation !== 'compact-only') {
-        return json(res, 400, { error:'Compact only requires explicit confirmation' });
+        return json(res, 400, { error:'Squished only requires explicit confirmation' });
       }
       // Only managed backup object stores are reversible today: switching them
       // back to Original makes normal backup reconciliation download the object
       // again. Never delete user source-folder files or server primary objects.
       if (!locationId.startsWith('backup:')) {
-        return json(res, 409, { error:'Compact only is currently available only for managed backup drives' });
+        return json(res, 409, { error:'Squished only is currently available only for managed backup drives' });
       }
       const policy = db.prepare('SELECT representation FROM representation_policies WHERE location_id=? AND media_type=?').get(locationId, mediaType);
       if (policy?.representation !== 'compact') {
-        return json(res, 409, { error:'Choose Compact for this backup before enabling Compact only' });
+        return json(res, 409, { error:'Choose Squished for this backup before enabling Squished only' });
       }
     }
 
