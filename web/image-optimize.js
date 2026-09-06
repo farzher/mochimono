@@ -44,7 +44,7 @@ document.head.append(style);
 const trigger = document.createElement('button');
 trigger.type = 'button';
 trigger.className = 'viewer-optimize-trigger';
-trigger.textContent = 'Compress';
+trigger.textContent = 'Squish';
 trigger.hidden = true;
 viewer?.append(trigger);
 
@@ -54,9 +54,9 @@ layer.hidden = true;
 layer.innerHTML = `
   <div class="image-optimize-compare" data-opt-compare>
     <img data-opt-original alt="Original" draggable="false">
-    <img class="image-optimize-after" data-opt-after alt="Compressed" draggable="false">
+    <img class="image-optimize-after" data-opt-after alt="Squished" draggable="false">
     <span class="image-optimize-label original">Original</span>
-    <span class="image-optimize-label optimized">Compressed</span>
+    <span class="image-optimize-label optimized">Squished</span>
     <i class="image-optimize-divider"></i>
   </div>
   <div class="image-optimize-controls" data-opt-controls>
@@ -121,7 +121,7 @@ layer.innerHTML = `
       </div>
       <label class="image-optimize-lossless" data-opt-lossless-row hidden><input data-opt-lossless type="checkbox"> Lossless WebP</label>
     </div>
-    <div class="image-optimize-actions">
+    <div class="image-optimize-actions" hidden>
       <button class="image-optimize-keep" data-opt-keep type="button" disabled>Keep both</button>
       <button class="image-optimize-replace" data-opt-replace type="button" disabled>Replace</button>
     </div>
@@ -242,7 +242,7 @@ compare.addEventListener('pointercancel', finishSplit, true);
 
 function syncTrigger() {
   trigger.hidden = !active() && (!currentImage() || !currentHash());
-  trigger.textContent = active() ? 'Done' : 'Compress';
+  trigger.textContent = active() ? 'Done' : 'Squish';
 }
 
 function sizeLabel() {
@@ -408,7 +408,7 @@ function setSaveState(data) {
 
 function showError(message) {
   setWorking(false);
-  status.textContent = message || 'Could not compress this image';
+  status.textContent = message || 'Could not squish this image';
   keep.disabled = true;
   replace.disabled = true;
 }
@@ -539,7 +539,7 @@ function closeOptimizer() {
 
 async function commit(mode) {
   if (committing || !session?.selected || session.status !== 'ready') return;
-  if (mode === 'replace' && !confirm(`Replace ${session.filename} with the compressed ${session.selected.format.toUpperCase()}?\
+  if (mode === 'replace' && !confirm(`Replace ${session.filename} with the squished ${session.selected.format.toUpperCase()}?\
 \
 Mochimono will verify the preview you approved, then replace the original.`)) return;
   committing = true;
