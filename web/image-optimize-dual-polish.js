@@ -192,6 +192,21 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     if (node && node.textContent !== text) node.textContent = text;
   }
 
+  function rightFormatName(format) {
+    if (format === 'original') return 'Original';
+    if (format === 'avif') return 'AVIF';
+    if (format === 'webp') return 'WebP';
+    return 'Auto';
+  }
+
+  function syncRightFormatLabel(format = '') {
+    if (rightOriginalMode) return setText(rightLabel, 'Original');
+    const activeFormat = format || rightFormats?.querySelector('[data-format].active')?.dataset.format || 'avif';
+    if (activeFormat === 'avif' || activeFormat === 'webp') return setText(rightLabel, rightFormatName(activeFormat));
+    const actualCodec = String(rightStatus?.textContent || '').match(/^(AVIF|WebP)\b/)?.[1];
+    setText(rightLabel, actualCodec || rightFormatName(activeFormat));
+  }
+
   function syncLeftOriginal() {
     if (!leftControls.classList.contains('is-original')) return;
     setText(leftSaving, '0%');
@@ -207,16 +222,17 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
   }
 
   function captureRight() {
+    const activeFormat = rightFormats?.querySelector('[data-format].active')?.dataset.format || 'avif';
     return {
       imageSrc:rightImage.currentSrc || rightImage.src || '',
       saving:rightSaving?.textContent || '',
       resultSize:rightResultSize?.textContent || '',
       status:rightStatus?.textContent || '',
-      label:rightLabel?.textContent || 'Compressed',
+      label:rightFormatName(activeFormat),
       working:rightControls.classList.contains('working'),
       keepDisabled:Boolean(rightKeep?.disabled),
       replaceDisabled:Boolean(rightReplace?.disabled),
-      activeFormat:rightFormats?.querySelector('[data-format].active')?.dataset.format || 'avif'
+      activeFormat
     };
   }
 
@@ -264,14 +280,14 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
       setText(rightSaving, rightShadow.saving);
       setText(rightResultSize, rightShadow.resultSize);
       setText(rightStatus, rightShadow.status);
-      setText(rightLabel, rightShadow.label);
       rightControls.classList.toggle('working', rightShadow.working);
       if (rightKeep) rightKeep.disabled = rightShadow.keepDisabled;
       if (rightReplace) rightReplace.disabled = rightShadow.replaceDisabled;
     }
     const next = button?.dataset.format || rightShadow?.activeFormat || 'avif';
-    const label = next === 'avif' ? 'AVIF' : next === 'webp' ? 'WebP' : 'Auto';
+    const label = rightFormatName(next);
     setText(rightFormatButton, `Format · ${label}`);
+    setText(rightLabel, label);
     for (const choice of rightFormats?.querySelectorAll('[data-format]') || []) choice.classList.toggle('active', choice.dataset.format === next);
     rightShadow = null;
   }
@@ -286,6 +302,7 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
       return;
     }
     if (rightOriginalMode) leaveRightOriginal(button);
+    else syncRightFormatLabel(button.dataset.format);
   }, true);
 
   new MutationObserver(() => {
@@ -296,6 +313,9 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     syncLeftOriginal();
     if (rightOriginalMode) syncRightOriginal();
   }).observe(rightOriginalInfo, { childList:true, characterData:true, subtree:true });
+
+  new MutationObserver(() => syncRightFormatLabel()).observe(rightStatus, { childList:true, characterData:true, subtree:true });
+  new MutationObserver(() => syncRightFormatLabel()).observe(rightFormats, { attributes:true, subtree:true, attributeFilter:['class'] });
 
   new MutationObserver(() => {
     if (!rightOriginalMode || syncing || !rightNeedsSync()) return;
@@ -332,6 +352,7 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     refreshEffort(rightControls, 'avif');
     const avif = rightFormats?.querySelector('[data-format="avif"]');
     if (avif && !avif.classList.contains('active')) avif.click();
+    syncRightFormatLabel('avif');
     setTimeout(syncLeftOriginal, 0);
   });
 
@@ -348,4 +369,5 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
   }).observe(leftImage, { attributes:true, attributeFilter:['src'] });
 
   syncLeftOriginal();
+  syncRightFormatLabel();
 }
