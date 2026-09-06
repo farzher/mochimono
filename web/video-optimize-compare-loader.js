@@ -18,3 +18,14 @@ try {
 } finally {
   EventTarget.prototype.addEventListener = nativeAdd;
 }
+
+// The compositor releases its previous VideoFrame pair on a fresh optimizer
+// open, but a canvas retains its last painted pixels until something explicitly
+// clears it. Clear only on a fresh open so a different video's old comparison
+// can never flash while its first sample is encoding. Setting changes do not
+// dispatch optimize-open, so their currently displayed preview remains intact.
+const comparisonCanvas = document.querySelector('.video-optimize-compare [data-canvas]');
+window.addEventListener('mochimono:optimize-open', () => {
+  if (!comparisonCanvas) return;
+  comparisonCanvas.width = comparisonCanvas.width;
+});
