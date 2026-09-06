@@ -90,4 +90,5 @@ if (viewer && stage) {
 // adopted into the viewer action row, so each media type gets one Compress action.
 import('./video-optimize.js')
   .then(() => import('./video-optimize-polish.js'))
+  .then(() => import('./video-optimize-zoom.js'))
   .catch(error => console.error('Could not load video compression UI', error));
