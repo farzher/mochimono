@@ -15,12 +15,17 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
   style.textContent = `
 .image-optimize-divider:before{width:4px!important;background:rgba(0,0,0,.62)!important;box-shadow:0 0 0 1px rgba(255,255,255,.04)!important}
 .image-optimize-divider-handle{width:42px!important;height:42px!important;border-radius:50%!important;gap:3px!important}
+.image-optimize-original{display:none!important}
 .image-optimize-controls.is-original{padding-bottom:12px}
 .image-optimize-controls.is-original [data-opt-size-button],.image-optimize-controls.is-original .image-optimize-tuning,.image-optimize-controls.is-original .image-optimize-actions{display:none!important}
 .image-optimize-controls.is-original .image-optimize-quick{grid-template-columns:1fr!important}
 .image-optimize-controls-left.is-original .image-optimize-saving{font-size:36px!important;letter-spacing:-.045em!important}
 .image-optimize-controls-left.is-original .image-optimize-result-size{display:inline!important}
-@media(max-width:760px){.image-optimize-divider-handle{width:38px!important;height:38px!important}.image-optimize-controls-left.is-original .image-optimize-saving{font-size:32px!important}}
+.image-optimize-effort-native{display:none!important}
+.image-optimize-effort-control{justify-self:end;width:170px;display:grid;grid-template-columns:1fr auto;align-items:center;gap:9px}
+.image-optimize-effort-control input{width:100%;margin:0;accent-color:#eee9e5}
+.image-optimize-effort-control output{min-width:44px;color:#aaa29e;font-size:11px;font-weight:700;text-align:right}
+@media(max-width:760px){.image-optimize-divider-handle{width:38px!important;height:38px!important}.image-optimize-controls-left.is-original .image-optimize-saving{font-size:32px!important}.image-optimize-effort-control{width:140px}}
 `;
   document.head.append(style);
 
@@ -49,6 +54,37 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     rightFormats.prepend(choice);
     rightFormats.classList.add('four');
   }
+
+  function setupEffortSlider(control) {
+    const row = control.querySelector('.image-optimize-segmented.effort');
+    const native = row?.querySelector('[data-opt-efforts]');
+    if (!row || !native || row.querySelector('.image-optimize-effort-control')) return;
+    native.classList.add('image-optimize-effort-native');
+    const slider = document.createElement('label');
+    slider.className = 'image-optimize-effort-control';
+    slider.innerHTML = '<input type="range" min="0" max="1" step="1" value="0" aria-label="Compression effort"><output>Normal</output>';
+    row.append(slider);
+    const input = slider.querySelector('input');
+    const output = slider.querySelector('output');
+    const sync = () => {
+      const mode = native.querySelector('[data-effort].active')?.dataset.effort === 'max' ? 'max' : 'normal';
+      input.value = mode === 'max' ? '1' : '0';
+      output.textContent = mode === 'max' ? 'Max' : 'Normal';
+    };
+    input.addEventListener('input', () => {
+      output.textContent = input.value === '1' ? 'Max' : 'Normal';
+    });
+    input.addEventListener('change', () => {
+      const mode = input.value === '1' ? 'max' : 'normal';
+      native.querySelector(`[data-effort="${mode}"]`)?.click();
+      sync();
+    });
+    new MutationObserver(sync).observe(native, { attributes:true, subtree:true, attributeFilter:['class'] });
+    sync();
+  }
+
+  setupEffortSlider(leftControls);
+  setupEffortSlider(rightControls);
 
   let sourceUrl = '';
   let rightOriginalMode = false;
@@ -92,7 +128,7 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
       working:rightControls.classList.contains('working'),
       keepDisabled:Boolean(rightKeep?.disabled),
       replaceDisabled:Boolean(rightReplace?.disabled),
-      activeFormat:rightFormats?.querySelector('[data-format].active')?.dataset.format || 'auto'
+      activeFormat:rightFormats?.querySelector('[data-format].active')?.dataset.format || 'avif'
     };
   }
 
@@ -145,7 +181,7 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
       if (rightKeep) rightKeep.disabled = rightShadow.keepDisabled;
       if (rightReplace) rightReplace.disabled = rightShadow.replaceDisabled;
     }
-    const next = button?.dataset.format || rightShadow?.activeFormat || 'auto';
+    const next = button?.dataset.format || rightShadow?.activeFormat || 'avif';
     const label = next === 'avif' ? 'AVIF' : next === 'webp' ? 'WebP' : 'Auto';
     setText(rightFormatButton, `Format · ${label}`);
     for (const choice of rightFormats?.querySelectorAll('[data-format]') || []) choice.classList.toggle('active', choice.dataset.format === next);
@@ -202,6 +238,8 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     rightOriginalMode = false;
     rightShadow = null;
     rightControls.classList.remove('is-original');
+    const avif = rightFormats?.querySelector('[data-format="avif"]');
+    if (avif && !avif.classList.contains('active')) avif.click();
     setTimeout(syncLeftOriginal, 0);
   });
 
