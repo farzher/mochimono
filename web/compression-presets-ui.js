@@ -40,10 +40,10 @@ if (viewer && viewerOpen && (imageControls || videoControls)) {
     bar.className = 'compression-savebar';
     bar.dataset.mediaType = type;
     bar.innerHTML = `
-      <select data-compression-preset aria-label="Compression preset"></select>
-      <button type="button" data-compression-save-preset title="Save current settings as a preset">Save preset</button>
+      <select data-compression-preset aria-label="Squish preset"></select>
+      <button type="button" data-compression-save-preset title="Save current Squish settings as a preset">Save preset</button>
       <button type="button" class="compression-preset-default" data-compression-default title="Make selected preset the default">★</button>
-      <button type="button" class="compression-save-compact" data-compression-save>Save compact</button>`;
+      <button type="button" class="compression-save-compact" data-compression-save>Save squished</button>`;
     controls.append(bar);
     bar.querySelector('[data-compression-preset]').addEventListener('change', () => {
       const preset = presets.find(item => item.id === bar.querySelector('[data-compression-preset]').value);
@@ -84,7 +84,7 @@ if (viewer && viewerOpen && (imageControls || videoControls)) {
 
   function captureImage() {
     const format = imageControls?.querySelector('[data-opt-formats] [data-format].active')?.dataset.format || 'auto';
-    if (format === 'original') throw new Error('Choose a compressed image format first');
+    if (format === 'original') throw new Error('Choose a Squish image format first');
     const sizeText = String(imageControls?.querySelector('[data-opt-size-button]')?.textContent || '').replace(/^Size\s*·\s*/i, '').trim();
     let resizeMax = 2560;
     let resizePercent = 0;
@@ -215,7 +215,7 @@ if (viewer && viewerOpen && (imageControls || videoControls)) {
     const button = bar.querySelector('[data-compression-save]');
     if (!originalHash || !button) return;
     const data = await api(`/api/renditions/${encodeURIComponent(originalHash)}`).catch(() => ({ rendition:null }));
-    button.textContent = data.rendition ? 'Update compact' : 'Save compact';
+    button.textContent = data.rendition ? 'Update squished' : 'Save squished';
   }
 
   async function activateDefaults() {
