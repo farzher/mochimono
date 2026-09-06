@@ -17,7 +17,7 @@ if (controls && quality) {
       <button class="video-optimize-choice" data-value="small">Small</button>
       <button class="video-optimize-choice" data-value="none">None</button>
     </div>
-    <div class="video-optimize-note" data-audio-note>Opus · source-aware up to 128 kbps</div>`;
+    <div class="video-optimize-note" data-audio-note hidden></div>`;
 
   const sample = controls.querySelector('[data-s]')?.closest('.video-optimize-section');
   if (sample) sample.before(section);
@@ -34,18 +34,12 @@ if (controls && quality) {
 `;
   document.head.append(style);
 
-  function noteFor(value) {
-    if (value === 'original') {
-      if (lastAudio?.codec) {
-        const bitrate = lastAudio.kbps ? ` · ${Math.round(lastAudio.kbps)} kbps` : '';
-        return `Copies ${String(lastAudio.codec).toUpperCase()} audio without re-encoding${bitrate} · final file uses MKV; preview uses Opus`;
-      }
-      return 'Copies the source audio without re-encoding · final file uses MKV; preview uses Opus';
+  function originalNote() {
+    if (lastAudio?.codec) {
+      const bitrate = lastAudio.kbps ? ` · ${Math.round(lastAudio.kbps)} kbps` : '';
+      return `${String(lastAudio.codec).toUpperCase()} passthrough${bitrate} · MKV final`;
     }
-    if (value === 'high') return 'Opus · source-aware up to 160 kbps';
-    if (value === 'small') return 'Opus · source-aware up to 48 kbps';
-    if (value === 'none') return 'Removes the audio track';
-    return 'Opus · source-aware up to 128 kbps';
+    return 'Audio passthrough · MKV final';
   }
 
   function sync() {
@@ -53,7 +47,8 @@ if (controls && quality) {
       button.classList.toggle('active', button.dataset.value === mode);
     }
     label.textContent = mode === 'original' ? 'Original' : mode === 'high' ? 'High' : mode === 'small' ? 'Small' : mode === 'none' ? 'None' : 'Normal';
-    note.textContent = noteFor(mode);
+    note.hidden = mode !== 'original';
+    if (mode === 'original') note.textContent = originalNote();
   }
 
   choices.addEventListener('click', event => {
