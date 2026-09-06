@@ -106,6 +106,6 @@ import('./video-optimize.js')
   .then(() => import('./video-optimize-bitrate.js'))
   .then(() => import('./video-optimize-polish.js'))
   .then(() => import('./video-optimize-compare-loader.js'))
-  .then(() => import('./video-optimize-transport.js'))
   .then(() => import('./video-optimize-live-settings.js'))
+  .then(() => import('./video-optimize-transport.js'))
   .catch(error => console.error('Could not load video compression UI', error));
