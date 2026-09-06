@@ -14,9 +14,14 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
 
   const style = document.createElement('style');
   style.textContent = `
+.viewer.image-optimize-active .viewer-optimize-trigger{display:none!important}
 .image-optimize-divider:before{width:4px!important;background:rgba(0,0,0,.62)!important;box-shadow:0 0 0 1px rgba(255,255,255,.04)!important}
 .image-optimize-divider-handle{width:42px!important;height:42px!important;border-radius:50%!important;gap:3px!important}
 .image-optimize-original{display:none!important}
+.image-optimize-controls .image-optimize-result{padding-right:30px}
+.image-optimize-card-close{position:absolute;z-index:2;top:8px;right:8px;width:28px;height:28px;padding:0;border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:transparent;color:#8f8885;font:400 22px/1 Arial,sans-serif;cursor:pointer;transition:background .12s ease,color .12s ease}
+.image-optimize-card-close:hover{background:rgba(255,255,255,.08);color:#fff}
+.image-optimize-card-close:focus-visible{outline:2px solid rgba(255,255,255,.55);outline-offset:1px}
 .image-optimize-controls.is-original{padding-bottom:12px}
 .image-optimize-controls.is-original [data-opt-size-button],.image-optimize-controls.is-original .image-optimize-tuning,.image-optimize-controls.is-original .image-optimize-actions{display:none!important}
 .image-optimize-controls.is-original .image-optimize-quick{grid-template-columns:1fr!important}
@@ -26,7 +31,7 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
 .image-optimize-effort-control{justify-self:end;width:170px;display:grid;grid-template-columns:1fr auto;align-items:center;gap:9px}
 .image-optimize-effort-control input{width:100%;margin:0;accent-color:#eee9e5}
 .image-optimize-effort-control output{min-width:34px;color:#aaa29e;font-size:11px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
-@media(max-width:760px){.image-optimize-divider-handle{width:38px!important;height:38px!important}.image-optimize-controls-left.is-original .image-optimize-saving{font-size:32px!important}.image-optimize-effort-control{width:140px}}
+@media(max-width:760px){.image-optimize-divider-handle{width:38px!important;height:38px!important}.image-optimize-controls-left.is-original .image-optimize-saving{font-size:32px!important}.image-optimize-effort-control{width:140px}.image-optimize-card-close{top:6px;right:6px;width:26px;height:26px;font-size:20px}}
 `;
   document.head.append(style);
 
@@ -55,6 +60,26 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     rightFormats.prepend(choice);
     rightFormats.classList.add('four');
   }
+
+  function addCloseButton(control) {
+    if (!control || control.querySelector('[data-opt-card-close]')) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'image-optimize-card-close';
+    button.dataset.optCardClose = '';
+    button.setAttribute('aria-label', 'Close compression');
+    button.title = 'Close compression';
+    button.textContent = '×';
+    button.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      window.mochimonoImageOptimize?.close?.();
+    });
+    control.append(button);
+  }
+
+  addCloseButton(leftControls);
+  addCloseButton(rightControls);
 
   const effortControls = new Map();
   let lastControl = rightControls;
