@@ -187,6 +187,19 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     return '—';
   }
 
+  function sourceResolutionText() {
+    const parts = String(rightOriginalInfo?.textContent || '').split('·').map(part => part.trim()).filter(Boolean);
+    for (const part of parts) {
+      if (/^\d[\d,]*\s*[×x]\s*\d[\d,]*$/i.test(part)) return part.replace(/\s*[×x]\s*/i, '×');
+    }
+    return '';
+  }
+
+  function sourceStatusText() {
+    const resolution = sourceResolutionText();
+    return resolution ? `Uncompressed source · ${resolution}` : 'Uncompressed source';
+  }
+
   function setText(node, text) {
     text = String(text ?? '');
     if (node && node.textContent !== text) node.textContent = text;
@@ -211,7 +224,7 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     if (!leftControls.classList.contains('is-original')) return;
     setText(leftSaving, '0%');
     setText(leftResultSize, sourceSizeText());
-    setText(leftStatus, 'Uncompressed source');
+    setText(leftStatus, sourceStatusText());
   }
 
   function closeRightDrawer() {
@@ -244,7 +257,7 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     setText(rightFormatButton, 'Format · Original');
     setText(rightSaving, '0%');
     setText(rightResultSize, sourceSizeText());
-    setText(rightStatus, 'Uncompressed source');
+    setText(rightStatus, sourceStatusText());
     setText(rightLabel, 'Original');
     if (rightKeep) rightKeep.disabled = true;
     if (rightReplace) rightReplace.disabled = true;
@@ -257,7 +270,7 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     if (!rightOriginalMode) return false;
     if (!rightControls.classList.contains('is-original') || rightControls.classList.contains('working')) return true;
     if (rightSaving?.textContent !== '0%' || rightResultSize?.textContent !== sourceSizeText()) return true;
-    if (rightStatus?.textContent !== 'Uncompressed source' || rightFormatButton?.textContent !== 'Format · Original') return true;
+    if (rightStatus?.textContent !== sourceStatusText() || rightFormatButton?.textContent !== 'Format · Original') return true;
     if (rightKeep && !rightKeep.disabled) return true;
     if (rightReplace && !rightReplace.disabled) return true;
     return rightFormats?.querySelector('[data-format].active')?.dataset.format !== 'original';
