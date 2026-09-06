@@ -62,10 +62,7 @@ if (controls && quality) {
   }
 
   function sync() {
-    for (const button of choices.querySelectorAll('[data-value]')) {
-      button.classList.toggle('active', button.dataset.value === mode);
-    }
-
+    for (const button of choices.querySelectorAll('[data-value]')) button.classList.toggle('active', button.dataset.value === mode);
     if (mode === 'custom') {
       ensureCustomValue();
       slider.disabled = false;
@@ -73,7 +70,6 @@ if (controls && quality) {
       label.textContent = bitrateText(customKbps);
       return;
     }
-
     slider.disabled = true;
     const shown = autoVideoKbps || 0;
     slider.value = String(positionFromKbps(shown || MIN_KBPS));
@@ -81,8 +77,6 @@ if (controls && quality) {
   }
 
   function requestPreview() {
-    // video-optimize.js already owns preview lifecycle. Reuse its Quality change
-    // path rather than creating another session controller.
     quality.onchange?.();
   }
 
@@ -105,9 +99,6 @@ if (controls && quality) {
     if (mode !== 'custom') return;
     customKbps = kbpsFromPosition(slider.value);
     sync();
-    // The live-settings controller watches click events on [data-value]. Emit
-    // one before starting the replacement encode so the displayed preview keeps
-    // playing while this custom bitrate sample is generated.
     slider.dispatchEvent(new MouseEvent('click', { bubbles:true }));
     requestPreview();
   });
@@ -116,18 +107,13 @@ if (controls && quality) {
   window.fetch = async (input, init = {}) => {
     const url = typeof input === 'string' ? input : input?.url || '';
     let nextInit = init;
-
     if (url.includes('/api/video-optimize/start') && typeof init.body === 'string') {
       try {
         const body = JSON.parse(init.body);
-        body.options = {
-          ...(body.options || {}),
-          videoBitrateKbps:mode === 'custom' ? Math.round(customKbps || MIN_KBPS) : 0
-        };
+        body.options = { ...(body.options || {}), videoBitrateKbps:mode === 'custom' ? Math.round(customKbps || MIN_KBPS) : 0 };
         nextInit = { ...init, body:JSON.stringify(body) };
       } catch {}
     }
-
     const response = await nativeFetch(input, nextInit);
     if (url.includes('/api/video-optimize/') && response.ok) {
       response.clone().json().then(data => {
@@ -140,6 +126,20 @@ if (controls && quality) {
       }).catch(() => {});
     }
     return response;
+  };
+
+  window.mochimonoVideoBitrate = {
+    get:() => ({ mode, kbps:mode === 'custom' ? Math.round(customKbps || MIN_KBPS) : 0, autoKbps:Math.round(autoVideoKbps || 0) }),
+    set(value, preview = true) {
+      const kbps = Number(value) || 0;
+      mode = kbps >= MIN_KBPS ? 'custom' : 'auto';
+      if (mode === 'custom') customKbps = clamp(Math.round(kbps), MIN_KBPS, maxKbps());
+      sync();
+      if (preview) {
+        slider.dispatchEvent(new MouseEvent('click', { bubbles:true }));
+        requestPreview();
+      }
+    }
   };
 
   window.addEventListener('mochimono:optimize-open', () => {
