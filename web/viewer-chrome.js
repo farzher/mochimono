@@ -101,6 +101,7 @@ if (viewer && stage) {
 // encoder state or preview lifecycle.
 import('./image-optimize-compact.js').catch(error => console.error('Could not compact image compression UI', error));
 import('./compression-work-ui.js').catch(error => console.error('Could not load compression work UI', error));
+import('./compression-locations-ui.js').catch(error => console.error('Could not load compression storage UI', error));
 import('./viewer-renditions.js').catch(error => console.error('Could not load rendition viewer', error));
 
 // Correct video dimensions from the actual loaded media rather than thumbnail
