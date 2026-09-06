@@ -21,19 +21,36 @@ style.textContent = `
 .video-optimize-compare{--split:50%;position:absolute;inset:0;background:#050505;touch-action:none;overflow:hidden}
 .video-optimize-canvas{position:absolute;inset:0;width:100%;height:100%;background:#050505;pointer-events:none}
 .video-optimize-decode{position:absolute;left:0;top:0;width:100%;height:100%;opacity:0;pointer-events:none}
-.video-optimize-label{position:absolute;z-index:4;top:18px;font-size:11px;font-weight:750;color:#ffffffc7;text-shadow:0 1px 5px #000;pointer-events:none}
-.video-optimize-label.original{left:16px}.video-optimize-label.optimized{right:16px}
-.video-optimize-divider{position:absolute;z-index:5;left:var(--split);top:0;bottom:0;width:42px;transform:translateX(-50%);cursor:e-resize;touch-action:none}
-.video-optimize-divider:before{content:'';position:absolute;left:50%;top:0;bottom:0;width:4px;transform:translateX(-50%);background:#000a}
-.video-optimize-divider:after{content:'↔';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:38px;height:38px;border:1px solid #ffffff40;border-radius:50%;background:#000c;color:#fff;font:400 17px/1 Arial}
-.video-optimize-controls{position:absolute;z-index:8;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));width:min(390px,calc(100% - 28px));max-height:calc(100dvh - 28px);overflow:auto;padding:14px;border:1px solid #ffffff17;border-radius:14px;background:#141314f0;box-shadow:0 16px 48px #0008;backdrop-filter:blur(18px)}
-.video-optimize-close{position:absolute;right:8px;top:8px;width:28px;height:28px;border:0;border-radius:50%;background:transparent;color:#8f8885;font:400 22px/1 Arial}.video-optimize-close:hover{background:#ffffff14;color:#fff}
-.video-optimize-result{padding-right:28px}.video-optimize-line{display:flex;align-items:baseline;gap:8px}.video-optimize-saving{font-size:34px;line-height:.95;letter-spacing:-.04em;color:#6fb1ff}.video-optimize-size{font-size:17px;font-weight:750;color:#ddd6d2}.video-optimize-status{margin-top:5px;color:#a19995;font-size:11px;line-height:1.4}
-.video-optimize-progress{height:3px;margin-top:8px;overflow:hidden;border-radius:99px;background:#ffffff14}.video-optimize-progress[hidden]{display:none!important}.video-optimize-progress i{display:block;height:100%;width:0;background:#8eadd0}
-.video-optimize-play{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;margin-top:12px}.video-optimize-play button{width:34px;height:30px;border:0;border-radius:8px;background:#2a2829;color:#eee}.video-optimize-play input,.video-optimize-section input[type=range]{width:100%;margin:0;accent-color:#eee9e5}.video-optimize-time{min-width:66px;text-align:right;color:#aaa29e;font-size:10px}
-.video-optimize-section{display:grid;gap:7px;margin-top:10px;padding:10px;border-radius:10px;background:#ffffff09}.video-optimize-head{display:flex;justify-content:space-between;color:#d6cfcb;font-size:11px;font-weight:700}.video-optimize-head output{color:#aaa29e}.video-optimize-choices{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}.video-optimize-choices.five{grid-template-columns:repeat(5,1fr)}.video-optimize-choice{min-height:32px;padding:0 5px;border:0;border-radius:8px;background:#2a2829;color:#bfb8b4;font-size:10.5px;font-weight:700}.video-optimize-choice.active{background:#eee9e5;color:#171416}.video-optimize-choice:disabled{opacity:.3}.video-optimize-note{color:#77706d;font-size:9.5px;line-height:1.35}
+.video-optimize-label{position:absolute;z-index:4;top:18px;font-size:11px;font-weight:750;text-shadow:0 1px 5px #000;pointer-events:none}
+.video-optimize-label.original{left:16px;color:#ff74b7}.video-optimize-label.optimized{right:16px;color:#72b6ff}
+.video-optimize-divider{position:absolute;z-index:5;left:var(--split);top:0;bottom:0;width:48px;transform:translateX(-50%);cursor:e-resize;touch-action:none}
+.video-optimize-divider:before{content:'';position:absolute;left:50%;top:0;bottom:0;width:3px;transform:translateX(-50%);background:rgba(8,8,10,.82);box-shadow:-1px 0 0 rgba(255,79,163,.34),1px 0 0 rgba(78,161,255,.34)}
+.video-optimize-divider-handle{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;gap:4px;width:50px;height:36px;border-radius:18px;background:rgba(8,8,10,.78);border:1px solid rgba(255,255,255,.18);box-shadow:0 4px 18px rgba(0,0,0,.4);backdrop-filter:blur(8px)}
+.video-optimize-divider:hover .video-optimize-divider-handle{background:rgba(8,8,10,.9);border-color:rgba(255,255,255,.3)}
+.video-optimize-divider-left,.video-optimize-divider-right{width:0;height:0;border-top:8px solid transparent;border-bottom:8px solid transparent;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}
+.video-optimize-divider-left{border-right:12px solid #ff4fa3}.video-optimize-divider-right{border-left:12px solid #4ea1ff}
+.video-optimize-card{position:absolute;z-index:8;bottom:max(14px,env(safe-area-inset-bottom));width:min(350px,calc(50% - 24px));padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(20,19,20,.92);box-shadow:0 16px 48px rgba(0,0,0,.46);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.video-optimize-card-left{left:max(14px,env(safe-area-inset-left))}
+.video-optimize-card-right{right:max(14px,env(safe-area-inset-right));max-height:calc(100dvh - 28px);overflow:auto}
+.video-optimize-close{position:absolute;z-index:2;top:8px;right:8px;width:28px;height:28px;padding:0;border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:transparent;color:#8f8885;font:400 22px/1 Arial,sans-serif;cursor:pointer}
+.video-optimize-close:hover{background:rgba(255,255,255,.08);color:#fff}
+.video-optimize-result{padding-right:30px}.video-optimize-line{display:flex;align-items:baseline;gap:8px}
+.video-optimize-saving{font-size:36px;line-height:.9;letter-spacing:-.045em;font-weight:790;white-space:nowrap}
+.video-optimize-card-left .video-optimize-saving{color:#ff74b7}.video-optimize-card-right .video-optimize-saving{color:#6fb1ff}
+.video-optimize-size{color:#ddd6d2;font-size:17px;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
+.video-optimize-status{margin-top:6px;color:#968e8a;font-size:11px;line-height:1.35}
+.video-optimize-progress{height:3px;margin-top:8px;overflow:hidden;border-radius:99px;background:#ffffff14}.video-optimize-progress[hidden]{display:none!important}.video-optimize-progress i{display:block;height:100%;width:0;background:#72b6ff}
+.video-optimize-play{display:grid;grid-template-columns:34px 1fr auto;align-items:center;gap:8px;margin-top:12px}
+.video-optimize-play button{width:34px;height:30px;padding:0;border:0;border-radius:8px;background:#2a2829;color:#eee;display:flex;align-items:center;justify-content:center;line-height:1}
+.video-optimize-play button:hover{background:#343132;color:#fff}.video-optimize-play-icon{display:block;line-height:1;transform:translateY(-.5px)}.video-optimize-play button[data-playing="0"] .video-optimize-play-icon{transform:translate(1px,-.5px)}
+.video-optimize-play input,.video-optimize-section input[type=range]{width:100%;margin:0;accent-color:#eee9e5}.video-optimize-time{min-width:66px;text-align:right;color:#aaa29e;font-size:10px}
+.video-optimize-section{display:grid;gap:7px;margin-top:10px;padding:10px;border-radius:10px;background:rgba(255,255,255,.035)}
+.video-optimize-head{display:flex;justify-content:space-between;color:#d6cfcb;font-size:11px;font-weight:700}.video-optimize-head output{color:#aaa29e}
+.video-optimize-choices{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}.video-optimize-choices.five{grid-template-columns:repeat(5,1fr)}
+.video-optimize-choice{min-height:32px;padding:0 5px;border:0;border-radius:8px;background:#2a2829;color:#bfb8b4;font-size:10.5px;font-weight:700}.video-optimize-choice:hover{background:#343132;color:#fff}.video-optimize-choice.active{background:#eee9e5;color:#171416}.video-optimize-choice:disabled{opacity:.3}
+.video-optimize-note{color:#77706d;font-size:9.5px;line-height:1.35}
 .video-optimize-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:10px}.video-optimize-actions button{min-height:38px;border:0;border-radius:9px;font-size:12px;font-weight:750}.video-optimize-keep{background:#2a2829;color:#d2cbc7}.video-optimize-replace{background:#eee9e5;color:#171416}.video-optimize-actions button:disabled{opacity:.35}
-@media(max-width:700px){.video-optimize-controls{right:8px;bottom:8px;width:min(370px,calc(100% - 16px));max-height:calc(100dvh - 16px);padding:12px}.video-optimize-choices.five{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:760px){.video-optimize-card{width:calc(50% - 12px);padding:10px}.video-optimize-card-left{left:max(8px,env(safe-area-inset-left))}.video-optimize-card-right{right:max(8px,env(safe-area-inset-right));max-height:calc(100dvh - 16px)}.video-optimize-saving{font-size:32px}.video-optimize-choices.five{grid-template-columns:repeat(3,1fr)}.video-optimize-divider-handle{width:44px;height:32px}.video-optimize-divider-left,.video-optimize-divider-right{border-top-width:7px;border-bottom-width:7px}.video-optimize-divider-left{border-right-width:10px}.video-optimize-divider-right{border-left-width:10px}}
 `;
 document.head.append(style);
 
@@ -59,22 +76,29 @@ layer.innerHTML = `
     <video class="video-optimize-decode" data-a playsinline preload="auto"></video>
     <span class="video-optimize-label original">Original</span>
     <span class="video-optimize-label optimized" data-l>AV1</span>
-    <i class="video-optimize-divider" data-d></i>
+    <i class="video-optimize-divider" data-d><span class="video-optimize-divider-handle" aria-hidden="true"><span class="video-optimize-divider-left"></span><span class="video-optimize-divider-right"></span></span></i>
   </div>
-  <div class="video-optimize-controls" data-controls>
-    <button class="video-optimize-close" data-close>×</button>
+  <div class="video-optimize-card video-optimize-card-left">
+    <button class="video-optimize-close" data-close-left aria-label="Close compression">×</button>
+    <div class="video-optimize-result">
+      <div class="video-optimize-line"><strong class="video-optimize-saving">0%</strong><span class="video-optimize-size" data-source-size>Original</span></div>
+      <div class="video-optimize-status" data-source-status>Uncompressed source</div>
+    </div>
+  </div>
+  <div class="video-optimize-card video-optimize-card-right" data-controls>
+    <button class="video-optimize-close" data-close-right aria-label="Close compression">×</button>
     <div class="video-optimize-result">
       <div class="video-optimize-line"><strong class="video-optimize-saving" data-save>—</strong><span class="video-optimize-size" data-size>Preparing…</span></div>
       <div class="video-optimize-status" data-status>Starting AV1 preview…</div>
       <div class="video-optimize-progress" data-progress hidden><i></i></div>
     </div>
-    <div class="video-optimize-play"><button data-play>▶</button><input data-playhead type="range" min="0" max="6" step="0.001" value="0"><span class="video-optimize-time" data-time>0:00 / 0:06</span></div>
+    <div class="video-optimize-play"><button data-play data-playing="0" aria-label="Play preview"><span class="video-optimize-play-icon" data-play-icon>▶</span></button><input data-playhead type="range" min="0" max="6" step="0.001" value="0"><span class="video-optimize-time" data-time>0:00 / 0:06</span></div>
     <div class="video-optimize-section"><div class="video-optimize-head"><span>Encoder</span><output data-enc-label>Auto</output></div><div class="video-optimize-choices" data-enc><button class="video-optimize-choice active" data-value="auto">Auto</button><button class="video-optimize-choice" data-value="gpu">GPU</button><button class="video-optimize-choice" data-value="cpu">CPU</button></div><div class="video-optimize-note" data-cap>Checking AV1 encoders…</div></div>
     <div class="video-optimize-section"><div class="video-optimize-head"><span>Resolution</span><output data-res-label>Original</output></div><div class="video-optimize-choices five" data-res><button class="video-optimize-choice active" data-value="0">Original</button><button class="video-optimize-choice" data-value="3840">4K</button><button class="video-optimize-choice" data-value="2560">1440p</button><button class="video-optimize-choice" data-value="1920">1080p</button><button class="video-optimize-choice" data-value="1280">720p</button></div></div>
     <div class="video-optimize-section"><div class="video-optimize-head"><span>Frame rate</span><output data-fps-label>Original</output></div><div class="video-optimize-choices" data-fps><button class="video-optimize-choice active" data-value="0">Original</button><button class="video-optimize-choice" data-value="60">60 fps</button><button class="video-optimize-choice" data-value="30">30 fps</button></div></div>
     <div class="video-optimize-section"><div class="video-optimize-head"><span>Quality</span><output data-q-label>72</output></div><input data-q type="range" min="1" max="100" value="72"></div>
     <div class="video-optimize-section"><div class="video-optimize-head"><span>Effort</span><output data-e-label>7 / 9</output></div><input data-e type="range" min="0" max="9" value="7"></div>
-    <div class="video-optimize-section"><div class="video-optimize-head"><span>Sample</span><output data-s-label>0:00</output></div><input data-s type="range" min="0" max="1" step="0.5" value="0"><div class="video-optimize-note">Encodes about 6 seconds around this point. Final size uses the encoder bitrate plan instead of blindly extrapolating one scene.</div></div>
+    <div class="video-optimize-section"><div class="video-optimize-head"><span>Sample</span><output data-s-label>0:00</output></div><input data-s type="range" min="0" max="1" step="0.5" value="0"><div class="video-optimize-note">Encodes about 6 seconds around this point. Preview playback loops automatically.</div></div>
     <div class="video-optimize-actions"><button class="video-optimize-keep" data-keep disabled>Keep copy</button><button class="video-optimize-replace" data-replace disabled>Replace original</button></div>
   </div>`;
 viewer?.append(layer);
@@ -83,7 +107,6 @@ const $ = selector => layer.querySelector(selector);
 const compare = $('[data-c]');
 const canvas = $('[data-canvas]');
 const ctx = canvas.getContext('2d', { alpha:false });
-const divider = $('[data-d]');
 const original = $('[data-o]');
 const after = $('[data-a]');
 const rightLabel = $('[data-l]');
@@ -91,9 +114,12 @@ const controls = $('[data-controls]');
 const save = $('[data-save]');
 const size = $('[data-size]');
 const status = $('[data-status]');
+const sourceSize = $('[data-source-size]');
+const sourceStatus = $('[data-source-status]');
 const progress = $('[data-progress]');
 const bar = progress.querySelector('i');
 const play = $('[data-play]');
+const playIcon = $('[data-play-icon]');
 const playhead = $('[data-playhead]');
 const time = $('[data-time]');
 const enc = $('[data-enc]');
@@ -115,14 +141,11 @@ const replace = $('[data-replace]');
 let session = null;
 let serial = 0;
 let timer = 0;
-let debounce = 0;
 let activeHash = '';
 let committing = false;
 let splitPointer = null;
 let sourceState = null;
 let split = 50;
-let afterFrame = NaN;
-let originalFrame = NaN;
 let frameGeneration = 0;
 let hardSyncing = false;
 let previewLoadSerial = 0;
@@ -131,10 +154,10 @@ let opt = { encoder:'auto', quality:72, effort:7, maxEdge:0, fps:0 };
 const active = () => viewer?.classList.contains('video-optimize-active');
 const bytes = value => {
   const units = ['B','KB','MB','GB','TB'];
-  let size = Math.abs(Number(value) || 0);
+  let amount = Math.abs(Number(value) || 0);
   let index = 0;
-  while (size >= 1000 && index < units.length - 1) { size /= 1000; index++; }
-  return `${size < 10 && index ? size.toFixed(1) : Math.round(size)} ${units[index]}`;
+  while (amount >= 1000 && index < units.length - 1) { amount /= 1000; index++; }
+  return `${amount < 10 && index ? amount.toFixed(1) : Math.round(amount)} ${units[index]}`;
 };
 const clock = value => {
   const seconds = Math.max(0, Number(value) || 0);
@@ -183,11 +206,6 @@ async function capabilities() {
   }
 }
 
-function frameTolerance() {
-  const rate = Number(session?.targetFps || session?.fps || 30) || 30;
-  return Math.max(.004, .48 / rate);
-}
-
 function containedRect(video) {
   const width = compare.clientWidth || 1;
   const height = compare.clientHeight || 1;
@@ -212,14 +230,8 @@ function resizeCanvas() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-function drawComposite(force = false) {
+function drawComposite() {
   if (!session?.preview || !original.videoWidth || !after.videoWidth) return;
-  if (!force && (!Number.isFinite(originalFrame) || !Number.isFinite(afterFrame))) return;
-  if (!force) {
-    const drift = (originalFrame - session.sampleStart) - afterFrame;
-    if (Math.abs(drift) > frameTolerance()) return;
-  }
-
   resizeCanvas();
   const width = compare.clientWidth || 1;
   const height = compare.clientHeight || 1;
@@ -243,54 +255,58 @@ function updateTimeline(value = Number(after.currentTime) || 0) {
   time.textContent = `${clock(current)} / ${clock(duration)}`;
 }
 
-function correctDrift() {
-  if (!session?.preview || original.paused || after.paused || hardSyncing || !Number.isFinite(originalFrame) || !Number.isFinite(afterFrame)) return;
-  const drift = (originalFrame - session.sampleStart) - afterFrame;
-  const tolerance = frameTolerance();
-  if (Math.abs(drift) > Math.max(.055, tolerance * 4)) {
+function setPlaying(value) {
+  play.dataset.playing = value ? '1' : '0';
+  playIcon.textContent = value ? '❚❚' : '▶';
+  play.setAttribute('aria-label', value ? 'Pause preview' : 'Play preview');
+}
+
+function syncOriginalTo(masterTime, force = false) {
+  if (!session?.preview || hardSyncing || !Number.isFinite(masterTime)) return;
+  const expected = session.sampleStart + masterTime;
+  const drift = Number(original.currentTime) - expected;
+  const rate = Math.max(24, Number(session.targetFps || session.fps || 30) || 30);
+  const hardThreshold = Math.max(.06, 2.25 / rate);
+
+  if (force || Math.abs(drift) > hardThreshold) {
     hardSyncing = true;
-    try { original.currentTime = Math.max(0, session.sampleStart + afterFrame); } catch {}
+    original.playbackRate = 1;
+    try { original.currentTime = Math.max(0, expected); } catch {}
     const clear = () => {
       hardSyncing = false;
-      original.playbackRate = 1;
       original.removeEventListener('seeked', clear);
     };
     original.addEventListener('seeked', clear, { once:true });
-    setTimeout(clear, 180);
+    setTimeout(clear, 160);
     return;
   }
-  const adjustment = Math.max(-.06, Math.min(.06, -drift * 1.6));
-  original.playbackRate = 1 + adjustment;
+
+  if (!original.paused && !after.paused) {
+    original.playbackRate = Math.max(.97, Math.min(1.03, 1 - drift * .45));
+  }
 }
 
-function maybeDraw() {
-  if (!session?.preview || !Number.isFinite(originalFrame) || !Number.isFinite(afterFrame)) return;
-  const drift = (originalFrame - session.sampleStart) - afterFrame;
-  if (Math.abs(drift) <= frameTolerance()) drawComposite();
-  else correctDrift();
-  updateTimeline(afterFrame);
-}
-
-function startFrameCallbacks() {
+function startFrameLoop() {
   const generation = ++frameGeneration;
-  afterFrame = NaN;
-  originalFrame = NaN;
-
-  const watchAfter = (_, metadata) => {
+  const frame = (_, metadata) => {
     if (generation !== frameGeneration || !active()) return;
-    afterFrame = Number(metadata?.mediaTime);
-    maybeDraw();
-    after.requestVideoFrameCallback?.(watchAfter);
+    const masterTime = Number(metadata?.mediaTime ?? after.currentTime) || 0;
+    syncOriginalTo(masterTime);
+    drawComposite();
+    updateTimeline(masterTime);
+    after.requestVideoFrameCallback?.(frame);
   };
-  const watchOriginal = (_, metadata) => {
-    if (generation !== frameGeneration || !active()) return;
-    originalFrame = Number(metadata?.mediaTime);
-    maybeDraw();
-    original.requestVideoFrameCallback?.(watchOriginal);
-  };
-
-  if (after.requestVideoFrameCallback) after.requestVideoFrameCallback(watchAfter);
-  if (original.requestVideoFrameCallback) original.requestVideoFrameCallback(watchOriginal);
+  if (after.requestVideoFrameCallback) after.requestVideoFrameCallback(frame);
+  else {
+    const fallback = () => {
+      if (generation !== frameGeneration || !active()) return;
+      syncOriginalTo(Number(after.currentTime) || 0);
+      drawComposite();
+      updateTimeline();
+      requestAnimationFrame(fallback);
+    };
+    requestAnimationFrame(fallback);
+  }
 }
 
 function waitFor(video, event) {
@@ -312,14 +328,12 @@ async function seekPair(relative, resume = false) {
   try { after.currentTime = point; } catch {}
   try { original.currentTime = session.sampleStart + point; } catch {}
   await Promise.all([waitFor(after, 'seeked'), waitFor(original, 'seeked')]);
-  afterFrame = point;
-  originalFrame = session.sampleStart + point;
-  drawComposite(true);
+  drawComposite();
   updateTimeline(point);
   if (resume && active()) {
     await Promise.allSettled([original.play(), after.play()]);
-    play.textContent = '❚❚';
-  } else play.textContent = '▶';
+    setPlaying(true);
+  } else setPlaying(false);
 }
 
 async function installPreview(data) {
@@ -336,8 +350,8 @@ async function installPreview(data) {
   original.load();
   await Promise.all([waitFor(after, 'loadedmetadata'), waitFor(original, 'loadedmetadata')]);
   if (!active() || loadSerial !== previewLoadSerial || session?.id !== data.id) return;
-  startFrameCallbacks();
-  await seekPair(0, false);
+  startFrameLoop();
+  await seekPair(0, true);
 }
 
 function fail(message) {
@@ -347,6 +361,7 @@ function fail(message) {
   status.textContent = message || 'Video compression failed';
   keep.disabled = true;
   replace.disabled = true;
+  setPlaying(false);
 }
 
 function consume(data, requestSerial) {
@@ -362,6 +377,11 @@ function consume(data, requestSerial) {
     sample.max = data.duration;
     if (document.activeElement !== sample) sample.value = Math.min(data.duration, Math.max(0, Number(sample.value) || data.sampleStart + data.sampleDuration / 2));
     sampleLabel.textContent = clock(sample.value);
+  }
+
+  if (data.width && data.height) {
+    sourceSize.textContent = bytes(data.sourceSize);
+    sourceStatus.textContent = ['Uncompressed source', `${Number(data.width).toLocaleString()}×${Number(data.height).toLocaleString()}`, data.fps ? `${Number(data.fps).toFixed(data.fps % 1 ? 1 : 0)} fps` : '', data.duration ? clock(data.duration) : ''].filter(Boolean).join(' · ');
   }
 
   if (data.preview && data.status !== 'committing') {
@@ -424,6 +444,7 @@ async function startPreview(at = Number(sample.value) || sourceState?.time || 0)
   frameGeneration++;
   after.pause();
   original.pause();
+  setPlaying(false);
   keep.disabled = replace.disabled = true;
   progress.hidden = false;
   bar.style.width = '4%';
@@ -465,14 +486,11 @@ function reset() {
   previewLoadSerial++;
   frameGeneration++;
   clearTimeout(timer);
-  clearTimeout(debounce);
   session = null;
   activeHash = '';
   committing = false;
   splitPointer = null;
   hardSyncing = false;
-  afterFrame = NaN;
-  originalFrame = NaN;
   after.pause();
   original.pause();
   after.removeAttribute('src');
@@ -481,6 +499,7 @@ function reset() {
   original.load();
   after.dataset.id = '';
   progress.hidden = true;
+  setPlaying(false);
 }
 
 function closeOptimizer() {
@@ -511,6 +530,8 @@ function openOptimizer() {
   sample.max = Math.max(1, Number(video.duration) || 1);
   sample.value = sourceState.time;
   sampleLabel.textContent = clock(sample.value);
+  sourceSize.textContent = 'Original';
+  sourceStatus.textContent = 'Uncompressed source';
   save.textContent = '—';
   size.textContent = 'Preparing…';
   status.textContent = 'Starting AV1 preview…';
@@ -552,7 +573,8 @@ sample.oninput = () => { sampleLabel.textContent = clock(sample.value); };
 sample.onchange = () => startPreview(Number(sample.value) || 0);
 keep.onclick = () => commit('keep');
 replace.onclick = () => commit('replace');
-$('[data-close]').onclick = closeOptimizer;
+$('[data-close-left]').onclick = closeOptimizer;
+$('[data-close-right]').onclick = closeOptimizer;
 trigger.onclick = openOptimizer;
 controls.onpointerdown = event => event.stopPropagation();
 
@@ -562,28 +584,37 @@ play.onclick = async () => {
     after.pause();
     original.pause();
     original.playbackRate = 1;
-    play.textContent = '▶';
+    setPlaying(false);
     return;
   }
-  await seekPair(Number(after.currentTime) || 0, true);
+  const duration = Math.max(.01, Number(session.sampleDuration) || 6);
+  const point = Number(after.currentTime) >= duration - .03 ? 0 : Number(after.currentTime) || 0;
+  await seekPair(point, true);
 };
 
+after.addEventListener('playing', () => {
+  if (original.paused) original.play().catch(() => {});
+  setPlaying(true);
+});
+after.addEventListener('waiting', () => {
+  if (!original.paused) original.pause();
+});
 after.addEventListener('pause', () => {
   if (!original.paused) original.pause();
   original.playbackRate = 1;
-  play.textContent = '▶';
+  if (!after.ended) setPlaying(false);
 });
 after.addEventListener('ended', () => {
   original.pause();
   original.playbackRate = 1;
-  play.textContent = '▶';
+  if (active() && session?.preview) seekPair(0, true);
 });
 playhead.oninput = () => seekPair(Number(playhead.value) || 0, false);
 
 function setSplit(value) {
   split = Math.max(0, Math.min(100, Number(value) || 0));
   compare.style.setProperty('--split', `${split}%`);
-  drawComposite(true);
+  drawComposite();
 }
 
 compare.addEventListener('pointerdown', event => {
@@ -605,8 +636,8 @@ for (const type of ['pointerup','pointercancel']) compare.addEventListener(type,
   if (event.pointerId === splitPointer) splitPointer = null;
 }, true);
 
-if (typeof ResizeObserver === 'function') new ResizeObserver(() => drawComposite(true)).observe(compare);
-else window.addEventListener('resize', () => drawComposite(true), { passive:true });
+if (typeof ResizeObserver === 'function') new ResizeObserver(drawComposite).observe(compare);
+else window.addEventListener('resize', drawComposite, { passive:true });
 
 document.addEventListener('keydown', event => {
   if (!active()) return;
