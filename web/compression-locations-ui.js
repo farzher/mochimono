@@ -16,7 +16,7 @@ if (workButton) {
   button.type = 'button';
   button.className = 'compression-storage-button';
   button.textContent = 'Storage';
-  button.title = 'Choose Original or Compact by location';
+  button.title = 'Choose Original or Squished by location';
   workButton.after(button);
 
   const overlay = document.createElement('div');
@@ -50,8 +50,8 @@ if (workButton) {
 
   function select(location, mediaType, mode) {
     const value = mode(location.id, mediaType);
-    const compactOnly = location.kind === 'backup' ? `<option value="compact-only"${value === 'compact-only' ? ' selected' : ''}>Compact only</option>` : '';
-    return `<select data-location="${escapeHtml(location.id)}" data-name="${escapeHtml(location.name)}" data-media="${mediaType}"><option value="original"${value === 'original' ? ' selected' : ''}>Original</option><option value="compact"${value === 'compact' ? ' selected' : ''}>Compact</option>${compactOnly}</select>`;
+    const compactOnly = location.kind === 'backup' ? `<option value="compact-only"${value === 'compact-only' ? ' selected' : ''}>Squished only</option>` : '';
+    return `<select data-location="${escapeHtml(location.id)}" data-name="${escapeHtml(location.name)}" data-media="${mediaType}"><option value="original"${value === 'original' ? ' selected' : ''}>Original</option><option value="compact"${value === 'compact' ? ' selected' : ''}>Squished</option>${compactOnly}</select>`;
   }
 
   async function writeMode(control) {
@@ -59,7 +59,7 @@ if (workButton) {
     const locationId = control.dataset.location;
     const mediaType = control.dataset.media;
     if (mode === 'compact-only') {
-      const okay = confirm(`Compact only can remove ${mediaType === 'image' ? 'image' : 'video'} Originals from ${control.dataset.name} after a verified Compact exists and another Original is verified elsewhere.\n\nEnable Compact only?`);
+      const okay = confirm(`Squished only can remove ${mediaType === 'image' ? 'image' : 'video'} Originals from ${control.dataset.name} after a verified Squished version exists and another Original is verified elsewhere.\n\nEnable Squished only?`);
       if (!okay) return false;
       await api('/api/compression/storage-policy', { method:'POST', body:JSON.stringify({ locationId, mediaType, representation:'compact' }) });
       await api('/api/compression/retention', { method:'POST', body:JSON.stringify({ locationId, mediaType, allowOriginalRemoval:true, confirmation:'compact-only' }) });
@@ -94,7 +94,7 @@ if (workButton) {
           <div class="compression-storage-column">Location</div><div class="compression-storage-column">Images</div><div class="compression-storage-column">Video</div>
           ${unique.map(item => `<div class="compression-storage-label"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.detail)}</span></div><div>${select(item,'image',mode)}</div><div>${select(item,'video',mode)}</div>`).join('')}
         </div>
-        <div class="compression-storage-state"><strong>Originals are retained by default.</strong> Compact adds a managed Compact without deleting the Original. Managed backups can explicitly use Compact only; even then an Original is removed only after the Compact is verified and another Original is verified elsewhere.</div>
+        <div class="compression-storage-state"><strong>Originals are retained by default.</strong> Squished adds a managed Squished version without deleting the Original. Managed backups can explicitly use Squished only; even then an Original is removed only after the Squished version is verified and another Original is verified elsewhere.</div>
       </div>`;
     dialog.querySelector('[data-close]').addEventListener('click', close);
     dialog.querySelectorAll('select[data-location]').forEach(control => control.addEventListener('change', async () => {
