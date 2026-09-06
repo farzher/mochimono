@@ -69,6 +69,7 @@ if (viewer && compare && original && tuning && qualitySlider) {
   const brushInput = panel.querySelector('[data-quality-brush]');
   const brushLabel = panel.querySelector('[data-quality-brush-label]');
   const resetButton = panel.querySelector('[data-quality-reset]');
+  const divider = compare.querySelector('.image-optimize-divider');
 
   const paintCanvas = document.createElement('canvas');
   paintCanvas.className = 'image-optimize-quality-mask';
@@ -316,8 +317,16 @@ if (viewer && compare && original && tuning && qualitySlider) {
     renderCursor();
   }
 
+  function overPreviewDivider(event) {
+    if (!divider || !event.composedPath().includes(compare)) return false;
+    const rect = divider.getBoundingClientRect();
+    if (!rect.width) return false;
+    const grab = event.pointerType === 'touch' ? 44 : 30;
+    return Math.abs(event.clientX - (rect.left + rect.width / 2)) <= grab;
+  }
+
   function blockedTarget(event) {
-    return event.composedPath().some(node =>
+    return overPreviewDivider(event) || event.composedPath().some(node =>
       node instanceof Element && node.matches?.('input,button,select,textarea,label,a,.image-optimize-controls,.image-optimize-divider,.viewer-optimize-trigger,.viewer-bar,.viewer-info')
     );
   }
@@ -328,7 +337,8 @@ if (viewer && compare && original && tuning && qualitySlider) {
 
   window.addEventListener('pointerdown', event => {
     if (!enabled || event.button !== 0) return;
-    if (event.composedPath().some(node => node instanceof HTMLInputElement && node.type === 'range')) beginSliderPreview();
+    const range = event.composedPath().some(node => node instanceof HTMLInputElement && node.type === 'range');
+    if (range || overPreviewDivider(event)) beginSliderPreview();
   }, true);
 
   window.addEventListener('pointerdown', event => {
