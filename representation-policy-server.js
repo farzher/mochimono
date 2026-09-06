@@ -11,6 +11,8 @@ db.exec(`
     updated_at TEXT NOT NULL,
     PRIMARY KEY(location_id, media_type)
   ) STRICT;
+  UPDATE representation_retention SET allow_original_removal=0
+  WHERE allow_original_removal=1 AND location_id NOT LIKE 'backup:%';
 `);
 
 function rows() {
@@ -73,12 +75,15 @@ export async function handleRepresentationPolicyServer(req, res, url) {
       if (body.confirmation !== 'compact-only') {
         return json(res, 400, { error:'Compact only requires explicit confirmation' });
       }
-      if (locationId === 'server') {
-        return json(res, 409, { error:'The Mochimono Server cannot remove Original objects yet' });
+      // Only managed backup object stores are reversible today: switching them
+      // back to Original makes normal backup reconciliation download the object
+      // again. Never delete user source-folder files or server primary objects.
+      if (!locationId.startsWith('backup:')) {
+        return json(res, 409, { error:'Compact only is currently available only for managed backup drives' });
       }
       const policy = db.prepare('SELECT representation FROM representation_policies WHERE location_id=? AND media_type=?').get(locationId, mediaType);
       if (policy?.representation !== 'compact') {
-        return json(res, 409, { error:'Choose Compact for this location before enabling Compact only' });
+        return json(res, 409, { error:'Choose Compact for this backup before enabling Compact only' });
       }
     }
 
