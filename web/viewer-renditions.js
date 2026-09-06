@@ -6,10 +6,11 @@ const actions = viewer?.querySelector('.viewer-actions');
 const menuActions = document.querySelector('#viewer-menu > div');
 
 if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
+  const THUMB_VERSION = 3;
   const style = document.createElement('style');
   style.textContent = `
-.viewer-renditions{display:inline-grid;grid-template-columns:1fr 1fr;align-items:center;height:30px;padding:2px;border-radius:8px;background:rgba(20,19,20,.82);border:1px solid rgba(255,255,255,.08)}
-.viewer-renditions[hidden]{display:none!important}.viewer-renditions button{height:24px;padding:0 8px;border:0;border-radius:6px;background:transparent;color:#a9a19d;font-size:10px;font-weight:750}.viewer-renditions button.active{background:#eee9e5;color:#171416}.viewer-renditions button:hover:not(.active){color:#fff}
+.viewer-renditions{display:inline-flex;align-items:center;height:30px;padding:2px;border-radius:8px;background:rgba(20,19,20,.82);border:1px solid rgba(255,255,255,.08)}
+.viewer-renditions[hidden]{display:none!important}.viewer-renditions button{height:24px;padding:0 8px;border:0;border-radius:6px;background:transparent;color:#a9a19d;font-size:10px;font-weight:750}.viewer-renditions button[hidden]{display:none!important}.viewer-renditions button.active{background:#eee9e5;color:#171416}.viewer-renditions button:hover:not(.active){color:#fff}
 @media(max-width:700px){.viewer-renditions button{padding:0 6px;font-size:9.5px}}
 `;
   document.head.append(style);
@@ -17,8 +18,11 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
   const switcher = document.createElement('div');
   switcher.className = 'viewer-renditions';
   switcher.hidden = true;
-  switcher.innerHTML = '<button type="button" data-rendition="original" class="active">Original</button><button type="button" data-rendition="compact">Squished</button>';
+  switcher.innerHTML = '<button type="button" data-rendition="thumbnail">Thumbnail</button><button type="button" data-rendition="original" class="active">Original</button><button type="button" data-rendition="compact" hidden>Squished</button>';
   viewerOpen.before(switcher);
+
+  const thumbnailButton = switcher.querySelector('[data-rendition="thumbnail"]');
+  const compactButton = switcher.querySelector('[data-rendition="compact"]');
 
   const removeCompact = document.createElement('button');
   removeCompact.type = 'button';
@@ -33,6 +37,7 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
   let mode = 'original';
   let originalMeta = '';
   let originalImageFull = '';
+  let originalThumbnail = '';
 
   const hash = () => viewerOpen.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
   const bytes = value => {
@@ -63,20 +68,64 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
       : `/api/renditions/file?original=${encodeURIComponent(currentHash)}&v=${Date.now()}`;
   }
 
+  function thumbnailUrl() {
+    if (!currentHash) return '';
+    return originalThumbnail || `/api/thumbs/${encodeURIComponent(currentHash)}?v=${THUMB_VERSION}`;
+  }
+
+  function currentMediaMode() {
+    const image = viewerMedia.querySelector(':scope > img');
+    if (image) {
+      const src = image.currentSrc || image.src || '';
+      if (image.hasAttribute('data-full-src') || src.includes('/api/thumbs/')) return 'thumbnail';
+      if (src.includes('/api/renditions/') || /\/api\/representations\/[^/]+\/compact(?:\?|$)/.test(src)) return 'compact';
+      if (src.includes('/api/objects/')) return 'original';
+    }
+    const video = viewerMedia.querySelector(':scope > video');
+    if (video) {
+      const src = video.currentSrc || video.src || '';
+      if (src.includes('/api/renditions/') || /\/api\/representations\/[^/]+\/compact(?:\?|$)/.test(src)) return 'compact';
+      if (src.includes('/api/objects/')) return 'original';
+    }
+    return '';
+  }
+
   function setButtons() {
+    const hasImage = Boolean(viewerMedia.querySelector(':scope > img'));
+    thumbnailButton.hidden = !hasImage;
+    compactButton.hidden = !rendition;
     switcher.querySelectorAll('[data-rendition]').forEach(button => button.classList.toggle('active', button.dataset.rendition === mode));
+    const choices = Number(hasImage) + 1 + Number(Boolean(rendition));
+    switcher.hidden = viewer.hidden || !currentHash || choices < 2;
     removeCompact.hidden = !rendition;
+  }
+
+  function originalDate() {
+    const parts = String(originalMeta || '').split('·').map(part => part.trim()).filter(Boolean);
+    const last = parts.at(-1) || '';
+    if (/^\d[\d,]*×\d[\d,]*$/.test(last) || /^\d+(?:\.\d+)?\s*(?:B|KB|MB|GB|TB)$/i.test(last)) return '';
+    return last;
   }
 
   function compactMeta() {
     if (!rendition) return originalMeta;
     const resolution = rendition.width && rendition.height ? `${Number(rendition.width).toLocaleString()}×${Number(rendition.height).toLocaleString()}` : '';
-    return [bytes(rendition.size), resolution, 'Squished', rendition.presetName].filter(Boolean).join(' · ');
+    return [bytes(rendition.size), resolution, originalDate()].filter(Boolean).join(' · ');
   }
 
   function rememberOriginalImage(image) {
-    if (!image || originalImageFull) return;
-    originalImageFull = image.dataset.fullSrc || `/api/objects/${encodeURIComponent(currentHash)}`;
+    if (!image) return;
+    const src = image.currentSrc || image.src || '';
+    if (!originalThumbnail && src.includes('/api/thumbs/')) originalThumbnail = src;
+    if (!originalImageFull) originalImageFull = image.dataset.fullSrc || `/api/objects/${encodeURIComponent(currentHash)}`;
+  }
+
+  function replaceImage(image, src) {
+    const next = image.cloneNode(false);
+    next.removeAttribute('data-full-src');
+    next.src = src;
+    image.replaceWith(next);
+    return next;
   }
 
   async function swapVideo(video, nextSrc) {
@@ -100,23 +149,30 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
   }
 
   async function show(next) {
-    if (!rendition || !currentHash || (next !== 'original' && next !== 'compact')) return;
-    mode = next;
-    setButtons();
+    if (!currentHash || !['thumbnail','original','compact'].includes(next)) return;
+    if (next === 'compact' && !rendition) return;
     const image = viewerMedia.querySelector(':scope > img');
     const video = viewerMedia.querySelector(':scope > video');
+    if (next === 'thumbnail' && !image) return;
+
+    mode = next;
+    setButtons();
+
     if (image) {
       rememberOriginalImage(image);
-      image.removeAttribute('data-full-src');
-      image.src = next === 'compact'
-        ? compactUrl()
-        : originalImageFull || `/api/objects/${encodeURIComponent(currentHash)}`;
+      const src = next === 'thumbnail'
+        ? thumbnailUrl()
+        : next === 'compact'
+          ? compactUrl()
+          : originalImageFull || `/api/objects/${encodeURIComponent(currentHash)}`;
+      replaceImage(image, src);
     } else if (video) {
       await swapVideo(video, next === 'compact'
         ? compactUrl()
         : `/api/objects/${encodeURIComponent(currentHash)}`);
     }
     viewerMeta.textContent = next === 'compact' ? compactMeta() : originalMeta;
+    setButtons();
   }
 
   async function removeCurrentCompact() {
@@ -126,8 +182,7 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
     await fetch(`/api/renditions/${encodeURIComponent(originalHash)}`, { method:'DELETE' }).catch(() => {});
     await fetch(`/api/representations/${encodeURIComponent(originalHash)}/rendition`, { method:'DELETE' }).catch(() => {});
     rendition = null;
-    mode = 'original';
-    switcher.hidden = true;
+    if (mode === 'compact') mode = 'original';
     setButtons();
     window.dispatchEvent(new CustomEvent('mochimono:work-changed', { detail:{ originalHash, removedCompact:true } }));
   }
@@ -144,18 +199,35 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
     }
     if (nextHash !== currentHash) {
       currentHash = nextHash;
-      mode = 'original';
+      rendition = null;
       originalImageFull = '';
+      originalThumbnail = '';
       originalMeta = viewerMeta.textContent;
+      const image = viewerMedia.querySelector(':scope > img');
+      if (image) rememberOriginalImage(image);
+      mode = currentMediaMode() || 'original';
       setButtons();
-    } else if (mode === 'original') originalMeta = viewerMeta.textContent;
+    } else if (mode === 'original') {
+      originalMeta = viewerMeta.textContent;
+    }
     const found = await readRendition(nextHash).catch(() => null);
     if (serial !== generation || nextHash !== hash()) return;
     rendition = found;
-    switcher.hidden = !rendition;
-    if (!rendition && mode === 'compact') mode = 'original';
+    if (!rendition && mode === 'compact') {
+      mode = 'original';
+      viewerMeta.textContent = originalMeta;
+    }
     setButtons();
   }
+
+  viewerMedia.addEventListener('load', event => {
+    if (!(event.target instanceof HTMLImageElement) || !currentHash) return;
+    const detected = currentMediaMode();
+    if (!detected) return;
+    mode = detected;
+    if (detected === 'original') originalMeta = viewerMeta.textContent;
+    setButtons();
+  }, true);
 
   switcher.addEventListener('click', event => {
     const button = event.target.closest('[data-rendition]');
@@ -165,7 +237,7 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
 
   document.addEventListener('click', event => {
     const trigger = event.target.closest('.viewer-optimize-trigger');
-    if (!trigger || mode !== 'compact' || !rendition) return;
+    if (!trigger || mode === 'original') return;
     event.preventDefault();
     event.stopImmediatePropagation();
     show('original').then(() => requestAnimationFrame(() => trigger.click())).catch(() => {});
