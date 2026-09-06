@@ -24,7 +24,6 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
   let rendition = null;
   let mode = 'original';
   let originalMeta = '';
-  let originalImageSrc = '';
   let originalImageFull = '';
 
   const hash = () => viewerOpen.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
@@ -53,9 +52,8 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
   }
 
   function rememberOriginalImage(image) {
-    if (!image || originalImageSrc) return;
-    originalImageSrc = image.currentSrc || image.src || '';
-    originalImageFull = image.dataset.fullSrc || '';
+    if (!image || originalImageFull) return;
+    originalImageFull = image.dataset.fullSrc || `/api/objects/${encodeURIComponent(currentHash)}`;
   }
 
   async function swapVideo(video, nextSrc) {
@@ -110,7 +108,6 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
     if (nextHash !== currentHash) {
       currentHash = nextHash;
       mode = 'original';
-      originalImageSrc = '';
       originalImageFull = '';
       originalMeta = viewerMeta.textContent;
       setButtons();
@@ -128,9 +125,18 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
     if (button) show(button.dataset.rendition).catch(error => console.warn('Could not switch rendition', error));
   });
 
+  document.addEventListener('click', event => {
+    const trigger = event.target.closest('.viewer-optimize-trigger');
+    if (!trigger || mode !== 'compact' || !rendition) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    show('original').then(() => requestAnimationFrame(() => trigger.click())).catch(() => {});
+  }, true);
+
   new MutationObserver(() => requestAnimationFrame(() => sync().catch(() => {}))).observe(viewerOpen, { attributes:true, attributeFilter:['href'] });
   new MutationObserver(() => requestAnimationFrame(() => sync().catch(() => {}))).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
   window.addEventListener('mochimono:work-changed', () => sync().catch(() => {}));
   window.addEventListener('mochimono:catalog-updated', () => sync().catch(() => {}));
+  setInterval(() => { if (!viewer.hidden && currentHash) sync().catch(() => {}); }, 2500);
   sync().catch(() => {});
 }
