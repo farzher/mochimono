@@ -17,15 +17,13 @@ if (controls && quality) {
       <button class="video-optimize-choice active" data-value="auto">Auto</button>
       <button class="video-optimize-choice" data-value="custom">Custom</button>
     </div>
-    <input data-video-bitrate data-value="bitrate" type="range" min="0" max="${SLIDER_MAX}" step="1" value="0" disabled>
-    <div class="video-optimize-note" data-vb-note>Calculated from resolution, frame rate and Quality</div>`;
+    <input data-video-bitrate data-value="bitrate" type="range" min="0" max="${SLIDER_MAX}" step="1" value="0" disabled>`;
 
   const qualitySection = quality.closest('.video-optimize-section');
   if (qualitySection) qualitySection.after(section);
   else controls.querySelector('.video-optimize-actions')?.before(section);
 
   const label = section.querySelector('[data-vb-label]');
-  const note = section.querySelector('[data-vb-note]');
   const slider = section.querySelector('[data-video-bitrate]');
   const choices = section.querySelector('.video-optimize-bitrate-choices');
 
@@ -58,12 +56,6 @@ if (controls && quality) {
     return value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)} Mbps` : `${value} kbps`;
   }
 
-  function perHourText(kbps) {
-    const megabytes = Math.max(0, Number(kbps) || 0) * .45;
-    if (megabytes >= 1000) return `~${(megabytes / 1000).toFixed(megabytes >= 10000 ? 0 : 1)} GB/hour`;
-    return `~${megabytes < 10 ? megabytes.toFixed(1) : Math.round(megabytes)} MB/hour`;
-  }
-
   function ensureCustomValue() {
     if (!customKbps) customKbps = clamp(autoVideoKbps || Math.min(1000, maxKbps()), MIN_KBPS, maxKbps());
     customKbps = clamp(customKbps, MIN_KBPS, maxKbps());
@@ -79,7 +71,6 @@ if (controls && quality) {
       slider.disabled = false;
       slider.value = String(positionFromKbps(customKbps));
       label.textContent = bitrateText(customKbps);
-      note.textContent = `${perHourText(customKbps)} video · VBR target; Quality remains the CQ/CRF limit`;
       return;
     }
 
@@ -87,9 +78,6 @@ if (controls && quality) {
     const shown = autoVideoKbps || 0;
     slider.value = String(positionFromKbps(shown || MIN_KBPS));
     label.textContent = shown ? `Auto · ${bitrateText(shown)}` : 'Auto';
-    note.textContent = shown
-      ? `Calculated from resolution, frame rate and Quality · ${perHourText(shown)} video`
-      : 'Calculated from resolution, frame rate and Quality';
   }
 
   function requestPreview() {
