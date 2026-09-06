@@ -101,6 +101,7 @@ if (viewer && stage) {
 // zoom and pan intentionally live together so separate controllers cannot fight.
 import('./viewer-video-resolution.js').catch(error => console.error('Could not load video resolution correction', error));
 import('./video-optimize.js')
+  .then(() => import('./video-optimize-presets.js'))
   .then(() => import('./video-optimize-polish.js'))
   .then(() => import('./video-optimize-compare.js'))
   .then(() => import('./video-optimize-transport.js'))
