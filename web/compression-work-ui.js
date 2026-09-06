@@ -116,15 +116,16 @@ if (selectionBar && fileCount) {
   function section(title, jobs) {
     if (!jobs.length) return '';
     return `<section class="compression-work-section"><h3>${title}</h3><div class="compression-work-list">${jobs.map(job => {
+      const managed = job.kind === 'placement';
       const active = job.status === 'running' || job.status === 'queued';
-      const retryable = job.status === 'error' || job.status === 'canceled';
+      const retryable = !managed && (job.status === 'error' || job.status === 'canceled');
       const result = job.result || {};
       const meta = job.status === 'done'
-        ? `${job.presetName || 'Compact'}${result.sourceSize && result.size ? ` · ${bytes(result.sourceSize)} → ${bytes(result.size)}` : ''}`
+        ? `${job.presetName || (managed ? 'Storage' : 'Compact')}${result.sourceSize && result.size ? ` · ${bytes(result.sourceSize)} → ${bytes(result.size)}` : ''}`
         : job.message || job.presetName || '';
       return `<article class="compression-work-item ${job.status === 'error' ? 'compression-work-error' : ''}">
         <div class="compression-work-main"><strong>${escapeHtml(job.filename || job.originalHash.slice(0,12))}</strong><div class="compression-work-meta">${escapeHtml(meta)}</div>${active ? `<div class="compression-work-progress"><i style="width:${Math.max(2, Math.min(100, Number(job.progress) || 0))}%"></i></div>` : ''}</div>
-        <div class="compression-work-item-actions">${active ? `<button class="compression-work-cancel" data-cancel="${escapeHtml(job.id)}">Cancel</button>` : ''}${retryable ? `<button class="compression-work-retry" data-retry="${escapeHtml(job.id)}">Retry</button>` : ''}</div>
+        <div class="compression-work-item-actions">${active && !managed ? `<button class="compression-work-cancel" data-cancel="${escapeHtml(job.id)}">Cancel</button>` : ''}${retryable ? `<button class="compression-work-retry" data-retry="${escapeHtml(job.id)}">Retry</button>` : ''}</div>
       </article>`;
     }).join('')}</div></section>`;
   }
@@ -144,12 +145,13 @@ if (selectionBar && fileCount) {
     const queued = jobs.filter(job => job.status === 'queued');
     const completed = jobs.filter(job => job.status === 'done');
     const failed = jobs.filter(job => job.status === 'error' || job.status === 'canceled');
+    const retryableFailed = failed.filter(job => job.kind !== 'placement');
     dialog.innerHTML = `
       <div class="compression-dialog-head"><strong>Work</strong><button class="compression-dialog-close" data-close>×</button></div>
       <div class="compression-dialog-body">
         <div class="compression-work-summary">${running.length ? `${running.length} processing · ` : ''}${queued.length} queued</div>
         ${section('Processing', running)}${section('Pending', queued)}${section('Completed', completed)}${section('Failed / canceled', failed)}
-        ${jobs.length ? `<div class="compression-dialog-actions">${queued.length ? '<button class="compression-secondary" data-cancel-pending>Cancel pending</button>' : ''}${failed.length ? '<button class="compression-secondary" data-retry-failed>Retry failed</button>' : ''}<button class="compression-secondary" data-clear>Clear finished</button></div>` : '<div class="compression-empty">No work yet.</div>'}
+        ${jobs.length ? `<div class="compression-dialog-actions">${queued.length ? '<button class="compression-secondary" data-cancel-pending>Cancel pending</button>' : ''}${retryableFailed.length ? '<button class="compression-secondary" data-retry-failed>Retry failed</button>' : ''}<button class="compression-secondary" data-clear>Clear finished</button></div>` : '<div class="compression-empty">No work yet.</div>'}
       </div>`;
     dialog.querySelector('[data-close]')?.addEventListener('click', close);
     dialog.querySelectorAll('[data-cancel]').forEach(button => button.addEventListener('click', async () => {
@@ -168,13 +170,13 @@ if (selectionBar && fileCount) {
     }));
     dialog.querySelector('[data-cancel-pending]')?.addEventListener('click', async event => {
       event.currentTarget.disabled = true;
-      await Promise.allSettled(queued.map(job => api(`/api/work/${encodeURIComponent(job.id)}/cancel`, { method:'POST', body:'{}' })));
+      await Promise.allSettled(queued.filter(job => job.kind !== 'placement').map(job => api(`/api/work/${encodeURIComponent(job.id)}/cancel`, { method:'POST', body:'{}' })));
       window.dispatchEvent(new CustomEvent('mochimono:work-changed'));
       renderWork().catch(() => {});
     });
     dialog.querySelector('[data-retry-failed]')?.addEventListener('click', async event => {
       event.currentTarget.disabled = true;
-      for (const job of failed) await retryJob(job).catch(() => {});
+      for (const job of retryableFailed) await retryJob(job).catch(() => {});
       window.dispatchEvent(new CustomEvent('mochimono:work-changed'));
       renderWork().catch(() => {});
     });
