@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DATA_DIR, db, json } from './lib/server-context.js';
-import { objectPath, readObject } from './lib/store.js';
+import { objectPath, readObject, removeObject } from './lib/store.js';
 
 const RENDITION_ROOT = join(DATA_DIR, 'renditions');
 const parse = value => {
@@ -57,6 +57,12 @@ export async function handleRemoteRenditionServer(req, res, url) {
   if (metadata && req.method === 'GET') {
     const row = db.prepare('SELECT * FROM renditions WHERE original_hash=?').get(metadata[1]);
     return json(res, 200, { rendition:publicRendition(row) });
+  }
+  if (metadata && req.method === 'DELETE') {
+    const row = db.prepare('SELECT rendition_hash FROM renditions WHERE original_hash=?').get(metadata[1]);
+    db.prepare('DELETE FROM renditions WHERE original_hash=?').run(metadata[1]);
+    if (row?.rendition_hash) await removeObject(RENDITION_ROOT, row.rendition_hash).catch(() => {});
+    return json(res, 200, { ok:true });
   }
 
   const compact = /^\/api\/representations\/([a-f0-9]{64})\/compact$/.exec(url.pathname);
