@@ -4,103 +4,98 @@ const canvas = compare?.querySelector('[data-canvas]');
 const original = compare?.querySelector('[data-o]');
 const optimized = compare?.querySelector('[data-a]');
 const controls = document.querySelector('[data-controls]');
+const playhead = document.querySelector('[data-playhead]');
 const play = document.querySelector('[data-play]');
 
 if (viewer && compare && canvas && original && optimized) {
   const ctx = canvas.getContext('2d', { alpha:false });
   const previousFillRect = ctx.fillRect.bind(ctx);
   const previousDrawImage = ctx.drawImage.bind(ctx);
-  let suppressComposite = false;
-  let sourceOffset = NaN;
-  let originalMediaTime = NaN;
-  let optimizedMediaTime = NaN;
+
+  let watcherGeneration = 0;
+  let sessionGeneration = 0;
+  let session = null;
+  let originalFrame = NaN;
+  let optimizedFrame = NaN;
+  let previousOriginalFrame = NaN;
+  let previousOptimizedFrame = NaN;
   let originalFrameDuration = 1 / 30;
   let optimizedFrameDuration = 1 / 30;
-  let previousOriginalMediaTime = NaN;
-  let previousOptimizedMediaTime = NaN;
-  let watcherGeneration = 0;
-  let syncInFlight = false;
-  let restoring = false;
-  let pausedAlignTimer = 0;
+  let suppressComposite = false;
+  let lastGoodPaint = 0;
+  let alignTimer = 0;
+  let alignBusy = false;
   let pendingRestore = null;
-  let lastPreviewSrc = '';
+  let restoreTimer = 0;
+  let driftTimer = 0;
+  let lastPreviewId = '';
 
   const active = () => viewer.classList.contains('video-optimize-active');
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
   function frameTolerance() {
-    return Math.max(.006, Math.max(originalFrameDuration, optimizedFrameDuration) * .58);
+    const sourceDuration = session?.fps ? 1 / session.fps : originalFrameDuration;
+    const targetDuration = session?.targetFps ? 1 / session.targetFps : optimizedFrameDuration;
+    return Math.max(.006, Math.min(sourceDuration || 1 / 30, targetDuration || 1 / 30) * .72);
   }
 
   function relativeDrift() {
-    if (!Number.isFinite(sourceOffset) || !Number.isFinite(originalMediaTime) || !Number.isFinite(optimizedMediaTime)) return Infinity;
-    return (originalMediaTime - sourceOffset) - optimizedMediaTime;
+    if (!session || !Number.isFinite(originalFrame) || !Number.isFinite(optimizedFrame)) return Infinity;
+    return (originalFrame - session.sampleStart) - optimizedFrame;
   }
 
   function framesAligned() {
-    return active() && Number.isFinite(sourceOffset) && Number.isFinite(originalMediaTime) && Number.isFinite(optimizedMediaTime) && Math.abs(relativeDrift()) <= frameTolerance();
+    return Number.isFinite(relativeDrift()) && Math.abs(relativeDrift()) <= frameTolerance();
   }
 
-  function updateFrame(kind, value) {
+  function updateFrame(which, value) {
     if (!Number.isFinite(value)) return;
-    if (kind === 'original') {
-      if (Number.isFinite(previousOriginalMediaTime)) {
-        const delta = Math.abs(value - previousOriginalMediaTime);
-        if (delta >= .004 && delta <= .15) originalFrameDuration = delta;
+    if (which === 'original') {
+      if (Number.isFinite(previousOriginalFrame)) {
+        const delta = Math.abs(value - previousOriginalFrame);
+        if (delta >= .003 && delta <= .2) originalFrameDuration = delta;
       }
-      previousOriginalMediaTime = value;
-      originalMediaTime = value;
-      return;
+      previousOriginalFrame = value;
+      originalFrame = value;
+    } else {
+      if (Number.isFinite(previousOptimizedFrame)) {
+        const delta = Math.abs(value - previousOptimizedFrame);
+        if (delta >= .003 && delta <= .2) optimizedFrameDuration = delta;
+      }
+      previousOptimizedFrame = value;
+      optimizedFrame = value;
     }
-    if (Number.isFinite(previousOptimizedMediaTime)) {
-      const delta = Math.abs(value - previousOptimizedMediaTime);
-      if (delta >= .004 && delta <= .15) optimizedFrameDuration = delta;
-    }
-    previousOptimizedMediaTime = value;
-    optimizedMediaTime = value;
+    if (framesAligned()) requestRedraw();
   }
 
-  function captureOffset(force = false) {
-    if (!active() || original.readyState < 1 || optimized.readyState < 1) return false;
-    const next = Number(original.currentTime) - Number(optimized.currentTime);
-    if (!Number.isFinite(next)) return false;
-    if (force || !Number.isFinite(sourceOffset)) sourceOffset = next;
-    return Number.isFinite(sourceOffset);
+  function requestRedraw() {
+    const zoom = window.mochimonoVideoOptimizeZoom;
+    const state = zoom?.state?.();
+    if (zoom?.set && state) zoom.set(state);
   }
 
-  function correctPlaybackSync() {
-    if (!active() || restoring || syncInFlight || original.paused || optimized.paused) return;
-    if (!Number.isFinite(sourceOffset) && !captureOffset()) return;
-    if (!Number.isFinite(optimizedMediaTime) || !Number.isFinite(originalMediaTime)) return;
-    const drift = relativeDrift();
-    const tolerance = frameTolerance();
-    if (Math.abs(drift) > tolerance) {
-      syncInFlight = true;
-      original.playbackRate = 1;
-      try { original.currentTime = Math.max(0, sourceOffset + optimizedMediaTime); } catch {}
-      const clear = () => {
-        syncInFlight = false;
-        original.removeEventListener('seeked', clear);
-      };
-      original.addEventListener('seeked', clear, { once:true });
-      setTimeout(clear, 180);
-      return;
-    }
-    original.playbackRate = clamp(1 - drift * 1.8, .94, 1.06);
-  }
-
-  // Both the base comparison renderer and the zoom renderer clear the whole
-  // canvas before drawing the two live videos. Refuse the whole paint whenever
-  // their actually-presented frame timestamps do not correspond. The previous
-  // matched composite remains visible instead of ever exposing two time points.
+  // The base player repaints whenever the compressed decoder presents a frame.
+  // If Original is only a callback behind, keep the previous matched composite
+  // for at most a tiny fraction of a second and repaint as soon as Original's
+  // matching frame arrives. Crucially, this never seeks during playback.
   ctx.fillRect = function(...args) {
-    const fullPaint = active() && args.length === 4 && Math.abs(Number(args[0])) < .01 && Math.abs(Number(args[1])) < .01 && Number(args[2]) >= (compare.clientWidth || 1) - 1 && Number(args[3]) >= (compare.clientHeight || 1) - 1;
-    if (fullPaint && !framesAligned()) {
-      suppressComposite = true;
-      correctPlaybackSync();
-      return;
+    const fullPaint = active() && args.length === 4 &&
+      Math.abs(Number(args[0])) < .01 && Math.abs(Number(args[1])) < .01 &&
+      Number(args[2]) >= (compare.clientWidth || 1) - 1 &&
+      Number(args[3]) >= (compare.clientHeight || 1) - 1;
+
+    if (fullPaint && session && Number.isFinite(originalFrame) && Number.isFinite(optimizedFrame) && !framesAligned()) {
+      const now = performance.now();
+      // Never turn a temporary decoder scheduling difference into visible
+      // freezing. One frame may be held briefly; after 45ms we paint anyway.
+      if (now - lastGoodPaint < 45) {
+        suppressComposite = true;
+        return;
+      }
     }
+
     suppressComposite = false;
+    if (fullPaint) lastGoodPaint = performance.now();
     return previousFillRect(...args);
   };
 
@@ -109,18 +104,12 @@ if (viewer && compare && canvas && original && optimized) {
     return previousDrawImage(...args);
   };
 
-  function requestRedraw() {
-    const zoom = window.mochimonoVideoOptimizeZoom;
-    const state = zoom?.state?.();
-    if (zoom?.set && state) zoom.set(state);
-  }
-
   function startFrameWatchers() {
     const generation = ++watcherGeneration;
-    previousOriginalMediaTime = NaN;
-    previousOptimizedMediaTime = NaN;
-    originalMediaTime = NaN;
-    optimizedMediaTime = NaN;
+    previousOriginalFrame = NaN;
+    previousOptimizedFrame = NaN;
+    originalFrame = NaN;
+    optimizedFrame = NaN;
 
     const watchOriginal = (_, metadata) => {
       if (generation !== watcherGeneration) return;
@@ -130,7 +119,6 @@ if (viewer && compare && canvas && original && optimized) {
     const watchOptimized = (_, metadata) => {
       if (generation !== watcherGeneration) return;
       updateFrame('optimized', Number(metadata?.mediaTime ?? optimized.currentTime));
-      correctPlaybackSync();
       optimized.requestVideoFrameCallback?.(watchOptimized);
     };
 
@@ -138,181 +126,211 @@ if (viewer && compare && canvas && original && optimized) {
     if (optimized.requestVideoFrameCallback) optimized.requestVideoFrameCallback(watchOptimized);
   }
 
-  function waitForSeek(video, timeout = 1200) {
+  function waitForSeek(video, timeout = 900) {
     return new Promise(resolve => {
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        video.removeEventListener('seeked', finish);
+      let finished = false;
+      const done = () => {
+        if (finished) return;
+        finished = true;
+        video.removeEventListener('seeked', done);
         resolve();
       };
-      video.addEventListener('seeked', finish, { once:true });
-      setTimeout(finish, timeout);
+      video.addEventListener('seeked', done, { once:true });
+      setTimeout(done, timeout);
     });
   }
 
-  async function seekPresented(video, time) {
+  function seekPresented(video, time) {
     const wanted = Math.max(0, Number(time) || 0);
-    let resolveFrame;
-    const frame = new Promise(resolve => { resolveFrame = resolve; });
-    let frameDone = false;
-    const finishFrame = value => {
-      if (frameDone) return;
-      frameDone = true;
-      resolveFrame(Number(value) || Number(video.currentTime) || 0);
-    };
-    if (video.requestVideoFrameCallback) {
-      video.requestVideoFrameCallback((_, metadata) => finishFrame(metadata?.mediaTime));
-    } else {
-      setTimeout(() => finishFrame(video.currentTime), 0);
-    }
-    const seek = waitForSeek(video);
-    try { video.currentTime = wanted; } catch {}
-    await seek;
-    const timeout = setTimeout(() => finishFrame(video.currentTime), 500);
-    const presented = await frame;
-    clearTimeout(timeout);
-    return presented;
+    return new Promise(async resolve => {
+      let frameResolved = false;
+      let frameValue = NaN;
+      let finishFrame;
+      const frameReady = new Promise(done => { finishFrame = done; });
+      const acceptFrame = value => {
+        if (frameResolved) return;
+        frameResolved = true;
+        frameValue = Number(value);
+        finishFrame();
+      };
+
+      if (video.requestVideoFrameCallback) {
+        video.requestVideoFrameCallback((_, metadata) => acceptFrame(metadata?.mediaTime));
+      }
+
+      const seeked = waitForSeek(video);
+      try { video.currentTime = wanted; } catch {}
+      await seeked;
+      if (!video.requestVideoFrameCallback) acceptFrame(video.currentTime);
+      const fallback = setTimeout(() => acceptFrame(video.currentTime), 240);
+      await frameReady;
+      clearTimeout(fallback);
+      resolve(Number.isFinite(frameValue) ? frameValue : Number(video.currentTime) || wanted);
+    });
   }
 
-  async function seekAlignedPair(relative) {
-    const duration = Math.max(.001, Number(optimized.duration) || 6);
-    let optimizedPoint = clamp(Number(relative) || 0, 0, Math.max(0, duration - .001));
-    optimizedMediaTime = await seekPresented(optimized, optimizedPoint);
-    originalMediaTime = await seekPresented(original, sourceOffset + optimizedMediaTime);
-
-    // A seek can land on opposite sides of a frame boundary. Resolve against
-    // the frame Original actually presented, then ask Original for that exact
-    // compressed timestamp again. This converges on the same visual moment for
-    // equal-rate streams and the nearest shared frame for reduced-FPS previews.
-    for (let attempt = 0; attempt < 2 && Math.abs(relativeDrift()) > frameTolerance(); attempt++) {
-      optimizedPoint = clamp(originalMediaTime - sourceOffset, 0, Math.max(0, duration - .001));
-      optimizedMediaTime = await seekPresented(optimized, optimizedPoint);
-      originalMediaTime = await seekPresented(original, sourceOffset + optimizedMediaTime);
-    }
-    return framesAligned();
-  }
-
-  async function alignPausedFrame() {
-    clearTimeout(pausedAlignTimer);
-    if (!active() || restoring || syncInFlight || !optimized.paused) return;
-    if (!Number.isFinite(sourceOffset) && !captureOffset()) return;
-    syncInFlight = true;
+  async function alignAt(relative, resume = false) {
+    if (!active() || !session || alignBusy || original.readyState < 1 || optimized.readyState < 1) return;
+    alignBusy = true;
+    clearTimeout(alignTimer);
     try {
       original.pause();
       optimized.pause();
       original.playbackRate = 1;
-      const master = Number.isFinite(optimizedMediaTime) ? optimizedMediaTime : Number(optimized.currentTime) || 0;
-      if (await seekAlignedPair(master)) requestRedraw();
+
+      const duration = Math.max(.001, Number(session.sampleDuration) || Number(optimized.duration) || 6);
+      const point = clamp(Number(relative) || 0, 0, Math.max(0, duration - .001));
+
+      // Compressed is the timeline master. Ask it which frame it actually
+      // presented, then seek Original once to that exact absolute source time.
+      optimizedFrame = await seekPresented(optimized, point);
+      originalFrame = await seekPresented(original, session.sampleStart + optimizedFrame);
+
+      // Browser seeking can resolve to the adjacent source frame on an exact
+      // boundary. One retry against the compressed frame is enough; never loop.
+      if (!framesAligned()) {
+        originalFrame = await seekPresented(original, session.sampleStart + optimizedFrame + .0001);
+      }
+
+      suppressComposite = false;
+      lastGoodPaint = performance.now();
+      requestRedraw();
+
+      if (resume && active()) {
+        await Promise.allSettled([original.play(), optimized.play()]);
+      } else {
+        original.pause();
+        optimized.pause();
+      }
     } finally {
-      syncInFlight = false;
+      alignBusy = false;
     }
   }
 
-  function schedulePausedAlignment(delay = 45) {
-    clearTimeout(pausedAlignTimer);
-    pausedAlignTimer = setTimeout(() => alignPausedFrame().catch(() => {}), delay);
+  function schedulePausedAlignment(delay = 28) {
+    clearTimeout(alignTimer);
+    alignTimer = setTimeout(() => {
+      if (active() && optimized.paused && !optimized.ended) alignAt(optimized.currentTime, false).catch(() => {});
+    }, delay);
   }
 
-  function snapshotBeforeSettingChange(event) {
-    if (!active() || restoring || !optimized.currentSrc || !Number.isFinite(sourceOffset)) return;
+  async function readSession(id) {
+    const generation = ++sessionGeneration;
+    try {
+      const response = await fetch(`/api/video-optimize/status?id=${encodeURIComponent(id)}`, { cache:'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw Error(data.error || response.statusText);
+      if (generation !== sessionGeneration || id !== optimized.dataset.id) return null;
+      session = {
+        id,
+        sampleStart:Number(data.sampleStart) || 0,
+        sampleDuration:Number(data.sampleDuration) || Number(optimized.duration) || 6,
+        fps:Number(data.fps) || 30,
+        targetFps:Number(data.targetFps) || Number(data.fps) || 30
+      };
+      return session;
+    } catch {
+      if (generation === sessionGeneration) session = null;
+      return null;
+    }
+  }
+
+  function captureSettingState(event) {
+    if (!active() || !session || !optimized.currentSrc || alignBusy) return;
     const target = event.target;
     if (!target?.closest) return;
     if (target.closest('[data-s]')) {
       pendingRestore = null;
       return;
     }
-    if (target.closest('[data-play],[data-playhead],[data-keep],[data-replace],[data-close-right],[data-close-left]')) return;
     if (!target.closest('[data-value],[data-q],[data-e]')) return;
-    const relative = Number.isFinite(optimizedMediaTime) ? optimizedMediaTime : Number(optimized.currentTime) || 0;
     pendingRestore = {
-      sourceTime:sourceOffset + relative,
+      absoluteTime:session.sampleStart + (Number(optimized.currentTime) || 0),
       playing:!optimized.paused && play?.dataset.playing === '1',
-      oldSrc:optimized.currentSrc || optimized.src || ''
+      oldId:optimized.dataset.id || ''
     };
   }
 
-  async function restoreAfterSettingChange() {
-    if (!pendingRestore || restoring || !active()) return;
-    const currentSrc = optimized.currentSrc || optimized.src || '';
-    if (!currentSrc || currentSrc === pendingRestore.oldSrc) return;
-    const wanted = pendingRestore;
+  async function restoreSettingState() {
+    clearTimeout(restoreTimer);
+    if (!pendingRestore || !session || pendingRestore.oldId === session.id || !active()) return;
+    const restore = pendingRestore;
     pendingRestore = null;
-    restoring = true;
-    syncInFlight = true;
-    try {
-      optimized.pause();
-      original.pause();
-      original.playbackRate = 1;
-      if (!Number.isFinite(sourceOffset) && !captureOffset(true)) return;
-      const duration = Math.max(.001, Number(optimized.duration) || 6);
-      const relative = clamp(wanted.sourceTime - sourceOffset, 0, Math.max(0, duration - .001));
-      if (await seekAlignedPair(relative)) requestRedraw();
-      if (wanted.playing && active()) {
-        await Promise.allSettled([original.play(), optimized.play()]);
-      } else {
-        original.pause();
-        optimized.pause();
-        schedulePausedAlignment(0);
-      }
-    } finally {
-      restoring = false;
-      syncInFlight = false;
-    }
+    const relative = clamp(restore.absoluteTime - session.sampleStart, 0, Math.max(0, session.sampleDuration - .001));
+    await alignAt(relative, restore.playing);
   }
 
-  controls?.addEventListener('click', snapshotBeforeSettingChange, true);
-  controls?.addEventListener('change', snapshotBeforeSettingChange, true);
+  controls?.addEventListener('pointerdown', captureSettingState, true);
+  controls?.addEventListener('change', captureSettingState, true);
 
-  original.addEventListener('seeking', () => { originalMediaTime = NaN; });
-  optimized.addEventListener('seeking', () => { optimizedMediaTime = NaN; });
-
-  for (const video of [original, optimized]) video.addEventListener('seeked', () => {
-    if (!active()) return;
-    if (!syncInFlight && !restoring && (!Number.isFinite(sourceOffset) || Number(optimized.currentTime) < .15)) captureOffset(true);
-    if (optimized.paused) schedulePausedAlignment();
-  });
-
-  optimized.addEventListener('loadedmetadata', () => {
-    const src = optimized.currentSrc || optimized.src || '';
-    if (src !== lastPreviewSrc) {
-      lastPreviewSrc = src;
-      sourceOffset = NaN;
-      originalMediaTime = NaN;
-      optimizedMediaTime = NaN;
-      startFrameWatchers();
+  optimized.addEventListener('loadedmetadata', async () => {
+    const id = optimized.dataset.id || '';
+    if (!id || id === lastPreviewId) return;
+    lastPreviewId = id;
+    session = null;
+    startFrameWatchers();
+    await readSession(id);
+    if (!active() || id !== optimized.dataset.id) return;
+    if (pendingRestore && pendingRestore.oldId !== id) {
+      // Base installPreview starts the new sample at zero. Restore after that
+      // initial seek/play settles, while preventing a paused preview from
+      // running away in the meantime.
+      restoreTimer = setTimeout(() => restoreSettingState().catch(() => {}), 55);
+    } else {
+      schedulePausedAlignment(45);
     }
   });
 
-  optimized.addEventListener('playing', () => {
-    if (!Number.isFinite(sourceOffset)) captureOffset(true);
-    if (pendingRestore && (optimized.currentSrc || optimized.src || '') !== pendingRestore.oldSrc) {
-      setTimeout(() => restoreAfterSettingChange().catch(() => {}), 0);
+  optimized.addEventListener('play', () => {
+    if (pendingRestore && pendingRestore.playing === false && pendingRestore.oldId !== optimized.dataset.id) {
+      queueMicrotask(() => {
+        optimized.pause();
+        original.pause();
+      });
     }
   });
 
   optimized.addEventListener('pause', () => {
-    if (active() && !optimized.ended && !restoring) schedulePausedAlignment();
+    original.playbackRate = 1;
+    if (active() && session && !optimized.ended && !alignBusy) schedulePausedAlignment();
   });
+
+  playhead?.addEventListener('change', () => schedulePausedAlignment(0));
+  playhead?.addEventListener('pointerup', () => schedulePausedAlignment(0));
+
+  // Over a six-second preview the media clocks should naturally remain close.
+  // A tiny rate nudge corrects scheduler drift without ever seeking mid-playback.
+  driftTimer = setInterval(() => {
+    if (!active() || !session || alignBusy || original.paused || optimized.paused) return;
+    const drift = (Number(original.currentTime) - session.sampleStart) - Number(optimized.currentTime);
+    const tolerance = frameTolerance();
+    if (!Number.isFinite(drift) || Math.abs(drift) <= tolerance * .45) {
+      original.playbackRate = 1;
+      return;
+    }
+    original.playbackRate = clamp(1 - drift * .55, .985, 1.015);
+  }, 120);
 
   window.addEventListener('mochimono:optimize-open', () => {
     if (!active()) return;
-    sourceOffset = NaN;
-    originalMediaTime = NaN;
-    optimizedMediaTime = NaN;
+    session = null;
     pendingRestore = null;
+    lastPreviewId = '';
     startFrameWatchers();
   });
+
   window.addEventListener('mochimono:optimize-close', () => {
     watcherGeneration++;
-    clearTimeout(pausedAlignTimer);
-    sourceOffset = NaN;
-    originalMediaTime = NaN;
-    optimizedMediaTime = NaN;
+    sessionGeneration++;
+    clearTimeout(alignTimer);
+    clearTimeout(restoreTimer);
+    session = null;
     pendingRestore = null;
-    restoring = false;
-    syncInFlight = false;
+    lastPreviewId = '';
+    alignBusy = false;
     suppressComposite = false;
+    original.playbackRate = 1;
   });
+
+  window.addEventListener('beforeunload', () => clearInterval(driftTimer), { once:true });
 }
