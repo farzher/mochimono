@@ -1,3 +1,5 @@
+import './viewer-header-ui.js';
+
 const search = document.querySelector('#search');
 const fileCount = document.querySelector('#fileCount');
 const mediaSizes = document.querySelector('#mediaSizeControl');
