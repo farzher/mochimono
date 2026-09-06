@@ -32,8 +32,8 @@ if (files) {
       if (!badge) {
         badge = document.createElement('span');
         badge.className = 'compact-rendition-badge';
-        badge.textContent = 'C';
-        badge.title = 'Compact rendition available';
+        badge.textContent = 'S';
+        badge.title = 'Squished version available';
         item.append(badge);
       }
     }
