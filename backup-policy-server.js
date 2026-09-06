@@ -157,6 +157,17 @@ export function getDrive(id) {
   return db.prepare('SELECT * FROM drives WHERE id = ?').get(id);
 }
 
+function compactOnlyTypes(driveId) {
+  const locationId = `backup:${driveId}`;
+  const rows = db.prepare(`
+    SELECT p.media_type AS mediaType
+    FROM representation_policies p
+    JOIN representation_retention r ON r.location_id=p.location_id AND r.media_type=p.media_type
+    WHERE p.location_id=? AND p.representation='compact' AND r.allow_original_removal=1
+  `).all(locationId);
+  return new Set(rows.map(row => row.mediaType));
+}
+
 export function driveCoverage(row) {
   const { policy, filter } = resolvePolicy(parseDrivePolicy(row), 'o');
   const desired = db.prepare(`
@@ -264,13 +275,20 @@ export async function handleBackupPolicy(req, res, url) {
       return true;
     }
     const { filter } = resolvePolicy(parseDrivePolicy(drive), 'o');
+    const compactOnly = compactOnlyTypes(id);
+    const removeImages = compactOnly.has('image') ? 1 : 0;
+    const removeVideos = compactOnly.has('video') ? 1 : 0;
     const after = String(url.searchParams.get('after') || '');
     const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') || 1000)));
     const rows = db.prepare(`
       SELECT o.hash, o.size, o.mime FROM objects o
       WHERE o.state = 'active' AND o.hash > ? AND ${filter.sql}
+        AND NOT (
+          (? = 1 AND o.mime LIKE 'image/%' AND EXISTS (SELECT 1 FROM renditions rr WHERE rr.original_hash=o.hash)) OR
+          (? = 1 AND o.mime LIKE 'video/%' AND EXISTS (SELECT 1 FROM renditions rr WHERE rr.original_hash=o.hash))
+        )
       ORDER BY o.hash LIMIT ?
-    `).all(after, ...filter.params, limit);
+    `).all(after, ...filter.params, removeImages, removeVideos, limit);
     db.prepare('UPDATE drives SET last_seen = ? WHERE id = ?').run(now(), id);
     json(res, 200, { objects: rows, nextAfter: rows.length === limit ? rows.at(-1).hash : null });
     return true;
