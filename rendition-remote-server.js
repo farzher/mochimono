@@ -32,7 +32,7 @@ function publicRendition(row) {
 async function serve(req, res, row) {
   const path = objectPath(RENDITION_ROOT, row.rendition_hash);
   const info = await stat(path).catch(() => null);
-  if (!info?.isFile() || Number(info.size) !== Number(row.size)) return json(res, 404, { error:'Compact rendition is unavailable' });
+  if (!info?.isFile() || Number(info.size) !== Number(row.size)) return json(res, 404, { error:'Squished version is unavailable' });
   const headers = { 'content-type':row.mime, 'accept-ranges':'bytes', 'cache-control':'private, max-age=3600' };
   const range = String(req.headers.range || '');
   if (!range) {
@@ -68,7 +68,7 @@ export async function handleRemoteRenditionServer(req, res, url) {
   const compact = /^\/api\/representations\/([a-f0-9]{64})\/compact$/.exec(url.pathname);
   if (compact && (req.method === 'GET' || req.method === 'HEAD')) {
     const row = db.prepare('SELECT * FROM renditions WHERE original_hash=?').get(compact[1]);
-    if (!row) return json(res, 404, { error:'Compact rendition not found' });
+    if (!row) return json(res, 404, { error:'Squished version not found' });
     return serve(req, res, row);
   }
 
