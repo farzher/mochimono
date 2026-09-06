@@ -88,4 +88,6 @@ if (viewer && stage) {
 
 // Load video compression after the existing image compression trigger has been
 // adopted into the viewer action row, so each media type gets one Compress action.
-import('./video-optimize.js').catch(error => console.error('Could not load video compression UI', error));
+import('./video-optimize.js')
+  .then(() => import('./video-optimize-polish.js'))
+  .catch(error => console.error('Could not load video compression UI', error));
