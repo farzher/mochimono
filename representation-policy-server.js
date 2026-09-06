@@ -1,5 +1,7 @@
 import { db, json, now, readJson } from './lib/server-context.js';
 
+const AGENT_PRESENCE_MAX_AGE_MS = 3 * 60 * 1000;
+
 // Destructive retention is deliberately separate from representation preference.
 // Absence of a row means originals are retained. This makes the safe default
 // impossible to flip accidentally by merely choosing the Compact representation.
@@ -34,6 +36,11 @@ function setRetention(locationId, mediaType, allow) {
   `).run(locationId, mediaType, allow ? 1 : 0, now());
 }
 
+const freshAgentPresence = value => {
+  const time = new Date(value || 0).getTime();
+  return Number.isFinite(time) && Date.now() - time <= AGENT_PRESENCE_MAX_AGE_MS;
+};
+
 function verifiedOriginalSafety(hash, locationId) {
   const currentDrive = locationId.startsWith('backup:') ? locationId.slice('backup:'.length) : '';
   const currentVerified = currentDrive
@@ -59,6 +66,7 @@ function verifiedOriginalSafety(hash, locationId) {
     FROM representation_presence
     WHERE original_hash=? AND representation='original'
   `).all(hash)) {
+    if (!freshAgentPresence(row.verifiedAt)) continue;
     if (row.locationId !== locationId && !alternatives.some(item => item.locationId === row.locationId)) {
       alternatives.push({ locationId:row.locationId, source:'agent', verifiedAt:row.verifiedAt });
     }
