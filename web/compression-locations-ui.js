@@ -50,7 +50,7 @@ if (workButton) {
 
   function select(location, mediaType, mode) {
     const value = mode(location.id, mediaType);
-    const compactOnly = location.kind === 'server' ? '' : `<option value="compact-only"${value === 'compact-only' ? ' selected' : ''}>Compact only</option>`;
+    const compactOnly = location.kind === 'backup' ? `<option value="compact-only"${value === 'compact-only' ? ' selected' : ''}>Compact only</option>` : '';
     return `<select data-location="${escapeHtml(location.id)}" data-name="${escapeHtml(location.name)}" data-media="${mediaType}"><option value="original"${value === 'original' ? ' selected' : ''}>Original</option><option value="compact"${value === 'compact' ? ' selected' : ''}>Compact</option>${compactOnly}</select>`;
   }
 
@@ -94,7 +94,7 @@ if (workButton) {
           <div class="compression-storage-column">Location</div><div class="compression-storage-column">Images</div><div class="compression-storage-column">Video</div>
           ${unique.map(item => `<div class="compression-storage-label"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.detail)}</span></div><div>${select(item,'image',mode)}</div><div>${select(item,'video',mode)}</div>`).join('')}
         </div>
-        <div class="compression-storage-state"><strong>Originals are retained by default.</strong> Compact adds the managed Compact without deleting the Original. Only Compact only can remove an Original, and it still requires another verified Original elsewhere.</div>
+        <div class="compression-storage-state"><strong>Originals are retained by default.</strong> Compact adds a managed Compact without deleting the Original. Managed backups can explicitly use Compact only; even then an Original is removed only after the Compact is verified and another Original is verified elsewhere.</div>
       </div>`;
     dialog.querySelector('[data-close]').addEventListener('click', close);
     dialog.querySelectorAll('select[data-location]').forEach(control => control.addEventListener('change', async () => {
