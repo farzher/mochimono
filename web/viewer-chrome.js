@@ -104,7 +104,6 @@ import('./compression-work-ui.js').catch(error => console.error('Could not load 
 import('./compression-locations-ui.js').catch(error => console.error('Could not load compression storage UI', error));
 import('./compact-rendition-badges.js').catch(error => console.error('Could not load compact rendition badges', error));
 import('./viewer-renditions.js').catch(error => console.error('Could not load rendition viewer', error));
-import('./squish-language.js').catch(error => console.error('Could not load Squish terminology', error));
 
 // Correct video dimensions from the actual loaded media rather than thumbnail
 // metadata, then load one comparison controller. Playback sync, frame pairing,
