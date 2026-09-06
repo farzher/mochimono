@@ -1,6 +1,8 @@
 const files = document.querySelector('#files');
 const commandbar = document.querySelector('.commandbar');
 
+const VIEWER_RETURN_PREFILL = 120;
+
 function onScreen(card) {
   if (!card?.isConnected) return false;
   const rect = card.getBoundingClientRect();
@@ -9,9 +11,28 @@ function onScreen(card) {
 }
 
 function refreshThumbnails() {
-  // Let any corrective scroll materialize its destination rows first, then
-  // re-prioritize the visible thumbnail window even when scrollY did not change.
-  requestAnimationFrame(() => window.mochimonoStableGrid?.syncThumbnails?.());
+  // A viewer jump can leave the stable grid with rows mounted around the old
+  // viewer position while the document is already back at a different scroll
+  // position. A normal scroll event would repair that row window, but returning
+  // from the viewer does not always produce one.
+  requestAnimationFrame(() => {
+    const grid = window.mochimonoStableGrid;
+    if (!grid?.active?.()) return;
+
+    // Materialize a modest window around the grid's current visible index so
+    // syncThumbnails has real cards to prioritize. ensureIndex is idempotent at
+    // the row level, so this is cheap when the correct rows are already mounted.
+    const center = Number(grid.visibleIndex?.());
+    const count = Number(grid.count?.()) || 0;
+    if (Number.isInteger(center) && center >= 0 && count > 0) {
+      const start = Math.max(0, center - VIEWER_RETURN_PREFILL);
+      const end = Math.min(count - 1, center + VIEWER_RETURN_PREFILL);
+      for (let index = start; index <= end; index++) grid.ensureIndex?.(index);
+    }
+
+    // Force a fresh priority/check pass even when scrollY itself did not change.
+    grid.syncThumbnails?.();
+  });
 }
 
 window.addEventListener('mochimono-viewer-return', event => {
@@ -27,6 +48,7 @@ window.addEventListener('mochimono-viewer-return', event => {
   }
 
   // Returning to an unchanged scroll position does not fire a scroll event, so
-  // the thumbnail scheduler otherwise keeps its stale pre-viewer priority set.
+  // explicitly rebuild the current thumbnail work set instead of waiting for
+  // the user to scroll.
   refreshThumbnails();
 });
