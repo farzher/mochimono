@@ -67,8 +67,8 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     button.type = 'button';
     button.className = 'image-optimize-card-close';
     button.dataset.optCardClose = '';
-    button.setAttribute('aria-label', 'Close compression');
-    button.title = 'Close compression';
+    button.setAttribute('aria-label', 'Close Squish');
+    button.title = 'Close Squish';
     button.textContent = '×';
     button.addEventListener('click', event => {
       event.preventDefault();
@@ -126,7 +126,7 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
     control.dataset.optEffortValue = String(DEFAULT_EFFORT);
     const slider = document.createElement('label');
     slider.className = 'image-optimize-effort-control';
-    slider.innerHTML = '<input type="range" min="0" max="9" step="1" value="4" aria-label="Compression effort"><output>4 / 9</output>';
+    slider.innerHTML = '<input type="range" min="0" max="9" step="1" value="4" aria-label="Squish effort"><output>4 / 9</output>';
     row.append(slider);
     const input = slider.querySelector('input');
     const output = slider.querySelector('output');
@@ -197,7 +197,7 @@ if (compare && leftImage && rightImage && leftControls && rightControls) {
 
   function sourceStatusText() {
     const resolution = sourceResolutionText();
-    return resolution ? `Uncompressed source · ${resolution}` : 'Uncompressed source';
+    return resolution ? `Original source · ${resolution}` : 'Original source';
   }
 
   function setText(node, text) {
