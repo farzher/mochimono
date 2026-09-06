@@ -28,8 +28,8 @@ if (selectionBar && fileCount) {
   const selectionCompress = document.createElement('button');
   selectionCompress.type = 'button';
   selectionCompress.className = 'selection-compress';
-  selectionCompress.textContent = 'Compress';
-  selectionCompress.title = 'Compress selected files';
+  selectionCompress.textContent = 'Squish';
+  selectionCompress.title = 'Squish selected files';
   selectionSpacer?.before(selectionCompress);
 
   const overlay = document.createElement('div');
@@ -87,10 +87,10 @@ if (selectionBar && fileCount) {
     mode = 'bulk';
     const items = await presets();
     dialog.innerHTML = `
-      <div class="compression-dialog-head"><strong>Compress ${hashes.length.toLocaleString()} file${hashes.length === 1 ? '' : 's'}</strong><button class="compression-dialog-close" data-close>×</button></div>
+      <div class="compression-dialog-head"><strong>Squish ${hashes.length.toLocaleString()} file${hashes.length === 1 ? '' : 's'}</strong><button class="compression-dialog-close" data-close>×</button></div>
       <div class="compression-dialog-body">
         <div class="compression-field"><span>Preset</span><select data-bulk-preset>${presetOptions(items)}</select></div>
-        <div class="compression-work-summary">Creates managed Compact renditions. Originals stay untouched.</div>
+        <div class="compression-work-summary">Creates managed Squished versions. Originals stay untouched.</div>
         <div class="compression-dialog-actions"><button class="compression-secondary" data-close>Cancel</button><button class="compression-primary" data-queue>Add to queue</button></div>
       </div>`;
     overlay.hidden = false;
@@ -121,7 +121,7 @@ if (selectionBar && fileCount) {
       const retryable = !managed && (job.status === 'error' || job.status === 'canceled');
       const result = job.result || {};
       const meta = job.status === 'done'
-        ? `${job.presetName || (managed ? 'Storage' : 'Compact')}${result.sourceSize && result.size ? ` · ${bytes(result.sourceSize)} → ${bytes(result.size)}` : ''}`
+        ? `${job.presetName || (managed ? 'Storage' : 'Squished')}${result.sourceSize && result.size ? ` · ${bytes(result.sourceSize)} → ${bytes(result.size)}` : ''}`
         : job.message || job.presetName || '';
       return `<article class="compression-work-item ${job.status === 'error' ? 'compression-work-error' : ''}">
         <div class="compression-work-main"><strong>${escapeHtml(job.filename || job.originalHash.slice(0,12))}</strong><div class="compression-work-meta">${escapeHtml(meta)}</div>${active ? `<div class="compression-work-progress"><i style="width:${Math.max(2, Math.min(100, Number(job.progress) || 0))}%"></i></div>` : ''}</div>
