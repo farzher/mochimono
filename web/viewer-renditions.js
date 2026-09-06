@@ -3,6 +3,7 @@ const viewerOpen = document.querySelector('#viewer-open');
 const viewerMedia = document.querySelector('#viewer-media');
 const viewerMeta = document.querySelector('#viewer-meta');
 const actions = viewer?.querySelector('.viewer-actions');
+const menuActions = document.querySelector('#viewer-menu > div');
 
 if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
   const style = document.createElement('style');
@@ -18,6 +19,13 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
   switcher.hidden = true;
   switcher.innerHTML = '<button type="button" data-rendition="original" class="active">Original</button><button type="button" data-rendition="compact">Compact</button>';
   viewerOpen.before(switcher);
+
+  const removeCompact = document.createElement('button');
+  removeCompact.type = 'button';
+  removeCompact.className = 'viewer-menu-action';
+  removeCompact.textContent = 'Remove compact';
+  removeCompact.hidden = true;
+  menuActions?.prepend(removeCompact);
 
   let generation = 0;
   let currentHash = '';
@@ -57,6 +65,7 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
 
   function setButtons() {
     switcher.querySelectorAll('[data-rendition]').forEach(button => button.classList.toggle('active', button.dataset.rendition === mode));
+    removeCompact.hidden = !rendition;
   }
 
   function compactMeta() {
@@ -110,11 +119,25 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
     viewerMeta.textContent = next === 'compact' ? compactMeta() : originalMeta;
   }
 
+  async function removeCurrentCompact() {
+    const originalHash = currentHash;
+    if (!originalHash || !rendition) return;
+    if (mode === 'compact') await show('original');
+    await fetch(`/api/renditions/${encodeURIComponent(originalHash)}`, { method:'DELETE' }).catch(() => {});
+    await fetch(`/api/representations/${encodeURIComponent(originalHash)}/rendition`, { method:'DELETE' }).catch(() => {});
+    rendition = null;
+    mode = 'original';
+    switcher.hidden = true;
+    setButtons();
+    window.dispatchEvent(new CustomEvent('mochimono:work-changed', { detail:{ originalHash, removedCompact:true } }));
+  }
+
   async function sync() {
     const nextHash = hash();
     const serial = ++generation;
     if (viewer.hidden || !nextHash) {
       switcher.hidden = true;
+      removeCompact.hidden = true;
       currentHash = '';
       rendition = null;
       return;
@@ -138,6 +161,7 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
     const button = event.target.closest('[data-rendition]');
     if (button) show(button.dataset.rendition).catch(error => console.warn('Could not switch rendition', error));
   });
+  removeCompact.addEventListener('click', () => removeCurrentCompact().catch(error => console.warn('Could not remove compact rendition', error)));
 
   document.addEventListener('click', event => {
     const trigger = event.target.closest('.viewer-optimize-trigger');
