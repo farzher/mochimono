@@ -1,5 +1,6 @@
 const controls = document.querySelector('[data-controls]');
 const quality = document.querySelector('[data-q]');
+const status = document.querySelector('[data-status]');
 
 if (controls && quality) {
   let mode = 'normal';
@@ -84,6 +85,11 @@ if (controls && quality) {
         if (data && (data.audioCodec || data.sourceAudioKbps)) {
           lastAudio = { codec:data.audioCodec || '', kbps:Number(data.sourceAudioKbps) || 0 };
           sync();
+          if (mode === 'original' && status && data.audioCodec) {
+            setTimeout(() => {
+              status.textContent = status.textContent.replace(/Opus\s+\d+(?:\.\d+)?\s*kbps/i, `Original ${String(data.audioCodec).toUpperCase()} audio`);
+            }, 0);
+          }
         }
       }).catch(() => {});
     }
