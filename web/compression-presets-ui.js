@@ -15,8 +15,11 @@ if (viewer && viewerOpen && (imageControls || videoControls)) {
 `;
   document.head.append(style);
 
+  const LAST_SETTINGS_KEY = 'mochimono.squish.last.v1';
+  const DEFAULT_IMAGE = { format:'avif', quality:69, content:'auto', effort:4, lossless:false, resizeMax:2560, resizePercent:0 };
   let presets = [];
   let applying = false;
+  let suppressRememberUntil = 0;
 
   const hash = () => viewerOpen.getAttribute('href')?.match(/\/api\/objects\/([a-f0-9]{64})/)?.[1] || '';
   const activeType = () => viewer.classList.contains('image-optimize-active') ? 'image' : viewer.classList.contains('video-optimize-active') ? 'video' : '';
@@ -28,8 +31,40 @@ if (viewer && viewerOpen && (imageControls || videoControls)) {
     return data;
   }
 
+  function readLastSettings() {
+    try {
+      const value = JSON.parse(localStorage.getItem(LAST_SETTINGS_KEY) || '{}');
+      return value && typeof value === 'object' ? value : {};
+    } catch { return {}; }
+  }
+
+  function writeLastSettings(type, options, presetId = '') {
+    if (!['image','video'].includes(type) || !options) return;
+    try {
+      const value = readLastSettings();
+      value[type] = { options, presetId:String(presetId || '') };
+      localStorage.setItem(LAST_SETTINGS_KEY, JSON.stringify(value));
+    } catch {}
+  }
+
+  function legacyImageDefault(item) {
+    const options = item?.options || {};
+    return item?.mediaType === 'image' && item?.name === 'Default Image' && item?.isDefault === true &&
+      String(options.format || '') === 'auto' && Number(options.quality) === 90 &&
+      String(options.content || 'auto') === 'auto' && Number(options.effort) === 4 &&
+      !options.lossless && Number(options.resizeMax) === 2560 && !Number(options.resizePercent);
+  }
+
   async function loadPresets() {
     presets = (await api('/api/compression/presets')).presets || [];
+    const legacy = presets.find(legacyImageDefault);
+    if (legacy) {
+      await api('/api/compression/presets', {
+        method:'POST',
+        body:JSON.stringify({ name:legacy.name, mediaType:'image', options:DEFAULT_IMAGE, isDefault:true })
+      });
+      presets = (await api('/api/compression/presets')).presets || [];
+    }
     syncBars();
     return presets;
   }
@@ -47,15 +82,33 @@ if (viewer && viewerOpen && (imageControls || videoControls)) {
     controls.append(bar);
     bar.querySelector('[data-compression-preset]').addEventListener('change', () => {
       const preset = presets.find(item => item.id === bar.querySelector('[data-compression-preset]').value);
-      if (preset) applyPreset(type, preset.options);
+      if (preset) {
+        applyPreset(type, preset.options);
+        writeLastSettings(type, preset.options, preset.id);
+      }
     });
     bar.querySelector('[data-compression-save-preset]').addEventListener('click', () => savePreset(type, bar).catch(error => alert(error.message)));
     bar.querySelector('[data-compression-default]').addEventListener('click', () => makeDefault(type, bar).catch(error => alert(error.message)));
     bar.querySelector('[data-compression-save]').addEventListener('click', event => queueCurrent(type, bar, event.currentTarget).catch(error => alert(error.message)));
-    controls.addEventListener('input', () => { if (!applying) markCustom(bar); }, true);
+    const remember = () => {
+      if (applying || Date.now() < suppressRememberUntil) return;
+      setTimeout(() => {
+        if (applying || Date.now() < suppressRememberUntil || activeType() !== type) return;
+        try { writeLastSettings(type, capture(type), bar.querySelector('[data-compression-preset]')?.value || ''); } catch {}
+      }, 0);
+    };
+    controls.addEventListener('input', () => { if (!applying) markCustom(bar); remember(); }, true);
+    controls.addEventListener('change', event => {
+      if (event.target.closest('.compression-savebar')) return;
+      if (!applying) markCustom(bar);
+      remember();
+    }, true);
     controls.addEventListener('click', event => {
       if (applying || event.target.closest('.compression-savebar')) return;
-      if (event.target.closest('[data-value],[data-format],[data-size-kind],[data-content],[data-effort]')) markCustom(bar);
+      if (event.target.closest('[data-value],[data-format],[data-size-kind],[data-content],[data-effort]')) {
+        markCustom(bar);
+        remember();
+      }
     }, true);
     return bar;
   }
@@ -83,7 +136,7 @@ if (viewer && viewerOpen && (imageControls || videoControls)) {
   }
 
   function captureImage() {
-    const format = imageControls?.querySelector('[data-opt-formats] [data-format].active')?.dataset.format || 'auto';
+    const format = imageControls?.querySelector('[data-opt-formats] [data-format].active')?.dataset.format || 'avif';
     if (format === 'original') throw new Error('Choose a Squish image format first');
     const sizeText = String(imageControls?.querySelector('[data-opt-size-button]')?.textContent || '').replace(/^Size\s*·\s*/i, '').trim();
     let resizeMax = 2560;
@@ -128,7 +181,8 @@ if (viewer && viewerOpen && (imageControls || videoControls)) {
   }
 
   function applyImage(options = {}) {
-    clickChoice(imageControls, `[data-opt-formats] [data-format="${CSS.escape(String(options.format || 'auto'))}"]`);
+    const format = String(options.format || 'avif');
+    clickChoice(imageControls, `[data-opt-formats] [data-format="${CSS.escape(format)}"]`);
     if (options.resizePercent) clickChoice(imageControls, `[data-opt-sizes] [data-size-kind="percent"][data-size-value="${Number(options.resizePercent)}"]`);
     else if (options.resizeMax) {
       const direct = imageControls.querySelector(`[data-opt-sizes] [data-size-kind="max"][data-size-value="${Number(options.resizeMax)}"]`);
@@ -141,7 +195,7 @@ if (viewer && viewerOpen && (imageControls || videoControls)) {
       }
     }
     clickChoice(imageControls, `[data-opt-content] [data-content="${CSS.escape(String(options.content || 'auto'))}"]`);
-    setRange(imageControls.querySelector('[data-opt-quality]'), Number(options.quality) || 90);
+    setRange(imageControls.querySelector('[data-opt-quality]'), Number(options.quality) || (format === 'avif' ? 69 : 90));
     setRange(imageControls.querySelector('.image-optimize-effort-control input'), Number(options.effort) || 4);
     const lossless = imageControls.querySelector('[data-opt-lossless]');
     if (lossless && lossless.checked !== Boolean(options.lossless)) {
@@ -171,12 +225,14 @@ if (viewer && viewerOpen && (imageControls || videoControls)) {
     const name = prompt('Preset name');
     if (!name?.trim()) return;
     const makeDefault = confirm('Use this as the default preset?');
+    const options = capture(type);
     const data = await api('/api/compression/presets', {
       method:'POST',
-      body:JSON.stringify({ name:name.trim(), mediaType:type, options:capture(type), makeDefault })
+      body:JSON.stringify({ name:name.trim(), mediaType:type, options, makeDefault })
     });
     await loadPresets();
     bar.querySelector('[data-compression-preset]').value = data.preset.id;
+    writeLastSettings(type, options, data.preset.id);
   }
 
   async function makeDefault(type, bar) {
@@ -218,20 +274,49 @@ if (viewer && viewerOpen && (imageControls || videoControls)) {
     button.textContent = data.rendition ? 'Update squished' : 'Save squished';
   }
 
+  async function existingRendition(originalHash) {
+    if (!originalHash) return null;
+    const local = await api(`/api/renditions/${encodeURIComponent(originalHash)}`).catch(() => null);
+    if (local?.rendition) return local.rendition;
+    return (await api(`/api/representations/${encodeURIComponent(originalHash)}/rendition`).catch(() => null))?.rendition || null;
+  }
+
   async function activateDefaults() {
     await loadPresets();
     const type = activeType();
+    const originalHash = hash();
     const bar = type === 'image' ? imageBar : type === 'video' ? videoBar : null;
-    if (!bar) return;
-    const preset = presets.find(item => item.mediaType === type && item.isDefault);
-    if (preset) {
-      bar.querySelector('[data-compression-preset]').value = preset.id;
-      applyPreset(type, preset.options);
+    if (!bar || !type || !originalHash) return;
+
+    // Existing Squished settings are file-specific and take precedence. The
+    // existing-rendition module restores those settings shortly after open.
+    if (await existingRendition(originalHash)) {
+      refreshSaveLabel(type, bar).catch(() => {});
+      return;
+    }
+
+    const remembered = readLastSettings()[type];
+    if (remembered?.options) {
+      const id = presets.some(item => item.id === remembered.presetId) ? remembered.presetId : '';
+      bar.querySelector('[data-compression-preset]').value = id;
+      applyPreset(type, remembered.options);
+    } else {
+      const preset = presets.find(item => item.mediaType === type && item.isDefault);
+      if (preset) {
+        bar.querySelector('[data-compression-preset]').value = preset.id;
+        applyPreset(type, preset.options);
+      } else if (type === 'image') {
+        bar.querySelector('[data-compression-preset]').value = '';
+        applyPreset('image', DEFAULT_IMAGE);
+      }
     }
     refreshSaveLabel(type, bar).catch(() => {});
   }
 
-  window.addEventListener('mochimono:optimize-open', () => setTimeout(() => activateDefaults().catch(() => {}), 0));
+  window.addEventListener('mochimono:optimize-open', () => {
+    suppressRememberUntil = Date.now() + 250;
+    setTimeout(() => activateDefaults().catch(() => {}), 0);
+  });
   window.addEventListener('mochimono:work-changed', () => {
     const type = activeType();
     refreshSaveLabel(type, type === 'image' ? imageBar : videoBar).catch(() => {});
