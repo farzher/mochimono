@@ -4,6 +4,7 @@ import { stat } from 'node:fs/promises';
 import { DATA_DIR, db, json, now } from './lib/server-context.js';
 import { objectPath, validHash, writeVerifiedObject } from './lib/store.js';
 import { handleCompressionServer } from './compression-server.js';
+import { handleRemoteRenditionServer } from './rendition-remote-server.js';
 
 const AUTO_SCRUB_DAYS = Math.max(0, Number(process.env.MOCHIMONO_SCRUB_DAYS ?? 30) || 0);
 const AUTO_SCRUB_MS = AUTO_SCRUB_DAYS * 24 * 60 * 60 * 1000;
@@ -162,6 +163,7 @@ if (AUTO_SCRUB_MS) {
 
 export async function handleIntegrity(req, res, url) {
   if (await handleCompressionServer(req, res, url)) return true;
+  if (await handleRemoteRenditionServer(req, res, url)) return true;
 
   if (req.method === 'GET' && url.pathname === '/api/integrity') {
     json(res, 200, status());
