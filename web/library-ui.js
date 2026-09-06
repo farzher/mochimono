@@ -15,8 +15,27 @@ const selectionCollection = document.querySelector('#selectionCollection');
 const selectionDelete = document.querySelector('#selectionDelete');
 const selectionIgnore = document.querySelector('#selectionIgnore');
 const selectionClear = document.querySelector('#selectionClear');
+const selectionSpacer = selectionBar?.querySelector('.selection-spacer');
+
+const selectionOnly = document.createElement('button');
+selectionOnly.type = 'button';
+selectionOnly.id = 'selectionOnly';
+selectionOnly.title = 'Show only selected files';
+selectionOnly.setAttribute('aria-label', 'Show only selected files');
+selectionOnly.setAttribute('aria-pressed', 'false');
+selectionOnly.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.6 10s2.6-4.5 7.4-4.5 7.4 4.5 7.4 4.5-2.6 4.5-7.4 4.5S2.6 10 2.6 10z"/><circle cx="10" cy="10" r="2.1"/></svg>';
+selectionSpacer?.before(selectionOnly);
+
+const selectionStyle = document.createElement('style');
+selectionStyle.textContent = `
+.selection-bar>.selection-compress{width:auto!important;min-width:54px!important;padding:0 9px!important;font-size:11px!important;font-weight:750!important}
+.selection-bar>#selectionOnly.active{background:#eee9e5!important;color:#171416!important}
+`;
+document.head.append(selectionStyle);
 
 let selectionMode = false;
+let selectedOnlyMode = false;
+let restoringSelectionFilter = false;
 let anchorHash = '';
 let selected = new Set();
 let timelineFrame = 0;
@@ -124,22 +143,61 @@ function syncTimelineSelection() {
   }
 }
 
+function restoreBaseHashFilter() {
+  const key = String(collectionFilter?.value || '');
+  if (/^\d+$/.test(key)) {
+    restoringSelectionFilter = true;
+    collectionFilter.dispatchEvent(new Event('change', { bubbles:true }));
+    restoringSelectionFilter = false;
+  } else {
+    window.mochimonoSetCollectionHashes?.(null);
+  }
+}
+
+function setSelectedOnly(next, restoreBase = true) {
+  next = Boolean(next && selected.size);
+  if (selectedOnlyMode === next) {
+    if (next) window.mochimonoSetCollectionHashes?.(new Set(selected));
+    return;
+  }
+  selectedOnlyMode = next;
+  invalidateTimelineMembership();
+  if (selectedOnlyMode) window.mochimonoSetCollectionHashes?.(new Set(selected));
+  else if (restoreBase) restoreBaseHashFilter();
+  else window.mochimonoSetCollectionHashes?.(null);
+}
+
+function actionTitle(base, mutable, count) {
+  if (!count || mutable) return base;
+  return `${base} — requires every selected file to be stored on the Mochimono Server`;
+}
+
 function syncSelectionUi() {
   const count = selected.size;
   const active = selectionMode || count > 0;
   const mutable = count > 0 && allServerStored(selected);
+  if (selectedOnlyMode && count) window.mochimonoSetCollectionHashes?.(new Set(selected));
   selectionBar.hidden = !active;
   document.documentElement.classList.toggle('selection-active', active);
   selectToggle.classList.toggle('active', selectionMode);
   selectionCount.textContent = count ? `${count.toLocaleString()} selected` : 'Select files';
   selectionCollection.disabled = selectionDelete.disabled = selectionIgnore.disabled = !mutable;
-  const title = count && !mutable ? 'This action requires every selected file to be stored on the Mochimono Server.' : '';
-  selectionCollection.title = selectionDelete.title = selectionIgnore.title = title;
+  selectionCollection.title = actionTitle('Add to group', mutable, count);
+  selectionDelete.title = actionTitle('Trash', mutable, count);
+  selectionIgnore.title = actionTitle('Trash + Ignore', mutable, count);
+  selectAll.title = 'Select all matching files';
+  selectionClear.title = 'Clear selection';
+  selectionOnly.disabled = !count;
+  selectionOnly.classList.toggle('active', selectedOnlyMode);
+  selectionOnly.setAttribute('aria-pressed', selectedOnlyMode ? 'true' : 'false');
+  selectionOnly.title = selectedOnlyMode ? 'Show all matching files' : 'Show only selected files';
+  selectionOnly.setAttribute('aria-label', selectionOnly.title);
   syncSelectedClasses();
   syncTimelineSelection();
 }
 
-function clearSelection(exit = true) {
+function clearSelection(exit = true, restoreFilter = true) {
+  if (selectedOnlyMode) setSelectedOnly(false, restoreFilter);
   selected.clear();
   anchorHash = '';
   if (exit) selectionMode = false;
@@ -172,6 +230,7 @@ function toggleGroup(hashes) {
   for (const hash of unique) remove ? selected.delete(hash) : selected.add(hash);
   anchorHash = '';
   selectionMode = selected.size > 0;
+  if (!selected.size && selectedOnlyMode) setSelectedOnly(false);
   syncSelectionUi();
 }
 
@@ -282,6 +341,11 @@ selectToggle.addEventListener('click', () => {
   else { selectionMode = true; syncSelectionUi(); }
 });
 selectionClear.addEventListener('click', () => clearSelection(true));
+selectionOnly.addEventListener('click', () => {
+  if (!selected.size) return;
+  setSelectedOnly(!selectedOnlyMode);
+  syncSelectionUi();
+});
 selectAll.addEventListener('click', async () => {
   selectionMode = true;
   selectAll.disabled = true;
@@ -311,6 +375,7 @@ files.addEventListener('click', event => {
   event.stopImmediatePropagation();
   selectionMode = true;
   toggleHash(item.dataset.hash, event.shiftKey);
+  if (!selected.size && selectedOnlyMode) setSelectedOnly(false);
   syncSelectionUi();
 }, true);
 
@@ -323,7 +388,11 @@ document.querySelector('#views').addEventListener('click', event => {
   clearSelection(true);
   setTimeout(() => { saveUi(); scheduleTimeline(); });
 });
-for (const control of [source, collectionFilter]) control.addEventListener('change', () => { invalidateTimelineMembership(); clearSelection(true); });
+source.addEventListener('change', () => { invalidateTimelineMembership(); clearSelection(true, false); });
+collectionFilter.addEventListener('change', () => {
+  invalidateTimelineMembership();
+  if (!restoringSelectionFilter) clearSelection(true, false);
+});
 search.addEventListener('input', () => { invalidateTimelineMembership(); if (selected.size) clearSelection(true); });
 document.querySelector('#mediaSize')?.addEventListener('input', scheduleTimeline);
 window.addEventListener('resize', scheduleTimeline, { passive: true });
@@ -335,6 +404,7 @@ window.mochimonoSelection = {
   hashes: () => [...selected],
   clear: () => clearSelection(true),
   count: () => selected.size,
+  selectedOnly: () => selectedOnlyMode,
   add(hashes) {
     const values = [...new Set((hashes || []).map(String).filter(Boolean))];
     if (!values.length) return selected.size;
