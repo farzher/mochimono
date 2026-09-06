@@ -118,4 +118,5 @@ import('./video-optimize.js')
   .then(() => import('./video-optimize-live-settings.js'))
   .then(() => import('./video-optimize-transport.js'))
   .then(() => import('./compression-presets-ui.js'))
+  .then(() => import('./compression-existing-rendition.js'))
   .catch(error => console.error('Could not load video compression UI', error));
