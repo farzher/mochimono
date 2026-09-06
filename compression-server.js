@@ -129,7 +129,7 @@ function upsertPreset(body) {
 async function serveRendition(req, res, row) {
   const path = objectPath(RENDITION_ROOT, row.rendition_hash);
   const info = await stat(path).catch(() => null);
-  if (!info?.isFile() || Number(info.size) !== Number(row.size)) return json(res, 404, { error:'Compact rendition is unavailable' });
+  if (!info?.isFile() || Number(info.size) !== Number(row.size)) return json(res, 404, { error:'Squished version is unavailable' });
   const headers = { 'content-type':row.mime, 'accept-ranges':'bytes', 'cache-control':'private, max-age=3600' };
   const range = String(req.headers.range || '');
   if (!range) {
@@ -228,7 +228,7 @@ export async function handleCompressionServer(req, res, url) {
     const mediaType = cleanMediaType(body.mediaType);
     if (!validHash(renditionHash) || !mediaType) return json(res, 400, { error:'Valid rendition hash and media type are required' });
     const file = await stat(objectPath(RENDITION_ROOT, renditionHash)).catch(() => null);
-    if (!file?.isFile() || (body.size && Number(file.size) !== Number(body.size))) return json(res, 409, { error:'Upload the compact rendition before registering it' });
+    if (!file?.isFile() || (body.size && Number(file.size) !== Number(body.size))) return json(res, 409, { error:'Upload the Squished version before registering it' });
     const old = db.prepare('SELECT rendition_hash FROM renditions WHERE original_hash=?').get(originalHash);
     const stamp = now();
     db.prepare(`INSERT INTO renditions(original_hash,rendition_hash,media_type,preset_id,preset_name,options_json,mime,size,source_size,width,height,duration,created_at,updated_at)
@@ -249,7 +249,7 @@ export async function handleCompressionServer(req, res, url) {
   const renditionFile = /^\/api\/renditions\/([a-f0-9]{64})\/file$/.exec(url.pathname);
   if (renditionFile && (req.method === 'GET' || req.method === 'HEAD')) {
     const row = db.prepare('SELECT * FROM renditions WHERE original_hash=?').get(renditionFile[1]);
-    if (!row) return json(res, 404, { error:'Compact rendition not found' });
+    if (!row) return json(res, 404, { error:'Squished version not found' });
     return serveRendition(req, res, row);
   }
 
