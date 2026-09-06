@@ -22,6 +22,16 @@ function rows() {
   `).all().map(row => ({ ...row, allowOriginalRemoval:Boolean(row.allowOriginalRemoval) }));
 }
 
+function setRetention(locationId, mediaType, allow) {
+  db.prepare(`
+    INSERT INTO representation_retention(location_id,media_type,allow_original_removal,updated_at)
+    VALUES(?,?,?,?)
+    ON CONFLICT(location_id,media_type) DO UPDATE SET
+      allow_original_removal=excluded.allow_original_removal,
+      updated_at=excluded.updated_at
+  `).run(locationId, mediaType, allow ? 1 : 0, now());
+}
+
 export async function handleRepresentationPolicyServer(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/compression/retention') {
     return json(res, 200, { retention:rows() });
@@ -35,6 +45,21 @@ export async function handleRepresentationPolicyServer(req, res, url) {
       `).all(),
       retention:rows()
     });
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/compression/storage-policy') {
+    const body = await readJson(req, 64 * 1024);
+    const locationId = String(body.locationId || '').trim().slice(0, 240);
+    const mediaType = ['image','video'].includes(String(body.mediaType || '')) ? String(body.mediaType) : '';
+    const representation = ['original','compact'].includes(String(body.representation || '')) ? String(body.representation) : '';
+    if (!locationId || !mediaType || !representation) return json(res, 400, { error:'Location, media type, and representation are required' });
+    db.prepare(`INSERT INTO representation_policies(location_id,media_type,representation,updated_at) VALUES(?,?,?,?)
+      ON CONFLICT(location_id,media_type) DO UPDATE SET representation=excluded.representation,updated_at=excluded.updated_at`)
+      .run(locationId, mediaType, representation, now());
+    // Returning to Original is always conservative: any prior deletion opt-in is
+    // revoked immediately rather than waiting for a second UI request.
+    if (representation === 'original') setRetention(locationId, mediaType, false);
+    return json(res, 200, { ok:true, representation });
   }
 
   if (req.method === 'POST' && url.pathname === '/api/compression/retention') {
@@ -57,13 +82,7 @@ export async function handleRepresentationPolicyServer(req, res, url) {
       }
     }
 
-    db.prepare(`
-      INSERT INTO representation_retention(location_id,media_type,allow_original_removal,updated_at)
-      VALUES(?,?,?,?)
-      ON CONFLICT(location_id,media_type) DO UPDATE SET
-        allow_original_removal=excluded.allow_original_removal,
-        updated_at=excluded.updated_at
-    `).run(locationId, mediaType, allow ? 1 : 0, now());
+    setRetention(locationId, mediaType, allow);
     return json(res, 200, { ok:true, allowOriginalRemoval:allow });
   }
 
