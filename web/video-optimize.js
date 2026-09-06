@@ -57,7 +57,7 @@ document.head.append(style);
 const trigger = document.createElement('button');
 trigger.type = 'button';
 trigger.className = 'viewer-optimize-trigger viewer-action video-optimize-trigger';
-trigger.textContent = 'Compress';
+trigger.textContent = 'Squish';
 trigger.hidden = true;
 if (actions) {
   const imageButton = actions.querySelector('.viewer-optimize-trigger');
@@ -79,14 +79,14 @@ layer.innerHTML = `
     <i class="video-optimize-divider" data-d><span class="video-optimize-divider-handle" aria-hidden="true"><span class="video-optimize-divider-left"></span><span class="video-optimize-divider-right"></span></span></i>
   </div>
   <div class="video-optimize-card video-optimize-card-left">
-    <button class="video-optimize-close" data-close-left aria-label="Close compression">×</button>
+    <button class="video-optimize-close" data-close-left aria-label="Close Squish">×</button>
     <div class="video-optimize-result">
       <div class="video-optimize-line"><strong class="video-optimize-saving">0%</strong><span class="video-optimize-size" data-source-size>Original</span></div>
-      <div class="video-optimize-status" data-source-status>Uncompressed source</div>
+      <div class="video-optimize-status" data-source-status>Original source</div>
     </div>
   </div>
   <div class="video-optimize-card video-optimize-card-right" data-controls>
-    <button class="video-optimize-close" data-close-right aria-label="Close compression">×</button>
+    <button class="video-optimize-close" data-close-right aria-label="Close Squish">×</button>
     <div class="video-optimize-result">
       <div class="video-optimize-line"><strong class="video-optimize-saving" data-save>—</strong><span class="video-optimize-size" data-size>Preparing…</span></div>
       <div class="video-optimize-status" data-status>Starting AV1 preview…</div>
@@ -98,8 +98,8 @@ layer.innerHTML = `
     <div class="video-optimize-section"><div class="video-optimize-head"><span>Frame rate</span><output data-fps-label>Original</output></div><div class="video-optimize-choices" data-fps><button class="video-optimize-choice active" data-value="0">Original</button><button class="video-optimize-choice" data-value="60">60 fps</button><button class="video-optimize-choice" data-value="30">30 fps</button></div></div>
     <div class="video-optimize-section"><div class="video-optimize-head"><span>Quality</span><output data-q-label>72</output></div><input data-q type="range" min="1" max="100" value="72"></div>
     <div class="video-optimize-section"><div class="video-optimize-head"><span>Effort</span><output data-e-label>7 / 9</output></div><input data-e type="range" min="0" max="9" value="7"></div>
-    <div class="video-optimize-section"><div class="video-optimize-head"><span>Sample</span><output data-s-label>0:00</output></div><input data-s type="range" min="0" max="1" step="0.5" value="0"><div class="video-optimize-note">Encodes about 6 seconds around this point. Preview playback loops automatically.</div></div>
-    <div class="video-optimize-actions"><button class="video-optimize-keep" data-keep disabled>Keep copy</button><button class="video-optimize-replace" data-replace disabled>Replace original</button></div>
+    <div class="video-optimize-section"><div class="video-optimize-head"><span>Sample</span><output data-s-label>0:00</output></div><input data-s type="range" min="0" max="1" step="0.5" value="0"></div>
+    <div class="video-optimize-actions" hidden><button class="video-optimize-keep" data-keep disabled>Keep copy</button><button class="video-optimize-replace" data-replace disabled>Replace original</button></div>
   </div>`;
 viewer?.append(layer);
 
@@ -358,7 +358,7 @@ function fail(message) {
   progress.hidden = true;
   save.textContent = '—';
   size.textContent = 'Error';
-  status.textContent = message || 'Video compression failed';
+  status.textContent = message || 'Could not squish this video';
   keep.disabled = true;
   replace.disabled = true;
   setPlaying(false);
@@ -381,7 +381,7 @@ function consume(data, requestSerial) {
 
   if (data.width && data.height) {
     sourceSize.textContent = bytes(data.sourceSize);
-    sourceStatus.textContent = ['Uncompressed source', `${Number(data.width).toLocaleString()}×${Number(data.height).toLocaleString()}`, data.fps ? `${Number(data.fps).toFixed(data.fps % 1 ? 1 : 0)} fps` : '', data.duration ? clock(data.duration) : ''].filter(Boolean).join(' · ');
+    sourceStatus.textContent = ['Original source', `${Number(data.width).toLocaleString()}×${Number(data.height).toLocaleString()}`, data.fps ? `${Number(data.fps).toFixed(data.fps % 1 ? 1 : 0)} fps` : '', data.duration ? clock(data.duration) : ''].filter(Boolean).join(' · ');
   }
 
   if (data.preview && data.status !== 'committing') {
@@ -464,7 +464,7 @@ async function startPreview(at = Number(sample.value) || sourceState?.time || 0)
 
 async function commit(mode) {
   if (committing || session?.status !== 'ready') return;
-  if (mode === 'replace' && !confirm(`Replace ${session.filename} with the approved AV1 WebM?\n\nMochimono will encode the full video with these exact settings, verify it, then replace the original.`)) return;
+  if (mode === 'replace' && !confirm(`Replace ${session.filename} with the approved Squished AV1 WebM?\n\nMochimono will encode the full video with these exact settings, verify it, then replace the original.`)) return;
   committing = true;
   keep.disabled = replace.disabled = true;
   progress.hidden = false;
@@ -531,7 +531,7 @@ function openOptimizer() {
   sample.value = sourceState.time;
   sampleLabel.textContent = clock(sample.value);
   sourceSize.textContent = 'Original';
-  sourceStatus.textContent = 'Uncompressed source';
+  sourceStatus.textContent = 'Original source';
   save.textContent = '—';
   size.textContent = 'Preparing…';
   status.textContent = 'Starting AV1 preview…';
