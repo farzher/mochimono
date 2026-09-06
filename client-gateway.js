@@ -40,7 +40,7 @@ async function serveLibrary(res, pathname) {
         @media(max-width:700px){html.client-library .shell{padding-top:58px!important}}
       </style></head>`)
       .replace('</body>', '<script type="module" src="/files/client-drop.js"></script></body>');
-    res.writeHead(200, { 'content-type':'text/html; charset=utf-8', 'content-length':Buffer.byteLength(html), 'cache-control':'no-cache' });
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': Buffer.byteLength(html), 'cache-control': 'no-cache' });
     res.end(html);
     return true;
   }
@@ -51,7 +51,7 @@ async function serveLibrary(res, pathname) {
   try {
     const info = await stat(path);
     if (!info.isFile()) return false;
-    res.writeHead(200, { 'content-type':staticType(path), 'content-length':info.size, 'cache-control':'no-cache' });
+    res.writeHead(200, { 'content-type': staticType(path), 'content-length': info.size, 'cache-control': 'no-cache' });
     createReadStream(path).pipe(res);
     return true;
   } catch { return false; }
@@ -62,32 +62,34 @@ async function login(req, res) {
   const server = String(body.server || '').trim().replace(/\/$/, '');
   const username = String(body.username || '');
   const password = String(body.password || '');
-  if (!server || !username || !password) return json(res, 400, { error:'Server, username, and password are required' });
+  if (!server || !username || !password) return json(res, 400, { error: 'Server, username, and password are required' });
   const response = await fetch(`${server}/api/auth/login`, {
-    method:'POST',
-    headers:{ 'content-type':'application/json' },
-    body:JSON.stringify({ username, password, device:String(body.device || 'Mochimono Client') })
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ username, password, device: String(body.device || 'Mochimono Client') })
   });
   const data = await response.json().catch(() => ({}));
-  return json(res, response.status, response.ok ? { token:data.token, username:data.username } : { error:data.error || 'Login failed' });
+  return json(res, response.status, response.ok ? { token: data.token, username: data.username } : { error: data.error || 'Login failed' });
 }
 
 async function serverThumbnails(hashes) {
-  const empty = () => ({ ready:new Map(), missing:new Map() });
+  const empty = () => ({ ready: new Map(), missing: new Map() });
   if (!settings.token || !hashes.length) return empty();
   try {
     const response = await fetch(`${settings.server}/api/thumbs/check`, {
-      method:'POST',
-      headers:{ authorization:`Bearer ${settings.token}`, 'content-type':'application/json' },
-      body:JSON.stringify({ hashes })
+      method: 'POST',
+      headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ hashes })
     });
     if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
     const data = await response.json();
     return {
-      ready:new Map((data.thumbnails || []).map(item => [String(item.hash), item])),
-      missing:new Map((data.missing || []).map(item => [String(item.hash), item]))
+      ready: new Map((data.thumbnails || []).map(item => [String(item.hash), item])),
+      missing: new Map((data.missing || []).map(item => [String(item.hash), item]))
     };
-  } catch { return empty(); }
+  } catch {
+    return empty();
+  }
 }
 
 function queueBackupThumbnails(hashes, background) {
@@ -100,7 +102,7 @@ function queueBackupThumbnails(hashes, background) {
 
 async function checkThumbnails(req, res) {
   const body = await readJson(req, 256 * 1024);
-  if (!Array.isArray(body.hashes) || body.hashes.length > 500) return json(res, 400, { error:'hashes must be an array of at most 500 items' });
+  if (!Array.isArray(body.hashes) || body.hashes.length > 500) return json(res, 400, { error: 'hashes must be an array of at most 500 items' });
   const background = body.background === true;
   const hashes = [...new Set(body.hashes.map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
   const ready = new Map();
@@ -115,7 +117,7 @@ async function checkThumbnails(req, res) {
     if (ready.has(hash)) continue;
     const candidate = locals.get(hash);
     if (!candidate || providerThumbnailFailure(hash)) continue;
-    queueProviderThumbnail({ hash, filename:candidate.filename, mime:candidate.mime, candidate }, { background });
+    queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
     queuedLocal.add(hash);
   }
 
@@ -133,7 +135,7 @@ async function checkThumbnails(req, res) {
 
     if (queuedLocal.has(hash) && !providerFailure) continue;
     if (candidate && !providerFailure) {
-      queueProviderThumbnail({ hash, filename:candidate.filename, mime:candidate.mime, candidate }, { background });
+      queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
       continue;
     }
     if (serverFile && !remoteFailure) {
@@ -148,11 +150,11 @@ async function checkThumbnails(req, res) {
   queueBackupThumbnails(unresolved, background);
 
   json(res, 200, {
-    thumbnails:[...ready.values()].map(item => ({
-      hash:item.hash, width:Number(item.width) || 0, height:Number(item.height) || 0,
-      duration:item.duration == null ? null : Number(item.duration)
+    thumbnails: [...ready.values()].map(item => ({
+      hash: item.hash, width: Number(item.width) || 0, height: Number(item.height) || 0,
+      duration: item.duration == null ? null : Number(item.duration)
     })),
-    failures:[...failures.values()]
+    failures: [...failures.values()]
   });
 }
 
@@ -163,13 +165,16 @@ async function serveLocalObject(req, res, candidate) {
   if (!info.isFile() || (candidate.size && Number(info.size) !== Number(candidate.size))) return false;
 
   const headers = {
-    'content-type':candidate.mime || 'application/octet-stream',
-    'accept-ranges':'bytes',
-    'cache-control':'private, max-age=31536000, immutable'
+    'content-type': candidate.mime || 'application/octet-stream',
+    'accept-ranges': 'bytes',
+    // /api/objects is content-addressed by SHA-256. A successful response for a
+    // hash is immutable, so let the browser keep large local originals instead
+    // of rereading/redecoding them every time the viewer returns to that file.
+    'cache-control': 'private, max-age=31536000, immutable'
   };
   const range = String(req.headers.range || '');
   if (!range) {
-    res.writeHead(200, { ...headers, 'content-length':info.size });
+    res.writeHead(200, { ...headers, 'content-length': info.size });
     if (req.method === 'HEAD') { res.end(); return true; }
     const source = createReadStream(candidate.path);
     try { await pipeline(source, res); } catch {}
@@ -178,7 +183,7 @@ async function serveLocalObject(req, res, candidate) {
 
   const match = /^bytes=(\d*)-(\d*)$/.exec(range);
   if (!match) {
-    res.writeHead(416, { 'content-range':`bytes */${info.size}` });
+    res.writeHead(416, { 'content-range': `bytes */${info.size}` });
     res.end();
     return true;
   }
@@ -189,15 +194,15 @@ async function serveLocalObject(req, res, candidate) {
     end = info.size - 1;
   }
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= info.size) {
-    res.writeHead(416, { 'content-range':`bytes */${info.size}` });
+    res.writeHead(416, { 'content-range': `bytes */${info.size}` });
     res.end();
     return true;
   }
   end = Math.min(end, info.size - 1);
   res.writeHead(206, {
     ...headers,
-    'content-range':`bytes ${start}-${end}/${info.size}`,
-    'content-length':end - start + 1
+    'content-range': `bytes ${start}-${end}/${info.size}`,
+    'content-length': end - start + 1
   });
   if (req.method === 'HEAD') { res.end(); return true; }
   const source = createReadStream(candidate.path, { start, end });
@@ -221,10 +226,13 @@ function configuredFolder(path) {
 function openNativePath(path, selectFile = false) {
   const target = resolve(String(path || ''));
   let child;
-  const options = { detached:true, stdio:'ignore', windowsHide:false };
+  const options = { detached: true, stdio: 'ignore', windowsHide: false };
   if (platform() === 'win32') {
+    // Explorer parses /select itself. Node's normal Windows argv quoting can
+    // turn a path containing spaces into an argument Explorer silently ignores,
+    // which opens the generic home folder instead of selecting the file.
     child = selectFile
-      ? spawn('explorer.exe', [`/select,"${target}"`], { ...options, windowsVerbatimArguments:true })
+      ? spawn('explorer.exe', [`/select,"${target}"`], { ...options, windowsVerbatimArguments: true })
       : spawn('explorer.exe', [target], options);
   } else if (platform() === 'darwin') {
     child = spawn('open', selectFile ? ['-R', target] : [target], options);
@@ -241,25 +249,25 @@ function openNativePath(path, selectFile = false) {
 }
 
 async function proxyApi(req, res, url) {
-  if (!settings.token) return json(res, 503, { error:'Mochimono Server is offline or not connected' });
-  const headers = { authorization:`Bearer ${settings.token}` };
+  if (!settings.token) return json(res, 503, { error: 'Mochimono Server is offline or not connected' });
+  const headers = { authorization: `Bearer ${settings.token}` };
   for (const name of ['content-type','content-length','range','if-none-match','if-modified-since','x-mochimono-mime','x-mochimono-thumb-version','x-mochimono-width','x-mochimono-height','x-mochimono-duration','x-mochimono-source-mime']) {
     if (req.headers[name] != null) headers[name] = req.headers[name];
   }
-  const body = ['GET','HEAD'].includes(req.method) ? undefined : req;
+  const body = ['GET', 'HEAD'].includes(req.method) ? undefined : req;
   const controller = new AbortController();
   let response;
   try {
     response = await fetch(`${settings.server}${url.pathname}${url.search}`, {
-      method:req.method,
+      method: req.method,
       headers,
       body,
-      duplex:body ? 'half' : undefined,
-      redirect:'manual',
-      signal:controller.signal
+      duplex: body ? 'half' : undefined,
+      redirect: 'manual',
+      signal: controller.signal
     });
   } catch {
-    if (!res.headersSent) json(res, 503, { error:'Mochimono Server is offline' });
+    if (!res.headersSent) json(res, 503, { error: 'Mochimono Server is offline' });
     return;
   }
 
@@ -294,7 +302,7 @@ async function proxyApi(req, res, url) {
 
 export async function handleClientGateway(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/health') {
-    json(res, 200, { ok:true });
+    json(res, 200, { ok: true });
     return true;
   }
   if (req.method === 'POST' && url.pathname === '/api/client/login') {
@@ -303,7 +311,7 @@ export async function handleClientGateway(req, res, url) {
   }
   if (req.method === 'GET' && url.pathname === '/api/client/locations') {
     const hash = String(url.searchParams.get('hash') || '');
-    if (hash && !/^[a-f0-9]{64}$/.test(hash)) json(res, 400, { error:'Invalid SHA-256 hash' });
+    if (hash && !/^[a-f0-9]{64}$/.test(hash)) json(res, 400, { error: 'Invalid SHA-256 hash' });
     else json(res, 200, localLocations(hash));
     return true;
   }
@@ -316,17 +324,17 @@ export async function handleClientGateway(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/reveal-file') {
     const body = await readJson(req, 32 * 1024);
     const hash = String(body.hash || '');
-    if (!/^[a-f0-9]{64}$/.test(hash)) json(res, 400, { error:'Invalid file' });
+    if (!/^[a-f0-9]{64}$/.test(hash)) json(res, 400, { error: 'Invalid file' });
     else {
       const candidate = localCandidate(hash);
       const info = candidate ? await stat(candidate.path).catch(() => null) : null;
-      if (!candidate || !info?.isFile()) json(res, 404, { error:'No local copy is currently available' });
+      if (!candidate || !info?.isFile()) json(res, 404, { error: 'No local copy is currently available' });
       else {
         try {
           await openNativePath(candidate.path, true);
-          json(res, 200, { ok:true, path:candidate.path });
+          json(res, 200, { ok: true, path: candidate.path });
         } catch (error) {
-          json(res, 500, { error:`Could not open file browser: ${error?.message || error}` });
+          json(res, 500, { error: `Could not open file browser: ${error?.message || error}` });
         }
       }
     }
@@ -336,13 +344,13 @@ export async function handleClientGateway(req, res, url) {
     const body = await readJson(req, 32 * 1024);
     const path = configuredFolder(body.path);
     const info = path ? await stat(path).catch(() => null) : null;
-    if (!path || !info?.isDirectory()) json(res, 404, { error:'Folder is not available' });
+    if (!path || !info?.isDirectory()) json(res, 404, { error: 'Folder is not available' });
     else {
       try {
         await openNativePath(path, false);
-        json(res, 200, { ok:true, path });
+        json(res, 200, { ok: true, path });
       } catch (error) {
-        json(res, 500, { error:`Could not open folder: ${error?.message || error}` });
+        json(res, 500, { error: `Could not open folder: ${error?.message || error}` });
       }
     }
     return true;
@@ -360,10 +368,13 @@ export async function handleClientGateway(req, res, url) {
 
   const thumb = /^\/api\/thumbs\/([a-f0-9]{64})$/.exec(url.pathname);
   if (thumb && (req.method === 'GET' || req.method === 'HEAD')) {
+    // Serve an existing provider preview immediately. Missing provider generation
+    // is queued by the batched /api/thumbs/check path; otherwise fall through to
+    // the server thumbnail for the same content hash.
     if (await serveProviderThumbnail(req, res, thumb[1])) return true;
   }
   if (url.pathname === '/files' || url.pathname.startsWith('/files/')) {
-    if (!await serveLibrary(res, url.pathname)) json(res, 404, { error:'Not found' });
+    if (!await serveLibrary(res, url.pathname)) json(res, 404, { error: 'Not found' });
     return true;
   }
   if (url.pathname.startsWith('/api/')) {
