@@ -157,37 +157,80 @@ export function getDrive(id) {
   return db.prepare('SELECT * FROM drives WHERE id = ?').get(id);
 }
 
-function compactOnlyTypes(driveId) {
+function representationModes(driveId) {
   const locationId = `backup:${driveId}`;
+  const result = { image:'original', video:'original' };
   const rows = db.prepare(`
-    SELECT p.media_type AS mediaType
+    SELECT p.media_type AS mediaType,p.representation,
+           COALESCE(r.allow_original_removal,0) AS allowOriginalRemoval
     FROM representation_policies p
-    JOIN representation_retention r ON r.location_id=p.location_id AND r.media_type=p.media_type
-    WHERE p.location_id=? AND p.representation='compact' AND r.allow_original_removal=1
+    LEFT JOIN representation_retention r ON r.location_id=p.location_id AND r.media_type=p.media_type
+    WHERE p.location_id=?
   `).all(locationId);
-  return new Set(rows.map(row => row.mediaType));
+  for (const row of rows) {
+    if (!['image','video'].includes(row.mediaType) || row.representation !== 'compact') continue;
+    result[row.mediaType] = row.allowOriginalRemoval ? 'compact-only' : 'compact';
+  }
+  return result;
+}
+
+function compactOnlyTypes(driveId) {
+  const modes = representationModes(driveId);
+  return new Set(['image','video'].filter(type => modes[type] === 'compact-only'));
 }
 
 export function driveCoverage(row) {
   const { policy, filter } = resolvePolicy(parseDrivePolicy(row), 'o');
+  const modes = representationModes(row.id);
+  const locationId = `backup:${row.id}`;
+  const modeArgs = [modes.image, modes.video, modes.image, modes.video];
   const desired = db.prepare(`
-    SELECT COUNT(*) AS count, COALESCE(SUM(o.size), 0) AS bytes
-    FROM objects o WHERE o.state = 'active' AND ${filter.sql}
-  `).get(...filter.params);
-  const protectedRow = db.prepare(`
     SELECT COUNT(*) AS count,
-           COALESCE(SUM(o.size), 0) AS bytes,
-           COALESCE(SUM(CASE WHEN r.verified_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS verifiedCount,
-           MIN(r.verified_at) AS oldestVerifiedAt,
-           MAX(r.verified_at) AS lastVerifiedAt
+           COALESCE(SUM(CASE
+             WHEN o.mime LIKE 'image/%' AND ?='compact-only' AND rd.size IS NOT NULL THEN rd.size
+             WHEN o.mime LIKE 'video/%' AND ?='compact-only' AND rd.size IS NOT NULL THEN rd.size
+             WHEN o.mime LIKE 'image/%' AND ?='compact' AND rd.size IS NOT NULL THEN o.size + rd.size
+             WHEN o.mime LIKE 'video/%' AND ?='compact' AND rd.size IS NOT NULL THEN o.size + rd.size
+             ELSE o.size END),0) AS bytes
     FROM objects o
-    JOIN replicas r ON r.object_hash = o.hash AND r.drive_id = ?
-    WHERE o.state = 'active' AND ${filter.sql}
-  `).get(row.id, ...filter.params);
+    LEFT JOIN renditions rd ON rd.original_hash=o.hash
+    WHERE o.state='active' AND ${filter.sql}
+  `).get(...modeArgs, ...filter.params);
+
+  const protectedRow = db.prepare(`
+    SELECT
+      COALESCE(SUM(CASE
+        WHEN o.mime LIKE 'image/%' AND ?='compact-only' AND rd.size IS NOT NULL THEN CASE WHEN cp.original_hash IS NOT NULL THEN 1 ELSE 0 END
+        WHEN o.mime LIKE 'video/%' AND ?='compact-only' AND rd.size IS NOT NULL THEN CASE WHEN cp.original_hash IS NOT NULL THEN 1 ELSE 0 END
+        WHEN o.mime LIKE 'image/%' AND ?='compact' AND rd.size IS NOT NULL THEN CASE WHEN rp.object_hash IS NOT NULL AND cp.original_hash IS NOT NULL THEN 1 ELSE 0 END
+        WHEN o.mime LIKE 'video/%' AND ?='compact' AND rd.size IS NOT NULL THEN CASE WHEN rp.object_hash IS NOT NULL AND cp.original_hash IS NOT NULL THEN 1 ELSE 0 END
+        ELSE CASE WHEN rp.object_hash IS NOT NULL THEN 1 ELSE 0 END END),0) AS count,
+      COALESCE(SUM(CASE
+        WHEN o.mime LIKE 'image/%' AND ?='compact-only' AND rd.size IS NOT NULL THEN CASE WHEN cp.original_hash IS NOT NULL THEN rd.size ELSE 0 END
+        WHEN o.mime LIKE 'video/%' AND ?='compact-only' AND rd.size IS NOT NULL THEN CASE WHEN cp.original_hash IS NOT NULL THEN rd.size ELSE 0 END
+        WHEN o.mime LIKE 'image/%' AND ?='compact' AND rd.size IS NOT NULL THEN (CASE WHEN rp.object_hash IS NOT NULL THEN o.size ELSE 0 END) + (CASE WHEN cp.original_hash IS NOT NULL THEN rd.size ELSE 0 END)
+        WHEN o.mime LIKE 'video/%' AND ?='compact' AND rd.size IS NOT NULL THEN (CASE WHEN rp.object_hash IS NOT NULL THEN o.size ELSE 0 END) + (CASE WHEN cp.original_hash IS NOT NULL THEN rd.size ELSE 0 END)
+        ELSE CASE WHEN rp.object_hash IS NOT NULL THEN o.size ELSE 0 END END),0) AS bytes,
+      COALESCE(SUM(CASE
+        WHEN o.mime LIKE 'image/%' AND ?='compact-only' AND rd.size IS NOT NULL THEN CASE WHEN cp.verified_at IS NOT NULL THEN 1 ELSE 0 END
+        WHEN o.mime LIKE 'video/%' AND ?='compact-only' AND rd.size IS NOT NULL THEN CASE WHEN cp.verified_at IS NOT NULL THEN 1 ELSE 0 END
+        WHEN o.mime LIKE 'image/%' AND ?='compact' AND rd.size IS NOT NULL THEN CASE WHEN rp.verified_at IS NOT NULL AND cp.verified_at IS NOT NULL THEN 1 ELSE 0 END
+        WHEN o.mime LIKE 'video/%' AND ?='compact' AND rd.size IS NOT NULL THEN CASE WHEN rp.verified_at IS NOT NULL AND cp.verified_at IS NOT NULL THEN 1 ELSE 0 END
+        ELSE CASE WHEN rp.verified_at IS NOT NULL THEN 1 ELSE 0 END END),0) AS verifiedCount,
+      MIN(COALESCE(rp.verified_at,cp.verified_at)) AS oldestVerifiedAt,
+      MAX(COALESCE(cp.verified_at,rp.verified_at)) AS lastVerifiedAt
+    FROM objects o
+    LEFT JOIN renditions rd ON rd.original_hash=o.hash
+    LEFT JOIN replicas rp ON rp.object_hash=o.hash AND rp.drive_id=?
+    LEFT JOIN representation_presence cp ON cp.original_hash=o.hash AND cp.location_id=? AND cp.representation='compact'
+    WHERE o.state='active' AND ${filter.sql}
+  `).get(...modeArgs, ...modeArgs, ...modeArgs, row.id, locationId, ...filter.params);
+
   return {
     id: row.id,
     name: row.name,
     policy,
+    representation: modes,
     lastSeen: row.last_seen,
     desiredCount: Number(desired.count) || 0,
     desiredBytes: Number(desired.bytes) || 0,
