@@ -79,7 +79,7 @@ if (viewer && viewerOpen) {
       const match = [...select.options].find(option => option.textContent.replace(/^★\s*/, '') === existing.presetName);
       if (match) select.value = match.value;
     }
-    if (save) save.textContent = 'Update compact';
+    if (save) save.textContent = 'Update squished';
   }
 
   window.addEventListener('mochimono:optimize-open', () => setTimeout(() => restore().catch(() => {}), 80));
@@ -88,6 +88,6 @@ if (viewer && viewerOpen) {
     const controls = mediaType === 'image' ? imageControls : videoControls;
     const save = controls?.querySelector('.compression-savebar [data-compression-save]');
     if (!mediaType || !save) return;
-    rendition(hash()).then(existing => { save.textContent = existing ? 'Update compact' : 'Save compact'; }).catch(() => {});
+    rendition(hash()).then(existing => { save.textContent = existing ? 'Update squished' : 'Save squished'; }).catch(() => {});
   });
 }
