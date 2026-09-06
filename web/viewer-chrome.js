@@ -85,3 +85,7 @@ if (viewer && stage) {
   window.addEventListener('mochimono:optimize-close', syncChrome);
   syncChrome();
 }
+
+// Load video compression after the existing image compression trigger has been
+// adopted into the viewer action row, so each media type gets one Compress action.
+import('./video-optimize.js').catch(error => console.error('Could not load video compression UI', error));
