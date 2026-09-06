@@ -35,10 +35,24 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
     return `${amount < 10 && unit ? amount.toFixed(1) : Math.round(amount)} ${units[unit]}`;
   };
 
-  async function readRendition(originalHash) {
-    const response = await fetch(`/api/renditions/${encodeURIComponent(originalHash)}`, { cache:'no-store' });
+  async function readJson(path) {
+    const response = await fetch(path, { cache:'no-store' });
     if (!response.ok) return null;
-    return (await response.json()).rendition || null;
+    return response.json().catch(() => null);
+  }
+
+  async function readRendition(originalHash) {
+    const local = await readJson(`/api/renditions/${encodeURIComponent(originalHash)}`);
+    if (local?.rendition) return { ...local.rendition, remote:false };
+    const remote = await readJson(`/api/representations/${encodeURIComponent(originalHash)}/rendition`);
+    return remote?.rendition ? { ...remote.rendition, remote:true } : null;
+  }
+
+  function compactUrl() {
+    if (!rendition || !currentHash) return '';
+    return rendition.remote
+      ? `/api/representations/${encodeURIComponent(currentHash)}/compact?v=${Date.now()}`
+      : `/api/renditions/file?original=${encodeURIComponent(currentHash)}&v=${Date.now()}`;
   }
 
   function setButtons() {
@@ -86,11 +100,11 @@ if (viewer && viewerOpen && viewerMedia && viewerMeta && actions) {
       rememberOriginalImage(image);
       image.removeAttribute('data-full-src');
       image.src = next === 'compact'
-        ? `/api/renditions/file?original=${encodeURIComponent(currentHash)}&v=${Date.now()}`
+        ? compactUrl()
         : originalImageFull || `/api/objects/${encodeURIComponent(currentHash)}`;
     } else if (video) {
       await swapVideo(video, next === 'compact'
-        ? `/api/renditions/file?original=${encodeURIComponent(currentHash)}&v=${Date.now()}`
+        ? compactUrl()
         : `/api/objects/${encodeURIComponent(currentHash)}`);
     }
     viewerMeta.textContent = next === 'compact' ? compactMeta() : originalMeta;
