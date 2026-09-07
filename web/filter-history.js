@@ -3,9 +3,17 @@ const source = document.querySelector('#source');
 const type = document.querySelector('#typeFilter');
 const sort = document.querySelector('#sort');
 const where = document.querySelector('#locationFilter');
+const views = document.querySelector('#views');
 
 let restoring = false;
 let searchEditing = false;
+
+function currentViewFromUrl(url = new URL(location.href)) {
+  const explicit = String(url.searchParams.get('view') || '');
+  if (['grid', 'list', 'folders'].includes(explicit)) return explicit;
+  if (url.searchParams.has('tree')) return 'folders';
+  return 'grid';
+}
 
 function targetUrl() {
   const url = new URL(location.href);
@@ -71,7 +79,12 @@ function restoreFilters() {
       }
     }
 
-    const wantedType = url.searchParams.get('type') || '';
+    // Grid is the visual media browser. An omitted type is therefore not
+    // "All files" in Grid; it means the implicit Media default. Derive this
+    // during URL restoration itself so startup/shell restores cannot reset the
+    // selector after navigation-state has initialized it.
+    const explicitType = url.searchParams.get('type');
+    const wantedType = explicitType == null && currentViewFromUrl(url) === 'grid' ? 'media' : (explicitType || '');
     const safeType = type?.querySelector(`option[value="${CSS.escape(wantedType)}"]`) ? wantedType : '';
     dispatchIfChanged(type, safeType);
 
@@ -89,5 +102,6 @@ function restoreFilters() {
 }
 
 window.addEventListener('popstate', () => queueMicrotask(restoreFilters));
+views?.addEventListener('click', () => queueMicrotask(restoreFilters));
 if (source) new MutationObserver(restoreFilters).observe(source, { childList:true, subtree:true });
 queueMicrotask(restoreFilters);
