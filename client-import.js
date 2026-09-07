@@ -180,12 +180,37 @@ async function finishImport(req, res, url) {
   }
 }
 
+function browserThumbnailPath(hash) {
+  return join(BROWSER_THUMB_DIR, hash.slice(0, 2), `${hash}.webp`);
+}
+
+async function serveBrowserThumbnail(req, res, hash) {
+  const path = browserThumbnailPath(hash);
+  const info = await stat(path).catch(() => null);
+  if (!info?.isFile() || !info.size) return false;
+  const headers = {
+    'content-type':'image/webp',
+    'content-length':info.size,
+    'cache-control':'private, max-age=31536000, immutable',
+    etag:`\"${hash}-provider-thumb-${BROWSER_THUMB_VERSION}\"`
+  };
+  if (req.headers['if-none-match'] === headers.etag) {
+    res.writeHead(304, { etag:headers.etag, 'cache-control':headers['cache-control'] });
+    res.end();
+    return true;
+  }
+  res.writeHead(200, headers);
+  if (req.method === 'HEAD') res.end();
+  else createReadStream(path).pipe(res);
+  return true;
+}
+
 async function saveBrowserThumbnail(req, res, hash) {
   if (!/^[a-f0-9]{64}$/.test(hash)) return json(res, 400, { error:'Invalid SHA-256 hash' });
   const width = Math.max(0, Math.round(Number(req.headers['x-mochimono-width']) || 0));
   const height = Math.max(0, Math.round(Number(req.headers['x-mochimono-height']) || 0));
   const bucket = join(BROWSER_THUMB_DIR, hash.slice(0, 2));
-  const destination = join(bucket, `${hash}.webp`);
+  const destination = browserThumbnailPath(hash);
   const info = join(bucket, `${hash}.json`);
   const temp = join(bucket, `${hash}.${process.pid}.${Date.now()}.tmp.webp`);
   await mkdir(bucket, { recursive:true });
@@ -237,10 +262,14 @@ export async function handleClientImport(req, res, url) {
     await finishImport(req, res, url);
     return true;
   }
-  const thumb = /^\/api\/client\/browser-thumb\/([a-f0-9]{64})$/.exec(url.pathname);
-  if (thumb && req.method === 'PUT') {
-    await saveBrowserThumbnail(req, res, thumb[1]);
+  const browserThumb = /^\/api\/client\/browser-thumb\/([a-f0-9]{64})$/.exec(url.pathname);
+  if (browserThumb && req.method === 'PUT') {
+    await saveBrowserThumbnail(req, res, browserThumb[1]);
     return true;
+  }
+  const thumb = /^\/api\/thumbs\/([a-f0-9]{64})$/.exec(url.pathname);
+  if (thumb && (req.method === 'GET' || req.method === 'HEAD')) {
+    if (await serveBrowserThumbnail(req, res, thumb[1])) return true;
   }
   return false;
 }
