@@ -6,6 +6,7 @@ const serverStorage = document.querySelector('#serverStorage');
 const headerActions = document.querySelector('.client-head-actions');
 const host = location.hostname.includes(':') ? `[${location.hostname}]` : location.hostname;
 const friendOrigin = `http://${host}:8644`;
+const SNAPSHOT_KEY = 'mochimono-storage-location-snapshots-v1';
 
 function openProtectionSettings() {
   const button = document.querySelector('#protectionSettings');
@@ -25,6 +26,23 @@ function formatBytes(number) {
     unit++;
   }
   return `${value < 10 && unit ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+function formatKnownAt(value) {
+  const date = new Date(value || 0);
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toLocaleString(undefined, {
+    year:'numeric', month:'short', day:'numeric', hour:'numeric', minute:'2-digit'
+  });
+}
+
+function newestDate(...values) {
+  let best = 0;
+  for (const value of values) {
+    const time = new Date(value || 0).getTime();
+    if (Number.isFinite(time) && time > best) best = time;
+  }
+  return best ? new Date(best).toISOString() : '';
 }
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -74,12 +92,15 @@ function localLocations(folders, device) {
         capacityBytes:0,
         freeBytes:0,
         mochimonoBytes:0,
-        folderCount:0
+        folderCount:0,
+        lastKnownAt:''
       };
       groups.set(key, group);
     }
     group.folderCount++;
+    // Indexed folder size remains useful even when the physical drive is gone.
     group.mochimonoBytes += Math.max(0, Number(folder.bytes) || 0);
+    group.lastKnownAt = newestDate(group.lastKnownAt, folder.lastIndexed, folder.lastSynced);
     const capacity = Math.max(0, Number(folder.capacityBytes) || 0);
     const free = Math.max(0, Number(folder.freeBytes) || 0);
     if (capacity > 0) {
@@ -105,7 +126,8 @@ function backupLocations(backups) {
     online:Number(backup.totalBytes) > 0,
     capacityBytes:Math.max(0, Number(backup.totalBytes) || 0),
     freeBytes:Math.max(0, Number(backup.freeBytes) || 0),
-    mochimonoBytes:Math.max(0, Number(backup.local?.bytes) || 0)
+    mochimonoBytes:Math.max(0, Number(backup.local?.bytes) || 0),
+    lastKnownAt:newestDate(backup.meta?.lastBackupAt, backup.meta?.lastVerifiedAt, backup.local?.oldestVerification)
   }));
 }
 
@@ -118,8 +140,51 @@ function cloudLocation(state) {
     online:true,
     capacityBytes:Math.max(0, Number(stats.capacityBytes) || 0),
     freeBytes:Math.max(0, Number(stats.freeBytes) || 0),
-    mochimonoBytes:Math.max(0, Number(stats.bytes) || 0)
-  } : { id:'cloud', type:'cloud', name:'Cloud', online:false };
+    mochimonoBytes:Math.max(0, Number(stats.bytes) || 0),
+    lastKnownAt:''
+  } : { id:'cloud', type:'cloud', name:'Cloud', online:false, lastKnownAt:'' };
+}
+
+function loadSnapshots() {
+  try {
+    const value = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || '{}');
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch { return {}; }
+}
+
+function applyLastKnown(locations) {
+  const snapshots = loadSnapshots();
+  const now = new Date().toISOString();
+  let changed = false;
+  const result = locations.map(location => {
+    const cached = snapshots[location.id] || null;
+    if (location.online) {
+      snapshots[location.id] = {
+        capacityBytes:Math.max(0, Number(location.capacityBytes) || 0),
+        freeBytes:Math.max(0, Number(location.freeBytes) || 0),
+        mochimonoBytes:Math.max(0, Number(location.mochimonoBytes) || 0),
+        lastKnownAt:now
+      };
+      changed = true;
+      return { ...location, lastKnownAt:now, stale:false };
+    }
+
+    const indexedUsed = Math.max(0, Number(location.mochimonoBytes) || 0);
+    const useIndexedUsage = location.type === 'local';
+    return {
+      ...location,
+      capacityBytes:Math.max(0, Number(location.capacityBytes) || Number(cached?.capacityBytes) || 0),
+      freeBytes:Math.max(0, Number(location.freeBytes) || Number(cached?.freeBytes) || 0),
+      mochimonoBytes:useIndexedUsage ? indexedUsed : Math.max(indexedUsed, Number(cached?.mochimonoBytes) || 0),
+      lastKnownAt:newestDate(location.lastKnownAt, cached?.lastKnownAt),
+      stale:true,
+      hasLiveSnapshot:Boolean(cached?.lastKnownAt)
+    };
+  });
+  if (changed) {
+    try { localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshots)); } catch {}
+  }
+  return result;
 }
 
 function locationIdentity(location) {
@@ -160,13 +225,14 @@ function makeCapacityUi() {
     .storage-location-list{display:grid;gap:4px;max-height:min(430px,60vh);overflow:auto}
     .storage-location-row{padding:10px;border-radius:9px;background:#111012;border:1px solid transparent}
     .storage-location-row:hover{border-color:#302b30;background:#141215}
-    .storage-location-row.offline{opacity:.58}
+    .storage-location-row.offline{opacity:.78}
     .storage-location-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;min-width:0}
     .storage-location-title{min-width:0}.storage-location-title strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e6ddda;font-size:12px;font-weight:710}
     .storage-location-title span{display:block;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#77706e;font-size:9px;font-weight:560}
     .storage-location-amounts{flex:0 0 auto;color:#a59c99;font-size:10px;font-weight:620;text-align:right;white-space:nowrap}
     .storage-location-amounts .free{color:#d3cac6}
-    .storage-location-offline{color:#8d8381;font-size:10px;font-weight:650}
+    .storage-location-stale{display:block;margin-top:3px;color:#807775;font-size:9px;font-weight:560}
+    .storage-location-offline{color:#a8908b;font-size:10px;font-weight:700}
     @media(max-width:700px){.storage-capacity-overview{width:190px}.storage-capacity-line .stored,.storage-capacity-line .separator{display:none}.storage-capacity-panel{right:-39px}.storage-capacity-overview summary{padding:4px 5px}}
   `;
   document.head.append(style);
@@ -216,22 +282,34 @@ function renderCapacity(details, locations) {
     const label = locationIdentity(primary).title;
     details.title = `${label}: ${formatBytes(numbers.used)} stored by Mochimono · ${formatBytes(numbers.free)} free for more`;
   } else {
-    usedNode.textContent = all.length ? 'Storage unavailable' : 'Storage';
+    usedNode.textContent = all.length ? 'Storage offline' : 'Storage';
     separatorNode.textContent = '';
     freeNode.textContent = '';
     bar.style.width = '0';
-    details.title = all.length ? 'Storage locations are currently unavailable' : 'Storage';
+    details.title = all.length ? 'Storage locations are currently offline; last known information is shown in the breakdown' : 'Storage';
   }
 
   count.textContent = `${online.length} online${offline ? ` · ${offline} offline` : ''}`;
   list.innerHTML = all.length ? all.map(location => {
     const identity = locationIdentity(location);
+    const numbers = storageNumbers(location);
+    const knownAt = formatKnownAt(location.lastKnownAt);
     const title = location.error || location.path || location.name || '';
     const identityHtml = `<div class="storage-location-title"><strong>${esc(identity.title)}</strong>${identity.meta ? `<span>${esc(identity.meta)}</span>` : ''}</div>`;
+
     if (!location.online) {
-      return `<div class="storage-location-row offline" title="${esc(title)}"><div class="storage-location-head">${identityHtml}<span class="storage-location-offline">Unavailable</span></div></div>`;
+      const amountLines = [];
+      if (numbers.used || location.type === 'local') amountLines.push(`<span>${formatBytes(numbers.used)} stored</span>`);
+      if (numbers.free) amountLines.push(`<span class="free">${formatBytes(numbers.free)} free</span>`);
+      else if (numbers.used || location.type === 'local') amountLines.push('<span class="free">Free space unknown</span>');
+      const stale = knownAt ? `Offline · last seen ${knownAt}` : 'Offline · last seen unknown';
+      const amounts = amountLines.length
+        ? `<div class="storage-location-amounts">${amountLines.join('<br>')}<span class="storage-location-stale">${esc(stale)}</span></div>`
+        : `<div class="storage-location-amounts"><span class="storage-location-offline">Offline</span><span class="storage-location-stale">${esc(knownAt ? `Last seen ${knownAt}` : 'No previous live snapshot')}</span></div>`;
+      const detail = [title, numbers.used ? `${formatBytes(numbers.used)} last known/indexed Mochimono data` : '', numbers.free ? `${formatBytes(numbers.free)} free at last live check` : '', stale].filter(Boolean).join(' · ');
+      return `<div class="storage-location-row offline" title="${esc(detail)}"><div class="storage-location-head">${identityHtml}${amounts}</div>${numbers.usable ? `<i class="storage-location-bar"><b style="width:${numbers.used ? `max(2px,${numbers.percent}%)` : '0'}"></b></i>` : ''}</div>`;
     }
-    const numbers = storageNumbers(location);
+
     const detail = numbers.capacity
       ? `${formatBytes(numbers.used)} stored by Mochimono · ${formatBytes(numbers.free)} free · ${formatBytes(numbers.capacity)} physical capacity`
       : `${formatBytes(numbers.used)} stored by Mochimono · ${formatBytes(numbers.free)} free`;
@@ -260,12 +338,12 @@ async function refreshCapacity(details) {
     ? (friendResult.value?.locations || []).filter(location => location.type === 'friend')
     : [];
 
-  const locations = [
+  const locations = applyLastKnown([
     cloudLocation(state),
     ...localLocations(folders, state?.settings?.device),
     ...backupLocations(backups),
     ...friendLocations
-  ];
+  ]);
   renderCapacity(details, locations);
 }
 
