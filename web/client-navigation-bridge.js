@@ -1,5 +1,5 @@
 if (location.pathname.startsWith('/files') && window.parent !== window) {
-  const NAV_PARAMS = ['view', 'tree', 'source', 'path', 'collection', 'file'];
+  const NAV_PARAMS = ['view', 'tree', 'source', 'path', 'collection', 'file', 'q', 'origin', 'type', 'sort', 'where'];
 
   function currentParams() {
     const url = new URL(location.href);
@@ -12,10 +12,7 @@ if (location.pathname.startsWith('/files') && window.parent !== window) {
   }
 
   function reportNavigation() {
-    window.parent.postMessage({
-      type: 'mochimono-navigation-state',
-      params: currentParams()
-    }, location.origin);
+    window.parent.postMessage({ type: 'mochimono-navigation-state', params: currentParams() }, location.origin);
   }
 
   for (const method of ['pushState', 'replaceState']) {
@@ -42,8 +39,6 @@ if (location.pathname.startsWith('/files') && window.parent !== window) {
     }
 
     if (url.href !== location.href) history.replaceState(history.state, '', url);
-    // Existing modules already know how to restore themselves on popstate. Reuse
-    // that path for shell Back/Forward instead of maintaining a second router.
     window.dispatchEvent(new PopStateEvent('popstate', { state: history.state }));
   });
 
