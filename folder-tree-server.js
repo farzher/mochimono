@@ -1,4 +1,5 @@
 import { db, json, catalogVersion, readJson } from './lib/server-context.js';
+import { handleSourceScopeServer } from './source-scope-server.js';
 
 let cachedVersion = '';
 let cachedNodes = null;
@@ -139,6 +140,8 @@ function importRoots() {
 const sourcePathMatch = pathname => /^\/api\/imports\/(\d+)\/source-paths(?:\/remove)?$/.exec(pathname);
 
 export async function handleFolderTreeServer(req, res, url) {
+  if (await handleSourceScopeServer(req, res, url)) return true;
+
   if (req.method === 'GET' && url.pathname === '/api/folder-tree') {
     json(res, 200, folderTree(url));
     return true;
