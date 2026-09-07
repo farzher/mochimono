@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, parse, resolve } from 'node:path';
 import { Transform } from 'node:stream';
@@ -10,6 +10,9 @@ import { localFolderTree } from './lib/local-folder-tree.js';
 import { mimeFor } from './lib/mime.js';
 
 const TMP_DIR = join(CONFIG_DIR, 'tmp');
+const BROWSER_THUMB_DIR = join(homedir(), '.mochimono', 'provider-thumbs');
+const BROWSER_THUMB_VERSION = 3;
+const MAX_BROWSER_THUMB_BYTES = 8 * 1024 * 1024;
 const sessions = new Map();
 
 function cleanRelative(value) {
@@ -59,22 +62,25 @@ async function importIdentity(body) {
 
 async function startImport(req, res) {
   const body = await readJson(req, 128 * 1024);
-  const importId = await importIdentity(body);
+  const localOnly = body.browser === true && body.cloud !== true;
+  const importId = localOnly ? 0 : await importIdentity(body);
   const label = String(body.label || 'Drop').slice(0, 200);
   const rootPath = String(body.rootPath || label).slice(0, 2000);
   const scope = String(body.scope || '').toLowerCase() === 'all' ? 'all' : 'media';
   const id = randomUUID();
-  sessions.set(id, { importId, createdAt: Date.now(), label, seen:new Set() });
+  sessions.set(id, { importId, localOnly, createdAt: Date.now(), label, seen:new Set() });
 
-  await api('/api/import-roots', {
-    method: 'POST',
-    body: { roots: [{ importId, deviceName: settings.device, rootPath }] }
-  }).catch(() => {});
-  if (body.browser === true || body.scope !== undefined) {
-    await api('/api/import-scope', { method: 'POST', body: { importId, scope } }).catch(() => {});
+  if (!localOnly) {
+    await api('/api/import-roots', {
+      method: 'POST',
+      body: { roots: [{ importId, deviceName: settings.device, rootPath }] }
+    }).catch(() => {});
+    if (body.browser === true || body.scope !== undefined) {
+      await api('/api/import-scope', { method: 'POST', body: { importId, scope } }).catch(() => {});
+    }
   }
 
-  return json(res, 200, { session: id, importId, scope });
+  return json(res, 200, { session: id, importId, scope, localOnly });
 }
 
 async function importFile(req, res, url) {
@@ -100,6 +106,15 @@ async function importFile(req, res, url) {
   try {
     await pipeline(req, meter, createWriteStream(temp, { flags: 'wx' }));
     const hash = digest.digest('hex');
+    session.seen.add(relative);
+
+    if (session.localOnly) {
+      return json(res, 200, {
+        hash, name, path:relative, size, mime, mtime,
+        existing:false, ignored:false, previous:[], localOnly:true
+      });
+    }
+
     const checked = await api('/api/objects/check', { method: 'POST', body: { hashes: [hash] } });
     const missing = (checked.missing || []).includes(hash);
     const ignored = (checked.ignored || []).includes(hash);
@@ -123,9 +138,8 @@ async function importFile(req, res, url) {
         body: { importId: session.importId, sources: [{ hash, path: relative, filename: name, mtime }] }
       });
     }
-    session.seen.add(relative);
 
-    return json(res, 200, { hash, name, path: relative, size, existing: !missing, ignored, previous });
+    return json(res, 200, { hash, name, path: relative, size, mime, mtime, existing: !missing, ignored, previous });
   } finally {
     await rm(temp, { force: true }).catch(() => {});
   }
@@ -145,6 +159,11 @@ async function finishImport(req, res, url) {
   const session = sessions.get(sessionId);
   if (!session) return json(res, 410, { error: 'Import session expired' });
 
+  if (session.localOnly) {
+    sessions.delete(sessionId);
+    return json(res, 200, { ok:true, importId:0, seen:session.seen.size, removed:0, localOnly:true });
+  }
+
   let removed = 0;
   try {
     const current = await api(`/api/imports/${session.importId}/source-paths`);
@@ -158,6 +177,38 @@ async function finishImport(req, res, url) {
     json(res, 200, { ok:true, importId:session.importId, seen:session.seen.size, removed });
   } catch (error) {
     json(res, error.status || 500, { error:error.message || 'Could not finish folder sync' });
+  }
+}
+
+async function saveBrowserThumbnail(req, res, hash) {
+  if (!/^[a-f0-9]{64}$/.test(hash)) return json(res, 400, { error:'Invalid SHA-256 hash' });
+  const width = Math.max(0, Math.round(Number(req.headers['x-mochimono-width']) || 0));
+  const height = Math.max(0, Math.round(Number(req.headers['x-mochimono-height']) || 0));
+  const bucket = join(BROWSER_THUMB_DIR, hash.slice(0, 2));
+  const destination = join(bucket, `${hash}.webp`);
+  const info = join(bucket, `${hash}.json`);
+  const temp = join(bucket, `${hash}.${process.pid}.${Date.now()}.tmp.webp`);
+  await mkdir(bucket, { recursive:true });
+
+  let size = 0;
+  const limit = new Transform({
+    transform(chunk, encoding, callback) {
+      size += chunk.length;
+      if (size > MAX_BROWSER_THUMB_BYTES) return callback(Object.assign(new Error('Thumbnail is too large'), { status:413 }));
+      callback(null, chunk);
+    }
+  });
+
+  try {
+    await pipeline(req, limit, createWriteStream(temp, { flags:'wx' }));
+    if (!size) throw Object.assign(new Error('Empty thumbnail'), { status:400 });
+    await rm(destination, { force:true });
+    await rename(temp, destination);
+    await writeFile(info, `${JSON.stringify({ version:BROWSER_THUMB_VERSION, width, height })}\n`);
+    json(res, 201, { ok:true, hash, size, width, height });
+  } catch (error) {
+    await rm(temp, { force:true }).catch(() => {});
+    if (!res.headersSent) json(res, error.status || 500, { error:error.message || 'Could not save thumbnail' });
   }
 }
 
@@ -184,6 +235,11 @@ export async function handleClientImport(req, res, url) {
   }
   if (req.method === 'POST' && url.pathname === '/api/client/import/finish') {
     await finishImport(req, res, url);
+    return true;
+  }
+  const thumb = /^\/api\/client\/browser-thumb\/([a-f0-9]{64})$/.exec(url.pathname);
+  if (thumb && req.method === 'PUT') {
+    await saveBrowserThumbnail(req, res, thumb[1]);
     return true;
   }
   return false;
