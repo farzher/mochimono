@@ -1,5 +1,6 @@
 import { db, json, now, readJson, catalogVersion } from './lib/server-context.js';
 import { validHash } from './lib/store.js';
+import { handleFolderTreeServer } from './folder-tree-server.js';
 
 function catalogPage(url) {
   const after = String(url.searchParams.get('after') || '');
@@ -156,6 +157,7 @@ function cleanDimension(value) {
 }
 
 export async function handleMetadata(req, res, url) {
+  if (await handleFolderTreeServer(req, res, url)) return true;
   const detailsMatch = /^\/api\/files\/([a-f0-9]{64})\/details$/.exec(url.pathname);
   const isRoute = url.pathname === '/api/catalog' ||
     url.pathname === '/api/catalog/version' ||
