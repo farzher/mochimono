@@ -19,6 +19,14 @@ if (location.pathname.startsWith('/files')) {
     window.parent.postMessage({ type: 'mochimono-library-scroll', y }, location.origin);
   };
 
+  setTimeout(() => {
+    const cloudChoice = document.querySelector('[data-drop-copy]');
+    const title = cloudChoice?.querySelector('b');
+    const note = cloudChoice?.querySelector('span');
+    if (title) title.textContent = 'Copy to Cloud';
+    if (note) note.textContent = 'One-time Mochimono Cloud copy · local original stays where it is';
+  }, 0);
+
   if (viewer || viewerOpen) {
     const viewerObserver = new MutationObserver(reportViewer);
     if (viewer) viewerObserver.observe(viewer, { attributes: true, attributeFilter: ['hidden'] });
