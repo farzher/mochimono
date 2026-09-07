@@ -7,6 +7,7 @@ import { backupCatalog } from './lib/db.js';
 import { objectPath, readObject, removeObject, validHash, writeVerifiedObject } from './lib/store.js';
 import { DATA_DIR, TOKEN, db, json, now, readJson, requireAuth } from './lib/server-context.js';
 import { handleServerAuth } from './server-auth.js';
+import { handleFriendSignaling } from './friend-signaling-server.js';
 import { handleThumbnails, cleanupThumbnail } from './thumbnail-server.js';
 import { handleCollections } from './collections-server.js';
 import { handleBackupPolicy, getDrive } from './backup-policy-server.js';
@@ -407,6 +408,7 @@ async function handleCoreApi(req, res, url) {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    if (await handleFriendSignaling(req, res, url)) return;
     if (await handleServerAuth(req, res, url)) return;
     if (url.pathname.startsWith('/api/')) {
       if (!requireAuth(req, res)) return;
