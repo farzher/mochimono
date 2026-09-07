@@ -6,6 +6,7 @@ import { objectPath, validHash, writeVerifiedObject } from './lib/store.js';
 import { handleCompressionServer } from './compression-server.js';
 import { handleRemoteRenditionServer } from './rendition-remote-server.js';
 import { handleRepresentationPolicyServer } from './representation-policy-server.js';
+import { handleSourceScopeServer } from './source-scope-server.js';
 
 const AUTO_SCRUB_DAYS = Math.max(0, Number(process.env.MOCHIMONO_SCRUB_DAYS ?? 30) || 0);
 const AUTO_SCRUB_MS = AUTO_SCRUB_DAYS * 24 * 60 * 60 * 1000;
@@ -163,6 +164,7 @@ if (AUTO_SCRUB_MS) {
 }
 
 export async function handleIntegrity(req, res, url) {
+  if (await handleSourceScopeServer(req, res, url)) return true;
   if (await handleRepresentationPolicyServer(req, res, url)) return true;
   if (await handleCompressionServer(req, res, url)) return true;
   if (await handleRemoteRenditionServer(req, res, url)) return true;
