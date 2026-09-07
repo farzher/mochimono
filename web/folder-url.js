@@ -1,10 +1,12 @@
 const views = document.querySelector('#views');
 const gridFolderToggle = document.querySelector('#gridFolderToggle');
 const gridFolderStrip = document.querySelector('#gridFolderStrip');
+const folderbar = document.querySelector('#folderbar');
 const GRID_FOLDERS_KEY = 'mochimono-grid-folders';
 
 let restoring = false;
 let restoreComplete = false;
+let pendingHistoryMode = '';
 let gridFoldersEnabled = localStorage.getItem(GRID_FOLDERS_KEY) !== '0';
 
 const library = () => window.mochimonoLibrary;
@@ -23,10 +25,11 @@ function formatBytes(bytes) {
   return `${value < 10 && unit ? value.toFixed(2) : value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
 }
 
-function syncUrl() {
+function syncUrl(mode = 'replace') {
   if (restoring) return;
   const folder = state();
   const url = new URL(location.href);
+  url.searchParams.delete('tree');
   if (folder.sourceName) {
     url.searchParams.set('source', folder.sourceName);
     if (folder.path) url.searchParams.set('path', folder.path);
@@ -35,7 +38,8 @@ function syncUrl() {
     url.searchParams.delete('source');
     url.searchParams.delete('path');
   }
-  if (url.href !== location.href) history.replaceState(history.state, '', url);
+  if (url.href === location.href) return;
+  history[mode === 'push' ? 'pushState' : 'replaceState'](history.state, '', url);
 }
 
 function sourceCards(items) {
@@ -79,31 +83,52 @@ function refresh() {
 }
 
 async function openFolder(importId, path = '') {
-  await library()?.openFolder?.(importId, path);
-  syncUrl();
-  refresh();
+  pendingHistoryMode = 'push';
+  try {
+    await library()?.openFolder?.(importId, path);
+    if (pendingHistoryMode) syncUrl(pendingHistoryMode);
+  } finally {
+    pendingHistoryMode = '';
+    refresh();
+  }
 }
 
-async function restoreFolder() {
-  if (restoreComplete) return;
+async function restoreFolder(force = false) {
+  if (restoreComplete && !force) return;
   const url = new URL(location.href);
   const wantedSource = url.searchParams.get('source');
+  const wantedPath = url.searchParams.get('path') || '';
+
   if (!wantedSource) {
+    restoreComplete = true;
+    if (!force || !state().importId) return;
+    restoring = true;
+    try { await library()?.openFolder?.('', ''); }
+    catch (error) { console.warn(error); }
+    finally {
+      restoring = false;
+      refresh();
+    }
+    return;
+  }
+
+  const source = library()?.sources?.().find(item => item.sourceName === wantedSource);
+  if (!source) return;
+  const current = state();
+  if (String(current.importId) === String(source.id) && current.path === wantedPath) {
     restoreComplete = true;
     return;
   }
-  const source = library()?.sources?.().find(item => item.sourceName === wantedSource);
-  if (!source) return;
 
   restoring = true;
   try {
-    await library().openFolder(source.id, url.searchParams.get('path') || '');
+    await library().openFolder(source.id, wantedPath);
     restoreComplete = true;
   } catch (error) {
     console.warn(error);
   } finally {
     restoring = false;
-    syncUrl();
+    refresh();
   }
 }
 
@@ -128,12 +153,26 @@ gridFolderStrip.addEventListener('click', event => {
   openFolder(folder.importId, path).catch(console.warn);
 });
 
+// library-app owns breadcrumb clicks outside the merged Folders view. Mark those
+// as user navigation before its bubble listener changes the folder state.
+folderbar?.addEventListener('click', event => {
+  if (currentView() === 'folders') return;
+  if (event.target.closest('[data-folder-home],[data-folder-depth]')) pendingHistoryMode = 'push';
+}, true);
+
 window.addEventListener('mochimono:folder-changed', () => {
-  syncUrl();
+  const mode = pendingHistoryMode || 'replace';
+  pendingHistoryMode = '';
+  syncUrl(mode);
   refresh();
 });
 window.addEventListener('mochimono:catalog-cache-restored', catalogChanged);
 window.addEventListener('mochimono:catalog-updated', catalogChanged);
+window.addEventListener('popstate', () => {
+  queueMicrotask(() => {
+    if (currentView() !== 'folders') restoreFolder(true).catch(console.warn);
+  });
+});
 views.addEventListener('click', refresh);
 
 refresh();
