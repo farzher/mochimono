@@ -21,8 +21,8 @@ if (missing.length) {
   const windows = process.platform === 'win32';
   const command = windows ? (process.env.ComSpec || 'cmd.exe') : 'npm';
   const args = windows
-    ? ['/d', '/s', '/c', 'npm.cmd install --no-audit --no-fund --prefer-offline']
-    : ['install', '--no-audit', '--no-fund', '--prefer-offline'];
+    ? ['/d', '/s', '/c', 'npm.cmd install --no-audit --no-fund --prefer-offline --package-lock=false']
+    : ['install', '--no-audit', '--no-fund', '--prefer-offline', '--package-lock=false'];
   const code = await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: root,

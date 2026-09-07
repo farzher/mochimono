@@ -16,6 +16,7 @@ Mochimono syncs folders to one deduplicated library while remembering where ever
 - Keep, Delete, and Delete + Ignore
 - native folder picker in the local Agent
 - offline backup folders with verification, repair, and restore
+- encrypted peer-to-peer friend backups without port forwarding
 - primary object integrity scrubbing and damaged-copy quarantine
 - cancellable sync and backup jobs
 
@@ -33,10 +34,12 @@ npm run dev
 `npm run dev` first runs `git pull --ff-only`, then starts:
 
 ```text
-Library  http://127.0.0.1:8642
-Agent    http://127.0.0.1:8643
-Token    dev
-Data     ./dev-data
+Library    http://127.0.0.1:8642
+Agent      http://127.0.0.1:8643
+Friend UI  http://127.0.0.1:8644  local management only
+Signaling  http://127.0.0.1:8645/friend-signal
+Token      dev
+Data       ./dev-data
 ```
 
 Run separately with:
@@ -52,18 +55,33 @@ Server settings:
 MOCHIMONO_TOKEN
 MOCHIMONO_DATA
 MOCHIMONO_SCRUB_DAYS           primary SHA-256 scrub interval; default 30, 0 disables automatic scrubs
+MOCHIMONO_SIGNAL_HOST          signaling bind address; defaults to HOST
+MOCHIMONO_SIGNAL_PORT          signaling port; default 8645
 HOST
 PORT
 ```
 
-Agent preview settings:
+Agent settings:
 
 ```text
 FFMPEG_PATH                    optional custom FFmpeg binary
 MOCHIMONO_THUMBNAIL_WORKERS    optional local preview worker count
+MOCHIMONO_SIGNAL_URL           public HTTPS signaling endpoint when not using local development
+MOCHIMONO_STUN_URLS            comma-separated STUN URLs
+MOCHIMONO_TURN_URLS            comma-separated TURN URLs used when direct ICE traversal fails
 ```
 
-The Agent stores its local settings in `~/.mochimono/agent.json`.
+The Agent stores its local settings in `~/.mochimono/agent.json`. Its friend-storage recovery keys and peer identities stay local to the Agent.
+
+## Friend storage
+
+Friend storage does not expose either Agent to the internet. In production, put the signaling service behind HTTPS (or another trusted encrypted tunnel) and point `MOCHIMONO_SIGNAL_URL` at it. Both Agents connect outbound to the Mochimono signaling service, exchange WebRTC ICE information, authenticate pinned Ed25519 device identities, and transfer encrypted objects over a reliable DataChannel. ICE tries direct peer-to-peer connectivity first. Configure TURN with `MOCHIMONO_TURN_URLS` for networks where direct NAT traversal fails.
+
+Pairing uses a short-lived invite code. The signaling service receives only a one-way pairing identifier/verifier; the invite secret itself is not uploaded. The invite authenticates the two public device identities before they are pinned locally.
+
+Backup contents retain their independent application encryption even though WebRTC also encrypts transport. Objects and the catalog are AES-256-GCM encrypted before transmission, and their remote object IDs are HMAC-derived opaque identifiers. The storage host never receives the recovery key, original filenames, or plaintext catalog.
+
+Port 8644 is now only a loopback management API used by the local Agent UI. Friend object data never travels through it.
 
 ## Previews
 
@@ -97,6 +115,13 @@ Backup folder:
   drive.json
   inventory.sqlite
   catalog.sqlite
+  objects/
+```
+
+Friend storage folder:
+
+```text
+<folder>/.mochimono-friend/<share-id>/
   objects/
 ```
 
