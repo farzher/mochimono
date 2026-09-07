@@ -1,6 +1,7 @@
 const files = document.querySelector('#files');
 const views = document.querySelector('#views');
 const folderbar = document.querySelector('#folderbar');
+const CLIENT = document.documentElement.classList.contains('client-library');
 
 let treePath = new URL(location.href).searchParams.get('tree') || '';
 let generation = 0;
@@ -41,6 +42,10 @@ function parts(path = treePath) {
   return String(path || '').split('/').filter(Boolean);
 }
 
+function cleanTreePath(path) {
+  return String(path || '').replaceAll('\\', '/').split('/').filter(part => part && part !== '.' && part !== '..').join('/');
+}
+
 function syncUrl() {
   const url = new URL(location.href);
   url.searchParams.delete('source');
@@ -76,6 +81,57 @@ function fileRows(items) {
     </button>`).join('');
 }
 
+function mergeTrees(trees) {
+  const folders = new Map();
+  const fileMap = new Map();
+  for (const tree of trees) {
+    for (const folder of tree?.folders || []) {
+      const key = cleanTreePath(folder.path);
+      if (!key) continue;
+      const previous = folders.get(key);
+      if (!previous) folders.set(key, { ...folder, path:key });
+      else previous.references = Math.max(Number(previous.references) || 0, Number(folder.references) || 0);
+    }
+    for (const file of tree?.files || []) {
+      const virtualPath = cleanTreePath(file.virtualPath || '');
+      const key = `${String(file.hash || '')}\u0000${virtualPath}`;
+      const previous = fileMap.get(key);
+      if (!previous) {
+        fileMap.set(key, { ...file, virtualPath });
+        continue;
+      }
+      if ((!previous.width || !previous.height) && file.width && file.height) {
+        previous.width = Number(file.width) || 0;
+        previous.height = Number(file.height) || 0;
+      }
+      if (!previous.rootPath && file.rootPath) previous.rootPath = file.rootPath;
+      if (!previous.originalPath && file.originalPath) previous.originalPath = file.originalPath;
+      if (file.local) previous.local = true;
+      if (file.protected) previous.protected = true;
+    }
+  }
+  return {
+    path:treePath,
+    folders:[...folders.values()].sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric:true, sensitivity:'base' })),
+    files:[...fileMap.values()].sort((a, b) => String(a.filename).localeCompare(String(b.filename), undefined, { numeric:true, sensitivity:'base' }))
+  };
+}
+
+async function treeData(path) {
+  const encoded = encodeURIComponent(path);
+  if (!CLIENT) return request(`/api/folder-tree?path=${encoded}`);
+
+  const [cloud, local] = await Promise.allSettled([
+    request(`/api/folder-tree?path=${encoded}`),
+    request(`/api/client/folder-tree?path=${encoded}`)
+  ]);
+  const trees = [];
+  if (cloud.status === 'fulfilled') trees.push(cloud.value);
+  if (local.status === 'fulfilled') trees.push(local.value);
+  if (!trees.length) throw cloud.reason || local.reason || new Error('Could not load folders');
+  return mergeTrees(trees);
+}
+
 function render(data) {
   if (!active || currentView() !== 'folders') return;
   currentFiles = data.files || [];
@@ -99,13 +155,13 @@ function render(data) {
 
 async function load(path = treePath) {
   const mine = ++generation;
-  treePath = String(path || '').replaceAll('\\', '/').split('/').filter(Boolean).join('/');
+  treePath = cleanTreePath(path);
   if (!active || currentView() !== 'folders') return;
   breadcrumbs();
   files.className = 'files folders';
   files.innerHTML = '<div class="empty">Loading…</div>';
   try {
-    const data = await request(`/api/folder-tree?path=${encodeURIComponent(treePath)}`);
+    const data = await treeData(treePath);
     if (mine !== generation || !active || currentView() !== 'folders') return;
     render(data);
   } catch (error) {
@@ -161,6 +217,9 @@ window.addEventListener('popstate', () => {
   load(treePath);
 });
 window.addEventListener('mochimono:catalog-updated', () => {
+  if (active && currentView() === 'folders') load(treePath);
+});
+window.addEventListener('mochimono:browser-folders-changed', () => {
   if (active && currentView() === 'folders') load(treePath);
 });
 
