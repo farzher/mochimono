@@ -14,6 +14,7 @@ if (folders && frame) {
   let refreshTimer = 0;
   let rendering = false;
   let writingRows = false;
+  let renderedKey = '';
 
   const api = () => frame.contentWindow?.mochimonoBrowserFolders;
   const relative = value => {
@@ -97,7 +98,35 @@ if (folders && frame) {
     </article>`;
   }
 
+  function sourceRenderKey(source) {
+    const previewKey = (source.previews || []).slice(0, 3).map(file => [file?.hash || '', file?.filename || '', file?.mime || '']);
+    return [
+      source.id || '', source.name || '', source.rootPath || '', source.permission || 'prompt',
+      source.scope || 'media', Boolean(source.cloud), Number(source.files) || 0, Number(source.bytes) || 0,
+      source.lastError || '', previewKey
+    ];
+  }
+
+  function updateRowState(source) {
+    const id = String(source.id || '');
+    const row = [...folders.querySelectorAll(':scope > [data-browser-folder]')].find(node => node.dataset.browserFolder === id);
+    if (!row) return;
+    const permission = source.permission || 'prompt';
+    const state = source.lastError || (permission === 'granted' ? relative(source.lastSynced) : 'Permission required');
+    const node = row.querySelector('.item-state');
+    if (!node) return;
+    if (node.textContent !== state) node.textContent = state;
+    node.classList.toggle('browser-folder-warning', permission !== 'granted');
+  }
+
   function replaceBrowserRows(sources) {
+    const nextKey = JSON.stringify((sources || []).map(sourceRenderKey));
+    if (renderedKey === nextKey) {
+      for (const source of sources || []) updateRowState(source);
+      return;
+    }
+
+    renderedKey = nextKey;
     writingRows = true;
     for (const row of folders.querySelectorAll(':scope > [data-browser-folder]')) row.remove();
     if (sources.length) {
