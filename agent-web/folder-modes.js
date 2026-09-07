@@ -190,6 +190,16 @@ function readyPreviewFiles(files) {
   return rankPreviewFiles(files).filter(file => readyPreviewHashes.has(String(file.hash || '')));
 }
 
+function previewCandidates(files) {
+  const ranked = rankPreviewFiles(files);
+  const ready = [];
+  const unchecked = [];
+  for (const file of ranked) {
+    (readyPreviewHashes.has(String(file.hash || '')) ? ready : unchecked).push(file);
+  }
+  return [...ready, ...unchecked];
+}
+
 function sampleGlyph(file) {
   return mediaKind(file) === 'video' ? '▶' : '▧';
 }
@@ -227,6 +237,7 @@ function installThumb(img, cell, hash, onReject) {
       onReject(cell);
       return;
     }
+    readyPreviewHashes.add(hash);
     cell.classList.add('thumb-ready');
   });
   img.addEventListener('error', () => {
@@ -277,7 +288,7 @@ function sampleCell(file, index, onReject) {
 
 function renderFolderPreview(row) {
   const sample = previewSamples.get(pathKey(row.dataset.folderPath));
-  const candidates = readyPreviewFiles(sample?.files);
+  const candidates = previewCandidates(sample?.files);
   let strip = row.querySelector('.storage-folder-samples');
   if (!strip) {
     strip = document.createElement('div');
@@ -288,7 +299,7 @@ function renderFolderPreview(row) {
   strip.dataset.openNativeFolderPath = row.dataset.folderPath || '';
   strip.title = 'Show in folder';
 
-  const key = candidates.slice(0, 16).map(file => `${file.hash}:${file.filename}:${file.mime}`).join('|') || 'empty';
+  const key = candidates.slice(0, 16).map(file => `${readyPreviewHashes.has(String(file.hash || '')) ? 1 : 0}:${file.hash}:${file.filename}:${file.mime}`).join('|') || 'empty';
   if (strip.dataset.key === key) return;
   strip.dataset.key = key;
 
