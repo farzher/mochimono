@@ -58,7 +58,8 @@ startThumbnailAgent();
 startMediaMetadataAgent();
 startProtectionAgent().catch(error => console.error('Protection agent failed', error));
 await import('./agent.js');
-await import('./lib/friend-storage.js');
+try { await import('./lib/friend-storage.js'); }
+catch (error) { console.error('Encrypted friend storage failed to start', error); }
 await import('./lib/squish-defaults-migration.js');
 const [{ startCompressionServerSync }, { startRepresentationReconciler }] = await Promise.all([
   import('./lib/compression-server-sync.js'),
