@@ -53,27 +53,26 @@ async function decorateChoice(choice) {
   button.type = 'button';
   button.className = 'client-drop-action primary';
   button.dataset.dropBrowserSync = '';
-  button.innerHTML = '<b>Sync folder</b><span>Photos and videos · remembers browser access · syncs while Mochimono is open</span>';
+  button.innerHTML = '<b>Index folder</b><span>Media only · local by default · remembers browser access</span>';
   actions.prepend(button);
 
   const existingPrimary = actions.querySelector('[data-drop-copy]');
   existingPrimary?.classList.remove('primary');
 
   const note = choice.querySelector('[data-drop-note]');
-  if (note) note.textContent = 'The browser hides the full disk path. You can set the real path later in Storage if you want Mochimono to remember where this folder physically belongs.';
+  if (note) note.textContent = 'Nothing is uploaded by default. You can enable Cloud later in Storage, and optionally set the full native path.';
 
   button.onclick = async () => {
     const handles = [...currentHandles];
     choice.querySelector('.client-drop-choice-close')?.click();
     removeButton(choice);
     if (!handles.length) return;
-    toast(handles.length === 1 ? `Syncing ${handles[0].name}…` : `Syncing ${handles.length} folders…`);
+    toast(handles.length === 1 ? `Indexing ${handles[0].name}…` : `Indexing ${handles.length} folders…`);
     try {
       await window.mochimonoBrowserFolders.addHandles(handles, 'media', { sync:true });
-      toast(handles.length === 1 ? `${handles[0].name} synced` : `${handles.length} folders synced`);
-      await window.mochimonoLibrary?.refresh?.();
+      toast(handles.length === 1 ? `${handles[0].name} indexed` : `${handles.length} folders indexed`);
     } catch (error) {
-      toast(error.message || 'Could not sync folder');
+      toast(error.message || 'Could not index folder');
     }
   };
 }
