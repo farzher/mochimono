@@ -1,3 +1,5 @@
+import './video-optimize-cloud-fallback.js';
+
 if (location.pathname.startsWith('/files')) {
   const viewer = document.querySelector('#viewer');
   const viewerOpen = document.querySelector('#viewer-open');
