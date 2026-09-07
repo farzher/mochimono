@@ -44,19 +44,36 @@ async function browseLocalFolders(res, url) {
   });
 }
 
+async function importIdentity(body) {
+  const requested = Number(body.importId) || 0;
+  if (requested > 0) {
+    try {
+      await api(`/api/imports/${requested}`, { method: 'POST', body: { sourceName: settings.device } });
+      return requested;
+    } catch {}
+  }
+  const created = await api('/api/imports', { method: 'POST', body: { sourceName: settings.device } });
+  return Number(created.id);
+}
+
 async function startImport(req, res) {
   const body = await readJson(req, 128 * 1024);
-  const created = await api('/api/imports', { method: 'POST', body: { sourceName: settings.device } });
+  const importId = await importIdentity(body);
   const label = String(body.label || 'Drop').slice(0, 200);
+  const rootPath = String(body.rootPath || label).slice(0, 2000);
+  const scope = String(body.scope || '').toLowerCase() === 'all' ? 'all' : 'media';
   const id = randomUUID();
-  sessions.set(id, { importId: Number(created.id), createdAt: Date.now(), label });
-  if (label) {
-    await api('/api/import-roots', {
-      method: 'POST',
-      body: { roots: [{ importId: Number(created.id), deviceName: settings.device, rootPath: label }] }
-    }).catch(() => {});
+  sessions.set(id, { importId, createdAt: Date.now(), label, seen:new Set() });
+
+  await api('/api/import-roots', {
+    method: 'POST',
+    body: { roots: [{ importId, deviceName: settings.device, rootPath }] }
+  }).catch(() => {});
+  if (body.browser === true || body.scope !== undefined) {
+    await api('/api/import-scope', { method: 'POST', body: { importId, scope } }).catch(() => {});
   }
-  return json(res, 200, { session: id, importId: Number(created.id) });
+
+  return json(res, 200, { session: id, importId, scope });
 }
 
 async function importFile(req, res, url) {
@@ -105,10 +122,41 @@ async function importFile(req, res, url) {
         body: { importId: session.importId, sources: [{ hash, path: relative, filename: name, mtime }] }
       });
     }
+    session.seen.add(relative);
 
     return json(res, 200, { hash, name, path: relative, size, existing: !missing, ignored, previous });
   } finally {
     await rm(temp, { force: true }).catch(() => {});
+  }
+}
+
+async function markSeen(req, res, url) {
+  const session = sessions.get(String(url.searchParams.get('session') || ''));
+  if (!session) return json(res, 410, { error: 'Import session expired' });
+  const body = await readJson(req, 2 * 1024 * 1024);
+  if (!Array.isArray(body.paths) || body.paths.length > 4000) return json(res, 400, { error: 'paths must be an array of at most 4000 entries' });
+  for (const path of body.paths) session.seen.add(cleanRelative(path));
+  json(res, 200, { ok:true, count:body.paths.length });
+}
+
+async function finishImport(req, res, url) {
+  const sessionId = String(url.searchParams.get('session') || '');
+  const session = sessions.get(sessionId);
+  if (!session) return json(res, 410, { error: 'Import session expired' });
+
+  let removed = 0;
+  try {
+    const current = await api(`/api/imports/${session.importId}/source-paths`);
+    const missing = (current.paths || []).filter(path => !session.seen.has(String(path)));
+    for (let offset = 0; offset < missing.length; offset += 2000) {
+      const batch = missing.slice(offset, offset + 2000);
+      const result = await api(`/api/imports/${session.importId}/source-paths/remove`, { method:'POST', body:{ paths:batch } });
+      removed += Number(result.count) || 0;
+    }
+    sessions.delete(sessionId);
+    json(res, 200, { ok:true, importId:session.importId, seen:session.seen.size, removed });
+  } catch (error) {
+    json(res, error.status || 500, { error:error.message || 'Could not finish folder sync' });
   }
 }
 
@@ -123,6 +171,14 @@ export async function handleClientImport(req, res, url) {
   }
   if (req.method === 'PUT' && url.pathname === '/api/client/import/file') {
     await importFile(req, res, url);
+    return true;
+  }
+  if (req.method === 'POST' && url.pathname === '/api/client/import/seen') {
+    await markSeen(req, res, url);
+    return true;
+  }
+  if (req.method === 'POST' && url.pathname === '/api/client/import/finish') {
+    await finishImport(req, res, url);
     return true;
   }
   return false;
