@@ -2,6 +2,7 @@ import './file-context-menu.js';
 import './random-sort.js';
 import './viewer-grid-return.js';
 import './browser-folder-drop.js';
+import './folder-tree.js';
 
 const files = document.querySelector('#files');
 const views = document.querySelector('#views');
