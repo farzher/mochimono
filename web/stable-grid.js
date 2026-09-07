@@ -177,7 +177,13 @@ function syncThumbnailPriority(force = false) {
   if (!force && scrollDirection === lastThumbDirection && Math.abs(range.top - lastThumbPriorityY) < viewportHeight * THUMB_PRIORITY_STEP) return;
 
   const cards = [];
-  for (const rowId of rowRange(layout, range.start, range.end)) {
+  const priorityRows = rowRange(layout, range.start, range.end);
+  // The prediction window extends farther in the current scroll direction. When
+  // moving upward, walk that window from its bottom edge toward the top so the
+  // thumbnails closest to where the user is headed render first instead of the
+  // farthest/topmost rows filling in first.
+  if (scrollDirection < 0) priorityRows.reverse();
+  for (const rowId of priorityRows) {
     const row = renderedRows.get(rowId);
     if (!row) continue;
     for (const card of row.querySelectorAll('.media-card[data-hash]')) cards.push(card);
