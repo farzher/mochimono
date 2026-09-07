@@ -16,7 +16,9 @@ function clearValue(control) {
 
 function cleanHomeUrl() {
   const url = new URL(location.href);
-  for (const key of ['collection', 'source', 'path', 'tree', 'view', 'file']) url.searchParams.delete(key);
+  for (const key of ['collection', 'source', 'path', 'tree', 'view', 'file', 'q', 'origin', 'type', 'sort', 'where']) {
+    url.searchParams.delete(key);
+  }
   return url;
 }
 
@@ -24,17 +26,11 @@ export function showAllFiles(historyMode = 'push') {
   const activeView = views?.querySelector('[data-view].active')?.dataset.view || 'grid';
   const cleanUrl = cleanHomeUrl();
 
-  // Home is one navigation step. Create a checkpoint first, then let all of the
-  // control-reset events replace the new current entry instead of overwriting the
-  // page the user should be able to return to with Back.
   if (historyMode === 'push' && cleanUrl.href !== location.href) {
     history.pushState(history.state, '', location.href);
   }
   if (cleanUrl.href !== location.href) history.replaceState(history.state, '', cleanUrl);
 
-  // Put every control into its final visual state first. Then update the few
-  // internal filter states that need events. This avoids rendering a chain of
-  // intermediate filter states (and the delayed search render) on Home.
   if (search) search.value = '';
   clearValue(collection);
   const typeChanged = clearValue(type);
@@ -47,10 +43,6 @@ export function showAllFiles(historyMode = 'push') {
   }
   if (typeChanged) type.dispatchEvent(new Event('change', { bubbles: true }));
   if (locationChanged) locationFilter.dispatchEvent(new Event('change', { bubbles: true }));
-
-  // Always finish through Source. Besides updating the library's source state,
-  // Collections uses this event to silently drop its active indicator without
-  // replaying a Smart Collection's source/type/search/sort reset sequence.
   source?.dispatchEvent(new Event('change', { bubbles: true }));
 
   window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
