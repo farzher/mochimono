@@ -2,7 +2,7 @@ const frame = document.querySelector('#filesFrame');
 const storagePane = document.querySelector('#storagePane');
 const manageButton = document.querySelector('[data-client-tab="storage"]');
 const brand = document.querySelector('.client-header .app-brand');
-const NAV_PARAMS = ['view', 'tree', 'source', 'path', 'collection', 'file'];
+const NAV_PARAMS = ['view', 'tree', 'source', 'path', 'collection', 'file', 'q', 'origin', 'type', 'sort', 'where'];
 
 let restoringPage = false;
 let restoringChild = false;
@@ -68,7 +68,6 @@ function applyPageFromUrl() {
 
 manageButton?.addEventListener('click', () => {
   if (restoringPage) return;
-  // client-shell's handler runs first and has already toggled the pane.
   pushPage(storagePane.hidden ? 'files' : 'storage');
 });
 
@@ -81,8 +80,6 @@ function isLibraryHome() {
 function checkpointHomeNavigation(event) {
   if (event.type === 'keydown' && event.key !== 'Enter' && event.code !== 'Space') return;
   if (isLibraryHome()) return;
-  // The iframe's Home action uses replaceState. Give it a fresh joint-history
-  // entry first so the page we came from remains available to Back.
   const url = pageUrl('files');
   history.pushState(history.state, '', url);
 }
@@ -108,8 +105,5 @@ window.addEventListener('popstate', () => {
 });
 
 frame?.addEventListener('load', sendChildState);
-
-// client-shell initializes to Library unconditionally. Apply a deep-linked shell
-// page after it has installed its handlers, then restore the iframe URL state.
 applyPageFromUrl();
 queueMicrotask(sendChildState);
