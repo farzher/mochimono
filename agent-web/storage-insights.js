@@ -1,7 +1,6 @@
 const storagePane = document.querySelector('#storagePane');
 const foldersSection = storagePane?.querySelector('.storage-folders-section');
 const filesFrame = document.querySelector('#filesFrame');
-const storageTab = document.querySelector('[data-client-tab="storage"]');
 
 if (storagePane && foldersSection) {
   const style = document.createElement('style');
@@ -19,15 +18,9 @@ if (storagePane && foldersSection) {
 .storage-space-type-bar i{display:block;height:100%;border-radius:inherit;background:#d69a95}
 .storage-space-type-size{min-width:62px;color:#b8afac;font-size:11px;text-align:right;white-space:nowrap}
 .storage-space-type-share{min-width:36px;color:#77706f;font-size:10px;text-align:right;white-space:nowrap}
-.storage-space-list{display:block;border-top:1px solid #201e20}
-.storage-space-row{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:12px;padding:9px 0;border:0;border-bottom:1px solid #201e20;border-radius:0;background:transparent;color:inherit;text-align:left;font-weight:500}
-.storage-space-row:hover{background:rgba(255,255,255,.018)}
-.storage-space-row-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#d8d0cd;font-size:12px}
-.storage-space-row-size{color:#a49b98;font-size:11px;white-space:nowrap}
-.storage-space-row-note{min-width:118px;color:#d6a29d;font-size:11px;text-align:right;white-space:nowrap}
 .storage-space-empty{padding:8px 0;color:#77706f;font-size:11px}
 .storage-space-error{padding:8px 0;color:#c98f89;font-size:11px}
-@media(max-width:700px){.storage-space-type{grid-template-columns:64px minmax(60px,1fr) auto}.storage-space-type-share{display:none}.storage-space-row{grid-template-columns:minmax(0,1fr) auto}.storage-space-row-note{grid-column:1/-1;min-width:0;text-align:left;margin-top:-7px}}
+@media(max-width:700px){.storage-space-type{grid-template-columns:64px minmax(60px,1fr) auto}.storage-space-type-share{display:none}}
 `;
   document.head.append(style);
 
@@ -37,15 +30,11 @@ if (storagePane && foldersSection) {
   section.innerHTML = `
     <div class="storage-space-head"><h2>Space</h2><span class="storage-space-total" data-space-total></span></div>
     <div class="storage-space-block"><div class="storage-space-label">By type</div><div class="storage-space-types" data-space-types></div></div>
-    <div class="storage-space-block"><div class="storage-space-label">Worth shrinking</div><div class="storage-space-list" data-space-candidates></div></div>
-    <div class="storage-space-block"><div class="storage-space-label">Largest files</div><div class="storage-space-list" data-space-largest></div></div>
     <div class="storage-space-error" data-space-error hidden></div>`;
   storagePane.insertBefore(section, foldersSection);
 
   const totalNode = section.querySelector('[data-space-total]');
   const typesNode = section.querySelector('[data-space-types]');
-  const candidatesNode = section.querySelector('[data-space-candidates]');
-  const largestNode = section.querySelector('[data-space-largest]');
   const errorNode = section.querySelector('[data-space-error]');
   let loading = null;
   let loadedAt = 0;
@@ -58,9 +47,10 @@ if (storagePane && foldersSection) {
     while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
     return `${value < 10 && unit ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
   };
-  const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char]));
-  const ext = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
-  const nameFromPath = value => String(value || '').replace(/[\\/]+$/, '').split(/[\\/]+/).filter(Boolean).at(-1) || String(value || '');
+
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  }[char]));
 
   function kind(file) {
     const mime = String(file.mime || '');
@@ -68,21 +58,6 @@ if (storagePane && foldersSection) {
     if (mime.startsWith('image/')) return 'Images';
     if (mime.startsWith('audio/')) return 'Audio';
     return 'Other';
-  }
-
-  function compressionCandidate(file) {
-    const size = Number(file.size) || 0;
-    const extension = ext(file.filename || file.originalPath);
-    if (extension === 'bmp' && size >= 2_000_000) return { reason:'BMP → WebP', saving:.82, weight:3.4 };
-    if (['tif','tiff'].includes(extension) && size >= 2_000_000) return { reason:'TIFF → WebP', saving:.65, weight:3.1 };
-    if (extension === 'png' && size >= 2_000_000) return { reason:'PNG → WebP', saving:.50, weight:2.8 };
-    if (['jpg','jpeg'].includes(extension) && size >= 20_000_000) return { reason:'Large JPEG', saving:.22, weight:1.3 };
-    if (['heic','heif'].includes(extension) && size >= 50_000_000) return { reason:'Very large HEIC', saving:.10, weight:.8 };
-    if (String(file.mime || '').startsWith('video/') && size >= 250_000_000) {
-      const older = ['avi','mpg','mpeg','m2v','mts','m2ts','mov'].includes(extension);
-      return { reason:older ? 'Older video format' : 'Large video', saving:older ? .45 : .25, weight:older ? 1.55 : 1 };
-    }
-    return null;
   }
 
   function addFiles(data, files, seen) {
@@ -121,8 +96,6 @@ if (storagePane && foldersSection) {
   }
 
   async function mergeLocal(token, files, seen) {
-    const live = await json('/api/client/local-catalog?limit=5000', token, true);
-    if (live) addFiles(live, files, seen);
     let offset = 0;
     for (;;) {
       const data = await json(`/api/client/local-catalog?limit=5000&offset=${offset}`, token, true);
@@ -140,12 +113,11 @@ if (storagePane && foldersSection) {
     let after = '';
     do {
       const data = await json(`/api/catalog?limit=5000&after=${encodeURIComponent(after)}`, token, true);
-      if (!data) return false;
+      if (!data) return;
       addFiles(data, files, seen);
       after = String(data.nextAfter || '');
       await new Promise(resolve => setTimeout(resolve, 0));
     } while (after && token === generation);
-    return true;
   }
 
   async function libraryFiles(token) {
@@ -157,9 +129,6 @@ if (storagePane && foldersSection) {
     await mergeLocal(token, files, seen);
     if (token !== generation) return [];
 
-    // If the iframe's persisted snapshot exactly matches its live catalog count,
-    // it is already the same dataset powering the grid. Otherwise fill any gap
-    // from the server catalog that the grid refreshes from.
     if (!cache.cached || cache.cached !== cache.visibleTotal) await mergeServer(token, files, seen);
     return files;
   }
@@ -172,50 +141,14 @@ if (storagePane && foldersSection) {
       totals.set(kind(file), (totals.get(kind(file)) || 0) + size);
       total += size;
     }
+
     totalNode.textContent = files.length ? `${bytes(total)} · ${files.length.toLocaleString()} files` : '';
-    const rows = [...totals].filter(([,size]) => size > 0).sort((a,b) => b[1] - a[1]);
-    typesNode.innerHTML = rows.length ? rows.map(([label,size]) => {
+    const rows = [...totals].filter(([, size]) => size > 0).sort((a, b) => b[1] - a[1]);
+    typesNode.innerHTML = rows.length ? rows.map(([label, size]) => {
       const share = total ? size / total * 100 : 0;
-      return `<div class="storage-space-type"><span class="storage-space-type-name">${label}</span><span class="storage-space-type-bar"><i style="width:${Math.max(1,share).toFixed(2)}%"></i></span><span class="storage-space-type-size">${esc(bytes(size))}</span><span class="storage-space-type-share">${share.toFixed(0)}%</span></div>`;
+      return `<div class="storage-space-type"><span class="storage-space-type-name">${label}</span><span class="storage-space-type-bar"><i style="width:${Math.max(1, share).toFixed(2)}%"></i></span><span class="storage-space-type-size">${esc(bytes(size))}</span><span class="storage-space-type-share">${share.toFixed(0)}%</span></div>`;
     }).join('') : '<div class="storage-space-empty">No files in library</div>';
   }
-
-  function row(file, note = '') {
-    const name = file.filename || nameFromPath(file.originalPath);
-    return `<button class="storage-space-row" data-space-hash="${esc(file.hash)}" title="${esc(file.originalPath || name)}"><span class="storage-space-row-name">${esc(name)}</span><span class="storage-space-row-size">${esc(bytes(file.size))}</span><span class="storage-space-row-note">${esc(note)}</span></button>`;
-  }
-
-  function renderCandidates(files) {
-    const ranked = [];
-    for (const file of files) {
-      const candidate = compressionCandidate(file);
-      if (!candidate) continue;
-      const size = Number(file.size) || 0;
-      ranked.push({ file, candidate, reclaim:size * candidate.saving, score:size * candidate.saving * candidate.weight });
-    }
-    ranked.sort((a,b) => b.score - a.score || b.reclaim - a.reclaim);
-    const shown = ranked.slice(0, 8);
-    candidatesNode.innerHTML = shown.length ? shown.map(({ file, candidate, reclaim }) => row(file, `${candidate.reason} · ~${bytes(reclaim)} potential`)).join('') : '<div class="storage-space-empty">No obvious compression wins yet</div>';
-  }
-
-  function renderLargest(files) {
-    const shown = [...files].sort((a,b) => Number(b.size || 0) - Number(a.size || 0)).slice(0, 8);
-    largestNode.innerHTML = shown.length ? shown.map(file => row(file, kind(file))).join('') : '<div class="storage-space-empty">No files in library</div>';
-  }
-
-  function openFile(hash) {
-    if (!hash) return;
-    storageTab?.click();
-    const open = () => filesFrame?.contentWindow?.mochimonoOpenViewer?.(hash);
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (!open()) setTimeout(open, 180);
-    }));
-  }
-
-  section.addEventListener('click', event => {
-    const button = event.target.closest('[data-space-hash]');
-    if (button) openFile(String(button.dataset.spaceHash || ''));
-  });
 
   async function refresh(force = false) {
     if (storagePane.hidden) return;
@@ -224,20 +157,17 @@ if (storagePane && foldersSection) {
     const token = ++generation;
     section.hidden = false;
     errorNode.hidden = true;
+
     loading = (async () => {
       try {
         const files = await libraryFiles(token);
         if (token !== generation) return;
         renderTypes(files);
-        renderCandidates(files);
-        renderLargest(files);
         loadedAt = Date.now();
       } catch (error) {
         if (token !== generation) return;
         totalNode.textContent = '';
         typesNode.innerHTML = '<div class="storage-space-empty">Analysis unavailable</div>';
-        candidatesNode.innerHTML = '';
-        largestNode.innerHTML = '';
         errorNode.textContent = error?.message || 'Could not analyze library';
         errorNode.hidden = false;
       } finally {
