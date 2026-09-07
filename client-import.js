@@ -6,6 +6,7 @@ import { basename, dirname, join, parse, resolve } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { CONFIG_DIR, api, json, readJson, settings } from './lib/agent-context.js';
+import { localFolderTree } from './lib/local-folder-tree.js';
 import { mimeFor } from './lib/mime.js';
 
 const TMP_DIR = join(CONFIG_DIR, 'tmp');
@@ -163,6 +164,10 @@ async function finishImport(req, res, url) {
 export async function handleClientImport(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/client/folder-browser') {
     await browseLocalFolders(res, url);
+    return true;
+  }
+  if (req.method === 'GET' && url.pathname === '/api/client/folder-tree') {
+    json(res, 200, localFolderTree(url.searchParams.get('path') || ''));
     return true;
   }
   if (req.method === 'POST' && url.pathname === '/api/client/import/start') {
