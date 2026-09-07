@@ -169,6 +169,7 @@ window.addEventListener('mochimono:folder-changed', () => {
 window.addEventListener('mochimono:catalog-cache-restored', catalogChanged);
 window.addEventListener('mochimono:catalog-updated', catalogChanged);
 window.addEventListener('popstate', () => {
+  restoreComplete = false;
   queueMicrotask(() => {
     if (currentView() !== 'folders') restoreFolder(true).catch(console.warn);
   });
