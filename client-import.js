@@ -238,6 +238,10 @@ async function saveBrowserThumbnail(req, res, hash) {
 }
 
 export async function handleClientImport(req, res, url) {
+  if (url.pathname.startsWith('/api/video-optimize/cloud-')) {
+    const { handleCloudVideoOptimizeApi } = await import('./lib/video-optimize-cloud.js');
+    if (await handleCloudVideoOptimizeApi(req, res, url)) return true;
+  }
   if (req.method === 'GET' && url.pathname === '/api/client/folder-browser') {
     await browseLocalFolders(res, url);
     return true;
