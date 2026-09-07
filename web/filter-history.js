@@ -16,7 +16,9 @@ function targetUrl() {
   const location = String(where?.value || '');
 
   if (query) url.searchParams.set('q', query); else url.searchParams.delete('q');
-  if (origin) url.searchParams.set('origin', origin); else url.searchParams.delete('origin');
+  if (url.searchParams.has('source')) url.searchParams.delete('origin');
+  else if (origin) url.searchParams.set('origin', origin);
+  else url.searchParams.delete('origin');
   if (kind) url.searchParams.set('type', kind); else url.searchParams.delete('type');
   if (order && order !== 'date-desc') url.searchParams.set('sort', order); else url.searchParams.delete('sort');
   if (location) url.searchParams.set('where', location); else url.searchParams.delete('where');
@@ -59,9 +61,14 @@ function restoreFilters() {
     const q = url.searchParams.get('q') || '';
     dispatchIfChanged(search, q, 'input');
 
-    const wantedOrigin = url.searchParams.get('origin') || '';
-    if (!wantedOrigin || source?.querySelector(`option[value="${CSS.escape(wantedOrigin)}"]`)) {
-      dispatchIfChanged(source, wantedOrigin);
+    // ?source=...&path=... is folder browsing state. In that mode library-app
+    // intentionally owns the same select element, so origin filtering must not
+    // reset it while a deep folder URL is being restored.
+    if (!url.searchParams.has('source')) {
+      const wantedOrigin = url.searchParams.get('origin') || '';
+      if (!wantedOrigin || source?.querySelector(`option[value="${CSS.escape(wantedOrigin)}"]`)) {
+        dispatchIfChanged(source, wantedOrigin);
+      }
     }
 
     const wantedType = url.searchParams.get('type') || '';
