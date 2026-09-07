@@ -3,6 +3,7 @@ import './random-sort.js';
 import './viewer-grid-return.js';
 import './browser-folder-client-loader.js';
 import './navigation-state.js';
+import './filter-history.js';
 import './collection-history.js';
 import './folder-tree.js';
 
