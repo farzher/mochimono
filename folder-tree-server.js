@@ -18,7 +18,7 @@ function rootParts(row) {
     if (parts.length) parts[0] = parts[0].toUpperCase();
     return parts;
   }
-  if (normalized.startsWith('/')) return ['/', ...cleanParts(normalized)];
+  if (normalized.startsWith('/')) return ['Root', ...cleanParts(normalized)];
   if (raw) return ['Browser', ...cleanParts(raw)];
   return ['Browser', String(row.sourceName || row.deviceName || `Source ${row.importId}`)];
 }
