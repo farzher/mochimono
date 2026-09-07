@@ -8,7 +8,7 @@ import http from 'node:http';
 import { api, cancelJob, currentJob, DEVICE, json, persistSettings, preemptBackgroundJob, readJson, serverState, settings, startJob } from './lib/agent-context.js';
 import { backgroundWorkStatus } from './lib/background-work.js';
 import { addFolder, folderFor, folderStats, queueFolderSync, removeFolder, startSyncService } from './lib/agent-sync.js';
-import { addBrowseFolder, browseFolderFor, browseFolderStats, indexBrowseFolder, protectBrowseFolder, refreshBrowsePreviewPolicy, removeBrowseFolder, startBrowseService } from './lib/browse-folders.js';
+import { addBrowseFolder, browseFolderFor, browseFolderScope, browseFolderStats, indexBrowseFolder, protectBrowseFolder, refreshBrowsePreviewPolicy, removeBrowseFolder, startBrowseService } from './lib/browse-folders.js';
 import { backupCollections, backupContents, backupInit, backupLocations, backupRestore, backupStatus, backupUpdate, backupVerify, setBackupPolicy } from './lib/agent-backups.js';
 import { invalidateClientProviders } from './lib/client-providers.js';
 import { pickFolder } from './lib/folder-picker.js';
@@ -61,7 +61,7 @@ async function serveStatic(res, pathname) {
 function visibleFolders() {
   return [
     ...settings.folders.map(folder => ({ ...folder, protected: true })),
-    ...settings.browseFolders.map(path => ({ path, importId: null, lastSynced: null, protected: false }))
+    ...settings.browseFolders.map(path => ({ path, importId: null, lastSynced: null, protected: false, scope: browseFolderScope(path) }))
   ];
 }
 
@@ -263,7 +263,7 @@ async function handleLocalApi(req, res, url) {
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error: 'Choose a folder' });
     else {
-      const folder = await addFolder(body.path);
+      const folder = await addFolder(body.path, body.scope);
       invalidateClientProviders();
       json(res, 200, { folder });
     }
@@ -280,7 +280,7 @@ async function handleLocalApi(req, res, url) {
       json(res, 200, { ok: true });
     } else if (browseFolder) {
       const continuing = await takeOverBackgroundJob(browseFolder);
-      if (!continuing) await addBrowseFolder(browseFolder);
+      if (!continuing) await addBrowseFolder(browseFolder, browseFolderScope(browseFolder));
       json(res, 200, { ok: true });
     } else json(res, 404, { error: 'Folder not found' });
     return true;
@@ -303,7 +303,7 @@ async function handleLocalApi(req, res, url) {
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error: 'Choose a folder' });
     else {
-      const path = await addBrowseFolder(body.path);
+      const path = await addBrowseFolder(body.path, body.scope);
       invalidateClientProviders();
       json(res, 200, { path });
     }
@@ -316,7 +316,7 @@ async function handleLocalApi(req, res, url) {
     if (!path) json(res, 404, { error: 'Folder not found' });
     else {
       const continuing = await takeOverBackgroundJob(path);
-      if (!continuing) await addBrowseFolder(path);
+      if (!continuing) await addBrowseFolder(path, browseFolderScope(path));
       json(res, 200, { ok: true });
     }
     return true;
