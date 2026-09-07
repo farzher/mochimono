@@ -36,14 +36,15 @@ function toast(text) {
   node.timer = setTimeout(() => { node.hidden = true; }, 3500);
 }
 
-function removeButton() {
+function removeButton(choice = document.querySelector('.client-drop-choice')) {
   button?.remove();
   button = null;
+  choice?.querySelector('[data-drop-copy]')?.classList.add('primary');
 }
 
 async function decorateChoice(choice) {
   currentHandles = await pendingHandles.catch(() => []);
-  removeButton();
+  removeButton(choice);
   if (!currentHandles.length || choice.hidden) return;
   const actions = choice.querySelector('.client-drop-actions');
   if (!actions) return;
@@ -64,7 +65,7 @@ async function decorateChoice(choice) {
   button.onclick = async () => {
     const handles = [...currentHandles];
     choice.querySelector('.client-drop-choice-close')?.click();
-    removeButton();
+    removeButton(choice);
     if (!handles.length) return;
     toast(handles.length === 1 ? `Syncing ${handles[0].name}…` : `Syncing ${handles.length} folders…`);
     try {
@@ -84,7 +85,7 @@ document.addEventListener('drop', event => {
 function watchChoice(choice) {
   choiceObserver?.disconnect();
   choiceObserver = new MutationObserver(() => {
-    if (choice.hidden) removeButton();
+    if (choice.hidden) removeButton(choice);
     else queueMicrotask(() => decorateChoice(choice));
   });
   choiceObserver.observe(choice, { attributes:true, attributeFilter:['hidden'] });
