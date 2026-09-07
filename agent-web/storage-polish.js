@@ -1,5 +1,4 @@
 import './storage-insights.js';
-import './folder-preview-cache.js';
 
 const protectionMenu = document.querySelector('#clientProtection');
 const serverStorage = document.querySelector('#serverStorage');
