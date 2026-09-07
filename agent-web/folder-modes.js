@@ -101,28 +101,29 @@ function renderPath(row, path) {
   title.dataset.openNativeFolderPath = path;
 }
 
-function renderLocationBadge(row, cloud) {
+function renderLocationBadge(row, cloud, scope) {
   let badges = row.querySelector('[data-folder-mode]');
-  if (!cloud) {
-    badges?.remove();
-    return;
-  }
   if (!badges) {
     badges = document.createElement('span');
     badges.dataset.folderMode = '';
     row.querySelector('.storage-title strong')?.after(badges);
   }
+  const scopeLabel = scope === 'all' ? 'Everything' : 'Media';
+  const text = cloud ? `Cloud · ${scopeLabel}` : scopeLabel;
   badges.className = 'storage-modes';
-  if (badges.textContent !== 'Cloud') badges.textContent = 'Cloud';
-  badges.title = 'Cloud copy';
+  if (badges.textContent !== text) badges.textContent = text;
+  badges.title = cloud
+    ? `${scopeLabel === 'Everything' ? 'All files' : 'Photos and videos'} · Cloud copy`
+    : scopeLabel === 'Everything' ? 'All files' : 'Photos and videos';
 }
 
 function decorateRow(row, folder) {
   const cloud = folder.protected !== false;
+  const scope = folder.scope === 'all' ? 'all' : 'media';
   row.classList.toggle('browse-only-folder', !cloud);
   row.classList.toggle('cloud-folder', cloud);
   renderPath(row, folder.path);
-  renderLocationBadge(row, cloud);
+  renderLocationBadge(row, cloud, scope);
 
   const actions = row.querySelector('.item-actions');
   const sync = actions?.querySelector('[data-sync-folder]');
