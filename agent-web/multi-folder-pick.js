@@ -11,6 +11,7 @@ if (addToggle) {
   let browserData = null;
   let adding = false;
   let addMode = 'local';
+  let addScope = 'media';
 
   if (addPanel) addPanel.hidden = true;
 
@@ -24,13 +25,14 @@ if (addToggle) {
     .folder-browser-tools{display:flex;align-items:center;gap:6px;padding:0 17px 10px}
     .folder-browser-current{margin-left:auto;display:flex;align-items:center;gap:6px;color:#aaa29f;font-size:10px;cursor:pointer}
     .folder-browser-current input{width:auto;margin:0}
-    .folder-browser-mode{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0 17px 11px}
-    .folder-browser-mode button{display:grid;gap:2px;min-height:47px;padding:8px 10px;border:1px solid #2d292d;border-radius:9px;background:#151316;color:#aaa29f;text-align:left;cursor:pointer}
-    .folder-browser-mode button:hover{background:#1e1b20;color:#e7dfdb}
-    .folder-browser-mode button.active{border-color:#665456;background:#211c20;color:#f0e7e2}
-    .folder-browser-mode strong{font-size:11px;font-weight:720;color:inherit}
-    .folder-browser-mode span{font-size:9px;color:#77706e}
-    .folder-browser-mode button.active span{color:#aaa19e}
+    .folder-browser-mode,.folder-browser-scope{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0 17px 11px}
+    .folder-browser-scope{padding-top:0}
+    .folder-browser-mode button,.folder-browser-scope button{display:grid;gap:2px;min-height:47px;padding:8px 10px;border:1px solid #2d292d;border-radius:9px;background:#151316;color:#aaa29f;text-align:left;cursor:pointer}
+    .folder-browser-mode button:hover,.folder-browser-scope button:hover{background:#1e1b20;color:#e7dfdb}
+    .folder-browser-mode button.active,.folder-browser-scope button.active{border-color:#665456;background:#211c20;color:#f0e7e2}
+    .folder-browser-mode strong,.folder-browser-scope strong{font-size:11px;font-weight:720;color:inherit}
+    .folder-browser-mode span,.folder-browser-scope span{font-size:9px;color:#77706e}
+    .folder-browser-mode button.active span,.folder-browser-scope button.active span{color:#aaa19e}
     .folder-browser-list{height:min(55vh,460px);min-height:240px;overflow:auto;border-top:1px solid #272329;border-bottom:1px solid #272329;background:#0d0c0e}
     .folder-browser-row{display:grid;grid-template-columns:38px minmax(0,1fr);align-items:center;border-bottom:1px solid #1d1a1e}
     .folder-browser-row:last-child{border-bottom:0}
@@ -57,6 +59,10 @@ if (addToggle) {
       <button type="button" data-browser-mode="local" class="active"><strong>Local</strong><span>Index on this device</span></button>
       <button type="button" data-browser-mode="cloud"><strong>Cloud</strong><span>Index + sync a Cloud copy</span></button>
     </div>
+    <div class="folder-browser-scope" role="group" aria-label="Files to index">
+      <button type="button" data-browser-scope="media" class="active"><strong>Media</strong><span>Photos + videos</span></button>
+      <button type="button" data-browser-scope="all"><strong>Everything</strong><span>All files</span></button>
+    </div>
     <div class="folder-browser-list" data-browser-list><div class="folder-browser-empty">Loading…</div></div>
     <div class="folder-browser-footer"><span class="folder-browser-count" data-browser-count>Select folders</span><span class="spacer"></span><button type="button" class="secondary" data-browser-cancel>Cancel</button><button type="button" class="primary folder-browser-add" data-browser-confirm disabled>Add</button></div>`;
   document.body.append(browser);
@@ -68,6 +74,7 @@ if (addToggle) {
   const browserUp = browser.querySelector('[data-browser-up]');
   const browserConfirm = browser.querySelector('[data-browser-confirm]');
   const browserModes = [...browser.querySelectorAll('[data-browser-mode]')];
+  const browserScopes = [...browser.querySelectorAll('[data-browser-scope]')];
 
   const clean = value => String(value || '').trim().replace(/[\\/]+$/, '');
   const key = value => clean(value).toLowerCase();
@@ -107,10 +114,17 @@ if (addToggle) {
     updateCount();
   }
 
+  function setScope(scope) {
+    addScope = scope === 'all' ? 'all' : 'media';
+    browserScopes.forEach(button => button.classList.toggle('active', button.dataset.browserScope === addScope));
+    updateCount();
+  }
+
   function updateCount() {
     const count = browserSelection.size;
     const mode = addMode === 'cloud' ? 'Cloud' : 'Local';
-    browserCount.textContent = count ? `${count.toLocaleString()} selected · ${mode}` : `Select folders · ${mode}`;
+    const scope = addScope === 'all' ? 'Everything' : 'Media';
+    browserCount.textContent = count ? `${count.toLocaleString()} selected · ${mode} · ${scope}` : `Select folders · ${mode} · ${scope}`;
     browserConfirm.disabled = !count || adding;
     browserConfirm.textContent = adding ? (addMode === 'cloud' ? 'Syncing…' : 'Indexing…') : 'Add';
   }
@@ -178,6 +192,7 @@ if (addToggle) {
     browserData = null;
     adding = false;
     setMode('local');
+    setScope('media');
     browser.showModal();
     await loadBrowser(browserPath || clean(input?.value));
   }
@@ -206,7 +221,7 @@ if (addToggle) {
 
     for (const path of paths) {
       try {
-        await request(endpoint, { method:'POST', body:JSON.stringify({ path }) });
+        await request(endpoint, { method:'POST', body:JSON.stringify({ path, scope:addScope }) });
         added++;
         addedPaths.push(path);
       } catch (error) {
@@ -228,7 +243,8 @@ if (addToggle) {
     if (input) input.value = '';
     refreshNow(addedPaths);
     const mode = addMode === 'cloud' ? 'Cloud' : 'Local';
-    toast(`${added.toLocaleString()} folder${added === 1 ? '' : 's'} added · ${mode}`);
+    const scope = addScope === 'all' ? 'Everything' : 'Media';
+    toast(`${added.toLocaleString()} folder${added === 1 ? '' : 's'} added · ${mode} · ${scope}`);
   }
 
   addToggle.addEventListener('click', openBrowser, true);
@@ -243,6 +259,8 @@ if (addToggle) {
   browser.addEventListener('click', event => {
     const mode = event.target.closest('[data-browser-mode]');
     if (mode) return setMode(mode.dataset.browserMode);
+    const scope = event.target.closest('[data-browser-scope]');
+    if (scope) return setScope(scope.dataset.browserScope);
     const open = event.target.closest('[data-open-path]');
     if (open) return void loadBrowser(open.dataset.openPath);
     if (event.target.closest('[data-browser-up]')) return void loadBrowser(browserUp.dataset.path);
