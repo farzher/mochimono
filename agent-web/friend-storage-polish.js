@@ -8,6 +8,7 @@ if (backups && actions && sharesNode) {
   const origin = `http://${host}:8644`;
   let friendBackups = [];
   let shares = [];
+  let indexedRoots = [];
   let syncing = false;
 
   const style = document.createElement('style');
@@ -22,6 +23,9 @@ if (backups && actions && sharesNode) {
   notice.className = 'friend-preflight';
   notice.hidden = true;
   sharesNode.before(notice);
+
+  const inviteInput = document.querySelector('[data-friend-invite]');
+  if (inviteInput) inviteInput.placeholder = 'Paste friend invite';
 
   function toast(text) {
     if (!toastNode) return;
@@ -38,11 +42,33 @@ if (backups && actions && sharesNode) {
     return `${value < 10 && unit ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
   }
 
+  function localPathKey(value) {
+    let path = String(value || '').trim().replaceAll('\\', '/').replace(/\/+$/, '');
+    const windows = /^[a-z]:\//i.test(path) || path.startsWith('//');
+    if (windows) path = path.toLowerCase();
+    return path;
+  }
+
+  function insideIndexedRoot(value) {
+    const candidate = localPathKey(value);
+    if (!candidate) return false;
+    return indexedRoots.some(root => {
+      const base = localPathKey(root);
+      return base && (candidate === base || candidate.startsWith(`${base}/`));
+    });
+  }
+
   async function local(path) {
     const response = await fetch(`${origin}${path}`, { cache:'no-store' });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || response.statusText || 'Friend Drive unavailable');
     return data;
+  }
+
+  async function agentState() {
+    const response = await fetch('/api/state', { cache:'no-store' });
+    if (!response.ok) return null;
+    return response.json().catch(() => null);
   }
 
   function polishBackups() {
@@ -99,12 +125,14 @@ if (backups && actions && sharesNode) {
     if (syncing) return;
     syncing = true;
     try {
-      const [backupData, shareData] = await Promise.all([
+      const [backupData, shareData, state] = await Promise.all([
         local('/local/friend-backups'),
-        local('/local/friend-shares')
+        local('/local/friend-shares'),
+        agentState()
       ]);
       friendBackups = backupData.backups || [];
       shares = shareData.shares || [];
+      indexedRoots = (state?.settings?.folders || []).map(folder => folder.path).filter(Boolean);
       notice.hidden = true;
       polishBackups();
       polishShares();
@@ -137,12 +165,21 @@ if (backups && actions && sharesNode) {
     event.stopImmediatePropagation();
   }, true);
 
+  const offerSave = document.querySelector('[data-offer-save]');
+  offerSave?.addEventListener('click', event => {
+    const path = document.querySelector('[data-offer-path]')?.value || '';
+    if (!insideIndexedRoot(path)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    toast('Choose storage outside folders Mochimono already indexes.');
+  }, true);
+
   const secretDialog = [...document.querySelectorAll('dialog.friend-dialog')].find(dialog => dialog.querySelector('[data-secret-title]'));
   if (secretDialog) {
     new MutationObserver(() => {
       const note = secretDialog.querySelector('.friend-note');
       if (note?.textContent.includes('expires shortly')) {
-        note.textContent = 'Send this code to your friend. It is valid for 10 minutes and is only used to pair the two Agent identities.';
+        note.textContent = 'Send this invite to your friend. It is valid for 10 minutes and includes the rendezvous automatically.';
       }
     }).observe(secretDialog, { childList:true, subtree:true });
   }
