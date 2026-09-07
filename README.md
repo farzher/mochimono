@@ -69,13 +69,15 @@ MOCHIMONO_THUMBNAIL_WORKERS    optional local preview worker count
 MOCHIMONO_SIGNAL_URL           public HTTPS signaling endpoint when not using local development
 MOCHIMONO_STUN_URLS            comma-separated STUN URLs
 MOCHIMONO_TURN_URLS            comma-separated TURN URLs used when direct ICE traversal fails
+MOCHIMONO_TURN_USERNAME        TURN username when the URLs do not contain credentials
+MOCHIMONO_TURN_PASSWORD        TURN password when the URLs do not contain credentials
 ```
 
 The Agent stores its local settings in `~/.mochimono/agent.json`. Its friend-storage recovery keys and peer identities stay local to the Agent.
 
 ## Friend storage
 
-Friend storage does not expose either Agent to the internet. In production, put the signaling service behind HTTPS (or another trusted encrypted tunnel) and point `MOCHIMONO_SIGNAL_URL` at it. Both Agents connect outbound to the Mochimono signaling service, exchange WebRTC ICE information, authenticate pinned Ed25519 device identities, and transfer encrypted objects over a reliable DataChannel. ICE tries direct peer-to-peer connectivity first. Configure TURN with `MOCHIMONO_TURN_URLS` for networks where direct NAT traversal fails.
+Friend storage does not expose either Agent to the internet. In production, put the signaling service behind HTTPS (or another trusted encrypted tunnel) and point `MOCHIMONO_SIGNAL_URL` at it. Both Agents connect outbound to the Mochimono signaling service, exchange WebRTC ICE information, authenticate pinned Ed25519 device identities, and transfer encrypted objects over a reliable DataChannel. ICE tries direct peer-to-peer connectivity first. Configure TURN with `MOCHIMONO_TURN_URLS` for networks where direct NAT traversal fails. TURN credentials can be included in each TURN URL or supplied with `MOCHIMONO_TURN_USERNAME` and `MOCHIMONO_TURN_PASSWORD`.
 
 Pairing uses a short-lived invite code. The signaling service receives only a one-way pairing identifier/verifier; the invite secret itself is not uploaded. The invite authenticates the two public device identities before they are pinned locally.
 
