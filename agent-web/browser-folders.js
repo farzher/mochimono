@@ -13,6 +13,7 @@ if (folders && frame) {
 
   let refreshTimer = 0;
   let rendering = false;
+  let writingRows = false;
 
   const api = () => frame.contentWindow?.mochimonoBrowserFolders;
   const relative = value => {
@@ -97,11 +98,14 @@ if (folders && frame) {
   }
 
   function replaceBrowserRows(sources) {
+    writingRows = true;
     for (const row of folders.querySelectorAll(':scope > [data-browser-folder]')) row.remove();
-    if (!sources.length) return;
-    const holder = document.createElement('div');
-    holder.innerHTML = sources.map(card).join('');
-    folders.append(...holder.children);
+    if (sources.length) {
+      const holder = document.createElement('div');
+      holder.innerHTML = sources.map(card).join('');
+      folders.append(...holder.children);
+    }
+    requestAnimationFrame(() => { writingRows = false; });
   }
 
   async function refresh() {
@@ -192,10 +196,9 @@ if (folders && frame) {
   frame.addEventListener('load', () => schedule(500));
   window.addEventListener('focus', () => schedule());
   document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(); });
-  window.addEventListener('mochimono:browser-folders-changed', () => schedule(0));
 
   new MutationObserver(records => {
-    if (rendering) return;
+    if (writingRows) return;
     if (records.some(record => record.addedNodes.length || record.removedNodes.length)) schedule(30);
   }).observe(folders, { childList:true });
 
