@@ -145,11 +145,14 @@ if (backups && actions && sharesNode) {
     }).observe(secretDialog, { childList:true, subtree:true });
   }
 
+  // The main Friend Drive UI already refreshes every three seconds. Re-apply our
+  // cached polish whenever it redraws, but only hit the P2P-backed management API
+  // occasionally so this layer does not double the normal polling traffic.
   new MutationObserver(() => {
     polishBackups();
     polishShares();
   }).observe(document.querySelector('#storagePane'), { childList:true, subtree:true });
 
   sync();
-  setInterval(sync, 3000);
+  setInterval(sync, 12000);
 }
