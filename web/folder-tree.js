@@ -108,6 +108,7 @@ function mergeTrees(trees) {
       if (!previous.originalPath && file.originalPath) previous.originalPath = file.originalPath;
       if (file.local) previous.local = true;
       if (file.protected) previous.protected = true;
+      if (file.browser) previous.browser = true;
     }
   }
   return {
@@ -121,14 +122,19 @@ async function treeData(path) {
   const encoded = encodeURIComponent(path);
   if (!CLIENT) return request(`/api/folder-tree?path=${encoded}`);
 
-  const [cloud, local] = await Promise.allSettled([
+  const browserTree = window.mochimonoBrowserFolders?.tree
+    ? window.mochimonoBrowserFolders.tree(path)
+    : Promise.resolve(null);
+  const [cloud, local, browser] = await Promise.allSettled([
     request(`/api/folder-tree?path=${encoded}`),
-    request(`/api/client/folder-tree?path=${encoded}`)
+    request(`/api/client/folder-tree?path=${encoded}`),
+    browserTree
   ]);
   const trees = [];
   if (cloud.status === 'fulfilled') trees.push(cloud.value);
   if (local.status === 'fulfilled') trees.push(local.value);
-  if (!trees.length) throw cloud.reason || local.reason || new Error('Could not load folders');
+  if (browser.status === 'fulfilled' && browser.value) trees.push(browser.value);
+  if (!trees.length) throw cloud.reason || local.reason || browser.reason || new Error('Could not load folders');
   return mergeTrees(trees);
 }
 
@@ -173,8 +179,6 @@ async function load(path = treePath) {
 async function activate() {
   if (currentView() !== 'folders') return;
   active = true;
-  // Cancel the legacy per-import folder load so it cannot overwrite this unified
-  // physical/source tree after our asynchronous request finishes.
   try { await window.mochimonoLibrary?.openFolder?.('', ''); } catch {}
   if (currentView() !== 'folders') return;
   await load(treePath);
@@ -217,6 +221,9 @@ window.addEventListener('popstate', () => {
   load(treePath);
 });
 window.addEventListener('mochimono:catalog-updated', () => {
+  if (active && currentView() === 'folders') load(treePath);
+});
+window.addEventListener('mochimono:browser-folders-ready', () => {
   if (active && currentView() === 'folders') load(treePath);
 });
 window.addEventListener('mochimono:browser-folders-changed', () => {
