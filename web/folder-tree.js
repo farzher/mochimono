@@ -46,13 +46,15 @@ function cleanTreePath(path) {
   return String(path || '').replaceAll('\\', '/').split('/').filter(part => part && part !== '.' && part !== '..').join('/');
 }
 
-function syncUrl() {
+function syncUrl(mode = 'replace') {
   const url = new URL(location.href);
+  url.searchParams.set('view', 'folders');
   url.searchParams.delete('source');
   url.searchParams.delete('path');
   if (treePath) url.searchParams.set('tree', treePath);
   else url.searchParams.delete('tree');
-  if (url.href !== location.href) history.replaceState(history.state, '', url);
+  if (url.href === location.href) return;
+  history[mode === 'push' ? 'pushState' : 'replaceState'](history.state, '', url);
 }
 
 function breadcrumbs() {
@@ -156,13 +158,13 @@ function render(data) {
     count.textContent = treePath ? `${currentFiles.length.toLocaleString()} files` : `${refs.toLocaleString()} references`;
     count.title = treePath ? 'Files directly in this folder' : 'Physical/source file references';
   }
-  syncUrl();
 }
 
-async function load(path = treePath) {
+async function load(path = treePath, historyMode = 'push') {
   const mine = ++generation;
   treePath = cleanTreePath(path);
   if (!active || currentView() !== 'folders') return;
+  if (historyMode !== 'none') syncUrl(historyMode);
   breadcrumbs();
   files.className = 'files folders';
   files.innerHTML = '<div class="empty">Loading…</div>';
@@ -179,9 +181,11 @@ async function load(path = treePath) {
 async function activate() {
   if (currentView() !== 'folders') return;
   active = true;
+  const url = new URL(location.href);
+  if (url.searchParams.has('tree')) treePath = cleanTreePath(url.searchParams.get('tree') || '');
   try { await window.mochimonoLibrary?.openFolder?.('', ''); } catch {}
   if (currentView() !== 'folders') return;
-  await load(treePath);
+  await load(treePath, 'replace');
 }
 
 function deactivate() {
@@ -202,8 +206,8 @@ folderbar?.addEventListener('click', event => {
   if (!home && !crumb) return;
   event.preventDefault();
   event.stopImmediatePropagation();
-  if (home) void load('');
-  else void load(parts().slice(0, Number(crumb.dataset.treeDepth)).join('/'));
+  if (home) void load('', 'push');
+  else void load(parts().slice(0, Number(crumb.dataset.treeDepth)).join('/'), 'push');
 }, true);
 
 files?.addEventListener('click', event => {
@@ -212,28 +216,29 @@ files?.addEventListener('click', event => {
   if (!folder) return;
   event.preventDefault();
   event.stopImmediatePropagation();
-  void load(folder.dataset.treeFolder);
+  void load(folder.dataset.treeFolder, 'push');
 }, true);
 
 window.addEventListener('popstate', () => {
-  if (!active || currentView() !== 'folders') return;
-  treePath = new URL(location.href).searchParams.get('tree') || '';
-  load(treePath);
+  queueMicrotask(() => {
+    treePath = cleanTreePath(new URL(location.href).searchParams.get('tree') || '');
+    if (active && currentView() === 'folders') load(treePath, 'none');
+  });
 });
 window.addEventListener('mochimono:catalog-updated', () => {
-  if (active && currentView() === 'folders') load(treePath);
+  if (active && currentView() === 'folders') load(treePath, 'none');
 });
 window.addEventListener('mochimono:browser-folders-ready', () => {
-  if (active && currentView() === 'folders') load(treePath);
+  if (active && currentView() === 'folders') load(treePath, 'none');
 });
 window.addEventListener('mochimono:browser-folders-changed', () => {
-  if (active && currentView() === 'folders') load(treePath);
+  if (active && currentView() === 'folders') load(treePath, 'none');
 });
 
 window.mochimonoFolderTree = {
   path:() => treePath,
   files:() => currentFiles.map(file => ({ ...file })),
-  open:path => load(path)
+  open:path => load(path, 'push')
 };
 
 if (currentView() === 'folders') activate();
