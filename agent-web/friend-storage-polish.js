@@ -69,7 +69,8 @@ if (backups && actions && sharesNode) {
           warning.className = 'friend-capacity-warning';
           row.querySelector('.storage-meta')?.append(' · ', warning);
         }
-        warning.textContent = `needs ${bytes(shortfall)} more space`;
+        const text = `needs ${bytes(shortfall)} more space`;
+        if (warning.textContent !== text) warning.textContent = text;
       } else {
         if (update.dataset.friendCapacityBlocked === '1') update.disabled = !storage.online;
         delete update.dataset.friendCapacityBlocked;
@@ -85,10 +86,10 @@ if (backups && actions && sharesNode) {
       const invite = row?.querySelector('[data-share-invite]');
       if (!invite) continue;
       if (share.paired) {
-        invite.textContent = 'Re-pair';
+        if (invite.textContent !== 'Re-pair') invite.textContent = 'Re-pair';
         invite.title = `Replace the paired identity for ${share.peerName || 'this friend'}`;
       } else {
-        invite.textContent = 'Invite';
+        if (invite.textContent !== 'Invite') invite.textContent = 'Invite';
         invite.removeAttribute('title');
       }
     }
@@ -108,7 +109,8 @@ if (backups && actions && sharesNode) {
       polishBackups();
       polishShares();
     } catch (error) {
-      notice.textContent = error.message || 'Friend Drive is unavailable on this Agent.';
+      const text = error.message || 'Friend Drive is unavailable on this Agent.';
+      if (notice.textContent !== text) notice.textContent = text;
       notice.hidden = false;
     } finally {
       syncing = false;
