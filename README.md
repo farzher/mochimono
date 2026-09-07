@@ -37,7 +37,7 @@ npm run dev
 Library    http://127.0.0.1:8642
 Agent      http://127.0.0.1:8643
 Friend UI  http://127.0.0.1:8644  local management only
-Signaling  http://127.0.0.1:8645/friend-signal
+Signaling  http://127.0.0.1:8642/friend-signal
 Token      dev
 Data       ./dev-data
 ```
@@ -55,8 +55,6 @@ Server settings:
 MOCHIMONO_TOKEN
 MOCHIMONO_DATA
 MOCHIMONO_SCRUB_DAYS           primary SHA-256 scrub interval; default 30, 0 disables automatic scrubs
-MOCHIMONO_SIGNAL_HOST          signaling bind address; defaults to HOST
-MOCHIMONO_SIGNAL_PORT          signaling port; default 8645
 HOST
 PORT
 ```
@@ -66,7 +64,7 @@ Agent settings:
 ```text
 FFMPEG_PATH                    optional custom FFmpeg binary
 MOCHIMONO_THUMBNAIL_WORKERS    optional local preview worker count
-MOCHIMONO_SIGNAL_URL           public HTTPS signaling endpoint when not using local development
+MOCHIMONO_SIGNAL_URL           optional shared signaling endpoint override; defaults to <Cloud URL>/friend-signal
 MOCHIMONO_STUN_URLS            comma-separated STUN URLs
 MOCHIMONO_TURN_URLS            comma-separated TURN URLs used when direct ICE traversal fails
 MOCHIMONO_TURN_USERNAME        TURN username when the URLs do not contain credentials
@@ -77,13 +75,15 @@ The Agent stores its local settings in `~/.mochimono/agent.json`. Its friend-sto
 
 ## Friend storage
 
-Friend storage does not expose either Agent to the internet. In production, put the signaling service behind HTTPS (or another trusted encrypted tunnel) and point `MOCHIMONO_SIGNAL_URL` at it. Both Agents connect outbound to the Mochimono signaling service, exchange WebRTC ICE information, authenticate pinned Ed25519 device identities, and transfer encrypted objects over a reliable DataChannel. ICE tries direct peer-to-peer connectivity first. Configure TURN with `MOCHIMONO_TURN_URLS` for networks where direct NAT traversal fails. TURN credentials can be included in each TURN URL or supplied with `MOCHIMONO_TURN_USERNAME` and `MOCHIMONO_TURN_PASSWORD`.
+Friend signaling is served at `/friend-signal` on the normal Mochimono Cloud origin, so the same HTTPS/reverse-proxy setup used by the rest of Mochimono also carries pairing and ICE signaling. No separate public signaling port is required. `MOCHIMONO_SIGNAL_URL` can point Agents at another shared signaling endpoint when needed; both friends must use the same signaling service.
+
+Both Agents connect outbound to signaling, exchange WebRTC ICE information, authenticate pinned Ed25519 device identities, and transfer encrypted objects over a reliable DataChannel. ICE tries direct peer-to-peer connectivity first. Configure TURN with `MOCHIMONO_TURN_URLS` for networks where direct NAT traversal fails. TURN credentials can be included in each TURN URL or supplied with `MOCHIMONO_TURN_USERNAME` and `MOCHIMONO_TURN_PASSWORD`.
 
 Pairing uses a short-lived invite code. The signaling service receives only a one-way pairing identifier/verifier; the invite secret itself is not uploaded. The invite authenticates the two public device identities before they are pinned locally.
 
 Backup contents retain their independent application encryption even though WebRTC also encrypts transport. Objects and the catalog are AES-256-GCM encrypted before transmission, and their remote object IDs are HMAC-derived opaque identifiers. The storage host never receives the recovery key, original filenames, or plaintext catalog.
 
-Port 8644 is now only a loopback management API used by the local Agent UI. Friend object data never travels through it.
+Port 8644 is only a loopback management API used by the local Agent UI. Friend object data never travels through it.
 
 ## Previews
 
