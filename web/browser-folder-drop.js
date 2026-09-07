@@ -3,6 +3,7 @@ import './browser-folder-sync.js';
 let pendingHandles = Promise.resolve([]);
 let currentHandles = [];
 let button = null;
+let choiceObserver = null;
 
 async function directoryHandles(dataTransfer) {
   const result = [];
@@ -79,14 +80,24 @@ document.addEventListener('drop', event => {
   pendingHandles = directoryHandles(event.dataTransfer);
 }, true);
 
-const observer = new MutationObserver(records => {
-  for (const record of records) {
-    const target = record.target;
-    const choice = target?.matches?.('.client-drop-choice') ? target : document.querySelector('.client-drop-choice');
-    if (!choice || choice.hidden) continue;
-    queueMicrotask(() => decorateChoice(choice));
-    return;
-  }
-  if (document.querySelector('.client-drop-choice')?.hidden) removeButton();
-});
-observer.observe(document.documentElement, { childList:true, subtree:true, attributes:true, attributeFilter:['hidden'] });
+function watchChoice(choice) {
+  choiceObserver?.disconnect();
+  choiceObserver = new MutationObserver(() => {
+    if (choice.hidden) removeButton();
+    else queueMicrotask(() => decorateChoice(choice));
+  });
+  choiceObserver.observe(choice, { attributes:true, attributeFilter:['hidden'] });
+  if (!choice.hidden) queueMicrotask(() => decorateChoice(choice));
+}
+
+const existing = document.querySelector('.client-drop-choice');
+if (existing) watchChoice(existing);
+else {
+  const finder = new MutationObserver(() => {
+    const choice = document.querySelector('.client-drop-choice');
+    if (!choice) return;
+    finder.disconnect();
+    watchChoice(choice);
+  });
+  finder.observe(document.body, { childList:true });
+}
