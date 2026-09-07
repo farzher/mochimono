@@ -10,8 +10,6 @@ function wantedView() {
   const url = new URL(location.href);
   const explicit = validView(url.searchParams.get('view'));
   if (explicit) return explicit;
-  // Older folder links only had ?tree=. Keep them working and normalize them
-  // to the explicit view state the next time the URL changes.
   if (url.searchParams.has('tree')) return 'folders';
   return 'grid';
 }
@@ -39,6 +37,7 @@ function restoreView() {
 
 views?.addEventListener('click', event => {
   if (!event.target.closest('[data-view]')) return;
+  const trusted = event.isTrusted;
   queueMicrotask(() => {
     if (restoring) return;
     if (suppressNextView) {
@@ -46,7 +45,7 @@ views?.addEventListener('click', event => {
       writeView('replace');
       return;
     }
-    writeView('push');
+    writeView(trusted ? 'push' : 'replace');
   });
 });
 
@@ -58,6 +57,4 @@ window.mochimonoNavigation = {
   restoreView
 };
 
-// Imports finish before this microtask runs, so folder-tree's view listener is
-// already installed when an initial ?view=folders URL is restored.
 queueMicrotask(restoreView);
