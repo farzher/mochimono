@@ -119,7 +119,7 @@ async function activate() {
   active = true;
   // Cancel the legacy per-import folder load so it cannot overwrite this unified
   // physical/source tree after our asynchronous request finishes.
-  await window.mochimonoLibrary?.openFolder?.('', '').catch?.(() => {});
+  try { await window.mochimonoLibrary?.openFolder?.('', ''); } catch {}
   if (currentView() !== 'folders') return;
   await load(treePath);
 }
