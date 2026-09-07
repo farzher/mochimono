@@ -6,15 +6,16 @@ let button = null;
 let choiceObserver = null;
 
 async function directoryHandles(dataTransfer) {
-  const result = [];
+  // getAsFileSystemHandle() must be invoked while the drop event still owns the
+  // protected DataTransfer store. Start every request synchronously, then await.
+  const requests = [];
   for (const item of dataTransfer?.items || []) {
     if (item.kind !== 'file' || !item.getAsFileSystemHandle) continue;
-    try {
-      const handle = await item.getAsFileSystemHandle();
-      if (handle?.kind === 'directory') result.push(handle);
-    } catch {}
+    try { requests.push(Promise.resolve(item.getAsFileSystemHandle()).catch(() => null)); }
+    catch {}
   }
-  return result;
+  const handles = await Promise.all(requests);
+  return handles.filter(handle => handle?.kind === 'directory');
 }
 
 function toast(text) {
