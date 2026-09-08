@@ -64,22 +64,24 @@ Agent settings:
 ```text
 FFMPEG_PATH                    optional custom FFmpeg binary
 MOCHIMONO_THUMBNAIL_WORKERS    optional local preview worker count
-MOCHIMONO_SIGNAL_URL           optional shared signaling endpoint override; defaults to <Cloud URL>/friend-signal
+MOCHIMONO_SIGNAL_URL           optional signaling endpoint override; defaults to <Cloud URL>/friend-signal
 MOCHIMONO_STUN_URLS            comma-separated STUN URLs
 MOCHIMONO_TURN_URLS            comma-separated TURN URLs used when direct ICE traversal fails
 MOCHIMONO_TURN_USERNAME        TURN username when the URLs do not contain credentials
 MOCHIMONO_TURN_PASSWORD        TURN password when the URLs do not contain credentials
 ```
 
-The Agent stores its local settings in `~/.mochimono/agent.json`. Its friend-storage recovery keys and peer identities stay local to the Agent.
+The Agent stores its local settings in `~/.mochimono/agent.json`. Its friend-storage recovery keys, peer identity, and chosen Friend Drive rendezvous stay local to the Agent.
 
 ## Friend storage
 
-Friend signaling is served at `/friend-signal` on the normal Mochimono Cloud origin, so the same HTTPS/reverse-proxy setup used by the rest of Mochimono also carries pairing and ICE signaling. No separate public signaling port is required. `MOCHIMONO_SIGNAL_URL` can point Agents at another shared signaling endpoint when needed; both friends must use the same signaling service.
+Friend signaling is served at `/friend-signal` on the normal Mochimono Cloud origin, so the same HTTPS/reverse-proxy setup used by the rest of Mochimono also carries pairing and ICE signaling. No separate public signaling port is required. `MOCHIMONO_SIGNAL_URL` can provide another signaling endpoint when needed.
+
+Friend invites are self-contained `M2-...` values: they carry both the short-lived pairing secret and the rendezvous endpoint. Pasting an invite automatically moves the joining Agent to the host's rendezvous, so the two people do not need matching Cloud settings. The first successful Friend Drive invite or join pins that rendezvous locally so paired friends can reconnect after Agent restarts. A failed or expired invite does not change the pinned rendezvous.
 
 Both Agents connect outbound to signaling, exchange WebRTC ICE information, authenticate pinned Ed25519 device identities, and transfer encrypted objects over a reliable DataChannel. ICE tries direct peer-to-peer connectivity first. Configure TURN with `MOCHIMONO_TURN_URLS` for networks where direct NAT traversal fails. TURN credentials can be included in each TURN URL or supplied with `MOCHIMONO_TURN_USERNAME` and `MOCHIMONO_TURN_PASSWORD`.
 
-Pairing uses a short-lived invite code. The signaling service receives only a one-way pairing identifier/verifier; the invite secret itself is not uploaded. The invite authenticates the two public device identities before they are pinned locally.
+Pairing invites are valid for ten minutes. The signaling service receives only a one-way pairing identifier/verifier; the invite secret itself is not uploaded. The invite authenticates the two public device identities before they are pinned locally.
 
 Backup contents retain their independent application encryption even though WebRTC also encrypts transport. Objects and the catalog are AES-256-GCM encrypted before transmission, and their remote object IDs are HMAC-derived opaque identifiers. The storage host never receives the recovery key, original filenames, or plaintext catalog.
 
