@@ -93,8 +93,9 @@ async function openStorageSource(row) {
     try {
       await library.openFolder(importId, '');
     } catch {
-      // The local index is authoritative for Storage. If the server-side source
-      // is stale/offline, the physical root can still be opened exactly.
+      // openFolder mutates the source scope before its request completes. Clear
+      // that failed scope before falling back to the exact local root.
+      child.mochimonoHome?.('replace');
       await openLocalFolder(child, library, path);
     }
   } else {
