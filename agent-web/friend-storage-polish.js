@@ -1,3 +1,5 @@
+import './storage-locations-ui.js';
+
 const backups = document.querySelector('#backups');
 const actions = document.querySelector('.friend-storage-actions');
 const sharesNode = document.querySelector('.friend-share-list');
