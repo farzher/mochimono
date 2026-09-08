@@ -4,7 +4,6 @@ const POLL_MS = 5000;
 
 const runtime = {
   localHashes:new Set(),
-  localOnlyHashes:new Set(),
   fingerprint:'',
   hydrating:null
 };
@@ -15,23 +14,84 @@ async function fetchJson(path) {
   return response.json();
 }
 
-async function localFiles() {
+const pathName = value => String(value || '').replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).at(-1) || String(value || '');
+
+async function localPage(path, offset) {
+  const params = new URLSearchParams({ limit:String(PAGE), offset:String(offset) });
+  if (path) params.set('path', path);
+  return fetchJson(`/api/client/local-catalog?${params}`);
+}
+
+async function localSnapshot() {
+  let state = null;
+  try { state = await fetchJson('/api/state'); } catch {}
+  const configured = Array.isArray(state?.settings?.folders) ? state.settings.folders : [];
+  const sources = configured.map(folder => ({
+    path:String(folder?.path || ''),
+    importId:Number(folder?.importId) || 0,
+    protected:folder?.protected !== false
+  })).filter(folder => folder.path);
+
   const files = [];
-  let offset = 0;
-  while (offset != null) {
-    const data = await fetchJson(`/api/client/local-catalog?limit=${PAGE}&offset=${offset}`);
-    files.push(...(data.files || []).map(file => ({ ...file, localManaged:true })));
-    offset = data.nextOffset == null ? null : Number(data.nextOffset);
+  const imports = new Map();
+  const seenLocations = new Map();
+
+  // A path-specific Agent catalog intentionally reads the persisted index even
+  // when that source drive is unplugged. That preserves offline metadata and any
+  // already-generated thumbnails instead of making the library appear empty.
+  const paths = sources.length ? sources : [{ path:'', importId:0, protected:false }];
+  for (const source of paths) {
+    let offset = 0;
+    do {
+      const data = await localPage(source.path, offset);
+      for (const raw of data.files || []) {
+        const hash = String(raw?.hash || '');
+        if (!hash) continue;
+        const previous = seenLocations.get(hash);
+        const searchText = [previous?.searchText, raw.searchText, source.path].filter(Boolean).join(' ').trim();
+        const importIds = source.importId
+          ? [...new Set([...(previous?.importIds || []), source.importId])]
+          : previous?.importIds || [];
+        const next = {
+          ...(previous || {}),
+          ...raw,
+          searchText,
+          importIds,
+          exactImportIds:importIds,
+          localManaged:true,
+          localAvailable:Boolean(raw.localAvailable)
+        };
+        seenLocations.set(hash, next);
+      }
+      offset = data.nextOffset == null ? null : Number(data.nextOffset);
+    } while (offset != null);
+
+    if (source.importId) imports.set(source.importId, {
+      id:source.importId,
+      sourceName:pathName(source.path) || state?.settings?.device || 'Local',
+      files:0,
+      referencedBytes:0,
+      createdAt:''
+    });
   }
-  return files;
+
+  for (const file of seenLocations.values()) {
+    files.push(file);
+    for (const id of file.importIds || []) {
+      const item = imports.get(Number(id));
+      if (!item) continue;
+      item.files++;
+      item.referencedBytes += Number(file.size) || 0;
+    }
+  }
+  return { files, imports:[...imports.values()] };
 }
 
 function isCloudRecord(file) {
-  if (file?.cloudBacked === true) return true;
-  if (file?.localManaged !== true) return true;
-  if (Array.isArray(file?.importIds) && file.importIds.length) return true;
-  if (Array.isArray(file?.exactImportIds) && file.exactImportIds.length) return true;
-  return Number(file?.backupCount) > 0;
+  // Once a row has been explicitly merged as localManaged, cloudBacked is the
+  // durable truth. importIds can also exist on a local-only protected source.
+  if (file?.localManaged === true) return file.cloudBacked === true;
+  return Boolean(file);
 }
 
 function sameLocalShape(a, b) {
@@ -40,41 +100,54 @@ function sameLocalShape(a, b) {
     String(a?.rootPath || '') === String(b?.rootPath || '') &&
     String(a?.originalPath || '') === String(b?.originalPath || '') &&
     String(a?.fileDate || '') === String(b?.fileDate || '') &&
-    Boolean(a?.localAvailable) === Boolean(b?.localAvailable);
+    Boolean(a?.localAvailable) === Boolean(b?.localAvailable) &&
+    String(a?.searchText || '') === String(b?.searchText || '');
 }
 
-function mergeSnapshot(cached, locals) {
+function mergeImports(cached = [], local = []) {
+  const result = new Map();
+  for (const item of cached || []) if (Number(item?.id)) result.set(Number(item.id), item);
+  for (const item of local || []) {
+    const id = Number(item?.id) || 0;
+    if (!id || result.has(id)) continue;
+    result.set(id, item);
+  }
+  return [...result.values()];
+}
+
+function mergeSnapshot(cached, local) {
   const previous = new Map((cached?.files || []).map(file => [String(file.hash || ''), file]).filter(([hash]) => hash));
   const next = new Map(previous);
   const localHashes = new Set();
-  const localOnlyHashes = new Set();
-  let changed = !cached?.files?.length && locals.length > 0;
+  let changed = !cached?.files?.length && local.files.length > 0;
 
-  for (const local of locals) {
-    const hash = String(local.hash || '');
+  for (const localFile of local.files) {
+    const hash = String(localFile.hash || '');
     if (!hash) continue;
     localHashes.add(hash);
     const old = previous.get(hash);
     const cloudBacked = old ? isCloudRecord(old) : false;
-    if (!cloudBacked) localOnlyHashes.add(hash);
-    const searchText = [old?.searchText, local.searchText].filter(Boolean).join(' ').trim();
+    const searchText = [old?.searchText, localFile.searchText].filter(Boolean).join(' ').trim();
     const merged = old
       ? {
-          ...local,
+          ...localFile,
           ...old,
-          rootPath:local.rootPath || old.rootPath,
-          localAvailable:local.localAvailable,
+          rootPath:localFile.rootPath || old.rootPath,
+          originalPath:localFile.originalPath || old.originalPath,
+          localAvailable:localFile.localAvailable,
           localManaged:true,
           cloudBacked,
-          searchText
+          searchText,
+          importIds:[...new Set([...(old.importIds || []), ...(localFile.importIds || [])])],
+          exactImportIds:[...new Set([...(old.exactImportIds || []), ...(localFile.exactImportIds || [])])]
         }
-      : { ...local, localManaged:true, cloudBacked:false };
+      : { ...localFile, localManaged:true, cloudBacked:false };
     if (!old || !sameLocalShape(old, merged) || old.localManaged !== true || Boolean(old.cloudBacked) !== cloudBacked) changed = true;
     next.set(hash, merged);
   }
 
-  // Remove only records we know came solely from the Agent index. Cloud-backed
-  // metadata remains visible even if its local source is later disconnected.
+  // Remove only rows that were previously known to be local-only. Cloud-backed
+  // records stay browseable even when their local source disappears.
   for (const [hash, file] of previous) {
     if (file?.localManaged === true && !isCloudRecord(file) && !localHashes.has(hash)) {
       next.delete(hash);
@@ -83,12 +156,11 @@ function mergeSnapshot(cached, locals) {
   }
 
   runtime.localHashes = localHashes;
-  runtime.localOnlyHashes = localOnlyHashes;
   return {
     changed,
     snapshot:{
       version:String(cached?.version || 'agent-local-v1'),
-      imports:Array.isArray(cached?.imports) ? cached.imports : [],
+      imports:mergeImports(cached?.imports, local.imports),
       files:[...next.values()]
     }
   };
@@ -98,13 +170,13 @@ async function prepareOfflineCatalog() {
   if (!CLIENT) return;
   const cache = window.mochimonoCatalogCache;
   if (!cache?.load || !cache?.save) return;
-  const [cached, locals] = await Promise.all([
+  const [cached, local] = await Promise.all([
     cache.load().catch(() => null),
-    localFiles().catch(() => [])
+    localSnapshot().catch(() => ({ files:[], imports:[] }))
   ]);
-  if (!locals.length && !cached?.files?.length) return;
-  const merged = mergeSnapshot(cached, locals);
-  if (merged.changed) {
+  if (!local.files.length && !cached?.files?.length) return;
+  const merged = mergeSnapshot(cached, local);
+  if (merged.changed || merged.snapshot.imports.length !== Number(cached?.imports?.length || 0)) {
     await cache.save(merged.snapshot.files, {
       version:merged.snapshot.version,
       imports:merged.snapshot.imports
@@ -123,15 +195,13 @@ async function localFingerprint() {
 async function hydrateLive() {
   if (!CLIENT || runtime.hydrating) return runtime.hydrating;
   runtime.hydrating = (async () => {
-    const locals = await localFiles();
-    const nextHashes = new Set(locals.map(file => String(file.hash || '')).filter(Boolean));
+    const local = await localSnapshot();
     const library = window.mochimonoLibrary;
-    if (locals.length) library?.upsertMany?.(locals);
-
-    const removed = [...runtime.localOnlyHashes].filter(hash => !nextHashes.has(hash));
-    if (removed.length) library?.remove?.(removed);
-    runtime.localHashes = nextHashes;
-    runtime.localOnlyHashes = new Set([...runtime.localOnlyHashes].filter(hash => nextHashes.has(hash)));
+    if (local.files.length) library?.upsertMany?.(local.files);
+    runtime.localHashes = new Set(local.files.map(file => String(file.hash || '')).filter(Boolean));
+    // Do not delete live rows here. A content hash can simultaneously exist in
+    // Cloud and a local source; the cold-start merge can distinguish those safely
+    // from persisted metadata, while an in-memory upsert API intentionally cannot.
   })().catch(() => {}).finally(() => { runtime.hydrating = null; });
   return runtime.hydrating;
 }
@@ -140,8 +210,8 @@ if (CLIENT) {
   await prepareOfflineCatalog().catch(error => console.warn('Local catalog bootstrap failed.', error));
 
   window.addEventListener('mochimono:catalog-updated', () => {
-    // A Cloud refresh replaces the in-memory catalog. Re-merge any local-only
-    // files so local browsing remains first-class while uploads are pending.
+    // A Cloud refresh replaces the in-memory catalog. Re-merge local-only files
+    // so files indexed while disconnected do not disappear before upload.
     setTimeout(() => hydrateLive(), 0);
   });
 }
