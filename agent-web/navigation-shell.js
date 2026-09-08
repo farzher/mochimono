@@ -1,3 +1,5 @@
+import './storage-source-navigation.js';
+
 const frame = document.querySelector('#filesFrame');
 const storagePane = document.querySelector('#storagePane');
 const manageButton = document.querySelector('[data-client-tab="storage"]');
