@@ -45,18 +45,24 @@ const [
   { startMediaMetadataAgent },
   { startProtectionAgent },
   { startBrowseFastDedupe },
-  { invalidateClientProviders }
+  { invalidateClientProviders },
+  { startOfflineIndexService }
 ] = await Promise.all([
   import('./lib/thumbnail-agent.js'),
   import('./lib/media-metadata-agent.js'),
   import('./lib/protection-agent.js'),
   import('./lib/browse-fast-dedupe.js'),
-  import('./lib/client-providers.js')
+  import('./lib/client-providers.js'),
+  import('./lib/offline-index.js')
 ]);
 
 startThumbnailAgent();
 startMediaMetadataAgent();
 startProtectionAgent().catch(error => console.error('Protection agent failed', error));
+// Keep the Agent's persistent SHA-256 index useful even when the Cloud cannot be
+// reached. The regular sync service remains responsible for Cloud ingestion and
+// reuses the hashes learned here when connectivity returns.
+startOfflineIndexService();
 await import('./agent.js');
 try { await import('./lib/friend-storage.js'); }
 catch (error) { console.error('Encrypted friend storage failed to start', error); }
