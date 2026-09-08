@@ -12,6 +12,7 @@ import { handleClientProviderApi } from './lib/client-providers.js';
 import { handleCompressionWorkApi } from './lib/compression-work.js';
 import { handleImageOptimizeApi } from './lib/image-optimize.js';
 import { handleVideoOptimizeApi } from './lib/video-optimize.js';
+import { localDuplicateStats } from './lib/local-duplicate-stats.js';
 import { localCandidate, localCandidates, localCatalog, localLocations } from './lib/local-locations.js';
 import { providerThumbnail, providerThumbnailFailure, queueProviderThumbnail, serveProviderThumbnail } from './lib/provider-thumbs.js';
 import { queueRemoteThumbnail, thumbnailFailure } from './lib/thumbnail-agent.js';
@@ -313,6 +314,10 @@ export async function handleClientGateway(req, res, url) {
     const hash = String(url.searchParams.get('hash') || '');
     if (hash && !/^[a-f0-9]{64}$/.test(hash)) json(res, 400, { error: 'Invalid SHA-256 hash' });
     else json(res, 200, localLocations(hash));
+    return true;
+  }
+  if (req.method === 'GET' && url.pathname === '/api/client/duplicate-stats') {
+    json(res, 200, localDuplicateStats());
     return true;
   }
   if (req.method === 'GET' && url.pathname === '/api/client/local-catalog') {
