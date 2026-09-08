@@ -41,6 +41,7 @@ function sync() {
 
 for (const control of controls) control.addEventListener('change', sync);
 search?.addEventListener('input', sync);
+window.addEventListener('mochimono:filters-changed', sync);
 
 mediaSizes?.addEventListener('click', event => {
   if (event.target.closest('[data-media-size]') && sizeMenu) sizeMenu.open = false;
