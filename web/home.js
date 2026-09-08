@@ -16,7 +16,7 @@ function clearValue(control) {
 
 function cleanHomeUrl() {
   const url = new URL(location.href);
-  for (const key of ['collection', 'source', 'path', 'root', 'tree', 'view', 'file', 'q', 'origin', 'type', 'sort', 'where']) {
+  for (const key of ['collection', 'source', 'path', 'root', 'browser', 'tree', 'view', 'file', 'q', 'origin', 'type', 'sort', 'where']) {
     url.searchParams.delete(key);
   }
   return url;
