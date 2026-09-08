@@ -1,6 +1,18 @@
 const startupGrid = document.querySelector('#files');
 const startupViewer = document.querySelector('#viewer');
 
+// The client library used to wait for library-entry.js to rebuild the complete
+// local snapshot before library-app.js was even imported. On a large index that
+// made the UI and window.mochimonoLibrary unavailable for seconds. Start the
+// cache and core library immediately; library-entry can reconcile local/offline
+// state afterward and its later import of library-app is deduplicated by the
+// browser module loader.
+if (document.documentElement.classList.contains('client-library')) {
+  import('./catalog-cache.js')
+    .then(() => import('./library-app.js'))
+    .catch(error => console.error('Could not start Mochimono library.', error));
+}
+
 let settled = false;
 let userTookFocus = false;
 const navigationKeys = new Set([
