@@ -105,7 +105,7 @@ function stopDev() {
   });
 }
 
-async function pullUpdate() {
+async function pullUpdate({ requireCurrent = false } = {}) {
   git(['fetch', '--quiet', 'origin', 'main']);
 
   const local = git(['rev-parse', 'HEAD']);
@@ -122,12 +122,16 @@ async function pullUpdate() {
   }
 
   if (!isAncestor(local, remote)) {
-    notice(`diverged:${remote}`, '[git] origin/main has diverged from the local branch; skipping automatic pull.');
+    const message = 'origin/main has diverged from the local branch; automatic update is unsafe.';
+    if (requireCurrent) throw new Error(`${message} Refusing to start an unverified dev server.`);
+    notice(`diverged:${remote}`, `[git] ${message}`);
     return false;
   }
 
   if (!workingTreeIsClean()) {
-    notice(`dirty:${remote}`, '[git] GitHub update available, but the working tree has local changes; skipping automatic pull.');
+    const message = 'GitHub has a newer version, but the working tree has local changes.';
+    if (requireCurrent) throw new Error(`${message} Refusing to start the outdated dev server.`);
+    notice(`dirty:${remote}`, `[git] ${message} Skipping automatic pull.`);
     return false;
   }
 
@@ -174,9 +178,11 @@ process.on('SIGINT', () => void shutdown());
 process.on('SIGTERM', () => void shutdown());
 
 try {
-  await pullUpdate();
+  await pullUpdate({ requireCurrent: true });
 } catch (error) {
-  console.warn(`[git] Initial update check failed: ${error.message}`);
+  console.error(`[git] Startup update check failed: ${error.message}`);
+  console.error('[dev] Mochimono was not started. Resolve the Git state and run npm run dev again.');
+  process.exit(1);
 }
 
 try {
