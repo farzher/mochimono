@@ -60,9 +60,9 @@ startThumbnailAgent();
 startMediaMetadataAgent();
 startProtectionAgent().catch(error => console.error('Protection agent failed', error));
 // Keep the Agent's persistent SHA-256 index useful even when the Cloud cannot be
-// reached. The regular sync service remains responsible for Cloud ingestion and
-// reuses the hashes learned here when connectivity returns.
-startOfflineIndexService();
+// reached. Resolve the initial Cloud state before the normal sync service starts;
+// when offline this immediately claims local indexing work first.
+await startOfflineIndexService();
 await import('./agent.js');
 try { await import('./lib/friend-storage.js'); }
 catch (error) { console.error('Encrypted friend storage failed to start', error); }
