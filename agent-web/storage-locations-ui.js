@@ -247,7 +247,12 @@ if (storagePane && sourceSection && backupSection) {
     if (location.type === 'cloud') {
       details.push(row('Server', location.server || '—'), row('Status', location.online ? 'Online' : 'Offline'));
     } else if (location.type === 'local') {
-      details.push(row('Path', location.path || '—'), row('Status', location.online ? 'Online' : 'Offline'));
+      details.push(
+        row('Path', location.path || '—'),
+        row('Contains', location.contents || 'Index · thumbnails · local metadata'),
+        row('Drive', location.root || ''),
+        row('Status', location.online ? 'Online' : 'Offline')
+      );
     } else if (location.type === 'backup') {
       const backup = location.backup || {};
       const policy = backup.meta?.policy || backup.remote?.policy || {};
@@ -408,7 +413,7 @@ if (storagePane && sourceSection && backupSection) {
     output.push(rawCloud ? { ...rawCloud, server:state?.settings?.server || '' } : cloudStats ? { id:'cloud', type:'cloud', name:'Cloud', online:true, server:state?.settings?.server || '', capacityBytes:Number(cloudStats.capacityBytes) || 0, freeBytes:Number(cloudStats.freeBytes) || 0, mochimonoBytes:Number(cloudStats.bytes) || 0 } : { id:'cloud', type:'cloud', name:'Cloud', online:false, server:state?.settings?.server || '' });
 
     for (const localLocation of raw.filter(item => item.type === 'local')) {
-      const label = String(localLocation.name || '').split('·').at(-1)?.trim() || localLocation.path || 'Local';
+      const label = localLocation.name || 'Local cache';
       output.push({ ...localLocation, label });
     }
 
