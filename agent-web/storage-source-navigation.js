@@ -25,7 +25,7 @@ async function waitForLibrary(timeoutMs = 30_000) {
   while (Date.now() < deadline) {
     const child = frame?.contentWindow;
     const library = child?.mochimonoLibrary;
-    if (child && library?.setLocationFilter && child.mochimonoHome) return { child, library };
+    if (child && library?.setLocationFilter) return { child, library };
     await delay(50);
   }
   throw new Error('Library could not finish loading.');
@@ -58,6 +58,34 @@ async function localFolderHashes(path) {
   return hashes;
 }
 
+function resetLibraryScope(child, library) {
+  const document = child.document;
+  const search = document.querySelector('#search');
+  const source = document.querySelector('#source');
+  const collection = document.querySelector('#collectionFilter');
+  const location = document.querySelector('#locationFilter');
+  const type = document.querySelector('#typeFilter');
+
+  if (search) {
+    search.value = '';
+    search.dispatchEvent(new Event('input', { bubbles:true }));
+  }
+  if (source) {
+    source.value = '';
+    source.dispatchEvent(new Event('change', { bubbles:true }));
+  }
+  if (type) {
+    type.value = '';
+    type.dispatchEvent(new Event('change', { bubbles:true }));
+  }
+  if (collection) {
+    collection.value = '';
+    child.mochimonoSetCollectionHashes?.(null);
+  }
+  if (location) location.value = '';
+  library.setLocationFilter('', null);
+}
+
 function selectLocalFolderFilter(child, path) {
   const control = child.document.querySelector('#locationFilter');
   if (!control) return;
@@ -84,7 +112,7 @@ async function openStorageSource(row) {
   if (storagePane && !storagePane.hidden) storageButton?.click();
 
   const { child, library } = await waitForLibrary();
-  child.mochimonoHome('replace');
+  resetLibraryScope(child, library);
   const gridButton = frame.contentDocument?.querySelector('#views [data-view="grid"]');
   if (gridButton && !gridButton.classList.contains('active')) gridButton.click();
 
