@@ -7,7 +7,7 @@
     "node": ">=22.16.0"
   },
   "scripts": {
-    "dev": "git pull --ff-only && node ensure-deps.js && node dev.js",
+    "dev": "node dev-watch.js",
     "start": "node server-entry.js",
     "agent": "node ensure-deps.js && node agent-entry.js"
   },
