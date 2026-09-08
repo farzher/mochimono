@@ -1,4 +1,5 @@
 import './client-navigation-bridge.js';
+import './local-root-scope.js';
 import './video-optimize-cloud-fallback.js';
 
 if (location.pathname.startsWith('/files')) {
