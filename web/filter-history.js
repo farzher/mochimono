@@ -15,6 +15,8 @@ function currentViewFromUrl(url = new URL(location.href)) {
   return 'grid';
 }
 
+const hasFolderScope = url => url.searchParams.has('root') || url.searchParams.has('browser');
+
 function targetUrl() {
   const url = new URL(location.href);
   const query = String(search?.value || '').trim();
@@ -30,11 +32,10 @@ function targetUrl() {
   if (kind) url.searchParams.set('type', kind); else url.searchParams.delete('type');
   if (order && order !== 'date-desc') url.searchParams.set('sort', order); else url.searchParams.delete('sort');
 
-  // Exact local source-folder navigation is represented by ?root=<path>. The
-  // visible Where selector mirrors that scope, but it must not also create a
-  // generic ?where=source-folder filter because locations.js does not own the
-  // root's exact hash membership.
-  if (location && !(location === 'source-folder' && url.searchParams.has('root'))) url.searchParams.set('where', location);
+  // Native and browser source-folder navigation own their exact hash sets. The
+  // visible Where selector mirrors that scope, but must not create a second
+  // generic ?where=source-folder filter.
+  if (location && !(location === 'source-folder' && hasFolderScope(url))) url.searchParams.set('where', location);
   else url.searchParams.delete('where');
   return url;
 }
@@ -75,9 +76,6 @@ function restoreFilters() {
     const q = url.searchParams.get('q') || '';
     dispatchIfChanged(search, q, 'input');
 
-    // ?source=...&path=... is folder browsing state. In that mode library-app
-    // intentionally owns the same select element, so origin filtering must not
-    // reset it while a deep folder URL is being restored.
     if (!url.searchParams.has('source')) {
       const wantedOrigin = url.searchParams.get('origin') || '';
       if (!wantedOrigin || source?.querySelector(`option[value="${CSS.escape(wantedOrigin)}"]`)) {
@@ -85,10 +83,6 @@ function restoreFilters() {
       }
     }
 
-    // Grid is the visual media browser. An omitted type is therefore not
-    // "All files" in Grid; it means the implicit Media default. Derive this
-    // during URL restoration itself so startup/shell restores cannot reset the
-    // selector after navigation-state has initialized it.
     const explicitType = url.searchParams.get('type');
     const wantedType = explicitType == null && currentViewFromUrl(url) === 'grid' ? 'media' : (explicitType || '');
     const safeType = type?.querySelector(`option[value="${CSS.escape(wantedType)}"]`) ? wantedType : '';
@@ -98,10 +92,7 @@ function restoreFilters() {
     const safeSort = sort?.querySelector(`option[value="${CSS.escape(wantedSort)}"]`) ? wantedSort : 'date-desc';
     dispatchIfChanged(sort, safeSort);
 
-    // local-root-scope.js restores the exact root membership and owns the
-    // temporary Folder option. Do not dispatch the generic location handler for
-    // that state; it would replace the exact root hashes with an empty set.
-    if (!url.searchParams.has('root')) {
+    if (!hasFolderScope(url)) {
       const wantedWhere = url.searchParams.get('where') || '';
       const safeWhere = where?.querySelector(`option[value="${CSS.escape(wantedWhere)}"]`) ? wantedWhere : '';
       dispatchIfChanged(where, safeWhere);
