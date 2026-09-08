@@ -1,15 +1,18 @@
 const CLIENT = document.documentElement.classList.contains('client-library');
 const PAGE = 5000;
 const POLL_MS = 5000;
+const nativeFetch = window.fetch.bind(window);
 
 const runtime = {
   localHashes:new Set(),
   fingerprint:'',
-  hydrating:null
+  hydrating:null,
+  offlineSnapshot:{ version:'agent-local-v1', files:[], imports:[] },
+  cloudOnline:null
 };
 
 async function fetchJson(path) {
-  const response = await fetch(path, { cache:'no-store' });
+  const response = await nativeFetch(path, { cache:'no-store' });
   if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
   return response.json();
 }
@@ -167,29 +170,75 @@ function mergeSnapshot(cached, local) {
 }
 
 async function prepareOfflineCatalog() {
-  if (!CLIENT) return;
+  if (!CLIENT) return runtime.offlineSnapshot;
   const cache = window.mochimonoCatalogCache;
-  if (!cache?.load || !cache?.save) return;
+  if (!cache?.load || !cache?.save) return runtime.offlineSnapshot;
   const [cached, local] = await Promise.all([
     cache.load().catch(() => null),
     localSnapshot().catch(() => ({ files:[], imports:[] }))
   ]);
-  if (!local.files.length && !cached?.files?.length) return;
   const merged = mergeSnapshot(cached, local);
-  if (merged.changed || merged.snapshot.imports.length !== Number(cached?.imports?.length || 0)) {
-    await cache.save(merged.snapshot.files, {
-      version:merged.snapshot.version,
-      imports:merged.snapshot.imports
-    }).catch(() => {});
+  runtime.offlineSnapshot = merged.snapshot;
+  if (local.files.length || cached?.files?.length) {
+    if (merged.changed || merged.snapshot.imports.length !== Number(cached?.imports?.length || 0)) {
+      await cache.save(merged.snapshot.files, {
+        version:merged.snapshot.version,
+        imports:merged.snapshot.imports
+      }).catch(() => {});
+    }
   }
+  return runtime.offlineSnapshot;
 }
 
-async function localFingerprint() {
-  const data = await fetchJson('/api/folder-stats');
-  return JSON.stringify((data.folders || []).map(folder => [
-    String(folder.path || ''), Number(folder.files) || 0, Number(folder.bytes) || 0,
-    String(folder.lastIndexed || ''), Boolean(folder.protected !== false)
-  ]));
+function jsonResponse(data) {
+  return new Response(JSON.stringify(data), {
+    status:200,
+    headers:{ 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' }
+  });
+}
+
+function offlineCatalogResponse(url) {
+  const snapshot = runtime.offlineSnapshot;
+  if (url.pathname === '/api/catalog/version') return jsonResponse({ version:snapshot.version });
+  if (url.pathname === '/api/imports') return jsonResponse({ imports:snapshot.imports || [] });
+  if (url.pathname !== '/api/catalog') return null;
+
+  const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit')) || 5000));
+  const offset = Math.max(0, Number(url.searchParams.get('after')) || 0);
+  const files = (snapshot.files || []).slice(offset, offset + limit);
+  const next = offset + files.length;
+  return jsonResponse({ files, nextAfter:next < (snapshot.files || []).length ? String(next) : '' });
+}
+
+function installOfflineCatalogFallback() {
+  if (!CLIENT) return;
+  window.fetch = async (input, options) => {
+    const response = await nativeFetch(input, options);
+    if (response.ok || response.status < 500) return response;
+    let url;
+    try { url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.origin); }
+    catch { return response; }
+    if (url.origin !== location.origin) return response;
+    return offlineCatalogResponse(url) || response;
+  };
+}
+
+async function localStatus() {
+  const [folders, state] = await Promise.all([
+    fetchJson('/api/folder-stats'),
+    fetchJson('/api/state')
+  ]);
+  const job = state?.job || {};
+  return {
+    cloudOnline:Boolean(state?.server?.online),
+    fingerprint:JSON.stringify([
+      (folders.folders || []).map(folder => [
+        String(folder.path || ''), Number(folder.files) || 0, Number(folder.bytes) || 0,
+        Boolean(folder.protected !== false)
+      ]),
+      String(job.id || ''), String(job.status || ''), String(job.finishedAt || '')
+    ])
+  };
 }
 
 async function hydrateLive() {
@@ -208,6 +257,7 @@ async function hydrateLive() {
 
 if (CLIENT) {
   await prepareOfflineCatalog().catch(error => console.warn('Local catalog bootstrap failed.', error));
+  installOfflineCatalogFallback();
 
   window.addEventListener('mochimono:catalog-updated', () => {
     // A Cloud refresh replaces the in-memory catalog. Re-merge local-only files
@@ -222,12 +272,17 @@ if (CLIENT) {
   const poll = async () => {
     if (document.hidden) return;
     try {
-      const fingerprint = await localFingerprint();
-      if (!runtime.fingerprint) runtime.fingerprint = fingerprint;
-      else if (fingerprint !== runtime.fingerprint) {
-        runtime.fingerprint = fingerprint;
-        await hydrateLive();
-      }
+      const status = await localStatus();
+      const cloudReturned = runtime.cloudOnline === false && status.cloudOnline === true;
+      const changed = runtime.fingerprint && status.fingerprint !== runtime.fingerprint;
+      runtime.cloudOnline = status.cloudOnline;
+      runtime.fingerprint = status.fingerprint;
+      if (cloudReturned) {
+        // Cloud is enrichment/synchronization, not a startup dependency. When it
+        // comes back, reconcile normally and then the catalog-updated hook above
+        // merges any still-local-only rows back into the live view.
+        await window.mochimonoLibrary?.refresh?.().catch?.(() => {});
+      } else if (changed) await hydrateLive();
     } catch {}
   };
   poll();
