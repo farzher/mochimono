@@ -45,7 +45,7 @@ if (storagePane && sourceSection && backupSection) {
     .managed-storage-shares{margin-top:22px;padding-top:18px;border-top:1px solid #1d1a1d}.managed-storage-shares[hidden]{display:none!important}.managed-storage-shares-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px}.managed-storage-shares-head strong{color:#aea4a1;font-size:11px}.managed-storage-share-list{display:flex;gap:8px;flex-wrap:wrap}.managed-storage-share{display:flex;align-items:center;gap:8px;max-width:100%;padding:8px 10px;border:1px solid #282428;border-radius:10px;background:#111012;color:#817977;font-size:9px}.managed-storage-share strong{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cfc6c2;font-size:10px}.managed-storage-share button{padding:3px 6px;background:transparent;color:#9e9491;font-size:9px}.managed-storage-share button:hover{background:#242124;color:#fff}
     .storage-location-dialog{width:min(570px,calc(100vw - 28px))}.storage-location-dialog .dialog-head h3{max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .storage-location-inspect{display:grid;gap:16px}.storage-location-inspect-hero{display:grid;grid-template-columns:auto minmax(0,1fr);gap:13px;align-items:center;padding:13px;border:1px solid #2a262a;border-radius:12px;background:#121013}.storage-location-inspect-icon{width:46px;height:46px;display:grid;place-items:center;border-radius:12px;background:#1c191d;color:#cfc5c1}.storage-location-inspect-icon svg{width:27px;height:27px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}.storage-location-inspect-copy{min-width:0}.storage-location-inspect-copy strong{display:block;color:#ebe3df;font-size:13px}.storage-location-inspect-copy span{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#817976;font-size:10px}
-    .storage-location-capacity{display:grid;gap:7px}.storage-location-capacity-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;color:#8c8380;font-size:10px}.storage-location-capacity-head strong{color:#d7cfcb;font-size:12px}.storage-location-capacity-track{height:7px;overflow:hidden;border-radius:999px;background:#292529}.storage-location-capacity-track i{display:block;height:100%;border-radius:inherit;background:#df9892}.storage-location-detail-list{display:grid}.storage-location-detail{display:grid;grid-template-columns:115px minmax(0,1fr);gap:12px;padding:9px 0;border-top:1px solid #242124;font-size:10px}.storage-location-detail:first-child{border-top:0}.storage-location-detail dt{color:#756e6c}.storage-location-detail dd{margin:0;min-width:0;overflow-wrap:anywhere;color:#c4bbb7}.storage-location-actions{display:flex;gap:7px;flex-wrap:wrap}.storage-location-actions button{font-size:10px}.storage-location-actions .secondary{background:#211e22;color:#bdb4b0}.storage-location-actions .secondary:hover{background:#2a262b;color:#fff}
+    .storage-location-capacity{display:grid;gap:7px}.storage-location-capacity-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;color:#8c8380;font-size:10px}.storage-location-capacity-head strong{color:#d7cfcb;font-size:12px}.storage-location-capacity-track{height:7px;overflow:hidden;border-radius:999px;background:#292529}.storage-location-capacity-track i{display:block;height:100%;border-radius:inherit;background:#df9892}.storage-location-detail-list{display:grid}.storage-location-detail{display:grid;grid-template-columns:115px minmax(0,1fr);gap:12px;padding:9px 0;border-top:1px solid #242124;font-size:10px}.storage-location-detail:first-child{border-top:0}.storage-location-detail dt{color:#756e6c}.storage-location-detail dd{margin:0;min-width:0;overflow-wrap:anywhere;color:#c4bbb7;white-space:pre-line}.storage-location-actions{display:flex;gap:7px;flex-wrap:wrap}.storage-location-actions button{font-size:10px}.storage-location-actions .secondary{background:#211e22;color:#bdb4b0}.storage-location-actions .secondary:hover{background:#2a262b;color:#fff}
     .storage-add-options{display:grid;gap:7px}.storage-add-option{width:100%;display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:11px;align-items:center;padding:10px;border:1px solid #292529;border-radius:10px;background:#121013;color:#cfc6c2;text-align:left}.storage-add-option:hover{border-color:#453c42;background:#181519}.storage-add-option-icon{width:36px;height:36px;display:grid;place-items:center;border-radius:9px;background:#1c191d;color:#aaa09d}.storage-add-option-icon svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}.storage-add-option-copy strong,.storage-add-option-copy span{display:block}.storage-add-option-copy strong{font-size:11px}.storage-add-option-copy span{margin-top:2px;color:#7e7674;font-size:9px;font-weight:550}.storage-add-option-action{color:#8d8381;font-size:9px;font-weight:700}.storage-add-option[disabled]{opacity:.58;cursor:default}.storage-add-note{margin-top:4px;color:#706967;font-size:9px;line-height:1.45}
     .storage-backup-add-path{padding:8px 9px;border:1px solid #2b272b;border-radius:9px;background:#111012;color:#a69c99;font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
     @media(max-width:700px){.managed-storage-grid{grid-template-columns:1fr}.storage-section-heading{align-items:flex-start}.storage-location-detail{grid-template-columns:90px minmax(0,1fr)}}
@@ -195,37 +195,70 @@ if (storagePane && sourceSection && backupSection) {
     };
   }
 
-  function enrichLocations(raw, folderStats, backupData, friendData, currentState) {
-    const foldersByRoot = new Map();
+  function composeLocations(folderStats, backupData, rawFriendLocations, currentState) {
+    const result = [];
+    const stats = currentState?.server?.online ? currentState.server.stats : null;
+    result.push(stats ? {
+      id:'cloud', snapshotId:'cloud', type:'cloud', name:'Cloud', online:true,
+      capacityBytes:Number(stats.capacityBytes) || 0,
+      freeBytes:Number(stats.freeBytes) || 0,
+      mochimonoBytes:Number(stats.bytes) || 0
+    } : { id:'cloud', snapshotId:'cloud', type:'cloud', name:'Cloud', online:false });
+
+    const localGroups = new Map();
     for (const folder of folderStats || []) {
-      const key = rootKey(folder.path);
+      const root = rootForPath(folder.path);
+      const key = rootKey(root);
       if (!key) continue;
-      const current = foldersByRoot.get(key) || { bytes:0, sources:[] };
-      current.bytes += Math.max(0, Number(folder.bytes) || 0);
-      current.sources.push({ path:folder.path, files:Number(folder.files) || 0, protected:folder.protected !== false });
-      foldersByRoot.set(key, current);
+      const group = localGroups.get(key) || {
+        id:`local:${key}`, snapshotId:`local:${key}`, type:'local', name:root, path:root,
+        online:false, capacityBytes:0, freeBytes:0, mochimonoBytes:0, sources:[]
+      };
+      group.mochimonoBytes += Math.max(0, Number(folder.bytes) || 0);
+      group.sources.push({ path:folder.path, files:Number(folder.files) || 0, protected:folder.protected !== false });
+      const capacity = Math.max(0, Number(folder.capacityBytes) || 0);
+      const free = Math.max(0, Number(folder.freeBytes) || 0);
+      if (capacity > 0) {
+        group.online = true;
+        group.capacityBytes = Math.max(group.capacityBytes, capacity);
+        group.freeBytes = Math.max(group.freeBytes, free);
+      }
+      group.lastKnownAt = folder.lastIndexed || folder.lastSynced || group.lastKnownAt || '';
+      localGroups.set(key, group);
+    }
+    result.push(...localGroups.values());
+
+    for (let index = 0; index < (backupData || []).length; index++) {
+      const backup = backupData[index];
+      result.push({
+        id:`backup-path:${pathKey(backup.path)}`,
+        snapshotId:`backup:${rootKey(backup.path) || index}`,
+        type:'backup',
+        name:backup.meta?.name || backup.path || 'Backup',
+        path:backup.path || '',
+        online:Number(backup.totalBytes) > 0,
+        capacityBytes:Number(backup.totalBytes) || 0,
+        freeBytes:Number(backup.freeBytes) || 0,
+        mochimonoBytes:Number(backup.local?.bytes) || 0,
+        lastKnownAt:backup.meta?.lastVerifiedAt || backup.meta?.lastBackupAt || '',
+        backupIndex:index,
+        backup
+      });
     }
 
+    for (const friend of rawFriendLocations || []) {
+      if (friend.type === 'friend') result.push({ ...friend, snapshotId:friend.id });
+    }
+    return result;
+  }
+
+  function enrichLocations(raw, friendData, currentState) {
     return (raw || []).map(original => {
-      let location = { ...original, snapshotId:original.id };
+      const location = { ...original };
       if (location.type === 'cloud') {
         location.server = currentState?.settings?.server || '';
       } else if (location.type === 'local') {
-        const group = foldersByRoot.get(rootKey(location.path || location.name));
-        location.mochimonoBytes = group?.bytes || Number(location.mochimonoBytes) || 0;
-        location.sources = group?.sources || [];
         location.device = currentState?.settings?.device || '';
-      } else if (location.type === 'backup') {
-        const index = (backupData || []).findIndex(item => pathKey(item.path) === pathKey(location.path));
-        const backup = index >= 0 ? backupData[index] : null;
-        if (backup) {
-          location.id = `backup-path:${pathKey(backup.path)}`;
-          location.backupIndex = index;
-          location.backup = backup;
-          location.name = backup.meta?.name || location.name;
-          location.mochimonoBytes = Number(backup.local?.bytes) || Number(location.mochimonoBytes) || 0;
-          location.lastKnownAt = backup.meta?.lastVerifiedAt || backup.meta?.lastBackupAt || '';
-        }
       } else if (location.type === 'friend') {
         const targetId = String(location.id || '').replace(/^friend:/, '');
         const target = (friendData || []).find(item => String(item.id) === targetId);
@@ -343,6 +376,7 @@ if (storagePane && sourceSection && backupSection) {
       actions = `<button class="primary" data-location-action="friend-update" ${location.online ? '' : 'disabled'}>Update</button><button class="secondary" data-location-action="friend-verify" ${hasBackup && location.online ? '' : 'disabled'}>Verify</button><button class="secondary" data-location-action="friend-restore" ${hasBackup ? '' : 'disabled'}>Restore</button><button class="secondary" data-location-action="friend-key">Recovery key</button>`;
     }
 
+    delete inspectDialog.dataset.shareId;
     inspectDialog.dataset.locationId = location.id;
     inspectDialog.querySelector('[data-location-dialog-title]').textContent = locationTitle(location);
     inspectDialog.querySelector('[data-location-dialog-body]').innerHTML = `<div class="storage-location-inspect">
@@ -354,7 +388,7 @@ if (storagePane && sourceSection && backupSection) {
       <dl class="storage-location-detail-list">${rows.join('')}</dl>
       <div class="storage-location-actions">${actions}</div>
     </div>`;
-    inspectDialog.showModal();
+    if (!inspectDialog.open) inspectDialog.showModal();
   }
 
   function openShare(share) {
@@ -368,7 +402,7 @@ if (storagePane && sourceSection && backupSection) {
       <dl class="storage-location-detail-list">${detailsRow('Folder', share.path || '')}${detailsRow('Used', bytes(storage.usedBytes || 0))}${detailsRow('Limit', quota ? bytes(quota) : 'Available free space')}${detailsRow('Paired with', share.paired ? share.peerName || 'Friend' : 'Nobody yet')}</dl>
       <div class="storage-location-actions"><button class="primary" data-location-action="share-invite">${share.paired ? 'Re-pair' : 'Invite'}</button><button class="secondary" data-location-action="share-remove">Stop offering</button></div>
     </div>`;
-    inspectDialog.showModal();
+    if (!inspectDialog.open) inspectDialog.showModal();
   }
 
   function renderAddOptions() {
@@ -382,6 +416,11 @@ if (storagePane && sourceSection && backupSection) {
       <div class="storage-add-note">Cloud is a single primary location. Backup and friend drives can be added multiple times. Local storage comes from the Sources you add above.</div>`;
   }
 
+  function showConnectionDialog() {
+    const dialog = document.querySelector('#connectionDialog');
+    if (dialog && !dialog.open) dialog.showModal();
+  }
+
   async function chooseBackup() {
     try {
       const picked = await json('/api/pick-folder');
@@ -390,7 +429,7 @@ if (storagePane && sourceSection && backupSection) {
       const existing = backups.find(item => pathKey(item.path) === pathKey(path));
       if (existing) {
         const location = locations.find(item => item.type === 'backup' && pathKey(item.path) === pathKey(path));
-        addDialog.close();
+        if (addDialog.open) addDialog.close();
         if (location) openLocation(location);
         return;
       }
@@ -403,8 +442,8 @@ if (storagePane && sourceSection && backupSection) {
         const collections = (await json('/api/backup-collections')).collections || [];
         if (collections.length) select.insertAdjacentHTML('beforeend', `<optgroup label="Smart Collections">${collections.map(item => `<option value="${Number(item.id)}" data-name="${esc(item.name)}">✦ ${esc(item.name)}</option>`).join('')}</optgroup>`);
       } catch {}
-      addDialog.close();
-      backupDialog.showModal();
+      if (addDialog.open) addDialog.close();
+      if (!backupDialog.open) backupDialog.showModal();
     } catch (error) { toast(error.message); }
   }
 
@@ -439,7 +478,7 @@ if (storagePane && sourceSection && backupSection) {
     const share = shares.find(item => item.id === inspectDialog.dataset.shareId);
     if (action === 'cloud') {
       inspectDialog.close();
-      document.querySelector('#connectionDialog')?.showModal();
+      showConnectionDialog();
       return;
     }
     if (action === 'source') {
@@ -485,7 +524,7 @@ if (storagePane && sourceSection && backupSection) {
     if (refreshing || storagePane.hidden || document.hidden) return schedule(1800);
     refreshing = true;
     try {
-      const [locationResult, folderResult, backupResult, friendResult, shareResult, stateResult] = await Promise.allSettled([
+      const [friendLocationResult, folderResult, backupResult, friendResult, shareResult, stateResult] = await Promise.allSettled([
         local('/local/storage-locations'),
         json('/api/folder-stats'),
         json('/api/backups'),
@@ -493,13 +532,13 @@ if (storagePane && sourceSection && backupSection) {
         local('/local/friend-shares'),
         json('/api/state')
       ]);
-      const raw = locationResult.status === 'fulfilled' ? locationResult.value.locations || [] : [];
       const folderStats = folderResult.status === 'fulfilled' ? folderResult.value.folders || [] : [];
       backups = backupResult.status === 'fulfilled' ? backupResult.value.backups || [] : [];
       friendBackups = friendResult.status === 'fulfilled' ? friendResult.value.backups || [] : [];
       shares = shareResult.status === 'fulfilled' ? shareResult.value.shares || [] : [];
       state = stateResult.status === 'fulfilled' ? stateResult.value : null;
-      locations = enrichLocations(raw, folderStats, backups, friendBackups, state);
+      const rawFriendLocations = friendLocationResult.status === 'fulfilled' ? (friendLocationResult.value.locations || []).filter(item => item.type === 'friend') : [];
+      locations = enrichLocations(composeLocations(folderStats, backups, rawFriendLocations, state), friendBackups, state);
       render();
     } catch {}
     finally {
@@ -514,7 +553,7 @@ if (storagePane && sourceSection && backupSection) {
 
   grid.addEventListener('click', event => {
     const add = event.target.closest('[data-add-storage]');
-    if (add) { renderAddOptions(); addDialog.showModal(); return; }
+    if (add) { renderAddOptions(); if (!addDialog.open) addDialog.showModal(); return; }
     const cardNode = event.target.closest('[data-location-id]');
     if (!cardNode) return;
     const location = locations.find(item => item.id === cardNode.dataset.locationId);
@@ -529,7 +568,7 @@ if (storagePane && sourceSection && backupSection) {
   addDialog.addEventListener('click', event => {
     const kind = event.target.closest('[data-add-kind]')?.dataset.addKind;
     if (!kind) return;
-    if (kind === 'cloud') { addDialog.close(); document.querySelector('#connectionDialog')?.showModal(); }
+    if (kind === 'cloud') { addDialog.close(); showConnectionDialog(); }
     else if (kind === 'local') { addDialog.close(); sourceSection.scrollIntoView({ behavior:'smooth', block:'start' }); setTimeout(() => document.querySelector('#showFolderAdd')?.click(), 200); }
     else if (kind === 'backup') chooseBackup();
     else if (kind === 'friend') { addDialog.close(); trigger('[data-add-friend-backup]'); }
@@ -542,10 +581,9 @@ if (storagePane && sourceSection && backupSection) {
   inspectDialog.querySelector('[data-location-close]').onclick = () => inspectDialog.close();
   addDialog.querySelector('[data-storage-add-close]').onclick = () => addDialog.close();
   backupDialog.querySelectorAll('[data-storage-backup-close]').forEach(button => button.onclick = () => backupDialog.close());
-  backupDialog.querySelector('[data-storage-backup-choose]').onclick = () => { backupDialog.close(); renderAddOptions(); addDialog.showModal(); chooseBackup(); };
+  backupDialog.querySelector('[data-storage-backup-choose]').onclick = () => { backupDialog.close(); chooseBackup(); };
   backupDialog.querySelector('[data-storage-backup-save]').onclick = saveBackup;
 
-  new MutationObserver(() => schedule(100)).observe(document.querySelector('#backups'), { childList:true });
   window.addEventListener('focus', () => schedule(0));
   document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(0); });
   schedule(80);
