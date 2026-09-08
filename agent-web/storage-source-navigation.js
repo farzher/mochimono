@@ -20,12 +20,12 @@ async function request(path) {
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function waitForLibrary(timeoutMs = 10_000) {
+async function waitForLibrary(timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const child = frame?.contentWindow;
     const library = child?.mochimonoLibrary;
-    if (child && library?.openFolder && library?.setLocationFilter) return { child, library };
+    if (child && library?.setLocationFilter && child.mochimonoHome) return { child, library };
     await delay(50);
   }
   throw new Error('Library could not finish loading.');
@@ -42,14 +42,15 @@ async function localFolderHashes(path) {
   const encoded = encodeURIComponent(path);
   const hashes = new Set();
 
-  // Include live browse-stage rows immediately, then page through the persisted
-  // local index so large source folders are not truncated at the preview limit.
+  // The non-paged request includes any live browse-stage rows. Then page the
+  // persisted local index so large folders are complete instead of preview-sized.
   addHashes(hashes, await request(`/api/client/local-catalog?limit=5000&path=${encoded}`));
 
   let offset = 0;
   for (;;) {
     const page = await request(`/api/client/local-catalog?limit=5000&path=${encoded}&offset=${offset}`);
     addHashes(hashes, page);
+    if (page.nextOffset == null) break;
     const next = Number(page.nextOffset);
     if (!Number.isFinite(next) || next <= offset) break;
     offset = next;
@@ -73,42 +74,35 @@ function selectLocalFolderFilter(child, path) {
   control.value = option.value;
 }
 
-async function openLocalFolder(child, library, path) {
-  const hashes = await localFolderHashes(path);
-  selectLocalFolderFilter(child, path);
-  library.setLocationFilter('source-folder', hashes);
-}
-
 async function openStorageSource(row) {
   const path = String(row?.dataset.folderPath || '').trim();
   if (!path) throw new Error('Folder path is unavailable.');
 
+  // Show the Library immediately. It may still be restoring its cached catalog,
+  // but clicking a Storage source should navigate, not fail just because startup
+  // work is still in progress.
+  if (storagePane && !storagePane.hidden) storageButton?.click();
+
   const { child, library } = await waitForLibrary();
-  child.mochimonoHome?.('replace');
+  child.mochimonoHome('replace');
   const gridButton = frame.contentDocument?.querySelector('#views [data-view="grid"]');
   if (gridButton && !gridButton.classList.contains('active')) gridButton.click();
 
-  const importId = Number(row?.dataset.folderImportId) || 0;
-  if (importId) {
-    try {
-      await library.openFolder(importId, '');
-    } catch {
-      // openFolder mutates the source scope before its request completes. Clear
-      // that failed scope before falling back to the exact local root.
-      child.mochimonoHome?.('replace');
-      await openLocalFolder(child, library, path);
-    }
-  } else {
-    await openLocalFolder(child, library, path);
-  }
+  // A Storage source is an exact physical root. Do not try to map it through a
+  // Cloud import/source ID: local-only roots have no import ID, and multiple roots
+  // may belong to the same device source. Filter by the hashes indexed for this
+  // exact root instead.
+  const hashes = await localFolderHashes(path);
+  if (!hashes.size) throw new Error('No indexed files found in this folder.');
+  selectLocalFolderFilter(child, path);
+  library.setLocationFilter('source-folder', hashes);
 
   child.scrollTo({ top:0, left:0, behavior:'auto' });
-  if (storagePane && !storagePane.hidden) storageButton?.click();
   child.focus();
 }
 
-// Capture at the window so this navigation wins before folder-modes handles the
-// preview strip. The path text itself is untouched and still opens Explorer.
+// Capture at the window so this wins before folder-modes' legacy preview click
+// handler. The path text itself is untouched and still opens Explorer.
 window.addEventListener('click', event => {
   const preview = event.target.closest?.('#folders .storage-folder-samples');
   if (!preview) return;
