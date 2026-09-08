@@ -52,15 +52,6 @@ style.textContent = `
   [data-folder-status][data-waiting-idle="1"]{font-size:0}
   [data-folder-status][data-waiting-idle="1"]:after{content:'Waiting for idle';font-size:9px;color:#b9aaa5}
   .folder-item[data-waiting-idle="1"] .item-progress .progress-bar.indeterminate>i{animation:none!important;transform:none!important;left:0!important;opacity:.45}
-  .storage-diagnostics{margin:4px 0 24px;border:1px solid #282429;border-radius:10px;background:#121013;color:#9d9491}
-  .storage-diagnostics>summary{padding:9px 11px;cursor:pointer;font-size:10px;font-weight:720;color:#8f8683;user-select:none}
-  .storage-diagnostics[open]>summary{border-bottom:1px solid #252126;color:#c9c0bd}
-  .storage-diagnostics-body{padding:10px;display:grid;gap:8px}
-  .storage-diagnostics-actions{display:flex;justify-content:flex-end}
-  .storage-diagnostics button{border:0;border-radius:6px;padding:5px 8px;background:#252126;color:#aaa19e;font:inherit;font-size:9px;cursor:pointer}
-  .storage-diagnostics button:hover{background:#302b30;color:#eee7e3}
-  .storage-diagnostics pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:10px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;color:#9f9693}
-  .storage-diagnostics .diag-stalled{color:#df9d82}
 `;
 document.head.append(style);
 
@@ -114,7 +105,6 @@ let progressTimer = 0;
 let progressBusy = false;
 const previewMemory = new Map();
 const previewDriveOwners = new Map();
-let latestFolderStats = [];
 
 const previewMode = () => window.mochimonoPreviewMode?.() || 'idle';
 const previewDrive = value => {
@@ -168,7 +158,6 @@ function previewInfo(folder) {
   const failed = Number(folder.previewFailed) || 0;
   const deferred = Number(folder.previewDeferred) || 0;
   const generated = Number(folder.previewGenerated) || 0;
-  const queued = Number(folder.previewQueued) || 0;
   const workerQueued = Number(folder.previewQueueBackground) || 0;
   const workerActive = Number(folder.previewQueueActive) || 0;
   const complete = total ? Math.min(total, ready + failed + deferred + generated) : ready + failed + deferred + generated;
@@ -194,7 +183,7 @@ function previewInfo(folder) {
     ready = previous.ready;
     const done = previous.done;
     return {
-      key, phase:'', total, processed, failed:previous.failed || 0, deferred:previous.deferred || 0, generated:previous.generated || 0, queued:0,
+      key, phase:'', total, processed, failed:previous.failed || 0, deferred:previous.deferred || 0, generated:previous.generated || 0,
       text:done ? 'Ready' : mode === 'off' ? 'Paused' : waiting ? 'Waiting for idle' : driveBlocked ? 'Next' : 'Working',
       percent:previous.percent || '', ratio:previous.ratio || 0, indeterminate:false,
       done, waiting, driveBlocked, driveOwner, state:waiting ? 'waiting' : 'queued', working:!done && mode !== 'off' && !waiting && !driveBlocked
@@ -241,7 +230,7 @@ function previewInfo(folder) {
   }
 
   const info = {
-    key, phase, total, processed, ready, failed, deferred, generated, queued, text, percent, ratio, indeterminate, done, waiting,
+    key, phase, total, processed, ready, failed, deferred, generated, text, percent, ratio, indeterminate, done, waiting,
     driveBlocked, driveOwner, state, working: Boolean(folder.previewWarming && mode !== 'off' && !waiting && !driveBlocked)
   };
   previewMemory.set(key, {
@@ -308,131 +297,6 @@ function renderPreviewProgress(stats) {
   return warming;
 }
 
-const diagnosticHistory = new Map();
-let diagnostics = null;
-let diagnosticsOutput = null;
-let diagnosticsTimer = 0;
-let diagnosticsBusy = false;
-
-function duration(value) {
-  const ms = Math.max(0, Number(value) || 0);
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
-  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ${Math.round(ms % 60_000 / 1000)}s`;
-  return `${Math.floor(ms / 3_600_000)}h ${Math.round(ms % 3_600_000 / 60_000)}m`;
-}
-
-function shortPath(value) {
-  const text = String(value || '');
-  return text.length > 100 ? `…${text.slice(-99)}` : text;
-}
-
-function diagnosticProgress(folder) {
-  const key = pathKey(folder.path);
-  const signature = [
-    folder.previewPhase, folder.previewProcessed, folder.previewReady, folder.previewFailed,
-    folder.previewDeferred, folder.previewGenerated, folder.previewQueued, folder.previewQueueBackground,
-    folder.previewQueueActive, folder.previewCursor, folder.pending, folder.waitingForIdle,
-    folder.diagnostics?.pendingChanges
-  ].join('|');
-  const previous = diagnosticHistory.get(key);
-  const now = Date.now();
-  if (!previous || previous.signature !== signature) {
-    const next = { signature, changedAt: now };
-    diagnosticHistory.set(key, next);
-    return next;
-  }
-  return previous;
-}
-
-function diagnosticsText(stats, state) {
-  const now = Date.now();
-  const lines = [];
-  const background = state?.background || {};
-  const cpu = Number.isFinite(Number(background.cpuLoad)) ? `${Math.round(Number(background.cpuLoad) * 100)}% CPU` : '';
-  const idle = Number.isFinite(Number(background.idleMs)) ? `idle ${duration(background.idleMs)}` : '';
-  lines.push(`Background  ${background.mode || previewMode()} · ${background.allowed ? 'allowed' : background.reason || 'waiting'}${cpu ? ` · ${cpu}` : ''}${idle ? ` · ${idle}` : ''}`);
-
-  const job = state?.job;
-  if (job?.status === 'running') {
-    const phase = job.progress?.phase ? ` · ${job.progress.phase}` : '';
-    lines.push(`Job         ${job.background ? 'background' : 'foreground'} · ${job.label || job.type}${phase}`);
-  } else lines.push('Job         none');
-
-  for (const folder of stats || []) {
-    const name = folderName(folder.path) || 'Folder';
-    const tracker = diagnosticProgress(folder);
-    const unchanged = now - tracker.changedAt;
-    const phase = String(folder.previewPhase || '');
-    const driveOwner = previewDriveOwners.get(previewDrive(folder.path)) || '';
-    const driveBlocked = Boolean(folder.previewWarming && driveOwner && pathKey(driveOwner) !== pathKey(folder.path));
-    const activelyWorking = folder.previewWarming && !folder.previewWaiting && !driveBlocked && previewMode() !== 'off';
-    const queueMoving = Number(folder.previewQueueActive) > 0 || Number(folder.previewQueueBackground) > 0;
-    const stalled = activelyWorking && phase !== 'done' && !queueMoving && unchanged > 15_000;
-    const diag = folder.diagnostics || {};
-
-    lines.push('');
-    lines.push(`${stalled ? 'STALLED  ' : 'Folder    '} ${name}`);
-    lines.push(`  path       ${folder.path}`);
-    lines.push(`  index      ${(Number(folder.files) || 0).toLocaleString()} files · ${folder.pending ? 'pending' : 'settled'}${folder.waitingForIdle ? ' · waiting for idle' : ''}`);
-    if (folder.lastIndexed) lines.push(`  indexed    ${folder.lastIndexed}`);
-    if (Object.keys(diag).length) {
-      lines.push(`  watcher    ${diag.watcher ? 'on' : 'off'} · full=${diag.fullCheckQueued ? 'queued' : 'no'} · incremental=${diag.incrementalQueued ? 'queued' : 'no'} · changes=${Number(diag.pendingChanges) || 0}`);
-    }
-    if (phase) {
-      lines.push(`  thumbnails ${driveBlocked ? `next after ${folderName(driveOwner)}` : phase} · checked=${Number(folder.previewProcessed) || 0} · cached=${Number(folder.previewReady) || 0} · generated=${Number(folder.previewGenerated) || 0} · failed=${Number(folder.previewFailed) || 0} · deferred=${Number(folder.previewDeferred) || 0}`);
-      lines.push(`  queue      queued=${Number(folder.previewQueueBackground) || 0} · active=${Number(folder.previewQueueActive) || 0} · global=${Number(folder.previewQueueGlobalBackground) || 0}/${Number(folder.previewQueueGlobalActive) || 0} · requested=${Number(folder.previewQueued) || 0}`);
-      lines.push(`  progress   ${duration(now - (Number(folder.previewLastProgressAt) || now))} ago · pass=${Number(folder.previewPasses) || 0}${stalled ? '  ← no progress' : ''}`);
-      if (folder.previewPauseUntil > now) lines.push(`  pause      ${duration(folder.previewPauseUntil - now)} remaining`);
-      if (folder.previewCursor) lines.push(`  cursor     ${shortPath(folder.previewCursor)}`);
-      if (folder.previewError) lines.push(`  error      ${folder.previewError} · count=${Number(folder.previewErrorCount) || 1}`);
-    }
-  }
-  return lines.join('\n');
-}
-
-async function refreshDiagnostics() {
-  clearTimeout(diagnosticsTimer);
-  diagnosticsTimer = 0;
-  if (!diagnostics?.open || diagnosticsBusy) return;
-  diagnosticsBusy = true;
-  try {
-    const [folderData, state] = await Promise.all([
-      request('/api/folder-stats'),
-      request('/api/state')
-    ]);
-    latestFolderStats = folderData.folders || latestFolderStats;
-    syncPreviewDriveOwners(latestFolderStats);
-    diagnosticsOutput.textContent = diagnosticsText(latestFolderStats, state);
-  } catch (error) {
-    diagnosticsOutput.textContent = `Diagnostics unavailable: ${error.message}`;
-  } finally {
-    diagnosticsBusy = false;
-    if (diagnostics?.open) diagnosticsTimer = setTimeout(refreshDiagnostics, 2000);
-  }
-}
-
-if (storagePane) {
-  diagnostics = document.createElement('details');
-  diagnostics.className = 'storage-diagnostics';
-  diagnostics.innerHTML = `<summary>Diagnostics</summary><div class="storage-diagnostics-body"><div class="storage-diagnostics-actions"><button type="button" data-copy-diagnostics>Copy</button></div><pre data-diagnostics-output>Open to inspect storage activity.</pre></div>`;
-  diagnosticsOutput = diagnostics.querySelector('[data-diagnostics-output]');
-  storagePane.append(diagnostics);
-  diagnostics.addEventListener('toggle', () => {
-    clearTimeout(diagnosticsTimer);
-    diagnosticsTimer = 0;
-    if (diagnostics.open) refreshDiagnostics();
-  });
-  diagnostics.querySelector('[data-copy-diagnostics]')?.addEventListener('click', async event => {
-    event.preventDefault();
-    try {
-      await navigator.clipboard.writeText(diagnosticsOutput.textContent || '');
-      event.currentTarget.textContent = 'Copied';
-      setTimeout(() => { event.currentTarget.textContent = 'Copy'; }, 1000);
-    } catch {}
-  });
-}
-
 function schedulePreviewProgress(delay = 0) {
   if (progressTimer) {
     if (delay > 0) return;
@@ -447,8 +311,8 @@ async function refreshPreviewProgress() {
   progressBusy = true;
   let warming = false;
   try {
-    latestFolderStats = (await request('/api/folder-stats')).folders || [];
-    warming = renderPreviewProgress(latestFolderStats);
+    const stats = (await request('/api/folder-stats')).folders || [];
+    warming = renderPreviewProgress(stats);
   } catch {}
   finally {
     progressBusy = false;
