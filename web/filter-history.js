@@ -29,7 +29,13 @@ function targetUrl() {
   else url.searchParams.delete('origin');
   if (kind) url.searchParams.set('type', kind); else url.searchParams.delete('type');
   if (order && order !== 'date-desc') url.searchParams.set('sort', order); else url.searchParams.delete('sort');
-  if (location) url.searchParams.set('where', location); else url.searchParams.delete('where');
+
+  // Exact local source-folder navigation is represented by ?root=<path>. The
+  // visible Where selector mirrors that scope, but it must not also create a
+  // generic ?where=source-folder filter because locations.js does not own the
+  // root's exact hash membership.
+  if (location && !(location === 'source-folder' && url.searchParams.has('root'))) url.searchParams.set('where', location);
+  else url.searchParams.delete('where');
   return url;
 }
 
@@ -92,9 +98,14 @@ function restoreFilters() {
     const safeSort = sort?.querySelector(`option[value="${CSS.escape(wantedSort)}"]`) ? wantedSort : 'date-desc';
     dispatchIfChanged(sort, safeSort);
 
-    const wantedWhere = url.searchParams.get('where') || '';
-    const safeWhere = where?.querySelector(`option[value="${CSS.escape(wantedWhere)}"]`) ? wantedWhere : '';
-    dispatchIfChanged(where, safeWhere);
+    // local-root-scope.js restores the exact root membership and owns the
+    // temporary Folder option. Do not dispatch the generic location handler for
+    // that state; it would replace the exact root hashes with an empty set.
+    if (!url.searchParams.has('root')) {
+      const wantedWhere = url.searchParams.get('where') || '';
+      const safeWhere = where?.querySelector(`option[value="${CSS.escape(wantedWhere)}"]`) ? wantedWhere : '';
+      dispatchIfChanged(where, safeWhere);
+    }
   } finally {
     restoring = false;
     searchEditing = false;
