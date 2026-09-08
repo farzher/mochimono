@@ -1,5 +1,7 @@
 const folders = document.querySelector('#folders');
 const frame = document.querySelector('#filesFrame');
+const storagePane = document.querySelector('#storagePane');
+const storageButton = document.querySelector('[data-client-tab="storage"]');
 
 let annotating = false;
 let annotateQueued = false;
@@ -122,6 +124,7 @@ function decorateRow(row, folder) {
   const scope = folder.scope === 'all' ? 'all' : 'media';
   row.classList.toggle('browse-only-folder', !cloud);
   row.classList.toggle('cloud-folder', cloud);
+  row.dataset.folderImportId = String(folder.importId || '');
   renderPath(row, folder.path);
   renderLocationBadge(row, cloud, scope);
 
@@ -131,20 +134,7 @@ function decorateRow(row, folder) {
     sync.textContent = cloud ? 'Sync' : 'Index';
     sync.title = cloud ? 'Sync now' : 'Re-index';
   }
-
-  let open = actions?.querySelector('[data-open-native-folder]');
-  if (actions && !open) {
-    open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'action-link';
-    open.dataset.openNativeFolder = '';
-    open.textContent = 'Open';
-    actions.prepend(open);
-  }
-  if (open) {
-    open.dataset.path = folder.path;
-    open.title = 'Show in folder';
-  }
+  actions?.querySelector('[data-open-native-folder]')?.remove();
 
   const existingCloud = actions?.querySelector('[data-protect-folder]');
   if (!cloud && actions && !existingCloud) {
@@ -296,8 +286,8 @@ function renderFolderPreview(row) {
     row.prepend(strip);
   }
   row.classList.add('has-folder-preview');
-  strip.dataset.openNativeFolderPath = row.dataset.folderPath || '';
-  strip.title = 'Show in folder';
+  strip.dataset.openLibraryFolder = '';
+  strip.title = 'Open in Mochimono';
 
   const key = candidates.slice(0, 16).map(file => `${readyPreviewHashes.has(String(file.hash || '')) ? 1 : 0}:${file.hash}:${file.filename}:${file.mime}`).join('|') || 'empty';
   if (strip.dataset.key === key) return;
@@ -439,12 +429,40 @@ function annotateSoon() {
   queueMicrotask(annotate);
 }
 
+async function openLibraryFolder(row) {
+  const importId = Number(row?.dataset.folderImportId) || 0;
+  if (!importId) throw new Error('This folder is not indexed yet.');
+  const child = frame?.contentWindow;
+  const library = child?.mochimonoLibrary;
+  if (!library?.openFolder) throw new Error('Library is still loading.');
+
+  child.mochimonoHome?.('replace');
+  const gridButton = frame.contentDocument?.querySelector('#views [data-view="grid"]');
+  if (gridButton && !gridButton.classList.contains('active')) gridButton.click();
+  await library.openFolder(importId, '');
+  child.scrollTo({ top:0, left:0, behavior:'auto' });
+  if (storagePane && !storagePane.hidden) storageButton?.click();
+  child.focus();
+}
+
 folders?.addEventListener('click', async event => {
-  const open = event.target.closest('[data-open-native-folder],[data-open-native-folder-path]');
+  const libraryOpen = event.target.closest('[data-open-library-folder]');
+  if (libraryOpen) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    try {
+      await openLibraryFolder(libraryOpen.closest('[data-folder-path]'));
+    } catch (error) {
+      toast(error.message);
+    }
+    return;
+  }
+
+  const open = event.target.closest('[data-open-native-folder-path]');
   if (open) {
     event.preventDefault();
     event.stopImmediatePropagation();
-    const path = open.dataset.path || open.dataset.openNativeFolderPath;
+    const path = open.dataset.openNativeFolderPath;
     try {
       await request('/api/open-folder', { method:'POST', body:JSON.stringify({ path }) });
     } catch (error) {
