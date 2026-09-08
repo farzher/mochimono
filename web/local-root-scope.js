@@ -1,8 +1,34 @@
 const CLIENT = document.documentElement.classList.contains('client-library');
 const locationFilter = document.querySelector('#locationFilter');
-const scopebar = document.querySelector('#scopebar');
 const source = document.querySelector('#source');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+let scopebar = document.querySelector('#localRootScopebar');
+if (!scopebar) {
+  scopebar = document.createElement('div');
+  scopebar.id = 'localRootScopebar';
+  scopebar.className = 'local-root-scopebar';
+  scopebar.hidden = true;
+  const folderbar = document.querySelector('#folderbar');
+  if (folderbar) folderbar.after(scopebar);
+  else document.querySelector('.commandbar')?.after(scopebar);
+}
+
+const style = document.createElement('style');
+style.textContent = `
+  .local-root-scopebar{display:flex;align-items:center;min-width:0;padding:10px 2px 2px}
+  .local-root-scopebar[hidden]{display:none!important}
+  .local-root-scopebar .scope-breadcrumbs{display:flex;align-items:center;gap:5px;min-width:0;max-width:100%;white-space:nowrap}
+  .local-root-scopebar button{flex:0 0 auto;padding:5px 7px;border-radius:7px;background:transparent;color:#bbb1ae;font-size:12px}
+  .local-root-scopebar button:hover{background:#211e22;color:#fff}
+  .local-root-scopebar .scope-separator{flex:0 0 auto;color:#676061;font-size:12px}
+  .local-root-scopebar .scope-kind{flex:0 0 auto;color:#8f8583;font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.045em}
+  .local-root-scopebar strong{min-width:0;overflow:hidden;text-overflow:ellipsis;color:#ddd4d0;font-size:12px;font-weight:650}
+  .local-root-scopebar small{flex:0 0 auto;color:#746d6c;font-size:9px}
+  .local-root-scopebar .scope-clear{width:27px;height:27px;display:grid;place-items:center;padding:0;color:#817978;font-size:17px;line-height:1}
+  @media(max-width:700px){.local-root-scopebar{padding-top:8px}.local-root-scopebar .scope-kind,.local-root-scopebar small{display:none}}
+`;
+document.head.append(style);
 
 let activeRoot = '';
 let restoreGeneration = 0;
@@ -70,6 +96,10 @@ async function hashesForRoot(root) {
   return hashes;
 }
 
+function notifyFilterUi() {
+  window.dispatchEvent(new CustomEvent('mochimono:filters-changed'));
+}
+
 function ensureRootOption(root) {
   if (!locationFilter) return;
   let option = locationFilter.querySelector('option[data-local-root]');
@@ -84,17 +114,16 @@ function ensureRootOption(root) {
   suppressLocationChange = true;
   locationFilter.value = option.value;
   suppressLocationChange = false;
-  window.dispatchEvent(new CustomEvent('mochimono:filters-changed'));
+  notifyFilterUi();
 }
 
 function removeRootOption() {
   locationFilter?.querySelector('option[data-local-root]')?.remove();
   if (locationFilter?.value === 'source-folder') locationFilter.value = '';
-  window.dispatchEvent(new CustomEvent('mochimono:filters-changed'));
+  notifyFilterUi();
 }
 
 function renderScope(root, count = null) {
-  if (!scopebar) return;
   if (!root) {
     scopebar.hidden = true;
     scopebar.replaceChildren();
@@ -104,9 +133,9 @@ function renderScope(root, count = null) {
   scopebar.hidden = false;
   scopebar.innerHTML = `<div class="scope-breadcrumbs">
     <button type="button" data-root-home>All files</button>
-    <span>›</span>
+    <span class="scope-separator">›</span>
     <span class="scope-kind">Source folder</span>
-    <span>›</span>
+    <span class="scope-separator">›</span>
     <strong title="${escapeHtml(root)}">${escapeHtml(root)}</strong>
     ${countText}
     <button type="button" class="scope-clear" data-root-clear title="Clear folder filter" aria-label="Clear folder filter">×</button>
@@ -114,10 +143,11 @@ function renderScope(root, count = null) {
 }
 
 function clearAppliedRoot({ clearFilter = true } = {}) {
+  const rootFilterWasActive = locationFilter?.value === 'source-folder';
   activeRoot = '';
   removeRootOption();
   renderScope('');
-  if (clearFilter) library()?.setLocationFilter?.('', null);
+  if (clearFilter && rootFilterWasActive) library()?.setLocationFilter?.('', null);
 }
 
 async function applyRoot(root) {
@@ -164,21 +194,21 @@ async function restore() {
   catch (error) { console.warn('Could not restore local folder scope.', error); }
 }
 
-function leaveRootForOtherScope() {
+function leaveRootForOtherScope({ clearFilter = true } = {}) {
   if (!activeRoot && !urlRoot()) return;
   restoreGeneration++;
   syncUrl('', 'replace');
-  clearAppliedRoot({ clearFilter:false });
+  clearAppliedRoot({ clearFilter });
 }
 
-scopebar?.addEventListener('click', event => {
+scopebar.addEventListener('click', event => {
   if (!event.target.closest('[data-root-home],[data-root-clear]')) return;
   window.mochimonoHome?.('push');
 });
 
 locationFilter?.addEventListener('change', () => {
   if (suppressLocationChange) return;
-  if (locationFilter.value !== 'source-folder') leaveRootForOtherScope();
+  if (locationFilter.value !== 'source-folder') leaveRootForOtherScope({ clearFilter:false });
 });
 
 source?.addEventListener('change', () => {
