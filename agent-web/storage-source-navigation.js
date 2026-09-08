@@ -17,33 +17,35 @@ async function waitForRootNavigation(timeoutMs = 30000) {
   while (Date.now() < deadline) {
     const child = frame?.contentWindow;
     const navigation = child?.mochimonoLocalRoot;
-    if (child && navigation?.open) return { child, navigation };
+    if (child && navigation?.open && navigation?.openBrowser) return { child, navigation };
     await delay(50);
   }
   throw new Error('Library could not finish loading.');
 }
 
 async function openStorageSource(row) {
-  const path = String(row?.dataset.folderPath || '').trim();
-  if (!path) throw new Error('Folder path is unavailable.');
-
-  // Reveal the Library immediately; the child owns the actual root scope, URL,
-  // visible filter state, refresh restoration, and back/forward navigation.
-  if (storagePane && !storagePane.hidden) storageButton?.click();
   const { child, navigation } = await waitForRootNavigation();
-  await navigation.open(path, 'push');
+  const browserId = String(row?.dataset.browserFolder || '').trim();
+  const path = String(row?.dataset.folderPath || '').trim();
+
+  // Apply the complete scope while the Library iframe is still hidden behind the
+  // Storage page. Revealing the already-rendered Grid first caused a brief flash
+  // of whatever photos were visible in the previous scope.
+  if (browserId) await navigation.openBrowser(browserId, 'push');
+  else if (path) await navigation.open(path, 'push');
+  else throw new Error('Folder is unavailable.');
+
+  if (storagePane && !storagePane.hidden) storageButton?.click();
   child.focus();
 }
 
-// Capture at the window so this wins before folder-modes' legacy preview click
-// handler. The path text itself is untouched and still opens Explorer.
 window.addEventListener('click', event => {
   const preview = event.target.closest?.('#folders .storage-folder-samples');
   if (!preview) return;
+  const row = preview.closest('[data-folder-path],[data-browser-folder]');
+  if (!row) return;
   event.preventDefault();
   event.stopPropagation();
   event.stopImmediatePropagation();
-  const row = preview.closest('[data-folder-path]');
-  if (!row) return;
   openStorageSource(row).catch(error => toast(error.message));
 }, true);
