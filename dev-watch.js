@@ -74,7 +74,7 @@ function startDev() {
     if (stopping || restarting) return;
     const why = signal ? `signal ${signal}` : `exit code ${code ?? 1}`;
     console.error(`[dev] Mochimono stopped unexpectedly (${why}).`);
-    shutdown(code || 1);
+    void shutdown(code || 1);
   });
 }
 
@@ -146,9 +146,14 @@ async function checkForUpdate() {
     restarting = true;
     console.log('[dev] Restarting Mochimono...');
     await stopDev();
-    ensureDeps();
-    if (!stopping) startDev();
-    console.log('[dev] Restart complete.');
+    try {
+      ensureDeps();
+      if (!stopping) startDev();
+      console.log('[dev] Restart complete.');
+    } catch (error) {
+      console.error(`[dev] Restart failed: ${error.message}`);
+      await shutdown(1);
+    }
   } catch (error) {
     notice(`error:${error.message}`, `[git] Update check failed: ${error.message}`);
   } finally {
