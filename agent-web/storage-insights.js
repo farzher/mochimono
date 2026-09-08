@@ -135,33 +135,10 @@ if (storagePane && foldersSection) {
     return files;
   }
 
-  async function sourceDuplicates(token, files) {
-    const data = await json('/api/client/locations', token, true);
-    if (!data?.files?.length) return { sourceBytes:0, duplicateBytes:0, duplicateFiles:0, groups:0 };
-
-    const sizes = new Map(files.map(file => [String(file.hash || ''), Math.max(0, Number(file.size) || 0)]));
-    const copies = new Map();
-    let sourceBytes = 0;
-
-    for (const entry of data.files) {
-      const hash = String(entry?.[0] || '');
-      const size = sizes.get(hash);
-      if (!hash || size == null) continue;
-      copies.set(hash, (copies.get(hash) || 0) + 1);
-      sourceBytes += size;
-    }
-
-    let duplicateBytes = 0;
-    let duplicateFiles = 0;
-    let groups = 0;
-    for (const [hash, count] of copies) {
-      if (count <= 1) continue;
-      const extras = count - 1;
-      duplicateBytes += extras * (sizes.get(hash) || 0);
-      duplicateFiles += extras;
-      groups++;
-    }
-    return { sourceBytes, duplicateBytes, duplicateFiles, groups };
+  async function sourceDuplicates(token) {
+    return await json('/api/client/duplicate-stats', token, true) || {
+      sourceBytes:0, sourceFiles:0, duplicateBytes:0, duplicateFiles:0, groups:0
+    };
   }
 
   function renderTypes(files, duplicates) {
@@ -185,7 +162,7 @@ if (storagePane && foldersSection) {
     const duplicateShare = sourceBytes ? duplicateBytes / sourceBytes * 100 : 0;
     const duplicateHtml = sourceBytes ? `<div class="storage-space-type storage-space-duplicate" title="${Number(duplicates?.duplicateFiles || 0).toLocaleString()} redundant source copies across ${Number(duplicates?.groups || 0).toLocaleString()} duplicated files"><span class="storage-space-type-name">Duplicates</span><span class="storage-space-type-bar"><i style="width:${Math.max(duplicateBytes ? 1 : 0, duplicateShare).toFixed(2)}%"></i></span><span class="storage-space-type-size">${esc(bytes(duplicateBytes))}</span><span class="storage-space-type-share">${duplicateShare.toFixed(0)}%</span></div>` : '';
 
-    typesNode.innerHTML = typeHtml || duplicateHtml ? `${typeHtml}${duplicateHtml}` : '<div class="storage-space-empty">No files in library</div>';
+    typesNode.innerHTML = (typeHtml || duplicateHtml) ? `${typeHtml}${duplicateHtml}` : '<div class="storage-space-empty">No files in library</div>';
   }
 
   async function refresh(force = false) {
@@ -198,9 +175,12 @@ if (storagePane && foldersSection) {
 
     loading = (async () => {
       try {
-        const files = await libraryFiles(token);
-        if (token !== generation) return;
-        const duplicates = await sourceDuplicates(token, files);
+        // Duplicate space is a tiny SQLite aggregate now. Run it alongside the
+        // existing type scan instead of serializing a second full-library pass.
+        const [files, duplicates] = await Promise.all([
+          libraryFiles(token),
+          sourceDuplicates(token)
+        ]);
         if (token !== generation) return;
         renderTypes(files, duplicates);
         loadedAt = Date.now();
