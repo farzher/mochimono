@@ -1,6 +1,7 @@
 const frame = document.querySelector('#filesFrame');
 const storagePane = document.querySelector('#storagePane');
 const manageButton = document.querySelector('[data-client-tab="storage"]');
+const header = document.querySelector('.client-header');
 const brand = document.querySelector('.client-header .app-brand');
 const NAV_PARAMS = ['view', 'tree', 'source', 'path', 'collection', 'file', 'q', 'origin', 'type', 'sort', 'where'];
 
@@ -86,6 +87,36 @@ function checkpointHomeNavigation(event) {
 
 brand?.addEventListener('click', checkpointHomeNavigation, true);
 brand?.addEventListener('keydown', checkpointHomeNavigation, true);
+
+function libraryWindow() {
+  if (!frame?.contentWindow || !storagePane?.hidden || document.querySelector('dialog[open]')) return null;
+  return frame.contentWindow;
+}
+
+function editableTarget(target) {
+  return target?.closest?.('input,select,textarea,[contenteditable="true"]');
+}
+
+window.addEventListener('keydown', event => {
+  if (event.key !== 'PageUp' && event.key !== 'PageDown') return;
+  if (editableTarget(event.target)) return;
+  const child = libraryWindow();
+  if (!child) return;
+  const viewport = child.innerHeight || frame.clientHeight || innerHeight;
+  child.scrollBy({ top: (event.key === 'PageUp' ? -1 : 1) * Math.max(1, Math.floor(viewport * .9)), behavior: 'auto' });
+  child.focus();
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+
+header?.addEventListener('wheel', event => {
+  if (event.ctrlKey || !event.deltaY || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;
+  const child = libraryWindow();
+  if (!child) return;
+  const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? (child.innerHeight || frame.clientHeight || innerHeight) : 1;
+  child.scrollBy({ top: event.deltaY * multiplier, behavior: 'auto' });
+  event.preventDefault();
+}, { passive: false });
 
 window.addEventListener('message', event => {
   if (event.source !== frame?.contentWindow || event.origin !== location.origin) return;
