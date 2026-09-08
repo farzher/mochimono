@@ -1,11 +1,12 @@
 import './storage-source-navigation.js';
+import './storage-clarity.js';
 
 const frame = document.querySelector('#filesFrame');
 const storagePane = document.querySelector('#storagePane');
 const manageButton = document.querySelector('[data-client-tab="storage"]');
 const header = document.querySelector('.client-header');
 const brand = document.querySelector('.client-header .app-brand');
-const NAV_PARAMS = ['view', 'tree', 'source', 'path', 'root', 'collection', 'file', 'q', 'origin', 'type', 'sort', 'where'];
+const NAV_PARAMS = ['view', 'tree', 'source', 'path', 'root', 'browser', 'collection', 'file', 'q', 'origin', 'type', 'sort', 'where'];
 
 let restoringPage = false;
 let restoringChild = false;
