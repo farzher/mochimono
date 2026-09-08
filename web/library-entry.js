@@ -28,6 +28,7 @@ async function localPage(path, offset) {
 async function localSnapshot() {
   let state = null;
   try { state = await fetchJson('/api/state'); } catch {}
+  if (state?.server) runtime.cloudOnline = Boolean(state.server.online);
   const configured = Array.isArray(state?.settings?.folders) ? state.settings.folders : [];
   const sources = configured.map(folder => ({
     path:String(folder?.path || ''),
@@ -210,16 +211,29 @@ function offlineCatalogResponse(url) {
   return jsonResponse({ files, nextAfter:next < (snapshot.files || []).length ? String(next) : '' });
 }
 
+function catalogUrl(input) {
+  let url;
+  try { url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.origin); }
+  catch { return null; }
+  if (url.origin !== location.origin) return null;
+  return ['/api/catalog/version','/api/imports','/api/catalog'].includes(url.pathname) ? url : null;
+}
+
 function installOfflineCatalogFallback() {
   if (!CLIENT) return;
   window.fetch = async (input, options) => {
-    const response = await nativeFetch(input, options);
-    if (response.ok || response.status < 500) return response;
-    let url;
-    try { url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.origin); }
-    catch { return response; }
-    if (url.origin !== location.origin) return response;
-    return offlineCatalogResponse(url) || response;
+    const url = catalogUrl(input);
+    if (url && runtime.cloudOnline === false) return offlineCatalogResponse(url);
+    try {
+      const response = await nativeFetch(input, options);
+      if (!url || response.ok || response.status < 500) return response;
+      runtime.cloudOnline = false;
+      return offlineCatalogResponse(url) || response;
+    } catch (error) {
+      if (!url) throw error;
+      runtime.cloudOnline = false;
+      return offlineCatalogResponse(url);
+    }
   };
 }
 
