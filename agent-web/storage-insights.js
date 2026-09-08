@@ -18,6 +18,8 @@ if (storagePane && foldersSection) {
 .storage-space-type-bar i{display:block;height:100%;border-radius:inherit;background:#d69a95}
 .storage-space-type-size{min-width:62px;color:#b8afac;font-size:11px;text-align:right;white-space:nowrap}
 .storage-space-type-share{min-width:36px;color:#77706f;font-size:10px;text-align:right;white-space:nowrap}
+.storage-space-duplicate{margin-top:3px;padding-top:9px;border-top:1px solid #252126}
+.storage-space-duplicate .storage-space-type-bar i{background:#8479ad}
 .storage-space-empty{padding:8px 0;color:#77706f;font-size:11px}
 .storage-space-error{padding:8px 0;color:#c98f89;font-size:11px}
 @media(max-width:700px){.storage-space-type{grid-template-columns:64px minmax(60px,1fr) auto}.storage-space-type-share{display:none}}
@@ -133,7 +135,36 @@ if (storagePane && foldersSection) {
     return files;
   }
 
-  function renderTypes(files) {
+  async function sourceDuplicates(token, files) {
+    const data = await json('/api/client/locations', token, true);
+    if (!data?.files?.length) return { sourceBytes:0, duplicateBytes:0, duplicateFiles:0, groups:0 };
+
+    const sizes = new Map(files.map(file => [String(file.hash || ''), Math.max(0, Number(file.size) || 0)]));
+    const copies = new Map();
+    let sourceBytes = 0;
+
+    for (const entry of data.files) {
+      const hash = String(entry?.[0] || '');
+      const size = sizes.get(hash);
+      if (!hash || size == null) continue;
+      copies.set(hash, (copies.get(hash) || 0) + 1);
+      sourceBytes += size;
+    }
+
+    let duplicateBytes = 0;
+    let duplicateFiles = 0;
+    let groups = 0;
+    for (const [hash, count] of copies) {
+      if (count <= 1) continue;
+      const extras = count - 1;
+      duplicateBytes += extras * (sizes.get(hash) || 0);
+      duplicateFiles += extras;
+      groups++;
+    }
+    return { sourceBytes, duplicateBytes, duplicateFiles, groups };
+  }
+
+  function renderTypes(files, duplicates) {
     const totals = new Map([['Video',0],['Images',0],['Audio',0],['Other',0]]);
     let total = 0;
     for (const file of files) {
@@ -144,10 +175,17 @@ if (storagePane && foldersSection) {
 
     totalNode.textContent = files.length ? `${bytes(total)} · ${files.length.toLocaleString()} files` : '';
     const rows = [...totals].filter(([, size]) => size > 0).sort((a, b) => b[1] - a[1]);
-    typesNode.innerHTML = rows.length ? rows.map(([label, size]) => {
+    const typeHtml = rows.map(([label, size]) => {
       const share = total ? size / total * 100 : 0;
       return `<div class="storage-space-type"><span class="storage-space-type-name">${label}</span><span class="storage-space-type-bar"><i style="width:${Math.max(1, share).toFixed(2)}%"></i></span><span class="storage-space-type-size">${esc(bytes(size))}</span><span class="storage-space-type-share">${share.toFixed(0)}%</span></div>`;
-    }).join('') : '<div class="storage-space-empty">No files in library</div>';
+    }).join('');
+
+    const duplicateBytes = Math.max(0, Number(duplicates?.duplicateBytes) || 0);
+    const sourceBytes = Math.max(0, Number(duplicates?.sourceBytes) || 0);
+    const duplicateShare = sourceBytes ? duplicateBytes / sourceBytes * 100 : 0;
+    const duplicateHtml = sourceBytes ? `<div class="storage-space-type storage-space-duplicate" title="${Number(duplicates?.duplicateFiles || 0).toLocaleString()} redundant source copies across ${Number(duplicates?.groups || 0).toLocaleString()} duplicated files"><span class="storage-space-type-name">Duplicates</span><span class="storage-space-type-bar"><i style="width:${Math.max(duplicateBytes ? 1 : 0, duplicateShare).toFixed(2)}%"></i></span><span class="storage-space-type-size">${esc(bytes(duplicateBytes))}</span><span class="storage-space-type-share">${duplicateShare.toFixed(0)}%</span></div>` : '';
+
+    typesNode.innerHTML = typeHtml || duplicateHtml ? `${typeHtml}${duplicateHtml}` : '<div class="storage-space-empty">No files in library</div>';
   }
 
   async function refresh(force = false) {
@@ -162,7 +200,9 @@ if (storagePane && foldersSection) {
       try {
         const files = await libraryFiles(token);
         if (token !== generation) return;
-        renderTypes(files);
+        const duplicates = await sourceDuplicates(token, files);
+        if (token !== generation) return;
+        renderTypes(files, duplicates);
         loadedAt = Date.now();
       } catch (error) {
         if (token !== generation) return;
