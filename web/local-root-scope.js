@@ -30,12 +30,23 @@ style.textContent = `
 `;
 document.head.append(style);
 
-let activeRoot = '';
+let activeScope = null;
 let restoreGeneration = 0;
 let suppressLocationChange = false;
 
 const library = () => window.mochimonoLibrary;
-const urlRoot = () => new URL(location.href).searchParams.get('root') || '';
+
+function wantedScope() {
+  const url = new URL(location.href);
+  const root = String(url.searchParams.get('root') || '').trim();
+  if (root) return { kind:'root', key:root };
+  const browser = String(url.searchParams.get('browser') || '').trim();
+  return browser ? { kind:'browser', key:browser } : null;
+}
+
+function sameScope(a, b) {
+  return Boolean(a && b && a.kind === b.kind && a.key === b.key);
+}
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'\"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[char]));
@@ -46,10 +57,12 @@ function pathName(path) {
   return clean.split(/[\\/]/).filter(Boolean).at(-1) || clean || 'Source folder';
 }
 
-function syncUrl(root, mode = 'replace') {
+function syncUrl(scope, mode = 'replace') {
   const url = new URL(location.href);
-  if (root) url.searchParams.set('root', root);
-  else url.searchParams.delete('root');
+  url.searchParams.delete('root');
+  url.searchParams.delete('browser');
+  if (scope?.kind === 'root') url.searchParams.set('root', scope.key);
+  else if (scope?.kind === 'browser') url.searchParams.set('browser', scope.key);
   if (url.href === location.href) return;
   history[mode === 'push' ? 'pushState' : 'replaceState'](history.state, '', url);
 }
@@ -61,6 +74,16 @@ async function waitForLibrary(timeoutMs = 30000) {
     await delay(50);
   }
   throw new Error('Library could not finish loading.');
+}
+
+async function waitForBrowserFolders(timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const api = window.mochimonoBrowserFolders;
+    if (api?.list && api?.tree) return api;
+    await delay(50);
+  }
+  throw new Error('Browser folders could not finish loading.');
 }
 
 async function request(path) {
@@ -77,12 +100,9 @@ function addHashes(target, data) {
   }
 }
 
-async function hashesForRoot(root) {
+async function nativeScope(root) {
   const encoded = encodeURIComponent(root);
   const hashes = new Set();
-
-  // Include live browse-stage rows, then page the persisted local index so the
-  // scope is complete even for very large folders.
   addHashes(hashes, await request(`/api/client/local-catalog?limit=5000&path=${encoded}`));
   let offset = 0;
   for (;;) {
@@ -93,14 +113,59 @@ async function hashesForRoot(root) {
     if (!Number.isFinite(next) || next <= offset) break;
     offset = next;
   }
-  return hashes;
+  return { hashes, label:root, kindLabel:'Source folder', filterLabel:`Folder · ${pathName(root)}` };
+}
+
+function cleanParts(value) {
+  return String(value || '').replaceAll('\\', '/').split('/').filter(part => part && part !== '.' && part !== '..');
+}
+
+function browserTreeRoot(item) {
+  const raw = String(item?.rootPath || item?.name || '').trim();
+  const normalized = raw.replaceAll('\\', '/');
+  if (/^[a-z]:\//i.test(normalized)) {
+    const parts = cleanParts(normalized);
+    if (parts.length) parts[0] = parts[0].toUpperCase();
+    return parts.join('/');
+  }
+  if (normalized.startsWith('/')) return ['Root', ...cleanParts(normalized)].join('/');
+  return ['Browser', ...cleanParts(raw || item?.name || 'Folder')].join('/');
+}
+
+async function browserScope(id) {
+  const api = await waitForBrowserFolders();
+  const item = (await api.list()).find(source => String(source.id) === String(id));
+  if (!item) throw new Error('Browser folder not found.');
+
+  const hashes = new Set();
+  const queue = [browserTreeRoot(item)];
+  const seen = new Set();
+  while (queue.length) {
+    const path = queue.shift();
+    if (seen.has(path)) continue;
+    seen.add(path);
+    const tree = await api.tree(path);
+    for (const file of tree?.files || []) {
+      if (String(file?.browserSourceId) !== String(id)) continue;
+      const hash = String(file?.hash || '');
+      if (/^[a-f0-9]{64}$/.test(hash)) hashes.add(hash);
+    }
+    for (const folder of tree?.folders || []) if (folder?.path) queue.push(String(folder.path));
+  }
+
+  const label = String(item.rootPath || item.name || 'Browser folder');
+  return { hashes, label, kindLabel:'Browser folder', filterLabel:`Browser · ${pathName(label)}` };
+}
+
+async function resolveScope(scope) {
+  return scope.kind === 'browser' ? browserScope(scope.key) : nativeScope(scope.key);
 }
 
 function notifyFilterUi() {
   window.dispatchEvent(new CustomEvent('mochimono:filters-changed'));
 }
 
-function ensureRootOption(root) {
+function ensureScopeOption(info) {
   if (!locationFilter) return;
   let option = locationFilter.querySelector('option[data-local-root]');
   if (!option) {
@@ -109,96 +174,96 @@ function ensureRootOption(root) {
     option.dataset.localRoot = '';
     locationFilter.append(option);
   }
-  option.textContent = `Folder · ${pathName(root)}`;
-  option.title = root;
+  option.textContent = info.filterLabel;
+  option.title = info.label;
   suppressLocationChange = true;
   locationFilter.value = option.value;
   suppressLocationChange = false;
   notifyFilterUi();
 }
 
-function removeRootOption() {
+function removeScopeOption() {
   locationFilter?.querySelector('option[data-local-root]')?.remove();
   if (locationFilter?.value === 'source-folder') locationFilter.value = '';
   notifyFilterUi();
 }
 
-function renderScope(root, count = null) {
-  if (!root) {
+function renderScope(info, count = null) {
+  if (!info) {
     scopebar.hidden = true;
     scopebar.replaceChildren();
     return;
   }
-  const countText = count == null ? '' : `<small>${Number(count).toLocaleString()} files</small>`;
+  const countText = count == null ? '<small>Loading…</small>' : `<small>${Number(count).toLocaleString()} files</small>`;
   scopebar.hidden = false;
   scopebar.innerHTML = `<div class="scope-breadcrumbs">
     <button type="button" data-root-home>All files</button>
     <span class="scope-separator">›</span>
-    <span class="scope-kind">Source folder</span>
+    <span class="scope-kind">${escapeHtml(info.kindLabel)}</span>
     <span class="scope-separator">›</span>
-    <strong title="${escapeHtml(root)}">${escapeHtml(root)}</strong>
+    <strong title="${escapeHtml(info.label)}">${escapeHtml(info.label)}</strong>
     ${countText}
     <button type="button" class="scope-clear" data-root-clear title="Clear folder filter" aria-label="Clear folder filter">×</button>
   </div>`;
 }
 
-function clearAppliedRoot({ clearFilter = true } = {}) {
-  const rootFilterWasActive = locationFilter?.value === 'source-folder';
-  activeRoot = '';
-  removeRootOption();
-  renderScope('');
-  if (clearFilter && rootFilterWasActive) library()?.setLocationFilter?.('', null);
+function clearAppliedScope({ clearFilter = true } = {}) {
+  const scopeFilterWasActive = locationFilter?.value === 'source-folder';
+  activeScope = null;
+  removeScopeOption();
+  renderScope(null);
+  if (clearFilter && scopeFilterWasActive) library()?.setLocationFilter?.('', null);
 }
 
-async function applyRoot(root) {
+async function applyScope(scope) {
   const generation = ++restoreGeneration;
-  const wanted = String(root || '').trim();
-  if (!wanted) {
-    clearAppliedRoot();
-    return;
-  }
-
-  renderScope(wanted);
-  ensureRootOption(wanted);
   const api = await waitForLibrary();
-  const hashes = await hashesForRoot(wanted);
-  if (generation !== restoreGeneration || urlRoot() !== wanted) return;
-  activeRoot = wanted;
-  api.setLocationFilter('source-folder', hashes);
-  renderScope(wanted, hashes.size);
+  const provisional = scope.kind === 'browser'
+    ? { label:'Browser folder', kindLabel:'Browser folder', filterLabel:'Browser folder' }
+    : { label:scope.key, kindLabel:'Source folder', filterLabel:`Folder · ${pathName(scope.key)}` };
+  renderScope(provisional);
+  const info = await resolveScope(scope);
+  if (generation !== restoreGeneration || !sameScope(wantedScope(), scope)) return;
+  ensureScopeOption(info);
+  api.setLocationFilter('source-folder', info.hashes);
+  activeScope = { ...scope, label:info.label, kindLabel:info.kindLabel };
+  renderScope(info, info.hashes.size);
 }
 
-async function open(root, historyMode = 'push') {
-  const wanted = String(root || '').trim();
-  if (!wanted) return;
-
-  // A Storage-folder click is navigation to a new scope, not an extra hidden
-  // filter layered on top of whatever the user happened to be viewing before.
+async function openScope(scope, historyMode = 'push') {
+  if (!scope?.key) return;
   window.mochimonoHome?.('replace');
-  syncUrl(wanted, historyMode);
-  await applyRoot(wanted);
+  syncUrl(scope, historyMode);
+  await applyScope(scope);
   window.scrollTo({ top:0, left:0, behavior:'auto' });
 }
 
-async function restore() {
-  const wanted = urlRoot();
-  if (!wanted) {
-    if (activeRoot || locationFilter?.value === 'source-folder') clearAppliedRoot();
-    return;
-  }
-  if (wanted === activeRoot) {
-    renderScope(wanted);
-    return;
-  }
-  try { await applyRoot(wanted); }
-  catch (error) { console.warn('Could not restore local folder scope.', error); }
+async function open(root, historyMode = 'push') {
+  const key = String(root || '').trim();
+  if (key) await openScope({ kind:'root', key }, historyMode);
 }
 
-function leaveRootForOtherScope({ clearFilter = true } = {}) {
-  if (!activeRoot && !urlRoot()) return;
+async function openBrowser(id, historyMode = 'push') {
+  const key = String(id || '').trim();
+  if (key) await openScope({ kind:'browser', key }, historyMode);
+}
+
+async function restore() {
+  const wanted = wantedScope();
+  if (!wanted) {
+    if (activeScope || locationFilter?.value === 'source-folder') clearAppliedScope();
+    return;
+  }
+  if (sameScope(wanted, activeScope)) return;
+  try { await applyScope(wanted); }
+  catch (error) { console.warn('Could not restore folder scope.', error); }
+}
+
+function leaveScopeForOtherScope({ clearFilter = true } = {}) {
+  if (!activeScope && !wantedScope()) return;
   restoreGeneration++;
-  syncUrl('', 'replace');
-  clearAppliedRoot({ clearFilter });
+  syncUrl(null, 'replace');
+  clearAppliedScope({ clearFilter });
 }
 
 scopebar.addEventListener('click', event => {
@@ -208,22 +273,23 @@ scopebar.addEventListener('click', event => {
 
 locationFilter?.addEventListener('change', () => {
   if (suppressLocationChange) return;
-  if (locationFilter.value !== 'source-folder') leaveRootForOtherScope({ clearFilter:false });
+  if (locationFilter.value !== 'source-folder') leaveScopeForOtherScope({ clearFilter:false });
 });
 
 source?.addEventListener('change', () => {
-  if (source.value) leaveRootForOtherScope();
+  if (source.value) leaveScopeForOtherScope();
 });
 
 window.addEventListener('mochimono:folder-changed', () => {
-  if (library()?.folderState?.().importId) leaveRootForOtherScope();
+  if (library()?.folderState?.().importId) leaveScopeForOtherScope();
 });
 window.addEventListener('popstate', () => void restore());
 
 window.mochimonoLocalRoot = {
   open,
+  openBrowser,
   restore,
-  current: () => activeRoot || urlRoot()
+  current: () => activeScope || wantedScope()
 };
 
-if (CLIENT || urlRoot()) queueMicrotask(() => void restore());
+if (CLIENT || wantedScope()) queueMicrotask(() => void restore());
