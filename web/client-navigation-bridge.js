@@ -1,5 +1,5 @@
 if (location.pathname.startsWith('/files') && window.parent !== window) {
-  const NAV_PARAMS = ['view', 'tree', 'source', 'path', 'root', 'browser', 'collection', 'file', 'q', 'origin', 'type', 'sort', 'where'];
+  const NAV_PARAMS = ['view', 'tree', 'source', 'path', 'folder', 'collection', 'file', 'q', 'origin', 'type', 'sort', 'where'];
 
   function currentParams() {
     const url = new URL(location.href);
