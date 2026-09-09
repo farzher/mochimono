@@ -1,6 +1,6 @@
 const CLIENT = document.documentElement.classList.contains('client-library');
 const locationFilter = document.querySelector('#locationFilter');
-const CACHE_MS = 5000;
+const CACHE_MS = 30000;
 
 let activePath = '';
 let activeKind = 'Source folder';
@@ -34,6 +34,7 @@ document.head.append(style);
 
 const pathKey = value => String(value || '').trim().replaceAll('/', '\\').replace(/[\\]+$/, '').toLowerCase();
 const urlPath = () => String(new URL(location.href).searchParams.get('folder') || '').trim();
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'\"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[char]));
@@ -128,24 +129,46 @@ async function browserMembership(source, api) {
   return { hashes, kind:'Browser folder' };
 }
 
-async function resolveMembership(path) {
-  const key = pathKey(path);
-  const cached = cache.get(key);
+async function waitForBrowserApi(timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const api = window.mochimonoBrowserFolders;
+    if (api?.list && api?.tree) return api;
+    await delay(50);
+  }
+  throw new Error('Browser folder is still loading.');
+}
+
+async function resolveMembership(path, browserId = '') {
+  const pathCacheKey = `path:${pathKey(path)}`;
+  const idCacheKey = browserId ? `browser:${browserId}` : '';
+  const cached = cache.get(idCacheKey || pathCacheKey) || cache.get(pathCacheKey);
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.value;
+
+  if (browserId) {
+    const api = await waitForBrowserApi();
+    const source = (await api.list()).find(item => String(item.id) === String(browserId));
+    if (!source) throw new Error('Browser folder is unavailable.');
+    const value = await browserMembership(source, api);
+    const entry = { at:Date.now(), value };
+    cache.set(idCacheKey, entry);
+    cache.set(pathCacheKey, entry);
+    return value;
+  }
 
   const browserApi = window.mochimonoBrowserFolders;
   if (browserApi?.list && browserApi?.tree) {
     const sources = await browserApi.list().catch(() => []);
-    const source = sources.find(item => pathKey(item.rootPath || item.name) === key);
+    const source = sources.find(item => pathKey(item.rootPath || item.name) === pathKey(path));
     if (source) {
       const value = await browserMembership(source, browserApi);
-      cache.set(key, { at:Date.now(), value });
+      cache.set(pathCacheKey, { at:Date.now(), value });
       return value;
     }
   }
 
   const value = await nativeMembership(path);
-  cache.set(key, { at:Date.now(), value });
+  cache.set(pathCacheKey, { at:Date.now(), value });
   return value;
 }
 
@@ -158,7 +181,7 @@ function clearApplied({ clearLibrary = true } = {}) {
   window.dispatchEvent(new CustomEvent('mochimono:filters-changed'));
 }
 
-async function apply(path, { reset = false } = {}) {
+async function apply(path, { reset = false, browserId = '' } = {}) {
   const wanted = String(path || '').trim();
   if (!wanted) {
     clearApplied();
@@ -168,8 +191,8 @@ async function apply(path, { reset = false } = {}) {
 
   if (reset) window.mochimonoHome?.('replace');
   const token = ++generation;
-  render(wanted, 'Source folder');
-  const membership = await resolveMembership(wanted);
+  render(wanted, browserId ? 'Browser folder' : 'Source folder');
+  const membership = await resolveMembership(wanted, browserId);
   if (token !== generation) return null;
 
   activePath = wanted;
@@ -209,8 +232,8 @@ scopebar.addEventListener('click', event => {
   window.mochimonoHome?.('push');
 });
 
-locationFilter?.addEventListener('change', () => {
-  if (!activePath && !urlPath()) return;
+locationFilter?.addEventListener('change', event => {
+  if (!event.isTrusted || (!activePath && !urlPath())) return;
   generation++;
   writeUrl('', 'replace');
   clearApplied({ clearLibrary:false });
