@@ -1,4 +1,3 @@
-import './storage-source-navigation.js';
 import './storage-clarity.js';
 
 const frame = document.querySelector('#filesFrame');
@@ -6,11 +5,21 @@ const storagePane = document.querySelector('#storagePane');
 const manageButton = document.querySelector('[data-client-tab="storage"]');
 const header = document.querySelector('.client-header');
 const brand = document.querySelector('.client-header .app-brand');
-const NAV_PARAMS = ['view', 'tree', 'source', 'path', 'root', 'browser', 'collection', 'file', 'q', 'origin', 'type', 'sort', 'where'];
+const folders = document.querySelector('#folders');
+const toastNode = document.querySelector('#toast');
+const NAV_PARAMS = ['view', 'tree', 'source', 'path', 'folder', 'collection', 'file', 'q', 'origin', 'type', 'sort', 'where'];
 
 let restoringPage = false;
 let restoringChild = false;
 let expectedChildKey = '';
+
+function toast(text) {
+  if (!toastNode) return;
+  toastNode.textContent = text;
+  toastNode.classList.add('show');
+  clearTimeout(toastNode.timer);
+  toastNode.timer = setTimeout(() => toastNode.classList.remove('show'), 2800);
+}
 
 function libraryParamsFromShell() {
   const url = new URL(location.href);
@@ -120,6 +129,64 @@ header?.addEventListener('wheel', event => {
   child.scrollBy({ top: event.deltaY * multiplier, behavior: 'auto' });
   event.preventDefault();
 }, { passive: false });
+
+function sourcePath(row) {
+  return String(row?.dataset.folderPath || row?.querySelector('.storage-title strong')?.title || '').trim();
+}
+
+function sourceLibraryUrl(path) {
+  const url = new URL(location.href);
+  url.searchParams.delete('page');
+  for (const key of NAV_PARAMS) url.searchParams.delete(key);
+  url.searchParams.set('folder', path);
+  return url;
+}
+
+async function waitForSourceNavigation(timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const child = frame?.contentWindow;
+    const scope = child?.mochimonoSourceFolder;
+    if (scope?.apply && scope?.commit && child?.mochimonoLibrary?.setLocationFilter && child?.mochimonoHome) return { child, scope };
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error('Library is still loading.');
+}
+
+async function openSourceFolder(row) {
+  const path = sourcePath(row);
+  if (!path) throw new Error('Folder path is unavailable.');
+
+  // Resolve and apply the complete filter before touching the visible page or
+  // outer URL. If anything fails, Storage remains exactly where it was.
+  const { child, scope } = await waitForSourceNavigation();
+  const result = await scope.apply(path, { reset:true });
+  if (!result) return;
+
+  history.pushState(history.state, '', sourceLibraryUrl(result.path));
+  scope.commit(result.path, 'replace');
+
+  // The Client shell owns the actual tab toggle. Suppress this module's normal
+  // Storage-button history listener because the destination URL was committed
+  // atomically above.
+  if (!storagePane.hidden) {
+    restoringPage = true;
+    try { manageButton?.click(); }
+    finally { restoringPage = false; }
+  }
+  child.focus();
+}
+
+window.addEventListener('click', event => {
+  const preview = event.target.closest?.('#folders .storage-folder-samples');
+  if (!preview) return;
+  const row = preview.closest('[data-folder-path],[data-browser-folder]');
+  if (!row) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  openSourceFolder(row).catch(error => toast(error.message));
+}, true);
 
 window.addEventListener('message', event => {
   if (event.source !== frame?.contentWindow || event.origin !== location.origin) return;
