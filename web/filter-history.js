@@ -15,8 +15,6 @@ function currentViewFromUrl(url = new URL(location.href)) {
   return 'grid';
 }
 
-const hasFolderScope = url => url.searchParams.has('root') || url.searchParams.has('browser');
-
 function targetUrl() {
   const url = new URL(location.href);
   const query = String(search?.value || '').trim();
@@ -31,12 +29,7 @@ function targetUrl() {
   else url.searchParams.delete('origin');
   if (kind) url.searchParams.set('type', kind); else url.searchParams.delete('type');
   if (order && order !== 'date-desc') url.searchParams.set('sort', order); else url.searchParams.delete('sort');
-
-  // Native and browser source-folder navigation own their exact hash sets. The
-  // visible Where selector mirrors that scope, but must not create a second
-  // generic ?where=source-folder filter.
-  if (location && !(location === 'source-folder' && hasFolderScope(url))) url.searchParams.set('where', location);
-  else url.searchParams.delete('where');
+  if (location) url.searchParams.set('where', location); else url.searchParams.delete('where');
   return url;
 }
 
@@ -73,8 +66,7 @@ function restoreFilters() {
   const url = new URL(location.href);
   restoring = true;
   try {
-    const q = url.searchParams.get('q') || '';
-    dispatchIfChanged(search, q, 'input');
+    dispatchIfChanged(search, url.searchParams.get('q') || '', 'input');
 
     if (!url.searchParams.has('source')) {
       const wantedOrigin = url.searchParams.get('origin') || '';
@@ -92,11 +84,9 @@ function restoreFilters() {
     const safeSort = sort?.querySelector(`option[value="${CSS.escape(wantedSort)}"]`) ? wantedSort : 'date-desc';
     dispatchIfChanged(sort, safeSort);
 
-    if (!hasFolderScope(url)) {
-      const wantedWhere = url.searchParams.get('where') || '';
-      const safeWhere = where?.querySelector(`option[value="${CSS.escape(wantedWhere)}"]`) ? wantedWhere : '';
-      dispatchIfChanged(where, safeWhere);
-    }
+    const wantedWhere = url.searchParams.get('where') || '';
+    const safeWhere = where?.querySelector(`option[value="${CSS.escape(wantedWhere)}"]`) ? wantedWhere : '';
+    dispatchIfChanged(where, safeWhere);
   } finally {
     restoring = false;
     searchEditing = false;
