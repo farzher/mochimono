@@ -34,8 +34,6 @@ export function showAllFiles(historyMode = 'push') {
   window.mochimonoSourceFolder?.clear?.({ updateUrl:false });
   if (search) search.value = '';
   clearValue(collection);
-  const typeChanged = Boolean(type && type.value !== 'media');
-  if (type) type.value = 'media';
   const locationChanged = clearValue(locationFilter);
   clearValue(source);
 
@@ -43,7 +41,19 @@ export function showAllFiles(historyMode = 'push') {
     window.mochimonoNavigation?.suppressNextView?.();
     views?.querySelector('[data-view="grid"]')?.click();
   }
-  if (typeChanged) type.dispatchEvent(new Event('change', { bubbles: true }));
+
+  // Home means the default content for the active presentation: Grid is the
+  // visual media browser; List is the complete file browser.
+  if (window.mochimonoNavigation?.resetTypeDefault) {
+    window.mochimonoNavigation.resetTypeDefault();
+  } else if (type) {
+    const wantedType = (views?.querySelector('[data-view].active')?.dataset.view || 'grid') === 'grid' ? 'media' : '';
+    if (type.value !== wantedType) {
+      type.value = wantedType;
+      type.dispatchEvent(new Event('change', { bubbles:true }));
+    }
+  }
+
   if (locationChanged) locationFilter.dispatchEvent(new Event('change', { bubbles: true }));
   source?.dispatchEvent(new Event('change', { bubbles: true }));
 
