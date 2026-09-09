@@ -27,7 +27,12 @@ function targetUrl() {
   if (url.searchParams.has('source')) url.searchParams.delete('origin');
   else if (origin) url.searchParams.set('origin', origin);
   else url.searchParams.delete('origin');
-  if (kind) url.searchParams.set('type', kind); else url.searchParams.delete('type');
+
+  // Media is the Grid's implicit default. Keep the canonical home URL clean;
+  // only serialize type when the user has selected a non-default type.
+  if (kind && !(kind === 'media' && currentViewFromUrl(url) === 'grid')) url.searchParams.set('type', kind);
+  else url.searchParams.delete('type');
+
   if (order && order !== 'date-desc') url.searchParams.set('sort', order); else url.searchParams.delete('sort');
   if (location) url.searchParams.set('where', location); else url.searchParams.delete('where');
   return url;
