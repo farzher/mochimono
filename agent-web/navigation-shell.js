@@ -145,11 +145,12 @@ async function waitForSourceNavigation(timeoutMs = 30000) {
 async function openSourceFolder(row) {
   const path = sourcePath(row);
   if (!path) throw new Error('Folder path is unavailable.');
+  const browserId = String(row?.dataset.browserFolder || '').trim();
 
   // Resolve and apply the complete filter before touching the visible page or
   // outer URL. If anything fails, Storage remains exactly where it was.
   const { child, scope } = await waitForSourceNavigation();
-  const result = await scope.apply(path, { reset:true });
+  const result = await scope.apply(path, { reset:true, browserId });
   if (!result) return;
 
   history.pushState(history.state, '', sourceLibraryUrl(result.path));
