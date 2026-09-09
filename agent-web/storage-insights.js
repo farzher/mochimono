@@ -18,7 +18,9 @@ if (storagePane && foldersSection) {
 .storage-space-type-bar i{display:block;height:100%;border-radius:inherit;background:#d69a95}
 .storage-space-type-size{min-width:62px;color:#b8afac;font-size:11px;text-align:right;white-space:nowrap}
 .storage-space-type-share{min-width:36px;color:#77706f;font-size:10px;text-align:right;white-space:nowrap}
-.storage-space-duplicate{margin-top:3px;padding-top:9px;border-top:1px solid #252126}
+.storage-space-duplicate{width:100%;margin-top:3px;padding:9px 0 0;border:0;border-top:1px solid #252126;background:transparent;color:inherit;font:inherit;text-align:inherit;cursor:pointer}
+.storage-space-duplicate:hover .storage-space-type-name,.storage-space-duplicate:focus-visible .storage-space-type-name{color:#fff}
+.storage-space-duplicate:focus-visible{outline:1px solid #5c5158;outline-offset:5px}
 .storage-space-duplicate .storage-space-type-bar i{background:#8479ad}
 .storage-space-empty{padding:8px 0;color:#77706f;font-size:11px}
 .storage-space-error{padding:8px 0;color:#c98f89;font-size:11px}
@@ -137,7 +139,7 @@ if (storagePane && foldersSection) {
 
   async function sourceDuplicates(token) {
     return await json('/api/client/duplicate-stats', token, true) || {
-      sourceBytes:0, sourceFiles:0, duplicateBytes:0, duplicateFiles:0, groups:0
+      sourceBytes:0, sourceFiles:0, duplicateBytes:0, duplicateFiles:0, groups:0, hashes:[]
     };
   }
 
@@ -160,10 +162,16 @@ if (storagePane && foldersSection) {
     const duplicateBytes = Math.max(0, Number(duplicates?.duplicateBytes) || 0);
     const sourceBytes = Math.max(0, Number(duplicates?.sourceBytes) || 0);
     const duplicateShare = sourceBytes ? duplicateBytes / sourceBytes * 100 : 0;
-    const duplicateHtml = sourceBytes ? `<div class="storage-space-type storage-space-duplicate" title="${Number(duplicates?.duplicateFiles || 0).toLocaleString()} redundant source copies across ${Number(duplicates?.groups || 0).toLocaleString()} duplicated files"><span class="storage-space-type-name">Duplicates</span><span class="storage-space-type-bar"><i style="width:${Math.max(duplicateBytes ? 1 : 0, duplicateShare).toFixed(2)}%"></i></span><span class="storage-space-type-size">${esc(bytes(duplicateBytes))}</span><span class="storage-space-type-share">${duplicateShare.toFixed(0)}%</span></div>` : '';
+    const duplicateCount = Math.max(0, Number(duplicates?.groups) || 0);
+    const duplicateHtml = sourceBytes ? `<button type="button" class="storage-space-type storage-space-duplicate" data-space-duplicates title="View ${duplicateCount.toLocaleString()} duplicated files · ${Number(duplicates?.duplicateFiles || 0).toLocaleString()} redundant source copies"><span class="storage-space-type-name">Duplicates</span><span class="storage-space-type-bar"><i style="width:${Math.max(duplicateBytes ? 1 : 0, duplicateShare).toFixed(2)}%"></i></span><span class="storage-space-type-size">${esc(bytes(duplicateBytes))}</span><span class="storage-space-type-share">${duplicateShare.toFixed(0)}%</span></button>` : '';
 
     typesNode.innerHTML = (typeHtml || duplicateHtml) ? `${typeHtml}${duplicateHtml}` : '<div class="storage-space-empty">No files in library</div>';
   }
+
+  typesNode.addEventListener('click', event => {
+    if (!event.target.closest('[data-space-duplicates]')) return;
+    window.mochimonoNavigationShell?.open?.({ view:'list', where:'duplicates' });
+  });
 
   async function refresh(force = false) {
     if (storagePane.hidden) return;
