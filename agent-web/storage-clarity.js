@@ -76,7 +76,7 @@ function decorateSources() {
 }
 
 async function loadCacheStats(force = false) {
-  if (!force && cacheStats && Date.now() - cacheLoadedAt < 60_000) return cacheStats;
+  if (!force && cacheStats && Date.now() - cacheLoadedAt < 5 * 60_000) return cacheStats;
   if (cacheLoading) return cacheLoading;
   cacheLoading = request(`/api/client/local-catalog?limit=1&path=${encodeURIComponent(CACHE_STATS_PATH)}`)
     .then(data => {
@@ -136,7 +136,10 @@ window.addEventListener('click', event => {
 }, true);
 
 if (storagePane) {
-  new MutationObserver(scheduleDecorate).observe(storagePane, { childList:true, subtree:true, attributes:true, attributeFilter:['class','hidden'] });
+  new MutationObserver(() => {
+    scheduleDecorate();
+    if (!storagePane.hidden) refreshCache().catch(() => {});
+  }).observe(storagePane, { childList:true, subtree:true, attributes:true, attributeFilter:['class','hidden'] });
 }
 
 window.addEventListener('focus', () => {
@@ -149,6 +152,5 @@ document.addEventListener('visibilitychange', () => {
   refreshCache().catch(() => {});
 });
 
-setInterval(() => refreshCache(true).catch(() => {}), 60_000);
 scheduleDecorate();
 setTimeout(() => refreshCache().catch(() => {}), 250);
