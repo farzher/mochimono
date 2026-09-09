@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
-const pollMs = 5000;
+const pollMs = 30_000;
 
 let dev = null;
 let stopping = false;
@@ -116,7 +116,6 @@ async function pullUpdate({ requireCurrent = false } = {}) {
   }
 
   if (isAncestor(remote, local)) {
-    // Local commits are ahead of GitHub. There is nothing to pull.
     lastNotice = '';
     return false;
   }
