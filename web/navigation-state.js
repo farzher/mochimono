@@ -35,6 +35,13 @@ function setType(value) {
   typeFilter.dispatchEvent(new Event('change', { bubbles:true }));
 }
 
+function resetTypeDefault() {
+  const useMedia = currentView() === 'grid';
+  automaticGridMedia = useMedia;
+  history.replaceState(historyState(useMedia), '', location.href);
+  setType(useMedia ? 'media' : '');
+}
+
 function syncGridMediaDefault() {
   const next = currentView();
   const url = new URL(location.href);
@@ -103,6 +110,7 @@ window.addEventListener('popstate', () => queueMicrotask(restoreView));
 window.mochimonoNavigation = {
   suppressNextView() { suppressNextView = true; },
   syncView(mode = 'replace') { writeView(mode); },
+  resetTypeDefault,
   restoreView
 };
 
