@@ -3,12 +3,21 @@ import { normalizeText } from './search-query.js';
 const CLIENT = document.documentElement.classList.contains('client-library');
 const locationFilter = document.querySelector('#locationFilter');
 const search = document.querySelector('#search');
-const BACKGROUND_HYDRATE_DELAY = 10000;
+const DUPLICATE_CACHE_MS = 30_000;
 let locationData = null;
 let loading = null;
-let hydrateTimer = 0;
+let duplicateHashes = null;
+let duplicateLoadedAt = 0;
+let duplicateLoading = null;
 
 const library = () => window.mochimonoLibrary;
+
+if (CLIENT && locationFilter && !locationFilter.querySelector('option[value="duplicates"]')) {
+  const option = document.createElement('option');
+  option.value = 'duplicates';
+  option.textContent = 'Duplicates';
+  locationFilter.append(option);
+}
 
 function locationText(location) {
   return normalizeText(`${location.kind || ''} ${location.name || ''} ${location.deviceName || ''} ${location.rootPath || ''}`);
@@ -49,6 +58,23 @@ async function loadLocations() {
   return loading;
 }
 
+async function loadDuplicateHashes(force = false) {
+  if (!force && duplicateHashes && Date.now() - duplicateLoadedAt < DUPLICATE_CACHE_MS) return duplicateHashes;
+  if (duplicateLoading) return duplicateLoading;
+  duplicateLoading = fetch('/api/client/duplicate-stats', { cache:'no-store' })
+    .then(response => {
+      if (!response.ok) throw new Error(`Duplicate scan failed (${response.status})`);
+      return response.json();
+    })
+    .then(data => {
+      duplicateHashes = new Set((data?.hashes || []).map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)));
+      duplicateLoadedAt = Date.now();
+      return duplicateHashes;
+    })
+    .finally(() => { duplicateLoading = null; });
+  return duplicateLoading;
+}
+
 async function applyFilter() {
   if (!locationFilter) return;
   const mode = String(locationFilter.value || '');
@@ -56,8 +82,16 @@ async function applyFilter() {
     library()?.setLocationFilter?.('', null);
     return;
   }
+
+  if (mode === 'duplicates') {
+    const hashes = await loadDuplicateHashes().catch(() => null);
+    if (!hashes || String(locationFilter.value || '') !== mode) return;
+    library()?.setLocationFilter?.(mode, hashes);
+    return;
+  }
+
   const data = await loadLocations().catch(() => null);
-  if (!data) return;
+  if (!data || String(locationFilter.value || '') !== mode) return;
   const locations = new Map((data.locations || []).map(item => [item.id, item]));
   const hashes = new Set();
   for (const [hash, locationId] of data.files || []) {
@@ -72,32 +106,17 @@ async function applyFilter() {
 
 locationFilter?.addEventListener('change', () => applyFilter().catch(() => {}));
 
-function scheduleBackgroundHydrate() {
-  if (!CLIENT || locationData || loading || hydrateTimer) return;
-  hydrateTimer = setTimeout(() => {
-    hydrateTimer = 0;
-    if (window.mochimonoGridInteraction?.active?.()) {
-      scheduleBackgroundHydrate();
-      return;
-    }
-    loadLocations().catch(() => {});
-  }, BACKGROUND_HYDRATE_DELAY);
-}
-
 if (CLIENT) {
-  // This payload can be tens of MB. requestIdleCallback is not a startup barrier:
-  // Chrome can call it almost immediately while network/catalog work is still on
-  // the critical path. Load locations immediately only when the user actually
-  // asks for location-aware filtering/search. Otherwise wait until the complete
-  // catalog has landed, then give the grid a long quiet window first.
+  // Location provenance can be a large payload, so never hydrate it merely
+  // because the Library is open. Load it only when search or a location filter
+  // actually needs it.
   search?.addEventListener('input', () => {
     if (String(search.value || '').trim()) loadLocations().catch(() => {});
   }, { passive:true });
 
-  window.addEventListener('mochimono:catalog-cache-restored', scheduleBackgroundHydrate, { once:true });
-  window.addEventListener('mochimono:catalog-updated', scheduleBackgroundHydrate, { once:true });
+  window.addEventListener('mochimono:catalog-updated', () => {
+    duplicateHashes = null;
+    duplicateLoadedAt = 0;
+    if (locationFilter?.value === 'duplicates') applyFilter().catch(() => {});
+  });
 }
-
-addEventListener('beforeunload', () => {
-  if (hydrateTimer) clearTimeout(hydrateTimer);
-}, { once:true });
