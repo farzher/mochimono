@@ -1,6 +1,7 @@
 const CLIENT = document.documentElement.classList.contains('client-library');
 const PAGE = 5000;
-const POLL_MS = 5000;
+const ACTIVE_POLL_MS = 2_000;
+const IDLE_POLL_MS = 60_000;
 const nativeFetch = window.fetch.bind(window);
 
 const runtime = {
@@ -245,6 +246,7 @@ async function localStatus() {
   const job = state?.job || {};
   return {
     cloudOnline:Boolean(state?.server?.online),
+    active:job.status === 'running',
     fingerprint:JSON.stringify([
       (folders.folders || []).map(folder => [
         String(folder.path || ''), Number(folder.files) || 0, Number(folder.bytes) || 0,
@@ -283,8 +285,20 @@ if (CLIENT) {
 await import('./library-app.js');
 
 if (CLIENT) {
-  const poll = async () => {
+  let timer = null;
+  let polling = false;
+
+  function schedule(delay) {
+    clearTimeout(timer);
+    timer = null;
     if (document.hidden) return;
+    timer = setTimeout(() => void poll(), Math.max(0, delay));
+  }
+
+  async function poll() {
+    if (polling || document.hidden) return;
+    polling = true;
+    let delay = IDLE_POLL_MS;
     try {
       const status = await localStatus();
       const cloudReturned = runtime.cloudOnline === false && status.cloudOnline === true;
@@ -292,15 +306,22 @@ if (CLIENT) {
       runtime.cloudOnline = status.cloudOnline;
       runtime.fingerprint = status.fingerprint;
       if (cloudReturned) {
-        // Cloud is enrichment/synchronization, not a startup dependency. When it
-        // comes back, reconcile normally and then the catalog-updated hook above
-        // merges any still-local-only rows back into the live view.
         await window.mochimonoLibrary?.refresh?.().catch?.(() => {});
       } else if (changed) await hydrateLive();
+      if (status.active) delay = ACTIVE_POLL_MS;
     } catch {}
-  };
-  poll();
-  const timer = setInterval(poll, POLL_MS);
-  addEventListener('beforeunload', () => clearInterval(timer), { once:true });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+    finally {
+      polling = false;
+      schedule(delay);
+    }
+  }
+
+  schedule(0);
+  addEventListener('beforeunload', () => clearTimeout(timer), { once:true });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      clearTimeout(timer);
+      timer = null;
+    } else schedule(0);
+  });
 }
