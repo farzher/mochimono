@@ -5,13 +5,10 @@ const storagePane = document.querySelector('#storagePane');
 const manageButton = document.querySelector('[data-client-tab="storage"]');
 const header = document.querySelector('.client-header');
 const brand = document.querySelector('.client-header .app-brand');
-const folders = document.querySelector('#folders');
 const toastNode = document.querySelector('#toast');
 const NAV_PARAMS = ['view', 'tree', 'source', 'path', 'folder', 'collection', 'file', 'q', 'origin', 'type', 'sort', 'where'];
 
 let restoringPage = false;
-let restoringChild = false;
-let expectedChildKey = '';
 
 function toast(text) {
   if (!toastNode) return;
@@ -31,10 +28,6 @@ function libraryParamsFromShell() {
   return params;
 }
 
-function paramsKey(params = {}) {
-  return NAV_PARAMS.map(key => `${key}=${String(params[key] || '')}`).join('&');
-}
-
 function mirrorChild(params = {}) {
   const url = new URL(location.href);
   for (const key of NAV_PARAMS) url.searchParams.delete(key);
@@ -47,10 +40,7 @@ function mirrorChild(params = {}) {
 
 function sendChildState() {
   if (!frame?.contentWindow) return;
-  const params = libraryParamsFromShell();
-  expectedChildKey = paramsKey(params);
-  restoringChild = true;
-  frame.contentWindow.postMessage({ type:'mochimono-shell-navigate', params }, location.origin);
+  frame.contentWindow.postMessage({ type:'mochimono-shell-navigate', params:libraryParamsFromShell() }, location.origin);
 }
 
 function pageName() {
@@ -93,8 +83,7 @@ function isLibraryHome() {
 function checkpointHomeNavigation(event) {
   if (event.type === 'keydown' && event.key !== 'Enter' && event.code !== 'Space') return;
   if (isLibraryHome()) return;
-  const url = pageUrl('files');
-  history.pushState(history.state, '', url);
+  history.pushState(history.state, '', pageUrl('files'));
 }
 
 brand?.addEventListener('click', checkpointHomeNavigation, true);
@@ -191,13 +180,7 @@ window.addEventListener('click', event => {
 window.addEventListener('message', event => {
   if (event.source !== frame?.contentWindow || event.origin !== location.origin) return;
   if (event.data?.type !== 'mochimono-navigation-state') return;
-  const params = event.data.params && typeof event.data.params === 'object' ? event.data.params : {};
-  const key = paramsKey(params);
-  if (restoringChild) {
-    if (key !== expectedChildKey) return;
-    restoringChild = false;
-  }
-  mirrorChild(params);
+  mirrorChild(event.data.params && typeof event.data.params === 'object' ? event.data.params : {});
 });
 
 window.addEventListener('popstate', () => {
