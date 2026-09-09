@@ -59,6 +59,27 @@ function pushPage(page) {
   if (url.href !== location.href) history.pushState(history.state, '', url);
 }
 
+function libraryUrl(params = {}) {
+  const url = new URL(location.href);
+  url.searchParams.delete('page');
+  for (const key of NAV_PARAMS) url.searchParams.delete(key);
+  for (const [key, value] of Object.entries(params || {})) {
+    if (!NAV_PARAMS.includes(key) || value == null || String(value) === '') continue;
+    url.searchParams.set(key, String(value));
+  }
+  return url;
+}
+
+function openLibrary(params = {}, mode = 'push') {
+  const url = libraryUrl(params);
+  if (url.href !== location.href) history[mode === 'replace' ? 'replaceState' : 'pushState'](history.state, '', url);
+  applyPageFromUrl();
+  sendChildState();
+  frame?.contentWindow?.focus();
+}
+
+window.mochimonoNavigationShell = { open:openLibrary };
+
 function applyPageFromUrl() {
   if (!manageButton || !storagePane) return;
   const wantStorage = pageName() === 'storage';
@@ -127,11 +148,7 @@ function sourcePath(row) {
 }
 
 function sourceLibraryUrl(path) {
-  const url = new URL(location.href);
-  url.searchParams.delete('page');
-  for (const key of NAV_PARAMS) url.searchParams.delete(key);
-  url.searchParams.set('folder', path);
-  return url;
+  return libraryUrl({ folder:path });
 }
 
 async function waitForSourceNavigation(timeoutMs = 30000) {
