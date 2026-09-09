@@ -34,7 +34,8 @@ export function showAllFiles(historyMode = 'push') {
   window.mochimonoSourceFolder?.clear?.({ updateUrl:false });
   if (search) search.value = '';
   clearValue(collection);
-  const typeChanged = clearValue(type);
+  const typeChanged = Boolean(type && type.value !== 'media');
+  if (type) type.value = 'media';
   const locationChanged = clearValue(locationFilter);
   clearValue(source);
 
