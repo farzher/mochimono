@@ -7,6 +7,8 @@ const deviceDialog = $('#deviceDialog');
 const backupDialog = $('#backupDialog');
 const restoreDialog = $('#restoreDialog');
 const VERIFY_STALE_MS = 180 * 24 * 60 * 60 * 1000;
+const ACTIVE_STATE_POLL_MS = 1_000;
+const IDLE_STATE_POLL_MS = 30_000;
 
 let backupPath = '';
 let backupEditing = false;
@@ -21,6 +23,8 @@ let smartCollections = [];
 let backupLoading = false;
 let lastBackupRefresh = 0;
 let currentJob = null;
+let stateTimer = null;
+let statePolling = false;
 
 async function req(path, options = {}) {
   const response = await fetch(path, { headers: { 'content-type': 'application/json' }, ...options });
@@ -91,6 +95,7 @@ function setRelativeTime(node, value, fallback = '') {
 }
 
 function refreshRelativeTimes() {
+  if (document.hidden) return;
   for (const node of document.querySelectorAll('[data-relative-time]')) {
     const text = ageLabel(node.dataset.relativeTime);
     if (!text) continue;
@@ -227,6 +232,7 @@ function renderFolders(folders, job) {
 }
 
 async function refreshFolderStats() {
+  if ($('#storagePane')?.hidden) return;
   try {
     const folders = (await req('/api/folder-stats')).folders || [];
     for (const item of folders) {
@@ -298,10 +304,12 @@ async function state() {
       const success = current.job.status === 'done';
       toast(finishedToast(current.job));
       if (success && ['sync', 'backup', 'verify', 'restore'].includes(current.job.type)) refreshLibrary();
-      backups(true);
-      refreshFolderStats();
+      if (!$('#storagePane')?.hidden) {
+        backups(true);
+        refreshFolderStats();
+      }
     }
-    if (Date.now() - lastBackupRefresh > 12_000) backups();
+    if (!$('#storagePane')?.hidden && Date.now() - lastBackupRefresh > 60_000) backups();
     return current;
   } catch (error) { toast(error.message); return null; }
 }
@@ -407,7 +415,7 @@ function renderBackupProgress(job) {
 }
 
 async function backups(force = false) {
-  if (backupLoading || (!force && Date.now() - lastBackupRefresh < 5000)) return;
+  if (backupLoading || (!force && Date.now() - lastBackupRefresh < 60_000)) return;
   backupLoading = true;
   try {
     backupLocations = (await req('/api/backups')).backups || [];
@@ -476,7 +484,7 @@ async function openRestoreDialog(path) {
 }
 
 async function runBackup(path, action) {
-  try { await req(`/api/backup/${action}`, { method: 'POST', body: JSON.stringify({ path }) }); state(); }
+  try { await req(`/api/backup/${action}`, { method: 'POST', body: JSON.stringify({ path }) }); wakeState(); }
   catch (error) { toast(error.message); }
 }
 
@@ -494,7 +502,7 @@ $$('[data-close]').forEach(button => button.onclick = () => button.closest('dial
 
 document.addEventListener('click', async event => {
   if (!event.target.closest('[data-cancel-job]')) return;
-  try { await req('/api/job/cancel', { method: 'POST' }); state(); }
+  try { await req('/api/job/cancel', { method: 'POST' }); wakeState(); }
   catch (error) { toast(error.message); }
 });
 
@@ -504,7 +512,7 @@ $('#folders').addEventListener('click', async event => {
   try {
     if (sync) await req('/api/folders/sync', { method: 'POST', body: JSON.stringify({ path: sync.dataset.syncFolder }) });
     if (remove) await req('/api/folders/remove', { method: 'POST', body: JSON.stringify({ path: remove.dataset.removeFolder }) });
-    await state();
+    await wakeState();
     refreshFolderStats();
   } catch (error) { toast(error.message); }
 });
@@ -517,7 +525,7 @@ $('#startImport').onclick = async () => {
     $('#importPath').value = '';
     $('#folderAdd').hidden = true;
     $('#showFolderAdd').classList.remove('active');
-    await state();
+    await wakeState();
     refreshFolderStats();
   } catch (error) { toast(error.message); }
 };
@@ -529,7 +537,7 @@ $('#saveDevice').onclick = async () => {
   try {
     await req('/api/settings', { method: 'POST', body: JSON.stringify({ device, uploadWorkers: workers }) });
     deviceDialog.close();
-    state();
+    wakeState();
   } catch (error) { toast(error.message); }
 };
 
@@ -572,17 +580,74 @@ $('#startRestore').onclick = async () => {
   try {
     await req('/api/backup/restore', { method: 'POST', body: JSON.stringify({ path: restorePath, destination: 'Mochimono' }) });
     restoreDialog.close();
-    state();
+    wakeState();
   } catch (error) {
     $('#startRestore').disabled = false;
     toast(error.message);
   }
 };
 
-state();
-refreshFolderStats();
-backups(true);
+function scheduleState(delay) {
+  clearTimeout(stateTimer);
+  stateTimer = null;
+  if (document.hidden) return;
+  stateTimer = setTimeout(() => void pollState(), Math.max(0, delay));
+}
+
+async function pollState() {
+  if (statePolling || document.hidden) return;
+  statePolling = true;
+  const current = await state();
+  statePolling = false;
+  scheduleState(current?.job?.status === 'running' ? ACTIVE_STATE_POLL_MS : IDLE_STATE_POLL_MS);
+}
+
+async function wakeState() {
+  clearTimeout(stateTimer);
+  stateTimer = null;
+  if (document.hidden) return null;
+  if (statePolling) {
+    scheduleState(ACTIVE_STATE_POLL_MS);
+    return null;
+  }
+  statePolling = true;
+  const current = await state();
+  statePolling = false;
+  scheduleState(current?.job?.status === 'running' ? ACTIVE_STATE_POLL_MS : IDLE_STATE_POLL_MS);
+  return current;
+}
+
+const storagePane = $('#storagePane');
+if (storagePane) {
+  new MutationObserver(() => {
+    if (storagePane.hidden) return;
+    refreshFolderStats();
+    backups();
+  }).observe(storagePane, { attributes:true, attributeFilter:['hidden'] });
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    clearTimeout(stateTimer);
+    stateTimer = null;
+    return;
+  }
+  wakeState();
+  if (!storagePane?.hidden) {
+    refreshFolderStats();
+    backups();
+  }
+  refreshRelativeTimes();
+});
+
+wakeState();
+if (!storagePane?.hidden) {
+  refreshFolderStats();
+  backups(true);
+}
 refreshRelativeTimes();
-setInterval(state, 2000);
-setInterval(refreshFolderStats, 5000);
-setInterval(refreshRelativeTimes, 1000);
+const relativeTimer = setInterval(refreshRelativeTimes, 60_000);
+addEventListener('beforeunload', () => {
+  clearTimeout(stateTimer);
+  clearInterval(relativeTimer);
+}, { once:true });
