@@ -10,6 +10,7 @@ const PREFIX = '/friend-signal';
 const MAX_BODY = 256 * 1024;
 const SESSION_IDLE_MS = 5 * 60 * 1000;
 const ONLINE_MS = 20 * 1000;
+const POLL_WAIT_MS = 15 * 1000;
 const PAIR_MS = 10 * 60 * 1000;
 const CHALLENGE_MS = 60 * 1000;
 
@@ -21,6 +22,7 @@ const pairs = new Map();
 const now = () => Date.now();
 
 function json(res, status, data) {
+  if (res.destroyed || res.headersSent) return;
   const body = JSON.stringify(data);
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -73,12 +75,26 @@ function bearer(req) {
   return /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || ''))?.[1] || '';
 }
 
+function removeSession(session) {
+  sessionsByToken.delete(session.token);
+  if (sessionsByDevice.get(session.deviceId) === session) sessionsByDevice.delete(session.deviceId);
+  session.wake?.();
+}
+
+function cleanupExpired() {
+  const timestamp = now();
+  for (const [id, challenge] of challenges) if (challenge.expires < timestamp) challenges.delete(id);
+  for (const [id, pair] of pairs) if (pair.expires < timestamp) pairs.delete(id);
+  for (const session of sessionsByToken.values()) {
+    if (timestamp - session.lastSeen > SESSION_IDLE_MS) removeSession(session);
+  }
+}
+
 function sessionFor(req) {
   const session = sessionsByToken.get(bearer(req));
   if (!session) return null;
   if (now() - session.lastSeen > SESSION_IDLE_MS) {
-    sessionsByToken.delete(session.token);
-    if (sessionsByDevice.get(session.deviceId) === session) sessionsByDevice.delete(session.deviceId);
+    removeSession(session);
     return null;
   }
   session.lastSeen = now();
@@ -111,12 +127,33 @@ function queue(deviceId, event) {
   if (!session) return false;
   session.queue.push(event);
   if (session.queue.length > 1000) session.queue.splice(0, session.queue.length - 1000);
+  session.wake?.();
   return true;
+}
+
+function waitForMessages(session, res) {
+  if (session.queue.length) return Promise.resolve();
+  return new Promise(resolve => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (session.wake === done) session.wake = null;
+      res.off('close', done);
+      resolve();
+    };
+    const timer = setTimeout(done, POLL_WAIT_MS);
+    timer.unref?.();
+    session.wake = done;
+    res.once('close', done);
+  });
 }
 
 export async function handleFriendSignaling(req, res, url) {
   if (!url.pathname.startsWith(PREFIX)) return false;
   const path = url.pathname.slice(PREFIX.length) || '/';
+  cleanupExpired();
 
   try {
     if (req.method === 'GET' && path === '/health') {
@@ -169,9 +206,9 @@ export async function handleFriendSignaling(req, res, url) {
       }
 
       const previous = sessionsByDevice.get(deviceId);
-      if (previous) sessionsByToken.delete(previous.token);
+      if (previous) removeSession(previous);
       const token = randomBytes(32).toString('base64url');
-      const session = { token, deviceId, publicKey, lastSeen: now(), queue: previous?.queue || [] };
+      const session = { token, deviceId, publicKey, lastSeen: now(), queue: previous?.queue || [], wake:null };
       sessionsByToken.set(token, session);
       sessionsByDevice.set(deviceId, session);
       json(res, 200, { token });
@@ -261,6 +298,9 @@ export async function handleFriendSignaling(req, res, url) {
     }
 
     if (req.method === 'GET' && path === '/poll') {
+      await waitForMessages(session, res);
+      if (res.destroyed) return true;
+      session.lastSeen = now();
       const messages = session.queue.splice(0, 100);
       json(res, 200, { messages });
       return true;
@@ -281,15 +321,3 @@ export async function handleFriendSignaling(req, res, url) {
     return true;
   }
 }
-
-const cleanup = setInterval(() => {
-  const timestamp = now();
-  for (const [id, challenge] of challenges) if (challenge.expires < timestamp) challenges.delete(id);
-  for (const [id, pair] of pairs) if (pair.expires < timestamp) pairs.delete(id);
-  for (const [token, session] of sessionsByToken) {
-    if (timestamp - session.lastSeen <= SESSION_IDLE_MS) continue;
-    sessionsByToken.delete(token);
-    if (sessionsByDevice.get(session.deviceId) === session) sessionsByDevice.delete(session.deviceId);
-  }
-}, 60_000);
-cleanup.unref?.();
