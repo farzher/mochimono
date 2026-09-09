@@ -33,7 +33,6 @@ style.textContent = `
 document.head.append(style);
 
 const pathKey = value => String(value || '').trim().replaceAll('/', '\\').replace(/[\\]+$/, '').toLowerCase();
-const pathName = value => String(value || '').replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).at(-1) || String(value || 'Source folder');
 const urlPath = () => String(new URL(location.href).searchParams.get('folder') || '').trim();
 
 function escapeHtml(value) {
@@ -167,8 +166,8 @@ async function apply(path, { reset = false } = {}) {
   }
   if (!window.mochimonoLibrary?.setLocationFilter) throw new Error('Library is still loading.');
 
-  const token = ++generation;
   if (reset) window.mochimonoHome?.('replace');
+  const token = ++generation;
   render(wanted, 'Source folder');
   const membership = await resolveMembership(wanted);
   if (token !== generation) return null;
