@@ -106,6 +106,18 @@ async function applyFilter() {
 
 locationFilter?.addEventListener('change', () => applyFilter().catch(() => {}));
 
+function restoreDuplicateFromUrl() {
+  if (!CLIENT || !locationFilter) return;
+  const wanted = String(new URL(location.href).searchParams.get('where') || '');
+  if (wanted === 'duplicates') {
+    if (locationFilter.value !== 'duplicates') locationFilter.value = 'duplicates';
+    applyFilter().catch(() => {});
+  } else if (locationFilter.value === 'duplicates') {
+    locationFilter.value = '';
+    applyFilter().catch(() => {});
+  }
+}
+
 if (CLIENT) {
   // Location provenance can be a large payload, so never hydrate it merely
   // because the Library is open. Load it only when search or a location filter
@@ -114,9 +126,11 @@ if (CLIENT) {
     if (String(search.value || '').trim()) loadLocations().catch(() => {});
   }, { passive:true });
 
+  window.addEventListener('popstate', () => queueMicrotask(restoreDuplicateFromUrl));
   window.addEventListener('mochimono:catalog-updated', () => {
     duplicateHashes = null;
     duplicateLoadedAt = 0;
     if (locationFilter?.value === 'duplicates') applyFilter().catch(() => {});
   });
+  queueMicrotask(restoreDuplicateFromUrl);
 }
