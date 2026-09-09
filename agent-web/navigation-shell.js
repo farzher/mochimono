@@ -74,16 +74,19 @@ manageButton?.addEventListener('click', () => {
   pushPage(storagePane.hidden ? 'files' : 'storage');
 });
 
-function isLibraryHome() {
-  if (pageName() === 'storage') return false;
+function libraryHomeUrl() {
   const url = new URL(location.href);
-  return NAV_PARAMS.every(key => !url.searchParams.has(key));
+  url.search = '';
+  url.hash = '';
+  return url;
 }
 
 function checkpointHomeNavigation(event) {
   if (event.type === 'keydown' && event.key !== 'Enter' && event.code !== 'Space') return;
-  if (isLibraryHome()) return;
-  history.pushState(history.state, '', pageUrl('files'));
+  const url = libraryHomeUrl();
+  if (url.href === location.href) return;
+  history.pushState(history.state, '', url);
+  queueMicrotask(sendChildState);
 }
 
 brand?.addEventListener('click', checkpointHomeNavigation, true);
