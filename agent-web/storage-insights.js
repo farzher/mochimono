@@ -167,7 +167,7 @@ if (storagePane && foldersSection) {
 
   async function refresh(force = false) {
     if (storagePane.hidden) return;
-    if (!force && Date.now() - loadedAt < 60_000) return;
+    if (!force && Date.now() - loadedAt < 5 * 60_000) return;
     if (loading) return loading;
     const token = ++generation;
     section.hidden = false;
@@ -175,8 +175,6 @@ if (storagePane && foldersSection) {
 
     loading = (async () => {
       try {
-        // Duplicate space is a tiny SQLite aggregate now. Run it alongside the
-        // existing type scan instead of serializing a second full-library pass.
         const [files, duplicates] = await Promise.all([
           libraryFiles(token),
           sourceDuplicates(token)
@@ -203,5 +201,4 @@ if (storagePane && foldersSection) {
   }).observe(storagePane, { attributes:true, attributeFilter:['hidden'] });
 
   addEventListener('focus', () => refresh());
-  setInterval(() => refresh(), 60_000);
 }
