@@ -16,9 +16,12 @@ const controls = [
 
 function activeCount() {
   let count = new URL(location.href).searchParams.has('folder') ? 1 : 0;
+  const gridView = (views?.querySelector('[data-view].active')?.dataset.view || 'grid') === 'grid';
   for (const control of controls) {
     if (control.id === 'sort') {
       if (control.value && control.value !== 'date-desc') count++;
+    } else if (control.id === 'typeFilter') {
+      if (control.value && !(gridView && control.value === 'media')) count++;
     } else if (control.value) count++;
   }
   return count;
