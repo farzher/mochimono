@@ -15,7 +15,7 @@ const controls = [
 ].filter(Boolean);
 
 function activeCount() {
-  let count = 0;
+  let count = new URL(location.href).searchParams.has('folder') ? 1 : 0;
   for (const control of controls) {
     if (control.id === 'sort') {
       if (control.value && control.value !== 'date-desc') count++;
@@ -42,6 +42,7 @@ function sync() {
 for (const control of controls) control.addEventListener('change', sync);
 search?.addEventListener('input', sync);
 window.addEventListener('mochimono:filters-changed', sync);
+window.addEventListener('popstate', sync);
 
 mediaSizes?.addEventListener('click', event => {
   if (event.target.closest('[data-media-size]') && sizeMenu) sizeMenu.open = false;
