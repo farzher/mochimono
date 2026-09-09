@@ -16,7 +16,7 @@ function clearValue(control) {
 
 function cleanHomeUrl() {
   const url = new URL(location.href);
-  for (const key of ['collection', 'source', 'path', 'root', 'browser', 'tree', 'view', 'file', 'q', 'origin', 'type', 'sort', 'where']) {
+  for (const key of ['collection', 'source', 'path', 'folder', 'tree', 'view', 'file', 'q', 'origin', 'type', 'sort', 'where']) {
     url.searchParams.delete(key);
   }
   return url;
@@ -31,6 +31,7 @@ export function showAllFiles(historyMode = 'push') {
   }
   if (cleanUrl.href !== location.href) history.replaceState(history.state, '', cleanUrl);
 
+  window.mochimonoSourceFolder?.clear?.({ updateUrl:false });
   if (search) search.value = '';
   clearValue(collection);
   const typeChanged = clearValue(type);
