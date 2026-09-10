@@ -5,6 +5,7 @@ const sort = document.querySelector('#sort');
 const views = document.querySelector('#views');
 const fileCount = document.querySelector('#fileCount');
 const dateRail = document.querySelector('#dateRail');
+const commandbar = document.querySelector('.commandbar');
 
 const DB_NAME = 'mochimono-visual-similarity';
 const DB_VERSION = 1;
@@ -43,7 +44,7 @@ let railDragging = false;
 let lastRailMove = 0;
 let railFrame = 0;
 let resetScrollNext = false;
-let pendingScrollY = null;
+let pendingScrollAnchor = null;
 let mode = (() => {
   const saved = localStorage.getItem(MODE_KEY);
   if (saved === 'duplicates') return 'near';
@@ -422,7 +423,64 @@ function moveRail(event, final = false) {
   scheduleRail();
 }
 
-function install(result, images, scrollYBefore, resetScroll) {
+function captureScrollAnchor() {
+  if (!active || !files) return null;
+  const viewportTop = Math.max(0, commandbar?.getBoundingClientRect().bottom || 0);
+  let best = null;
+  for (const card of files.querySelectorAll('.file-card[data-hash]')) {
+    const rect = card.getBoundingClientRect();
+    if (rect.bottom <= viewportTop || rect.top >= innerHeight) continue;
+    const distance = Math.abs(rect.top - viewportTop);
+    if (best && best.distance <= distance) continue;
+    best = {
+      preserve:true,
+      hash:String(card.dataset.hash || ''),
+      offset:rect.top - viewportTop,
+      y:scrollY,
+      distance
+    };
+  }
+  if (!best?.hash) return null;
+  delete best.distance;
+  return best;
+}
+
+function refreshPendingScrollAnchor() {
+  if (!pendingScrollAnchor?.preserve) return;
+  const next = captureScrollAnchor();
+  if (next) pendingScrollAnchor = next;
+}
+
+function restorePendingScrollAnchor() {
+  const anchor = pendingScrollAnchor;
+  pendingScrollAnchor = null;
+  if (!anchor) return;
+  if (anchor.reset) {
+    scrollTo({ top:0, left:0, behavior:'auto' });
+    return;
+  }
+
+  const index = ordered.indexOf(anchor.hash);
+  if (index < 0 || !window.mochimonoStableGrid?.scrollToIndex?.(index, 'start')) {
+    scrollTo({ top:Math.max(0, Number(anchor.y) || 0), left:0, behavior:'auto' });
+    return;
+  }
+
+  requestAnimationFrame(() => {
+    const card = files.querySelector(`.file-card[data-hash="${anchor.hash}"]`);
+    if (!card) return;
+    const viewportTop = Math.max(0, commandbar?.getBoundingClientRect().bottom || 0);
+    const targetTop = viewportTop + (Number(anchor.offset) || 0);
+    const correction = card.getBoundingClientRect().top - targetTop;
+    if (Math.abs(correction) > 1) scrollBy({ top:correction, left:0, behavior:'auto' });
+  });
+}
+
+function install(result, images, resetScroll) {
+  pendingScrollAnchor = resetScroll
+    ? { reset:true }
+    : captureScrollAnchor() || { preserve:true, hash:'', offset:0, y:scrollY };
+
   orderedFiles = new Map(result.order.map(file => [file.hash, file]));
   ordered = result.order.map(file => file.hash);
   scores = result.scores;
@@ -441,7 +499,6 @@ function install(result, images, scrollYBefore, resetScroll) {
     items:result.order.map(tuple)
   };
   window.mochimonoGridModel = similarityModel;
-  pendingScrollY = resetScroll ? 0 : scrollYBefore;
   originalSetModel?.(similarityModel);
 
   bar.hidden = false;
@@ -477,7 +534,7 @@ function deactivate() {
   partners.clear();
   groupByHash.clear();
   groupInfo = [];
-  pendingScrollY = null;
+  pendingScrollAnchor = null;
   restoreFilteredHashes();
   document.documentElement.classList.remove('similarity-sort-active','similarity-sort-indexing');
   bar.hidden = true;
@@ -504,7 +561,6 @@ async function activate() {
   const images = modelImages();
   const resetScroll = resetScrollNext || !active;
   resetScrollNext = false;
-  const scrollYBefore = scrollY;
   if (!images.length) {
     indexing = false;
     document.documentElement.classList.remove('similarity-sort-indexing');
@@ -530,7 +586,7 @@ async function activate() {
     await new Promise(resolve => requestAnimationFrame(resolve));
     const result = await buildGroupsInWorker(images, indexed.fingerprints, MODES[mode], signal);
     if (mine !== generation || signal.aborted || !wanted) return;
-    install(result, images, scrollYBefore, resetScroll);
+    install(result, images, resetScroll);
   } catch (error) {
     if (mine !== generation || signal.aborted) return;
     indexing = false;
@@ -678,17 +734,16 @@ new MutationObserver(records => {
 
 viewer && new MutationObserver(() => { if (active && !viewer.hidden) requestAnimationFrame(syncViewerNav); }).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
 viewerOpen && new MutationObserver(() => { if (active) requestAnimationFrame(syncViewerNav); }).observe(viewerOpen, { attributes:true, attributeFilter:['href'] });
-window.addEventListener('scroll', scheduleRail, { passive:true });
+window.addEventListener('scroll', () => {
+  scheduleRail();
+  refreshPendingScrollAnchor();
+}, { passive:true });
 window.addEventListener('mochimono:stable-grid-installed', () => {
   if (!active) return;
   requestAnimationFrame(() => {
     decorate(files);
     buildRail();
-    if (pendingScrollY != null) {
-      const y = pendingScrollY;
-      pendingScrollY = null;
-      requestAnimationFrame(() => scrollTo({ top:y, left:0, behavior:'auto' }));
-    }
+    restorePendingScrollAnchor();
   });
 });
 
