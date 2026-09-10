@@ -12,25 +12,29 @@ if (files && menu && actions) {
   actions.prepend(button);
 
   let hash = '';
+  let name = '';
 
   files.addEventListener('contextmenu', event => {
     const card = event.target.closest('.file-card.media-card[data-hash]');
     if (!card || !files.contains(card)) {
       hash = '';
+      name = '';
       button.hidden = true;
       return;
     }
     const image = !card.classList.contains('video-card');
     hash = image ? String(card.dataset.hash || '') : '';
+    name = image ? String(card.dataset.filename || card.title || '') : '';
     button.hidden = !hash;
   }, true);
 
   menu.addEventListener('click', event => {
     if (!event.target.closest('[data-context-similarity]') || !hash) return;
     const selectedHash = hash;
+    const selectedName = name;
     event.preventDefault();
     event.stopImmediatePropagation();
     menu.querySelector('[data-context-action="close"]')?.click();
-    queueMicrotask(() => window.mochimonoVisualSimilarity?.find?.(selectedHash));
+    queueMicrotask(() => window.mochimonoVisualSimilarity?.find?.(selectedHash, selectedName));
   }, true);
 }
