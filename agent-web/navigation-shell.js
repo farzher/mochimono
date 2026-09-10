@@ -1,4 +1,5 @@
 import './storage-clarity.js';
+import './storage-live-previews.js';
 
 const frame = document.querySelector('#filesFrame');
 const storagePane = document.querySelector('#storagePane');
@@ -6,6 +7,7 @@ const manageButton = document.querySelector('[data-client-tab="storage"]');
 const header = document.querySelector('.client-header');
 const brand = document.querySelector('.client-header .app-brand');
 const toastNode = document.querySelector('#toast');
+const folders = document.querySelector('#folders');
 const NAV_PARAMS = ['view', 'tree', 'source', 'path', 'folder', 'collection', 'file', 'q', 'origin', 'type', 'sort', 'where'];
 
 let restoringPage = false;
@@ -151,52 +153,83 @@ function sourceLibraryUrl(path) {
   return libraryUrl({ folder:path });
 }
 
-async function waitForSourceNavigation(timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const child = frame?.contentWindow;
-    const scope = child?.mochimonoSourceFolder;
-    if (scope?.apply && scope?.commit && child?.mochimonoLibrary?.setLocationFilter && child?.mochimonoHome) return { child, scope };
-    await new Promise(resolve => setTimeout(resolve, 50));
+const sourceLinkStyle = document.createElement('style');
+sourceLinkStyle.textContent = `
+#folders a.storage-folder-samples{display:block;color:inherit;text-decoration:none;cursor:pointer}
+#folders a.storage-folder-samples.opening{opacity:.62;cursor:progress;pointer-events:none}
+`;
+document.head.append(sourceLinkStyle);
+
+function decorateSourceLinks() {
+  if (!folders) return;
+  for (const preview of folders.querySelectorAll('.storage-folder-samples')) {
+    const row = preview.closest('[data-folder-path],[data-browser-folder]');
+    const path = sourcePath(row);
+    if (!row || !path) continue;
+    let link = preview;
+    if (preview.tagName !== 'A') {
+      link = document.createElement('a');
+      for (const attribute of preview.attributes) {
+        if (attribute.name === 'data-open-library-folder') continue;
+        link.setAttribute(attribute.name, attribute.value);
+      }
+      link.innerHTML = preview.innerHTML;
+      preview.replaceWith(link);
+    }
+    link.removeAttribute('data-open-library-folder');
+    link.href = sourceLibraryUrl(path).href;
+    link.title = `View ${path} in Library`;
   }
-  throw new Error('Library is still loading.');
 }
 
-async function openSourceFolder(row) {
+async function openSourceFolder(row, preview) {
   const path = sourcePath(row);
   if (!path) throw new Error('Folder path is unavailable.');
   const browserId = String(row?.dataset.browserFolder || '').trim();
+  const importId = Number(row?.dataset.folderImportId) || 0;
+  const child = frame?.contentWindow;
+  const scope = child?.mochimonoSourceFolder;
 
-  // Resolve and apply the complete filter before touching the visible page or
-  // outer URL. If anything fails, Storage remains exactly where it was.
-  const { child, scope } = await waitForSourceNavigation();
-  const result = await scope.apply(path, { reset:true, browserId });
-  if (!result) return;
-
-  history.pushState(history.state, '', sourceLibraryUrl(result.path));
-  scope.commit(result.path, 'replace');
-
-  // The Client shell owns the actual tab toggle. Suppress this module's normal
-  // Storage-button history listener because the destination URL was committed
-  // atomically above.
-  if (!storagePane.hidden) {
-    restoringPage = true;
-    try { manageButton?.click(); }
-    finally { restoringPage = false; }
+  // If the iframe is not ready, use the real link as a hard-navigation fallback
+  // instead of polling internal state and leaving the click apparently stuck.
+  if (!scope?.apply || !scope?.commit || !child?.mochimonoHome) {
+    location.href = preview.href;
+    return;
   }
-  child.focus();
+
+  preview.classList.add('opening');
+  try {
+    const result = await scope.apply(path, { reset:true, browserId, importId });
+    if (!result) return;
+    history.pushState(history.state, '', sourceLibraryUrl(result.path));
+    scope.commit(result.path, 'replace');
+    if (!storagePane.hidden) {
+      restoringPage = true;
+      try { manageButton?.click(); }
+      finally { restoringPage = false; }
+    }
+    child.focus();
+  } finally {
+    preview.classList.remove('opening');
+  }
 }
 
-window.addEventListener('click', event => {
-  const preview = event.target.closest?.('#folders .storage-folder-samples');
+folders?.addEventListener('click', event => {
+  const preview = event.target.closest?.('a.storage-folder-samples');
   if (!preview) return;
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
   const row = preview.closest('[data-folder-path],[data-browser-folder]');
   if (!row) return;
   event.preventDefault();
   event.stopPropagation();
   event.stopImmediatePropagation();
-  openSourceFolder(row).catch(error => toast(error.message));
+  openSourceFolder(row, preview).catch(error => toast(error.message));
 }, true);
+
+if (folders) {
+  new MutationObserver(decorateSourceLinks).observe(folders, { childList:true, subtree:true });
+  decorateSourceLinks();
+}
 
 window.addEventListener('message', event => {
   if (event.source !== frame?.contentWindow || event.origin !== location.origin) return;
