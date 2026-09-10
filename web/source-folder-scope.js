@@ -1,10 +1,12 @@
 const CLIENT = document.documentElement.classList.contains('client-library');
 const locationFilter = document.querySelector('#locationFilter');
+const sourceFilter = document.querySelector('#source');
 const CACHE_MS = 30000;
 
 let activePath = '';
-let activeKind = 'Source folder';
+let activeMode = '';
 let activeHashes = null;
+let activeImportId = 0;
 let generation = 0;
 const cache = new Map();
 
@@ -25,17 +27,13 @@ style.textContent = `
 .source-folder-scopebar button{flex:0 0 auto;padding:5px 7px;border-radius:7px;background:transparent;color:#bbb1ae;font-size:12px}
 .source-folder-scopebar button:hover{background:#211e22;color:#fff}
 .source-folder-scopebar .scope-separator{color:#676061;font-size:12px}
-.source-folder-scopebar .scope-kind{color:#8f8583;font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.045em}
 .source-folder-scopebar strong{min-width:0;overflow:hidden;text-overflow:ellipsis;color:#ddd4d0;font-size:12px;font-weight:650}
-.source-folder-scopebar small{flex:0 0 auto;color:#746d6c;font-size:9px}
 .source-folder-scopebar .scope-clear{width:27px;height:27px;display:grid;place-items:center;padding:0;color:#817978;font-size:17px;line-height:1}
-@media(max-width:700px){.source-folder-scopebar{padding-top:8px}.source-folder-scopebar .scope-kind,.source-folder-scopebar small{display:none}}
 `;
 document.head.append(style);
 
 const pathKey = value => String(value || '').trim().replaceAll('/', '\\').replace(/[\\]+$/, '').toLowerCase();
 const urlPath = () => String(new URL(location.href).searchParams.get('folder') || '').trim();
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'\"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[char]));
@@ -43,13 +41,14 @@ function escapeHtml(value) {
 
 function writeUrl(path, mode = 'replace') {
   const url = new URL(location.href);
-  if (path) url.searchParams.set('folder', path);
-  else url.searchParams.delete('folder');
-  if (url.href === location.href) return;
-  history[mode === 'push' ? 'pushState' : 'replaceState'](history.state, '', url);
+  if (path) {
+    url.searchParams.set('folder', path);
+    url.searchParams.delete('origin');
+  } else url.searchParams.delete('folder');
+  if (url.href !== location.href) history[mode === 'push' ? 'pushState' : 'replaceState'](history.state, '', url);
 }
 
-function render(path = activePath, kind = activeKind, count = null) {
+function render(path = activePath) {
   if (!path) {
     scopebar.hidden = true;
     scopebar.replaceChildren();
@@ -59,10 +58,7 @@ function render(path = activePath, kind = activeKind, count = null) {
   scopebar.innerHTML = `<div class="scope-breadcrumbs">
     <button type="button" data-source-folder-home>All files</button>
     <span class="scope-separator">›</span>
-    <span class="scope-kind">${escapeHtml(kind)}</span>
-    <span class="scope-separator">›</span>
     <strong title="${escapeHtml(path)}">${escapeHtml(path)}</strong>
-    ${count == null ? '<small>Loading…</small>' : `<small>${Number(count).toLocaleString()} files</small>`}
     <button type="button" class="scope-clear" data-source-folder-clear title="Clear folder filter" aria-label="Clear folder filter">×</button>
   </div>`;
 }
@@ -92,126 +88,139 @@ async function nativeMembership(path) {
     if (!Number.isFinite(next) || next <= offset) break;
     offset = next;
   }
-  return { hashes, kind:'Source folder' };
+  return hashes;
 }
 
-function cleanParts(value) {
-  return String(value || '').replaceAll('\\', '/').split('/').filter(part => part && part !== '.' && part !== '..');
+function browserManifestHashes(id) {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open('mochimono-browser-folders', 1);
+    open.onerror = () => reject(open.error || new Error('Browser folder database is unavailable.'));
+    open.onsuccess = () => {
+      const db = open.result;
+      const hashes = new Set();
+      try {
+        const request = db.transaction('files', 'readonly').objectStore('files').openCursor();
+        const prefix = `${id}\u0000`;
+        request.onerror = () => { db.close(); reject(request.error || new Error('Could not read browser folder.')); };
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) { db.close(); resolve(hashes); return; }
+          const row = cursor.value;
+          if (String(row?.key || '').startsWith(prefix)) {
+            const hash = String(row?.hash || '');
+            if (/^[a-f0-9]{64}$/.test(hash)) hashes.add(hash);
+          }
+          cursor.continue();
+        };
+      } catch (error) {
+        db.close();
+        reject(error);
+      }
+    };
+  });
 }
 
-function browserTreeRoot(item) {
-  const raw = String(item?.rootPath || item?.name || '').trim();
-  const normalized = raw.replaceAll('\\', '/');
-  if (/^[a-z]:\//i.test(normalized)) {
-    const parts = cleanParts(normalized);
-    if (parts.length) parts[0] = parts[0].toUpperCase();
-    return parts.join('/');
-  }
-  if (normalized.startsWith('/')) return ['Root', ...cleanParts(normalized)].join('/');
-  return ['Browser', ...cleanParts(raw || item?.name || 'Folder')].join('/');
-}
-
-async function browserMembership(source, api) {
-  const hashes = new Set();
-  const pending = [browserTreeRoot(source)];
-  const seen = new Set();
-  while (pending.length) {
-    const path = pending.shift();
-    if (!path || seen.has(path)) continue;
-    seen.add(path);
-    const tree = await api.tree(path);
-    for (const file of tree?.files || []) {
-      if (String(file?.browserSourceId) !== String(source.id)) continue;
-      const hash = String(file?.hash || '');
-      if (/^[a-f0-9]{64}$/.test(hash)) hashes.add(hash);
-    }
-    for (const folder of tree?.folders || []) if (folder?.path) pending.push(String(folder.path));
-  }
-  return { hashes, kind:'Browser folder' };
-}
-
-async function waitForBrowserApi(timeoutMs = 5000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const api = window.mochimonoBrowserFolders;
-    if (api?.list && api?.tree) return api;
-    await delay(50);
-  }
-  throw new Error('Browser folder is still loading.');
-}
-
-async function resolveMembership(path, browserId = '') {
-  const pathCacheKey = `path:${pathKey(path)}`;
-  const idCacheKey = browserId ? `browser:${browserId}` : '';
-  const cached = cache.get(idCacheKey || pathCacheKey) || cache.get(pathCacheKey);
+async function configuredImportId(path) {
+  const key = `import:${pathKey(path)}`;
+  const cached = cache.get(key);
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.value;
-
-  if (browserId) {
-    const api = await waitForBrowserApi();
-    const source = (await api.list()).find(item => String(item.id) === String(browserId));
-    if (!source) throw new Error('Browser folder is unavailable.');
-    const value = await browserMembership(source, api);
-    const entry = { at:Date.now(), value };
-    cache.set(idCacheKey, entry);
-    cache.set(pathCacheKey, entry);
-    return value;
-  }
-
-  const browserApi = window.mochimonoBrowserFolders;
-  if (browserApi?.list && browserApi?.tree) {
-    const sources = await browserApi.list().catch(() => []);
-    const source = sources.find(item => pathKey(item.rootPath || item.name) === pathKey(path));
-    if (source) {
-      const value = await browserMembership(source, browserApi);
-      cache.set(pathCacheKey, { at:Date.now(), value });
-      return value;
-    }
-  }
-
-  const value = await nativeMembership(path);
-  cache.set(pathCacheKey, { at:Date.now(), value });
+  const state = await request('/api/state').catch(() => null);
+  const wanted = pathKey(path);
+  const folder = (state?.settings?.folders || []).find(item => pathKey(item?.path || item) === wanted && item?.protected !== false);
+  const value = Number(folder?.importId) || 0;
+  cache.set(key, { at:Date.now(), value });
   return value;
 }
 
+function hasImportOption(importId) {
+  return Boolean(importId && sourceFilter?.querySelector(`option[value="${CSS.escape(String(importId))}"]`));
+}
+
+function applyImport(importId) {
+  if (!hasImportOption(importId)) return false;
+  sourceFilter.value = String(importId);
+  sourceFilter.dispatchEvent(new Event('change', { bubbles:true }));
+  // Folder is the user-facing scope. Keep Origin visually empty while retaining
+  // library-app's already-applied in-memory import filter.
+  sourceFilter.value = '';
+  const url = new URL(location.href);
+  url.searchParams.delete('origin');
+  if (url.href !== location.href) history.replaceState(history.state, '', url);
+  return true;
+}
+
 function clearApplied({ clearLibrary = true } = {}) {
-  const owned = window.mochimonoLibrary?.state?.().locationFilter === 'source-folder';
+  const mode = activeMode;
   activePath = '';
-  activeKind = 'Source folder';
+  activeMode = '';
   activeHashes = null;
+  activeImportId = 0;
   render('');
-  if (clearLibrary && owned) window.mochimonoLibrary?.setLocationFilter?.('', null);
+  if (clearLibrary) {
+    if (mode === 'import' && sourceFilter) {
+      sourceFilter.value = '';
+      sourceFilter.dispatchEvent(new Event('change', { bubbles:true }));
+    } else if (mode === 'hash' && window.mochimonoLibrary?.state?.().locationFilter === 'source-folder') {
+      window.mochimonoLibrary.setLocationFilter('', null);
+    }
+  }
   window.dispatchEvent(new CustomEvent('mochimono:filters-changed'));
 }
 
-async function apply(path, { reset = false, browserId = '' } = {}) {
+async function resolveHashes(path, browserId = '') {
+  const key = browserId ? `browser:${browserId}` : `path:${pathKey(path)}`;
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.at < CACHE_MS) return cached.value;
+  const hashes = browserId ? await browserManifestHashes(browserId) : await nativeMembership(path);
+  cache.set(key, { at:Date.now(), value:hashes });
+  return hashes;
+}
+
+async function apply(path, { reset = false, browserId = '', importId = 0 } = {}) {
   const wanted = String(path || '').trim();
   if (!wanted) {
     clearApplied();
-    return { path:'', kind:'Source folder', count:0 };
+    return { path:'' };
   }
-  if (!window.mochimonoLibrary?.setLocationFilter) throw new Error('Library is still loading.');
+  if (!window.mochimonoLibrary?.setLocationFilter || !window.mochimonoHome) throw new Error('Library is still loading.');
 
-  if (reset) window.mochimonoHome?.('replace');
+  if (reset) window.mochimonoHome('replace');
   const token = ++generation;
-  render(wanted, browserId ? 'Browser folder' : 'Source folder');
-  const membership = await resolveMembership(wanted, browserId);
+  render(wanted);
+
+  let nativeImportId = browserId ? 0 : Number(importId) || 0;
+  if (!browserId && !nativeImportId) nativeImportId = await configuredImportId(wanted);
   if (token !== generation) return null;
 
   activePath = wanted;
-  activeKind = membership.kind;
-  activeHashes = membership.hashes;
-  window.mochimonoLibrary.setLocationFilter('source-folder', activeHashes);
-  render(wanted, membership.kind, activeHashes.size);
+  activeHashes = null;
+  activeImportId = 0;
+  activeMode = '';
+
+  if (nativeImportId && applyImport(nativeImportId)) {
+    activeMode = 'import';
+    activeImportId = nativeImportId;
+    if (window.mochimonoLibrary.state().locationFilter === 'source-folder') window.mochimonoLibrary.setLocationFilter('', null);
+  } else {
+    const hashes = await resolveHashes(wanted, browserId);
+    if (token !== generation) return null;
+    activeMode = 'hash';
+    activeHashes = hashes;
+    window.mochimonoLibrary.setLocationFilter('source-folder', hashes);
+  }
+
+  render(wanted);
   window.dispatchEvent(new CustomEvent('mochimono:filters-changed'));
-  return { path:wanted, kind:membership.kind, count:activeHashes.size };
+  return { path:wanted };
 }
 
 function commit(path, mode = 'replace') {
   writeUrl(String(path || '').trim(), mode);
+  window.dispatchEvent(new CustomEvent('mochimono:filters-changed'));
 }
 
-async function open(path, mode = 'push') {
-  const result = await apply(path, { reset:true });
+async function open(path, mode = 'push', options = {}) {
+  const result = await apply(path, { ...options, reset:true });
   if (!result) return null;
   commit(result.path, mode);
   window.scrollTo({ top:0, left:0, behavior:'auto' });
@@ -235,6 +244,13 @@ scopebar.addEventListener('click', event => {
   window.mochimonoHome?.('push');
 });
 
+sourceFilter?.addEventListener('change', event => {
+  if (!event.isTrusted || (!activePath && !urlPath())) return;
+  generation++;
+  writeUrl('', 'replace');
+  clearApplied({ clearLibrary:false });
+});
+
 locationFilter?.addEventListener('change', event => {
   if (!event.isTrusted || (!activePath && !urlPath())) return;
   generation++;
@@ -246,19 +262,16 @@ window.addEventListener('popstate', () => void restore());
 window.addEventListener('mochimono:catalog-updated', () => cache.clear());
 window.addEventListener('mochimono:browser-folder-sync', () => cache.clear());
 window.addEventListener('mochimono:local-catalog-event', event => {
-  const root = activePath || urlPath();
-  if (!root || !activeHashes || window.mochimonoLibrary?.state?.().locationFilter !== 'source-folder') return;
+  if (activeMode !== 'hash' || !activePath || !activeHashes || window.mochimonoLibrary?.state?.().locationFilter !== 'source-folder') return;
   let changed = false;
   for (const file of event.detail?.files || []) {
-    if (pathKey(file?.rootPath) !== pathKey(root)) continue;
+    if (pathKey(file?.rootPath) !== pathKey(activePath)) continue;
     const hash = String(file?.hash || '');
     if (!/^[a-f0-9]{64}$/.test(hash) || activeHashes.has(hash)) continue;
     activeHashes.add(hash);
     changed = true;
   }
-  if (!changed) return;
-  window.mochimonoLibrary.setLocationFilter('source-folder', activeHashes);
-  render(root, activeKind, activeHashes.size);
+  if (changed) window.mochimonoLibrary.setLocationFilter('source-folder', activeHashes);
 });
 
 window.mochimonoSourceFolder = {
