@@ -15,6 +15,16 @@ function currentViewFromUrl(url = new URL(location.href)) {
   return 'grid';
 }
 
+function historySignature(url = new URL(location.href)) {
+  const copy = new URL(url);
+  copy.searchParams.delete('file');
+  copy.hash = '';
+  copy.searchParams.sort();
+  return `${copy.pathname}?${copy.searchParams}`;
+}
+
+let lastHistorySignature = historySignature();
+
 function targetUrl() {
   const url = new URL(location.href);
   const query = String(search?.value || '').trim();
@@ -41,9 +51,13 @@ function targetUrl() {
 function commitControlChange(event) {
   if (restoring) return;
   const url = targetUrl();
-  if (url.href === location.href) return;
+  if (url.href === location.href) {
+    lastHistorySignature = historySignature(url);
+    return;
+  }
   if (event?.isTrusted) history.pushState(history.state, '', location.href);
   history.replaceState(history.state, '', url);
+  lastHistorySignature = historySignature(url);
 }
 
 for (const control of [source, type, sort, where]) control?.addEventListener('change', commitControlChange);
@@ -51,12 +65,16 @@ for (const control of [source, type, sort, where]) control?.addEventListener('ch
 search?.addEventListener('input', event => {
   if (restoring) return;
   const url = targetUrl();
-  if (url.href === location.href) return;
+  if (url.href === location.href) {
+    lastHistorySignature = historySignature(url);
+    return;
+  }
   if (event.isTrusted && !searchEditing) {
     history.pushState(history.state, '', location.href);
     searchEditing = true;
   }
   history.replaceState(history.state, '', url);
+  lastHistorySignature = historySignature(url);
 });
 search?.addEventListener('blur', () => { searchEditing = false; });
 search?.addEventListener('keydown', event => { if (event.key === 'Enter') searchEditing = false; });
@@ -67,8 +85,17 @@ function dispatchIfChanged(control, value, typeName = 'change') {
   control.dispatchEvent(new Event(typeName, { bubbles:true }));
 }
 
-function restoreFilters() {
+function restoreFilters(preserveInitialSimilar = false) {
   const url = new URL(location.href);
+
+  // Similar can be restored from local UI state before this module installs.
+  // Preserve that initial choice and make the URL canonical instead of
+  // immediately interpreting the absent sort= parameter as Newest.
+  if (preserveInitialSimilar && !url.searchParams.has('sort') && sort?.value === 'similar') {
+    url.searchParams.set('sort', 'similar');
+    history.replaceState(history.state, '', url);
+  }
+
   restoring = true;
   try {
     dispatchIfChanged(search, url.searchParams.get('q') || '', 'input');
@@ -95,10 +122,18 @@ function restoreFilters() {
   } finally {
     restoring = false;
     searchEditing = false;
+    lastHistorySignature = historySignature(url);
   }
 }
 
-window.addEventListener('popstate', () => queueMicrotask(restoreFilters));
-views?.addEventListener('click', () => queueMicrotask(restoreFilters));
-if (source) new MutationObserver(restoreFilters).observe(source, { childList:true, subtree:true });
-queueMicrotask(restoreFilters);
+window.addEventListener('popstate', () => {
+  const nextSignature = historySignature();
+  // Opening/closing the viewer only changes ?file=. It must never restore
+  // Library controls, especially Sort, because the Library view did not change.
+  if (nextSignature === lastHistorySignature) return;
+  lastHistorySignature = nextSignature;
+  queueMicrotask(() => restoreFilters(false));
+});
+views?.addEventListener('click', () => queueMicrotask(() => restoreFilters(false)));
+if (source) new MutationObserver(() => restoreFilters(false)).observe(source, { childList:true, subtree:true });
+queueMicrotask(() => restoreFilters(true));
