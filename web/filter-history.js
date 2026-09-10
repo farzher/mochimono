@@ -85,6 +85,19 @@ function dispatchIfChanged(control, value, typeName = 'change') {
   control.dispatchEvent(new Event(typeName, { bubbles:true }));
 }
 
+function restoreSource(url = new URL(location.href)) {
+  if (!source || url.searchParams.has('source')) return;
+  const wantedOrigin = url.searchParams.get('origin') || '';
+  if (wantedOrigin && !source.querySelector(`option[value="${CSS.escape(wantedOrigin)}"]`)) return;
+  const wasRestoring = restoring;
+  restoring = true;
+  try { dispatchIfChanged(source, wantedOrigin); }
+  finally {
+    restoring = wasRestoring;
+    lastHistorySignature = historySignature(url);
+  }
+}
+
 function restoreFilters(preserveInitialSimilar = false) {
   const url = new URL(location.href);
 
@@ -99,13 +112,7 @@ function restoreFilters(preserveInitialSimilar = false) {
   restoring = true;
   try {
     dispatchIfChanged(search, url.searchParams.get('q') || '', 'input');
-
-    if (!url.searchParams.has('source')) {
-      const wantedOrigin = url.searchParams.get('origin') || '';
-      if (!wantedOrigin || source?.querySelector(`option[value="${CSS.escape(wantedOrigin)}"]`)) {
-        dispatchIfChanged(source, wantedOrigin);
-      }
-    }
+    restoreSource(url);
 
     const explicitType = url.searchParams.get('type');
     const wantedType = explicitType == null && currentViewFromUrl(url) === 'grid' ? 'media' : (explicitType || '');
@@ -135,5 +142,8 @@ window.addEventListener('popstate', () => {
   queueMicrotask(() => restoreFilters(false));
 });
 views?.addEventListener('click', () => queueMicrotask(() => restoreFilters(false)));
-if (source) new MutationObserver(() => restoreFilters(false)).observe(source, { childList:true, subtree:true });
+// Import/source option lists are rebuilt when catalog data changes. That DOM
+// mutation only needs to restore the source selection; restoring every control
+// here can silently replace a user-selected sort such as Similar.
+if (source) new MutationObserver(() => restoreSource()).observe(source, { childList:true, subtree:true });
 queueMicrotask(() => restoreFilters(true));
