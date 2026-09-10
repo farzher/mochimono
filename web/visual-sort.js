@@ -8,6 +8,7 @@ const commandbar = document.querySelector('.commandbar');
 const dateRail = document.querySelector('#dateRail');
 
 const MODE_KEY = 'mochimono-visual-order-mode';
+const RESULT_CACHE_LIMIT = 6;
 const MODES = {
   flow:{ label:'Flow', description:'Visual neighborhoods + color' },
   structure:{ label:'Structure', description:'Shape and composition' },
@@ -37,6 +38,9 @@ let visualRailEntries = [];
 let railDragging = false;
 let railFrame = 0;
 let lastRailMove = 0;
+let runningKey = '';
+let installedKey = '';
+const resultCache = new Map();
 
 const option = document.createElement('option');
 option.value = 'visual';
@@ -94,6 +98,57 @@ function modelMedia() {
     dateMs:Number(item[5]) || 0,
     size:Number(item[6]) || 0
   })).filter(file => /^[a-f0-9]{64}$/.test(file.hash));
+}
+
+function hashText(value, seed) {
+  let hash = seed >>> 0;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  hash ^= hash >>> 16;
+  return hash >>> 0;
+}
+
+function mediaIdentity(media) {
+  const tokens = media.map(file => `${file.hash}:${file.type}:${file.width}x${file.height}`).sort();
+  let left = 2166136261;
+  let right = 2246822507;
+  for (const token of tokens) {
+    left = hashText(token, left);
+    right = hashText(token, right ^ 0x9e3779b9);
+  }
+  return `${media.length}:${left.toString(36)}:${right.toString(36)}`;
+}
+
+function runKeyFor(media) {
+  return `${mode}:${mediaIdentity(media)}`;
+}
+
+function cacheResult(key, result) {
+  resultCache.delete(key);
+  resultCache.set(key, {
+    hashes:(result.order || []).map(file => file.hash),
+    indexed:Number(result.indexed) || 0,
+    unavailable:Number(result.unavailable) || 0,
+    families:Number(result.families) || 0,
+    rail:Array.isArray(result.rail) ? result.rail.map(entry => ({ ...entry })) : []
+  });
+  while (resultCache.size > RESULT_CACHE_LIMIT) resultCache.delete(resultCache.keys().next().value);
+}
+
+function cachedResult(key, media) {
+  const cached = resultCache.get(key);
+  if (!cached) return null;
+  const byHash = new Map(media.map(file => [file.hash, file]));
+  const order = cached.hashes.map(hash => byHash.get(hash)).filter(Boolean);
+  if (order.length !== cached.hashes.length || order.length !== media.length) {
+    resultCache.delete(key);
+    return null;
+  }
+  resultCache.delete(key);
+  resultCache.set(key, cached);
+  return { order, indexed:cached.indexed, unavailable:cached.unavailable, families:cached.families, rail:cached.rail.map(entry => ({ ...entry })) };
 }
 
 function runWorker(media, signal) {
@@ -306,7 +361,7 @@ function moveRail(event, final = false) {
   scheduleRail();
 }
 
-function install(result, media, resetScroll) {
+function install(result, media, resetScroll, key) {
   pendingScrollAnchor = resetScroll
     ? { reset:true }
     : captureScrollAnchor() || { preserve:true, hash:'', offset:0, y:scrollY };
@@ -317,6 +372,8 @@ function install(result, media, resetScroll) {
   visualRailEntries = Array.isArray(result.rail) ? result.rail : [];
   active = true;
   indexing = false;
+  installedKey = key;
+  runningKey = '';
   document.documentElement.classList.add('visual-sort-active');
   document.documentElement.classList.remove('visual-sort-indexing');
   patchFilteredHashes();
@@ -347,6 +404,8 @@ function deactivate() {
   clearTimeout(rerunTimer);
   controller?.abort();
   controller = null;
+  runningKey = '';
+  installedKey = '';
   active = false;
   indexing = false;
   visualModel = null;
@@ -381,6 +440,7 @@ async function activate() {
   resetScrollNext = false;
   if (!media.length) {
     indexing = false;
+    runningKey = '';
     document.documentElement.classList.remove('visual-sort-indexing');
     bar.hidden = false;
     visualRail.hidden = true;
@@ -388,10 +448,30 @@ async function activate() {
     return;
   }
 
+  const key = runKeyFor(media);
+  if (active && installedKey === key) {
+    indexing = false;
+    document.documentElement.classList.remove('visual-sort-indexing');
+    return;
+  }
+  if (indexing && runningKey === key) return;
+
+  const cached = cachedResult(key, media);
+  if (cached) {
+    generation++;
+    controller?.abort();
+    controller = null;
+    indexing = false;
+    runningKey = '';
+    install(cached, media, resetScroll, key);
+    return;
+  }
+
   const mine = ++generation;
   controller?.abort();
   controller = new AbortController();
   const signal = controller.signal;
+  runningKey = key;
   indexing = true;
   bar.hidden = false;
   syncModeButtons();
@@ -401,12 +481,16 @@ async function activate() {
   try {
     const result = await runWorker(media, signal);
     if (mine !== generation || signal.aborted || !wanted) return;
-    install(result, media, resetScroll);
+    cacheResult(key, result);
+    install(result, media, resetScroll, key);
   } catch (error) {
     if (mine !== generation || signal.aborted) return;
     indexing = false;
+    runningKey = '';
     document.documentElement.classList.remove('visual-sort-indexing');
     updateProgress(0, 1, error.message || 'Could not build visual order');
+  } finally {
+    if (mine === generation) controller = null;
   }
 }
 
@@ -561,7 +645,8 @@ window.mochimonoVisualSort = {
   mode:() => mode,
   orderedHashes:() => active ? [...ordered] : null,
   rail:() => visualRailEntries.map(entry => ({ ...entry })),
-  refresh:() => scheduleActivate(0, false)
+  refresh:() => scheduleActivate(0, false),
+  cache:() => ({ entries:resultCache.size, runningKey, installedKey })
 };
 
 wrapStableGrid();
