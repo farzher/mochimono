@@ -73,7 +73,11 @@ async function saveRows(rows) {
   await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     const store = tx.objectStore(STORE);
-    for (const row of rows) store.put(row);
+    for (const row of rows) {
+      const request = store.get(row.hash);
+      request.onsuccess = () => store.put({ ...(request.result || {}), ...row });
+      request.onerror = () => tx.abort();
+    }
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error || new Error('Could not cache visual descriptors'));
