@@ -14,11 +14,11 @@ const THUMB_VERSION = 3;
 const SAMPLE = 16;
 const LOW = 8;
 const INDEX_BATCH = 32;
-const CANDIDATE_DISTANCE = 7;
+const CANDIDATE_DISTANCE = 9;
 const MODE_KEY = 'mochimono-similarity-mode';
 const MODES = {
   near:{ label:'Near duplicates', maxDistance:0, description:'100-score pHash matches' },
-  similar:{ label:'Similar images', maxDistance:7, description:'Broader visual groups' }
+  similar:{ label:'Similar images', maxDistance:9, description:'Broader visual groups' }
 };
 const POPCOUNT = [0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4];
 const COS = Array.from({ length:LOW }, (_, u) => Array.from({ length:SAMPLE }, (_, x) => Math.cos((2 * x + 1) * u * Math.PI / (2 * SAMPLE))));
@@ -321,7 +321,11 @@ function buildGroups(images, fingerprints, maxDistance) {
           for (const other of buckets[block].get(key) || []) if (other > index) candidates.add(other);
         };
         collect(word);
-        for (let bit = 0; bit < 16; bit++) collect(word ^ (1 << bit));
+        for (let bit = 0; bit < 16; bit++) {
+          const oneBit = word ^ (1 << bit);
+          collect(oneBit);
+          for (let otherBit = bit + 1; otherBit < 16; otherBit++) collect(oneBit ^ (1 << otherBit));
+        }
       }
       for (const otherIndex of candidates) {
         const other = unique[otherIndex];
