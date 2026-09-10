@@ -6,6 +6,8 @@ const status = dialog?.querySelector('[data-ai-status]');
 
 if (dialog && toolbar && !toolbar.querySelector('[data-ai-scope]')) {
   let scope = 'view';
+  let busyDepth = 0;
+  const disabledBeforeBusy = new Map();
   const originals = {
     index:ai.index.bind(ai),
     similar:ai.similar.bind(ai),
@@ -17,6 +19,7 @@ if (dialog && toolbar && !toolbar.querySelector('[data-ai-scope]')) {
   style.textContent = `
 .ai-lab-scope{height:31px;padding:0 8px;border:1px solid #373238;border-radius:8px;background:#171518;color:#bbb2af;font-size:9.5px;font-weight:700;outline:none}
 .ai-lab-scope:focus{border-color:#6d6268}.ai-lab-clear{color:#9e9296}
+.ai-lab-dialog.ai-work-busy [data-ai-query]{opacity:.62}
 `;
   document.head.append(style);
 
@@ -36,6 +39,29 @@ if (dialog && toolbar && !toolbar.querySelector('[data-ai-scope]')) {
   firstIndexButton?.before(select);
   toolbar.append(clear);
 
+  function lockAiControls() {
+    if (++busyDepth !== 1) return;
+    dialog.classList.add('ai-work-busy');
+    const controls = dialog.querySelectorAll('.ai-lab-button,[data-ai-query],[data-ai-scope]');
+    for (const control of controls) {
+      disabledBeforeBusy.set(control, Boolean(control.disabled));
+      control.disabled = true;
+    }
+  }
+
+  function unlockAiControls() {
+    if (busyDepth > 0) busyDepth--;
+    if (busyDepth) return;
+    dialog.classList.remove('ai-work-busy');
+    for (const [control, wasDisabled] of disabledBeforeBusy) {
+      if (control.isConnected) control.disabled = wasDisabled;
+    }
+    disabledBeforeBusy.clear();
+  }
+
+  window.addEventListener('mochimono:ai-work-start', lockAiControls);
+  window.addEventListener('mochimono:ai-work-end', unlockAiControls);
+
   select.addEventListener('change', () => {
     scope = select.value === 'all' ? 'all' : 'view';
     if (status) status.textContent = scope === 'all'
@@ -50,6 +76,7 @@ if (dialog && toolbar && !toolbar.querySelector('[data-ai-scope]')) {
   ai.groups = (options = {}) => originals.groups(scoped(options));
 
   clear.addEventListener('click', async () => {
+    if (busyDepth || ai.busy?.() || window.mochimonoAITranscription?.busy?.()) return;
     if (!confirm('Clear Mochimono AI index and cached AI descriptions?\n\nDownloaded model files may remain in the browser cache. Your original files are not changed.')) return;
     clear.disabled = true;
     const old = clear.textContent;
@@ -69,6 +96,7 @@ if (dialog && toolbar && !toolbar.querySelector('[data-ai-scope]')) {
 
   window.mochimonoAIScope = {
     get:() => scope,
+    busy:() => busyDepth > 0,
     set:value => {
       select.value = value === 'all' ? 'all' : 'view';
       select.dispatchEvent(new Event('change'));
