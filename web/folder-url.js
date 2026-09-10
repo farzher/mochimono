@@ -11,6 +11,7 @@ let gridFoldersEnabled = localStorage.getItem(GRID_FOLDERS_KEY) !== '0';
 
 const library = () => window.mochimonoLibrary;
 const currentView = () => views.querySelector('[data-view].active')?.dataset.view || 'grid';
+const treeView = () => currentView() === 'folders';
 const state = () => library()?.folderState?.() || { importId: '', path: '', sourceName: '' };
 
 function escapeHtml(value) {
@@ -26,7 +27,9 @@ function formatBytes(bytes) {
 }
 
 function syncUrl(mode = 'replace') {
-  if (restoring) return;
+  // source/path belong to Grid's source-folder browser. The merged Folders view
+  // exclusively owns view=folders + tree= and must never be rewritten here.
+  if (treeView() || restoring) return;
   const folder = state();
   const url = new URL(location.href);
   url.searchParams.delete('tree');
@@ -94,6 +97,10 @@ async function openFolder(importId, path = '') {
 }
 
 async function restoreFolder(force = false) {
+  if (treeView()) {
+    restoreComplete = true;
+    return;
+  }
   if (restoreComplete && !force) return;
   const url = new URL(location.href);
   const wantedSource = url.searchParams.get('source');
@@ -133,7 +140,7 @@ async function restoreFolder(force = false) {
 }
 
 async function catalogChanged() {
-  await restoreFolder();
+  if (!treeView()) await restoreFolder();
   refresh();
 }
 
@@ -156,11 +163,12 @@ gridFolderStrip.addEventListener('click', event => {
 // library-app owns breadcrumb clicks outside the merged Folders view. Mark those
 // as user navigation before its bubble listener changes the folder state.
 folderbar?.addEventListener('click', event => {
-  if (currentView() === 'folders') return;
+  if (treeView()) return;
   if (event.target.closest('[data-folder-home],[data-folder-depth]')) pendingHistoryMode = 'push';
 }, true);
 
 window.addEventListener('mochimono:folder-changed', () => {
+  if (treeView()) return;
   const mode = pendingHistoryMode || 'replace';
   pendingHistoryMode = '';
   syncUrl(mode);
@@ -171,7 +179,7 @@ window.addEventListener('mochimono:catalog-updated', catalogChanged);
 window.addEventListener('popstate', () => {
   restoreComplete = false;
   queueMicrotask(() => {
-    if (currentView() !== 'folders') restoreFolder(true).catch(console.warn);
+    if (!treeView()) restoreFolder(true).catch(console.warn);
   });
 });
 views.addEventListener('click', refresh);

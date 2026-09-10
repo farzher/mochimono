@@ -407,11 +407,14 @@ function trimRenderedEnd(count) {
   if (!cards.length) return 0;
   for (const card of cards) card.remove();
   cleanupEmptyDateGroups();
+  restoreAnchor(anchor);
   return cards.length;
 }
 
 function renderFiles(preserve = false) {
-  if (view === 'folders') return renderFolder();
+  // The merged physical folder tree owns view=folders. Source/path folder state
+  // remains available only as a Grid/List scope and must not render a second UI.
+  if (view === 'folders') return;
   if (folderImportId) folderBreadcrumb();
   else { $('#folderbar').hidden = true; $('#folderbar').replaceChildren(); }
 
@@ -437,7 +440,7 @@ function sortFiles(items) {
 }
 
 function applyFilters(reset = true, preserve = false, keepHash = '') {
-  if (view === 'folders') return loadFolder();
+  if (view === 'folders') return;
   const terms = queryTerms($('#search').value, $('#source').options);
   if (terms.length) ensureSearchIndex();
   const sourceId = Number(importId) || 0;
@@ -583,7 +586,6 @@ function renderRail() {
 function renderImports() {
   $('#source').innerHTML = '<option value="">All sources</option>' + imports.map(item => `<option value="${item.id}">${escapeHtml(item.sourceName)}</option>`).join('');
   $('#source').value = importId;
-  if (view === 'folders' && !folderImportId) renderFolder();
 }
 
 function jumpToIndex(index, smooth = true) {
@@ -700,33 +702,9 @@ function folderBreadcrumb() {
   bar.innerHTML = `<div class="breadcrumbs">${crumbs.join('')}</div>`;
 }
 
-function renderFolder() {
-  window.mochimonoStableGrid?.release?.();
-  filesElement.className = 'files folders';
-  topScrollSentinel.hidden = true;
-  $('#scroll-sentinel').hidden = true;
-  $('#dateRail').hidden = true;
-  document.documentElement.classList.remove('library-scroll');
-  folderBreadcrumb();
-  if (!folderImportId) {
-    renderFileCount(catalog.length);
-    filesElement.innerHTML = imports.length ? `<div class="folder-list-head"><span>Name</span><span>Files</span><span>Imported</span></div>${imports.map(item => `<button class="folder-row source-row" data-folder-source="${item.id}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(item.sourceName)}</strong></span><span>${Number(item.files || 0).toLocaleString()} · ${formatBytes(item.referencedBytes)}</span><span>${escapeHtml(new Date(item.createdAt).toLocaleDateString())}</span></button>`).join('')}` : '<div class="empty">No sources.</div>';
-    return;
-  }
-  if (!folderData) { renderFileCount(0); filesElement.innerHTML = '<div class="empty">Loading…</div>'; return; }
-  renderFileCount(folderData.files.length);
-  const rows = [];
-  for (const folder of folderData.folders || []) rows.push(`<button class="folder-row" data-folder-name="${escapeHtml(folder.name)}"><span class="folder-name"><i class="folder-icon"></i><strong>${escapeHtml(folder.name)}</strong></span><span>${Number(folder.files || 0).toLocaleString()}</span><span>Folder</span></button>`);
-  for (const file of folderData.files || []) {
-    rows.push(`<button class="folder-row file-folder-row" data-hash="${file.hash}" data-filename="${escapeHtml(file.filename)}"><span class="folder-name"><i class="document-icon"></i><strong>${escapeHtml(file.filename)}</strong></span><span>${formatBytes(file.size)}</span><span>${escapeHtml(typeLabel(file))}</span></button>`);
-  }
-  filesElement.innerHTML = rows.length ? `<div class="folder-list-head"><span>Name</span><span>Size</span><span>Type</span></div>${rows.join('')}` : '<div class="empty">Empty.</div>';
-}
-
 async function loadFolder() {
   const generation = ++folderLoadGeneration;
   folderData = null;
-  if (view === 'folders') renderFolder();
   if (!folderImportId) {
     if (view !== 'folders') { $('#folderbar').hidden = true; $('#folderbar').replaceChildren(); applyFilters(true); }
     notifyFolderChanged();
@@ -737,7 +715,7 @@ async function loadFolder() {
   const data = await request(`/api/folders?import=${encodeURIComponent(wantedImport)}&path=${encodeURIComponent(wantedPath)}`);
   if (generation !== folderLoadGeneration || String(folderImportId) !== wantedImport || folderPath !== wantedPath) return null;
   folderData = { ...data, files: (data.files || []).map(normalizeFile) };
-  if (view === 'folders') renderFolder(); else applyFilters(true);
+  if (view !== 'folders') applyFilters(true);
   notifyFolderChanged();
   return folderData;
 }
@@ -762,9 +740,19 @@ function setView(next) {
   $('#mediaSizeControl').hidden = view !== 'grid';
   $$('#views button').forEach(item => item.classList.toggle('active', item.dataset.view === view));
   if (folderMode) {
-    if (!folderImportId) { folderImportId = importId; folderPath = ''; }
-    loadFolder().catch(console.error);
+    // Entering Folders leaves source/path scoping behind. folder-tree.js is the
+    // sole renderer and URL owner for this view.
+    folderLoadGeneration++;
+    folderImportId = '';
+    folderPath = '';
+    folderData = null;
+    importId = '';
+    $('#source').value = '';
+    $('#folderbar').hidden = true;
+    $('#folderbar').replaceChildren();
+    notifyFolderChanged();
   } else applyFilters(true);
+  window.dispatchEvent(new CustomEvent('mochimono:view-changed', { detail:{ view } }));
 }
 
 function setCollectionHashes(hashes) {
@@ -785,7 +773,9 @@ function setCollectionHashes(hashes) {
 }
 window.mochimonoSetCollectionHashes = setCollectionHashes;
 
-const viewerItems = () => view === 'folders' ? (folderData?.files || []) : filtered;
+const viewerItems = () => view === 'folders'
+  ? (window.mochimonoFolderTree?.files?.() || []).map(file => catalogFile(file.hash) || normalizeFile(file))
+  : filtered;
 function viewerIndex(items = viewerItems()) {
   if (view !== 'folders') return filteredIndex.get(selected?.hash) ?? -1;
   return items.findIndex(file => file.hash === selected?.hash);
@@ -922,7 +912,8 @@ function closeViewer() {
   selected = null;
   if (viewerDirty) {
     viewerDirty = false;
-    if (view === 'folders') loadFolder().catch(console.error); else applyFilters(false, true, returnHash);
+    if (view === 'folders') Promise.resolve(window.mochimonoFolderTree?.refresh?.()).catch(console.error);
+    else applyFilters(false, true, returnHash);
   }
   revealViewerHash(returnHash);
 }
@@ -952,7 +943,8 @@ async function removeSelected(ignore) {
   viewerDirty = false;
   closeViewer();
   await Promise.allSettled([loadStats(), refreshImports()]);
-  if (view === 'folders') await loadFolder(); else applyFilters(true);
+  if (view === 'folders') await window.mochimonoFolderTree?.refresh?.();
+  else applyFilters(true);
   window.mochimonoCatalogCache?.save?.(catalog, { version: catalogVersion, imports }).catch(() => {});
 }
 
@@ -1017,7 +1009,8 @@ window.mochimonoLibrary = {
     catalog = catalog.filter(file => !removed.has(file.hash));
     for (const hash of removed) { searchIndex.delete(hash); locationSearch.delete(hash); fileDates.delete(hash); }
     rebuildIndexes();
-    applyFilters(false, true, anchor?.hash || '');
+    if (view === 'folders') window.mochimonoFolderTree?.refresh?.();
+    else applyFilters(false, true, anchor?.hash || '');
   },
   state: () => ({
     total: catalog.length,
@@ -1113,18 +1106,20 @@ $('#login-form').addEventListener('submit', async event => {
 logout.addEventListener('click', async () => { await request('/api/logout', { method: 'POST' }).catch(() => {}); catalog = []; catalogVersion = ''; await boot(); });
 $('#search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => applyFilters(true), 55); });
 $('#source').addEventListener('change', event => {
+  if (view === 'folders') {
+    importId = '';
+    event.target.value = '';
+    return;
+  }
   importId = event.target.value;
   folderLoadGeneration++;
   folderImportId = '';
   folderPath = '';
   folderData = null;
-  if (view === 'folders') { folderImportId = importId; loadFolder().catch(console.error); }
-  else {
-    $('#folderbar').hidden = true;
-    $('#folderbar').replaceChildren();
-    notifyFolderChanged();
-    applyFilters(true);
-  }
+  $('#folderbar').hidden = true;
+  $('#folderbar').replaceChildren();
+  notifyFolderChanged();
+  applyFilters(true);
 });
 $('#typeFilter').addEventListener('change', event => { type = event.target.value; applyFilters(true); });
 $('#sort').addEventListener('change', event => { sort = event.target.value; applyFilters(true); });

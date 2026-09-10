@@ -3,7 +3,7 @@ const views = document.querySelector('#views');
 const folderbar = document.querySelector('#folderbar');
 const CLIENT = document.documentElement.classList.contains('client-library');
 
-let treePath = new URL(location.href).searchParams.get('tree') || '';
+let treePath = '';
 let generation = 0;
 let active = false;
 let currentFiles = [];
@@ -49,8 +49,11 @@ function cleanTreePath(path) {
 function syncUrl(mode = 'replace') {
   const url = new URL(location.href);
   url.searchParams.set('view', 'folders');
+  // Folders is one merged physical hierarchy. source/path/folder are alternate
+  // Grid scopes and must never coexist with the canonical tree location.
   url.searchParams.delete('source');
   url.searchParams.delete('path');
+  url.searchParams.delete('folder');
   if (treePath) url.searchParams.set('tree', treePath);
   else url.searchParams.delete('tree');
   if (url.href === location.href) return;
@@ -174,6 +177,7 @@ async function load(path = treePath, historyMode = 'push') {
     render(data);
   } catch (error) {
     if (mine !== generation || !active) return;
+    currentFiles = [];
     files.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
   }
 }
@@ -181,22 +185,22 @@ async function load(path = treePath, historyMode = 'push') {
 async function activate() {
   if (currentView() !== 'folders') return;
   active = true;
+  // A bare ?view=folders always means the root. Never revive a stale in-memory
+  // source/path/tree from a previous visit.
   const url = new URL(location.href);
-  if (url.searchParams.has('tree')) treePath = cleanTreePath(url.searchParams.get('tree') || '');
-  try { await window.mochimonoLibrary?.openFolder?.('', ''); } catch {}
-  if (currentView() !== 'folders') return;
+  treePath = cleanTreePath(url.searchParams.get('tree') || '');
   await load(treePath, 'replace');
 }
 
 function deactivate() {
-  if (currentView() === 'folders') return;
   active = false;
   generation++;
+  currentFiles = [];
 }
 
-views?.addEventListener('click', event => {
-  if (!event.target.closest('[data-view]')) return;
-  queueMicrotask(() => currentView() === 'folders' ? activate() : deactivate());
+window.addEventListener('mochimono:view-changed', event => {
+  if (event.detail?.view === 'folders') void activate();
+  else deactivate();
 });
 
 folderbar?.addEventListener('click', event => {
@@ -210,35 +214,50 @@ folderbar?.addEventListener('click', event => {
   else void load(parts().slice(0, Number(crumb.dataset.treeDepth)).join('/'), 'push');
 }, true);
 
+// Capture clicks so the legacy source/path handlers in library-app cannot also
+// interpret a merged-tree row as a different folder navigation operation.
 files?.addEventListener('click', event => {
   if (!active || currentView() !== 'folders') return;
   const folder = event.target.closest('[data-tree-folder]');
-  if (!folder) return;
+  if (folder) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void load(folder.dataset.treeFolder, 'push');
+    return;
+  }
+  const item = event.target.closest('[data-hash]');
+  if (!item) return;
+  const file = currentFiles.find(entry => String(entry.hash) === String(item.dataset.hash));
+  if (!file) return;
   event.preventDefault();
   event.stopImmediatePropagation();
-  void load(folder.dataset.treeFolder, 'push');
+  window.mochimonoOpenViewer?.(file.hash, file);
 }, true);
 
 window.addEventListener('popstate', () => {
   queueMicrotask(() => {
-    treePath = cleanTreePath(new URL(location.href).searchParams.get('tree') || '');
-    if (active && currentView() === 'folders') load(treePath, 'none');
+    if (currentView() !== 'folders') return;
+    active = true;
+    const url = new URL(location.href);
+    treePath = cleanTreePath(url.searchParams.get('tree') || '');
+    void load(treePath, 'none');
   });
 });
 window.addEventListener('mochimono:catalog-updated', () => {
-  if (active && currentView() === 'folders') load(treePath, 'none');
+  if (active && currentView() === 'folders') void load(treePath, 'none');
 });
 window.addEventListener('mochimono:browser-folders-ready', () => {
-  if (active && currentView() === 'folders') load(treePath, 'none');
+  if (active && currentView() === 'folders') void load(treePath, 'none');
 });
 window.addEventListener('mochimono:browser-folders-changed', () => {
-  if (active && currentView() === 'folders') load(treePath, 'none');
+  if (active && currentView() === 'folders') void load(treePath, 'none');
 });
 
 window.mochimonoFolderTree = {
   path:() => treePath,
   files:() => currentFiles.map(file => ({ ...file })),
-  open:path => load(path, 'push')
+  open:path => load(path, 'push'),
+  refresh:() => load(treePath, 'none')
 };
 
-if (currentView() === 'folders') activate();
+if (currentView() === 'folders') void activate();
