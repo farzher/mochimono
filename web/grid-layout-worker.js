@@ -25,6 +25,8 @@ function buildItemData(items) {
   const years = new Int32Array(count);
   const months = new Uint8Array(count);
   const days = new Uint8Array(count);
+  const groupIds = new Int32Array(count);
+  groupIds.fill(-1);
   const diagnostics = { missingMediaDimensions:0 };
 
   for (let index = 0; index < count; index++) {
@@ -33,21 +35,25 @@ function buildItemData(items) {
     years[index] = date.getFullYear();
     months[index] = date.getMonth();
     days[index] = date.getDate();
+    groupIds[index] = Number.isInteger(Number(items[index]?.[8])) ? Number(items[index][8]) : -1;
   }
-  return { ratios, years, months, days, diagnostics };
+  return { ratios, years, months, days, groupIds, diagnostics };
 }
 
 function layoutItems(items, config) {
   const started = performance.now();
-  const { ratios, years, months, days, diagnostics } = buildItemData(items);
+  const { ratios, years, months, days, groupIds, diagnostics } = buildItemData(items);
   const count = items.length;
   const width = Math.max(200, Number(config.width) || 1000);
   const target = Math.max(72, Number(config.target) || 170);
   const gap = Math.max(0, Number(config.gap ?? ROW_GAP));
-  const grouped = String(config.sort || '').startsWith('date-');
+  const sort = String(config.sort || '');
+  const dateGrouped = sort.startsWith('date-');
+  const similarityGrouped = sort.startsWith('similarity-groups');
   const MAX_ROW_HEIGHT = target * 1.28;
   const LAST_ROW_FILL_MAX = target * 1.16;
   const GROUP_GAP = 24;
+  const SIMILARITY_GROUP_GAP = 14;
   const YEAR_HEIGHT = 31;
   const MONTH_HEIGHT = 27;
   const FLAT_TOP = 16;
@@ -61,7 +67,7 @@ function layoutItems(items, config) {
   const itemW = new Float32Array(count);
   const headers = [];
   const dayStarts = [];
-  let y = grouped ? 0 : FLAT_TOP;
+  let y = dateGrouped ? 0 : FLAT_TOP;
   let previousYear = null;
   let previousDayKey = '';
 
@@ -100,7 +106,7 @@ function layoutItems(items, config) {
       itemX[index] = x;
       itemW[index] = itemWidth;
 
-      if (grouped) {
+      if (dateGrouped) {
         const key = `${years[index]}-${months[index] + 1}-${days[index]}`;
         if (key !== previousDayKey) {
           dayStarts.push({ index, row, x, top:y, year:years[index], month:months[index], day:days[index] });
@@ -143,7 +149,7 @@ function layoutItems(items, config) {
     }
   }
 
-  if (grouped) {
+  if (dateGrouped) {
     let start = 0;
     while (start < count) {
       const year = years[start];
@@ -158,6 +164,16 @@ function layoutItems(items, config) {
       }
       headers.push({ kind:'month', year, month, top:y });
       y += MONTH_HEIGHT;
+      layoutRange(start, end);
+      start = end;
+    }
+  } else if (similarityGrouped) {
+    let start = 0;
+    while (start < count) {
+      const groupId = groupIds[start];
+      let end = start + 1;
+      while (end < count && groupIds[end] === groupId) end++;
+      if (start) y += SIMILARITY_GROUP_GAP;
       layoutRange(start, end);
       start = end;
     }
