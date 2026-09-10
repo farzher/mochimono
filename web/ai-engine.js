@@ -1,8 +1,10 @@
 const WORKER_URL = new URL('./ai-worker.js', import.meta.url);
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
+const HEAVY_ACTIONS = new Set(['index','similar','search','groups','describe','mask']);
 let worker = null;
 let sequence = 0;
+let heavyJobs = 0;
 const pending = new Map();
 
 function extension(name) {
@@ -34,6 +36,27 @@ function mediaRecord(file) {
   };
 }
 
+function beginHeavy(action, id) {
+  heavyJobs++;
+  if (heavyJobs !== 1) return;
+  window.dispatchEvent(new CustomEvent('mochimono:ai-work-start', { detail:{ action, id, source:'ai-engine' } }));
+}
+
+function endHeavy(action, id) {
+  heavyJobs = Math.max(0, heavyJobs - 1);
+  if (heavyJobs) return;
+  window.dispatchEvent(new CustomEvent('mochimono:ai-work-end', { detail:{ action, id, source:'ai-engine' } }));
+}
+
+function settleJob(id) {
+  const job = pending.get(String(id || ''));
+  if (!job) return null;
+  pending.delete(String(id));
+  job.signal?.removeEventListener('abort', job.abort);
+  if (job.heavy) endHeavy(job.action, id);
+  return job;
+}
+
 function ensureWorker() {
   if (worker) return worker;
   worker = new Worker(WORKER_URL, { type:'module' });
@@ -45,8 +68,7 @@ function ensureWorker() {
       job.onProgress?.(data);
       return;
     }
-    pending.delete(String(data.id || ''));
-    job.signal?.removeEventListener('abort', job.abort);
+    settleJob(data.id);
     if (data.type === 'error') {
       const error = new Error(data.error || 'AI operation failed');
       if (data.aborted) error.name = 'AbortError';
@@ -57,10 +79,9 @@ function ensureWorker() {
   };
   worker.onerror = event => {
     const error = new Error(event.message || 'AI worker failed');
-    for (const [id, job] of pending) {
-      pending.delete(id);
-      job.signal?.removeEventListener('abort', job.abort);
-      job.reject(error);
+    for (const id of [...pending.keys()]) {
+      const job = settleJob(id);
+      job?.reject(error);
     }
     worker?.terminate();
     worker = null;
@@ -73,15 +94,17 @@ function request(action, payload = {}, options = {}) {
   const target = ensureWorker();
   return new Promise((resolve, reject) => {
     const signal = options.signal || null;
+    const heavy = HEAVY_ACTIONS.has(action);
     const abort = () => {
       target.postMessage({ id:`cancel-${id}`, action:'cancel', cancelId:id });
-      pending.delete(id);
-      signal?.removeEventListener('abort', abort);
+      const job = settleJob(id);
+      if (!job) return;
       reject(signal?.reason || new DOMException('Aborted', 'AbortError'));
     };
-    if (signal?.aborted) return abort();
+    if (signal?.aborted) return reject(signal.reason || new DOMException('Aborted', 'AbortError'));
     signal?.addEventListener('abort', abort, { once:true });
-    pending.set(id, { resolve, reject, onProgress:options.onProgress, signal, abort });
+    pending.set(id, { resolve, reject, onProgress:options.onProgress, signal, abort, heavy, action });
+    if (heavy) beginHeavy(action, id);
     target.postMessage({ id, action, payload });
   });
 }
@@ -155,12 +178,13 @@ const api = {
     request('describe', { hash:String(hash || ''), prompt:String(prompt || '') }, options),
   masks:(hash, options = {}) =>
     request('mask', { hash:String(hash || '') }, options),
+  busy:() => heavyJobs > 0,
   stop:() => {
     worker?.terminate();
     worker = null;
-    for (const [id, job] of pending) {
-      pending.delete(id);
-      job.reject(new DOMException('AI worker stopped', 'AbortError'));
+    for (const id of [...pending.keys()]) {
+      const job = settleJob(id);
+      job?.reject(new DOMException('AI worker stopped', 'AbortError'));
     }
   }
 };
