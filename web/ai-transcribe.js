@@ -11,10 +11,13 @@ if (dialog && target && targetName && targetHash && main) {
   const MODEL = 'onnx-community/whisper-large-v3-turbo';
   const CACHE_KIND = 'whisper-large-v3-turbo-transcript-v1';
   const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
+  const DB_VERSION = 2;
   const AUDIO = new Set(['mp3','wav','flac','m4a','aac','ogg','oga','opus','wma','aiff','aif','alac']);
   const VIDEO = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
   let pipelinePromise = null;
   let generation = 0;
+  let workSequence = 0;
+  const activeWork = new Set();
 
   const button = document.createElement('button');
   button.type = 'button';
@@ -36,10 +39,23 @@ if (dialog && target && targetName && targetHash && main) {
   function supported() { const ext = extension(targetName.textContent); return AUDIO.has(ext) || VIDEO.has(ext); }
   function syncButton() { button.hidden = !supported() || !/^[a-f0-9]{64}$/.test(targetHash.textContent.trim()); }
 
+  function beginWork(hash) {
+    const id = `whisper-${Date.now().toString(36)}-${(++workSequence).toString(36)}`;
+    const wasIdle = activeWork.size === 0;
+    activeWork.add(id);
+    if (wasIdle) window.dispatchEvent(new CustomEvent('mochimono:ai-work-start', { detail:{ action:'transcribe', id, hash, source:'whisper' } }));
+    return id;
+  }
+
+  function endWork(id) {
+    if (!activeWork.delete(id) || activeWork.size) return;
+    window.dispatchEvent(new CustomEvent('mochimono:ai-work-end', { detail:{ action:'transcribe', id, source:'whisper' } }));
+  }
+
   function openDb() {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open('mochimono-ai', 1);
-      request.onupgradeneeded = () => {
+      const request = indexedDB.open('mochimono-ai', DB_VERSION);
+      request.onupgradeneeded = event => {
         const db = request.result;
         if (!db.objectStoreNames.contains('embeddings')) {
           const store = db.createObjectStore('embeddings', { keyPath:'id' });
@@ -50,6 +66,9 @@ if (dialog && target && targetName && targetHash && main) {
           const store = db.createObjectStore('metadata', { keyPath:'id' });
           store.createIndex('kind', 'kind', { unique:false });
           store.createIndex('hash', 'hash', { unique:false });
+        }
+        if (event.oldVersion < 2 && db.objectStoreNames.contains('embeddings')) {
+          request.transaction.objectStore('embeddings').clear();
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -110,6 +129,7 @@ if (dialog && target && targetName && targetHash && main) {
     const hash = targetHash.textContent.trim();
     if (!/^[a-f0-9]{64}$/.test(hash) || !supported()) return;
     const mine = ++generation;
+    const workId = beginWork(hash);
     section.hidden = false;
     output.textContent = 'Checking transcript cache…';
     button.disabled = true;
@@ -147,6 +167,7 @@ if (dialog && target && targetName && targetHash && main) {
         if (status) status.textContent = output.textContent;
       }
     } finally {
+      endWork(workId);
       if (mine === generation) {
         button.disabled = false;
         if (progressWrap) progressWrap.hidden = true;
@@ -161,5 +182,5 @@ if (dialog && target && targetName && targetHash && main) {
   new MutationObserver(syncButton).observe(targetHash, { childList:true, characterData:true, subtree:true });
   syncButton();
 
-  window.mochimonoAITranscription = { transcribe, supported };
+  window.mochimonoAITranscription = { transcribe, supported, busy:() => activeWork.size > 0 };
 }
