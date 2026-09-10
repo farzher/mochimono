@@ -14,11 +14,11 @@ const THUMB_VERSION = 3;
 const SAMPLE = 16;
 const LOW = 8;
 const INDEX_BATCH = 32;
-const CANDIDATE_DISTANCE = 9;
+const CANDIDATE_DISTANCE = 15;
 const MODE_KEY = 'mochimono-similarity-mode';
 const MODES = {
-  near:{ label:'Near duplicates', maxDistance:0, description:'100-score pHash matches' },
-  similar:{ label:'Similar images', maxDistance:9, description:'Broader visual groups' }
+  near:{ label:'Near duplicates', maxDistance:0, expandDistance:0, description:'100-score pHash matches' },
+  similar:{ label:'Similar images', maxDistance:9, expandDistance:14, description:'Broader visual groups' }
 };
 const POPCOUNT = [0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4];
 const COS = Array.from({ length:LOW }, (_, u) => Array.from({ length:SAMPLE }, (_, x) => Math.cos((2 * x + 1) * u * Math.PI / (2 * SAMPLE))));
@@ -251,7 +251,9 @@ async function ensureFingerprints(images, signal, mine) {
   return { fingerprints, unavailable };
 }
 
-function buildGroups(images, fingerprints, maxDistance) {
+function buildGroups(images, fingerprints, config) {
+  const maxDistance = Math.max(0, Number(config?.maxDistance) || 0);
+  const expandDistance = Math.min(CANDIDATE_DISTANCE, Math.max(maxDistance, Number(config?.expandDistance) || maxDistance));
   const fileIndex = new Map(images.map((file, index) => [file.hash, index]));
   const parent = Int32Array.from(images, (_, index) => index);
   const best = new Uint8Array(images.length);
@@ -289,6 +291,7 @@ function buildGroups(images, fingerprints, maxDistance) {
     members.push(fileIndex.get(file.hash));
   }
 
+  const blockValues = value => Array.from({ length:8 }, (_, block) => parseInt(value.slice(block * 2, block * 2 + 2), 16));
   const unique = [];
   for (const [value, members] of identical) {
     const first = members[0];
@@ -300,37 +303,40 @@ function buildGroups(images, fingerprints, maxDistance) {
         if (index) union(first, member);
       }
     }
-    unique.push({ value, members, representative:first, words:[0,4,8,12].map(offset => parseInt(value.slice(offset, offset + 4), 16)) });
+    unique.push({ value, members, representative:first, blocks:blockValues(value) });
   }
 
-  if (maxDistance > 0) {
-    const buckets = Array.from({ length:4 }, () => new Map());
-    for (let index = 0; index < unique.length; index++) for (let block = 0; block < 4; block++) {
-      const word = unique[index].words[block];
-      let bucket = buckets[block].get(word);
-      if (!bucket) buckets[block].set(word, bucket = []);
-      bucket.push(index);
-    }
+  // Eight 8-bit blocks with a one-bit probe are exhaustive for any full
+  // 64-bit Hamming distance <= 15: at least one block must differ by <= 1 bit.
+  const buckets = Array.from({ length:8 }, () => new Map());
+  for (let index = 0; index < unique.length; index++) for (let block = 0; block < 8; block++) {
+    const value = unique[index].blocks[block];
+    let bucket = buckets[block].get(value);
+    if (!bucket) buckets[block].set(value, bucket = []);
+    bucket.push(index);
+  }
 
+  const candidatesForValue = (value, after = -1) => {
+    const candidates = new Set();
+    const blocks = blockValues(value);
+    for (let block = 0; block < 8; block++) {
+      const word = blocks[block];
+      const collect = key => {
+        for (const index of buckets[block].get(key) || []) if (index > after) candidates.add(index);
+      };
+      collect(word);
+      for (let bit = 0; bit < 8; bit++) collect(word ^ (1 << bit));
+    }
+    return candidates;
+  };
+
+  if (maxDistance > 0) {
     for (let index = 0; index < unique.length; index++) {
       const item = unique[index];
-      const candidates = new Set();
-      for (let block = 0; block < 4; block++) {
-        const word = item.words[block];
-        const collect = key => {
-          for (const other of buckets[block].get(key) || []) if (other > index) candidates.add(other);
-        };
-        collect(word);
-        for (let bit = 0; bit < 16; bit++) {
-          const oneBit = word ^ (1 << bit);
-          collect(oneBit);
-          for (let otherBit = bit + 1; otherBit < 16; otherBit++) collect(oneBit ^ (1 << otherBit));
-        }
-      }
-      for (const otherIndex of candidates) {
+      for (const otherIndex of candidatesForValue(item.value, index)) {
         const other = unique[otherIndex];
         const delta = distance(item.value, other.value);
-        if (delta > maxDistance || delta > CANDIDATE_DISTANCE) continue;
+        if (delta > maxDistance) continue;
         union(item.representative, other.representative);
         const leftPartner = other.members[0];
         const rightPartner = item.members[0];
@@ -340,13 +346,9 @@ function buildGroups(images, fingerprints, maxDistance) {
     }
   }
 
-  const scoreMap = new Map();
-  const partnerMap = new Map();
   const groupsByRoot = new Map();
   for (let index = 0; index < images.length; index++) {
     if (best[index] > maxDistance || partner[index] < 0) continue;
-    scoreMap.set(images[index].hash, similarityScore(best[index]));
-    partnerMap.set(images[index].hash, images[partner[index]].hash);
     const root = find(index);
     let group = groupsByRoot.get(root);
     if (!group) {
@@ -360,6 +362,72 @@ function buildGroups(images, fingerprints, maxDistance) {
   }
 
   const groups = [...groupsByRoot.values()].filter(group => group.members.length > 1);
+
+  if (expandDistance > maxDistance && groups.length) {
+    const owner = new Int32Array(images.length);
+    owner.fill(-1);
+    groups.forEach((group, groupId) => {
+      group.coreSize = group.members.length;
+      for (const index of group.members) owner[index] = groupId;
+    });
+
+    const centroid = members => {
+      const ones = new Uint32Array(64);
+      let count = 0;
+      for (const index of members) {
+        const value = fingerprints.get(images[index].hash);
+        if (!value) continue;
+        count++;
+        for (let nibble = 0; nibble < 16; nibble++) {
+          const valueNibble = parseInt(value[nibble], 16);
+          for (let bit = 0; bit < 4; bit++) if (valueNibble & (1 << (3 - bit))) ones[nibble * 4 + bit]++;
+        }
+      }
+      if (!count) return '';
+      let value = '';
+      for (let nibble = 0; nibble < 16; nibble++) {
+        let valueNibble = 0;
+        for (let bit = 0; bit < 4; bit++) if (ones[nibble * 4 + bit] * 2 >= count) valueNibble |= 1 << (3 - bit);
+        value += valueNibble.toString(16);
+      }
+      return value;
+    };
+
+    const assignments = new Map();
+    for (let groupId = 0; groupId < groups.length; groupId++) {
+      const group = groups[groupId];
+      const center = centroid(group.members);
+      if (!center) continue;
+      group.centroid = center;
+      for (const uniqueIndex of candidatesForValue(center)) {
+        const item = unique[uniqueIndex];
+        const delta = distance(center, item.value);
+        if (delta > expandDistance) continue;
+        for (const member of item.members) {
+          if (owner[member] >= 0) continue;
+          const previous = assignments.get(member);
+          if (previous && (previous.distance < delta || (previous.distance === delta && previous.coreSize >= group.coreSize))) continue;
+          assignments.set(member, { groupId, distance:delta, coreSize:group.coreSize });
+        }
+      }
+    }
+
+    for (const [index, assignment] of assignments) {
+      const group = groups[assignment.groupId];
+      group.members.push(index);
+      best[index] = assignment.distance;
+      group.newest = Math.max(group.newest, images[index].dateMs || 0);
+      if (images[index].hash < group.key) group.key = images[index].hash;
+    }
+  }
+
+  const scoreMap = new Map();
+  const partnerMap = new Map();
+  for (const group of groups) for (const index of group.members) {
+    scoreMap.set(images[index].hash, similarityScore(best[index]));
+    if (partner[index] >= 0) partnerMap.set(images[index].hash, images[partner[index]].hash);
+  }
+
   for (const group of groups) {
     group.members.sort((a, b) =>
       best[a] - best[b] ||
@@ -642,7 +710,7 @@ async function activate() {
     if (!indexed || mine !== generation || signal.aborted || !wanted) return;
     updateProgress(images.length, images.length, 'Building visual groups…');
     await new Promise(resolve => requestAnimationFrame(resolve));
-    const result = buildGroups(images, indexed.fingerprints, MODES[mode].maxDistance);
+    const result = buildGroups(images, indexed.fingerprints, MODES[mode]);
     if (mine !== generation || signal.aborted || !wanted) return;
     install(result, images, scrollYBefore, resetScroll);
   } catch (error) {
