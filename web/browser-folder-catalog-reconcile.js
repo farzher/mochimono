@@ -1,11 +1,17 @@
 const DB_NAME = 'mochimono-browser-folders';
 const DB_VERSION = 1;
+const SOURCES = 'sources';
 const FILES = 'files';
 const SHA256 = /^[a-f0-9]{64}$/;
 
 function readAllManifests() {
   return new Promise((resolve, reject) => {
     const open = indexedDB.open(DB_NAME, DB_VERSION);
+    open.onupgradeneeded = () => {
+      const db = open.result;
+      if (!db.objectStoreNames.contains(SOURCES)) db.createObjectStore(SOURCES, { keyPath:'id' });
+      if (!db.objectStoreNames.contains(FILES)) db.createObjectStore(FILES, { keyPath:'key' });
+    };
     open.onerror = () => reject(open.error || new Error('Browser folder database is unavailable'));
     open.onsuccess = () => {
       const db = open.result;
@@ -52,15 +58,18 @@ async function ownedOutsideBrowser(hash) {
   }
 }
 
-let known = await readAllManifests().catch(() => new Map());
-let generation = 0;
+const known = await readAllManifests().catch(() => new Map());
+const generations = new Map();
 
 async function reconcileSource(id) {
-  const mine = ++generation;
+  const mine = (generations.get(id) || 0) + 1;
+  generations.set(id, mine);
   const before = known.get(id) || new Map();
   const current = await readAllManifests().catch(() => null);
-  if (!current || mine !== generation) return;
-  known = current;
+  if (!current || generations.get(id) !== mine) return;
+
+  const after = current.get(id) || new Map();
+  known.set(id, after);
   if (!before.size) return;
 
   // The IndexedDB manifest is authoritative by source + path. If a path was
@@ -80,7 +89,7 @@ async function reconcileSource(id) {
     }
   });
   await Promise.all(workers);
-  if (mine !== generation || !removable.length) return;
+  if (generations.get(id) !== mine || !removable.length) return;
   window.mochimonoLibrary?.remove?.(removable);
 }
 
