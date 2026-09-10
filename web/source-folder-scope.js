@@ -132,17 +132,22 @@ async function configuredImportId(path) {
   return value;
 }
 
-function hasImportOption(importId) {
-  return Boolean(importId && sourceFilter?.querySelector(`option[value="${CSS.escape(String(importId))}"]`));
-}
-
 function applyImport(importId) {
-  if (!hasImportOption(importId)) return false;
-  sourceFilter.value = String(importId);
+  if (!sourceFilter || !importId) return false;
+  const value = String(importId);
+  let option = sourceFilter.querySelector(`option[value="${CSS.escape(value)}"]`);
+  let temporary = false;
+  if (!option) {
+    option = document.createElement('option');
+    option.value = value;
+    option.hidden = true;
+    sourceFilter.append(option);
+    temporary = true;
+  }
+  sourceFilter.value = value;
   sourceFilter.dispatchEvent(new Event('change', { bubbles:true }));
-  // Folder is the user-facing scope. Keep Origin visually empty while retaining
-  // library-app's already-applied in-memory import filter.
   sourceFilter.value = '';
+  if (temporary) option.remove();
   const url = new URL(location.href);
   url.searchParams.delete('origin');
   if (url.href !== location.href) history.replaceState(history.state, '', url);
