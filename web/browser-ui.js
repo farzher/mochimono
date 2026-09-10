@@ -6,6 +6,7 @@ import './navigation-state.js';
 import './filter-history.js';
 import './collection-history.js';
 import './folder-tree.js';
+import './library-ux-cleanup.js';
 
 const files = document.querySelector('#files');
 const views = document.querySelector('#views');
