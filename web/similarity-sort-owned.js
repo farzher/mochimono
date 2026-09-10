@@ -11,18 +11,12 @@ const DB_NAME = 'mochimono-visual-similarity';
 const DB_VERSION = 1;
 const STORE = 'fingerprints';
 const PHASH_VERSION = 'phash16-dct8-v1';
-const THUMB_VERSION = 3;
-const SAMPLE = 16;
-const LOW = 8;
-const INDEX_BATCH = 32;
 const RESULT_CACHE_LIMIT = 4;
 const MODE_KEY = 'mochimono-similarity-mode';
 const MODES = {
   near:{ label:'Near duplicates', maxDistance:0, expandDistance:0, description:'100-score pHash matches' },
   similar:{ label:'Similar images', maxDistance:9, expandDistance:14, description:'Broader visual groups' }
 };
-const COS = Array.from({ length:LOW }, (_, u) => Array.from({ length:SAMPLE }, (_, x) => Math.cos((2 * x + 1) * u * Math.PI / (2 * SAMPLE))));
-const SCALE = Array.from({ length:LOW }, (_, u) => u === 0 ? Math.sqrt(1 / SAMPLE) : Math.sqrt(2 / SAMPLE));
 
 let wanted = false;
 let active = false;
@@ -49,6 +43,7 @@ let pendingScrollAnchor = null;
 let runningKey = '';
 let installedKey = '';
 const resultCache = new Map();
+const pauseReasons = new Set();
 let mode = (() => {
   const saved = localStorage.getItem(MODE_KEY);
   if (saved === 'duplicates') return 'near';
@@ -68,6 +63,7 @@ style.textContent = `
 html.similarity-sort-indexing:not(.similarity-sort-active) #files{visibility:hidden!important}
 html.similarity-sort-active #dateRail{display:none!important}
 html.similarity-sort-active .file-card>.similarity-score{position:absolute;z-index:8;right:6px;top:6px;min-width:27px;height:19px;padding:0 6px;display:grid;place-items:center;border-radius:999px;background:rgba(13,12,14,.8);box-shadow:0 1px 6px rgba(0,0,0,.35);color:#f2eae6;font-size:9px;font-weight:800;line-height:1;pointer-events:none;backdrop-filter:blur(6px)}
+html.similarity-active .file-card>.similarity-score{display:none!important}
 `;
 document.head.append(style);
 
@@ -117,23 +113,6 @@ async function loadFingerprints() {
       .filter(row => row.version === PHASH_VERSION && /^[0-9a-f]{16}$/.test(String(row.value || '')))
       .map(row => [String(row.hash), String(row.value)]));
   } finally { db.close(); }
-}
-
-async function saveFingerprints(rows) {
-  if (!rows.length) return;
-  const db = await openDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    const store = tx.objectStore(STORE);
-    for (const row of rows) {
-      const request = store.get(row.hash);
-      request.onsuccess = () => store.put({ ...(request.result || {}), ...row });
-      request.onerror = () => tx.abort();
-    }
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error || new Error('Could not save similarity fingerprints'));
-  }).finally(() => db.close());
 }
 
 function modelImages() {
@@ -209,103 +188,53 @@ function cachedResult(key, images) {
   };
 }
 
-async function pixels(hash, signal) {
-  const response = await fetch(`/api/thumbs/${hash}?v=${THUMB_VERSION}`, { cache:'force-cache', signal });
-  if (!response.ok) return null;
-  const blob = await response.blob();
-  let image = null;
-  let url = '';
-  try {
-    if ('createImageBitmap' in window) image = await createImageBitmap(blob);
-    else {
-      url = URL.createObjectURL(blob);
-      image = new Image();
-      image.src = url;
-      await new Promise((resolve, reject) => {
-        image.onload = resolve;
-        image.onerror = reject;
-        signal?.addEventListener('abort', () => reject(signal.reason || new DOMException('Aborted','AbortError')), { once:true });
-      });
-    }
-    const canvas = typeof OffscreenCanvas === 'function'
-      ? new OffscreenCanvas(SAMPLE, SAMPLE)
-      : Object.assign(document.createElement('canvas'), { width:SAMPLE, height:SAMPLE });
-    const context = canvas.getContext('2d', { willReadFrequently:true, alpha:false });
-    context.drawImage(image, 0, 0, SAMPLE, SAMPLE);
-    return context.getImageData(0, 0, SAMPLE, SAMPLE).data;
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    return null;
-  } finally {
-    image?.close?.();
-    if (url) URL.revokeObjectURL(url);
-  }
-}
-
-function pHash(data) {
-  const gray = new Float64Array(SAMPLE * SAMPLE);
-  for (let pixel = 0, index = 0; index < gray.length; index++, pixel += 4) gray[index] = data[pixel] * .299 + data[pixel + 1] * .587 + data[pixel + 2] * .114;
-
-  const horizontal = new Float64Array(SAMPLE * LOW);
-  for (let y = 0; y < SAMPLE; y++) for (let u = 0; u < LOW; u++) {
-    let sum = 0;
-    for (let x = 0; x < SAMPLE; x++) sum += gray[y * SAMPLE + x] * COS[u][x];
-    horizontal[y * LOW + u] = sum * SCALE[u];
-  }
-
-  const low = new Float64Array(LOW * LOW);
-  for (let v = 0; v < LOW; v++) for (let u = 0; u < LOW; u++) {
-    let sum = 0;
-    for (let y = 0; y < SAMPLE; y++) sum += horizontal[y * LOW + u] * COS[v][y];
-    low[v * LOW + u] = sum * SCALE[v];
-  }
-
-  const values = [...low.slice(1)].sort((a, b) => a - b);
-  const median = values[Math.floor(values.length / 2)];
-  let hex = '';
-  for (let nibble = 0; nibble < 16; nibble++) {
-    let value = 0;
-    for (let bit = 0; bit < 4; bit++) {
-      const index = nibble * 4 + bit;
-      if (index && low[index] > median) value |= 1 << (3 - bit);
-    }
-    hex += value.toString(16);
-  }
-  return hex;
-}
-
-async function fingerprint(hash, signal) {
-  const data = await pixels(hash, signal);
-  return data ? pHash(data) : '';
-}
-
 function updateProgress(done, total, text) {
   status.textContent = text;
   progress.style.width = `${total ? Math.max(2, Math.min(100, done / total * 100)) : 0}%`;
 }
 
+function preindexFingerprints(images, signal) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./similarity-fingerprint-worker.js', import.meta.url), { type:'module' });
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abort);
+      worker.terminate();
+      callback(value);
+    };
+    const abort = () => finish(reject, signal?.reason || new DOMException('Aborted', 'AbortError'));
+    if (signal?.aborted) return abort();
+    signal?.addEventListener('abort', abort, { once:true });
+    worker.onerror = event => finish(reject, new Error(event.message || 'Similarity fingerprint worker failed'));
+    worker.onmessage = event => {
+      const data = event.data || {};
+      if (data.type === 'progress') {
+        const done = Number(data.done) || 0;
+        const total = Number(data.total) || images.length;
+        updateProgress(done, total, `Indexing thumbnails · ${done.toLocaleString()} / ${total.toLocaleString()}`);
+        return;
+      }
+      if (data.type === 'error') return finish(reject, new Error(data.error || 'Could not index similarity fingerprints'));
+      if (data.type === 'ready') finish(resolve, data.result || {});
+    };
+    worker.postMessage({ hashes:images.map(file => file.hash) });
+  });
+}
+
 async function ensureFingerprints(images, signal, mine) {
-  const fingerprints = await loadFingerprints();
+  let fingerprints = await loadFingerprints();
   if (mine !== generation || signal.aborted) return null;
   const missing = images.filter(file => !fingerprints.has(file.hash));
-  let done = images.length - missing.length;
-  let unavailable = 0;
-  updateProgress(done, images.length, `Indexing thumbnails · ${done.toLocaleString()} / ${images.length.toLocaleString()}`);
-
-  for (let offset = 0; offset < missing.length; offset += INDEX_BATCH) {
+  if (missing.length) {
+    updateProgress(images.length - missing.length, images.length, `Indexing thumbnails · ${(images.length - missing.length).toLocaleString()} / ${images.length.toLocaleString()}`);
+    await preindexFingerprints(images, signal);
     if (mine !== generation || signal.aborted) return null;
-    const chunk = missing.slice(offset, offset + INDEX_BATCH);
-    const rows = (await Promise.all(chunk.map(async file => {
-      const value = await fingerprint(file.hash, signal);
-      return value ? { hash:file.hash, value, version:PHASH_VERSION, updatedAt:Date.now() } : null;
-    }))).filter(Boolean);
-    for (const row of rows) fingerprints.set(row.hash, row.value);
-    unavailable += chunk.length - rows.length;
-    await saveFingerprints(rows);
-    done += chunk.length;
-    updateProgress(done, images.length, `Indexing thumbnails · ${done.toLocaleString()} / ${images.length.toLocaleString()}${unavailable ? ` · ${unavailable.toLocaleString()} unavailable` : ''}`);
-    await new Promise(resolve => requestAnimationFrame(resolve));
+    fingerprints = await loadFingerprints();
   }
+  const unavailable = images.reduce((total, file) => total + (fingerprints.has(file.hash) ? 0 : 1), 0);
+  updateProgress(images.length, images.length, `Indexed ${(images.length - unavailable).toLocaleString()} / ${images.length.toLocaleString()} thumbnails${unavailable ? ` · ${unavailable.toLocaleString()} unavailable` : ''}`);
   return { fingerprints, unavailable };
 }
 
@@ -363,7 +292,7 @@ function tuple(file) {
 }
 
 function decorate(root = files) {
-  if (!active || !root) return;
+  if (!active || !root || document.documentElement.classList.contains('similarity-active')) return;
   const cards = [];
   if (root instanceof Element && root.matches?.('.file-card[data-hash]')) cards.push(root);
   root.querySelectorAll?.('.file-card[data-hash]').forEach(card => cards.push(card));
@@ -591,6 +520,27 @@ function install(result, images, resetScroll, key) {
   });
 }
 
+function pause(reason = 'external') {
+  reason = String(reason || 'external');
+  if (pauseReasons.has(reason)) return;
+  pauseReasons.add(reason);
+  clearTimeout(rerunTimer);
+  if (!indexing) return;
+  generation++;
+  controller?.abort();
+  controller = null;
+  indexing = false;
+  runningKey = '';
+  document.documentElement.classList.remove('similarity-sort-indexing');
+  if (!active) bar.hidden = true;
+}
+
+function resume(reason = 'external') {
+  pauseReasons.delete(String(reason || 'external'));
+  if (pauseReasons.size || !wanted || sort?.value !== 'similar') return;
+  scheduleActivate(40, false);
+}
+
 function deactivate() {
   generation++;
   clearTimeout(rerunTimer);
@@ -618,7 +568,7 @@ function deactivate() {
 }
 
 async function activate() {
-  if (!wanted || sort?.value !== 'similar' || document.documentElement.classList.contains('similarity-active')) return;
+  if (pauseReasons.size || !wanted || sort?.value !== 'similar' || document.documentElement.classList.contains('similarity-active')) return;
   const gridButton = views?.querySelector('[data-view="grid"]');
   if (!gridButton?.classList.contains('active')) {
     gridButton?.click();
@@ -675,11 +625,11 @@ async function activate() {
 
   try {
     const indexed = await ensureFingerprints(images, signal, mine);
-    if (!indexed || mine !== generation || signal.aborted || !wanted) return;
+    if (!indexed || mine !== generation || signal.aborted || !wanted || pauseReasons.size || document.documentElement.classList.contains('similarity-active')) return;
     updateProgress(images.length, images.length, 'Building visual groups…');
     await new Promise(resolve => requestAnimationFrame(resolve));
     const result = await buildGroupsInWorker(images, indexed.fingerprints, MODES[mode], signal);
-    if (mine !== generation || signal.aborted || !wanted) return;
+    if (mine !== generation || signal.aborted || !wanted || pauseReasons.size || document.documentElement.classList.contains('similarity-active')) return;
     cacheResult(key, result);
     install(result, images, resetScroll, key);
   } catch (error) {
@@ -695,8 +645,8 @@ async function activate() {
 
 function scheduleActivate(delay = 0, resetScroll = false) {
   clearTimeout(rerunTimer);
-  if (!wanted || sort?.value !== 'similar') return;
   resetScrollNext ||= resetScroll;
+  if (!wanted || sort?.value !== 'similar' || pauseReasons.size) return;
   bar.hidden = false;
   if (!active) document.documentElement.classList.add('similarity-sort-indexing');
   rerunTimer = setTimeout(activate, Math.max(0, delay));
@@ -826,7 +776,7 @@ rail.addEventListener('click', event => {
 }, true);
 
 new MutationObserver(records => {
-  if (!active) return;
+  if (!active || document.documentElement.classList.contains('similarity-active')) return;
   for (const record of records) for (const node of record.addedNodes) if (node instanceof Element) decorate(node);
 }).observe(files, { childList:true, subtree:true });
 
@@ -837,7 +787,7 @@ window.addEventListener('scroll', () => {
   refreshPendingScrollAnchor();
 }, { passive:true });
 window.addEventListener('mochimono:stable-grid-installed', () => {
-  if (!active) return;
+  if (!active || document.documentElement.classList.contains('similarity-active')) return;
   requestAnimationFrame(() => {
     decorate(files);
     buildRail();
@@ -853,6 +803,9 @@ window.mochimonoSimilaritySort = {
   mode:() => mode,
   groups:() => groupInfo.map(group => ({ ...group })),
   refresh:() => scheduleActivate(0, false),
+  pause,
+  resume,
+  paused:() => [...pauseReasons],
   cache:() => ({ entries:resultCache.size, runningKey, installedKey })
 };
 
