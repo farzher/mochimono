@@ -159,7 +159,7 @@ function hashText(value, seed) {
 }
 
 function imageIdentity(images) {
-  const tokens = images.map(file => `${file.hash}:${file.width}x${file.height}`).sort();
+  const tokens = images.map(file => `${file.hash}:${file.width}x${file.height}:${file.dateMs}`).sort();
   let left = 2166136261;
   let right = 2246822507;
   for (const token of tokens) {
