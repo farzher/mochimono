@@ -13,11 +13,10 @@ const DB_NAME = 'mochimono-visual-similarity';
 const DB_VERSION = 1;
 const STORE = 'fingerprints';
 const ROBUST_VERSION = 'phash32-dct16-v1';
-const COLOR_VERSION = 'oklab-grid4-v2';
+const FEATURE_VERSION = 'layout-edge-palette-v3';
 const THUMB_VERSION = 3;
 const MAX_RESULTS = 500;
-const MIN_SHORTLIST = 1200;
-const SHORTLIST_MULTIPLIER = 4;
+const HUE_BINS = 24;
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const POPCOUNT16 = new Uint8Array(1 << 16);
 for (let value = 1; value < POPCOUNT16.length; value++) POPCOUNT16[value] = POPCOUNT16[value >> 1] + (value & 1);
@@ -67,6 +66,19 @@ findButton.textContent = 'Find similar';
 findButton.title = 'Find visually similar images';
 findButton.hidden = true;
 if (viewerMenu) viewerMenu.insertBefore(findButton, viewerInfoButton || viewerMenu.firstChild);
+
+const clamp = (value, low = 0, high = 1) => Math.max(low, Math.min(high, value));
+const uq01 = value => (Number(value) || 0) / 255;
+const uab = value => (Number(value) || 0) / 255 * .7 - .35;
+const robustWords = value => Array.from({ length:16 }, (_, index) => parseInt(value.slice(index * 4, index * 4 + 4), 16));
+const aspectFor = file => Math.max(1e-6, (Number(file?.width) || 1) / (Number(file?.height) || 1));
+const aspectDistance = (left, right) => Math.min(2, Math.abs(Math.log2(left / right))) / 2;
+
+function hamming(left, right) {
+  let total = 0;
+  for (let index = 0; index < left.length; index++) total += POPCOUNT16[left[index] ^ right[index]];
+  return total;
+}
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -178,7 +190,7 @@ function workerMedia(file) {
   };
 }
 
-function indexDescriptors(media, mode, signal, label) {
+function indexDescriptors(media, signal) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./visual-order-worker.js', import.meta.url), { type:'module' });
     let settled = false;
@@ -200,128 +212,115 @@ function indexDescriptors(media, mode, signal, label) {
         const done = Number(data.done) || 0;
         const total = Number(data.total) || media.length;
         if (data.stage === 'ordering') return finish(resolve);
-        setProgress(done, total, `${label} · ${done.toLocaleString()} / ${total.toLocaleString()}`);
+        setProgress(done, total, `Reading visual descriptors · ${done.toLocaleString()} / ${total.toLocaleString()}`);
         return;
       }
       if (data.type === 'result') finish(resolve);
     };
-    worker.postMessage({ media, mode });
+    worker.postMessage({ media, mode:'flow' });
   });
 }
 
-function validRobust(row) {
-  return row?.robustVersion === ROBUST_VERSION && /^[0-9a-f]{64}$/.test(String(row.robust || ''));
+function validFeature(value) {
+  return value?.version === FEATURE_VERSION &&
+    Array.isArray(value.layout) && value.layout.length === 48 && value.layout.every(Number.isFinite) &&
+    Array.isArray(value.edges) && value.edges.length === 64 && value.edges.every(Number.isFinite) &&
+    Array.isArray(value.energy) && value.energy.length === 16 && value.energy.every(Number.isFinite) &&
+    Array.isArray(value.hues) && value.hues.length === HUE_BINS && value.hues.every(Number.isFinite) &&
+    ['meanLuma','contrast','colorfulness','edgeDensity'].every(key => Number.isFinite(value[key]));
 }
 
-function validColor(row) {
-  const value = row?.visualColor;
-  return row?.visualColorVersion === COLOR_VERSION && Boolean(value) &&
-    Array.isArray(value.grid) && value.grid.length === 15 && value.grid.every(Number.isFinite) &&
-    ['meanChroma','colorFraction','meanSpread','dominantHue','dominantStrength'].every(key => Number.isFinite(value[key]));
+function descriptor(file, row) {
+  if (!validFeature(row?.visualFeature)) return null;
+  const robust = row?.robustVersion === ROBUST_VERSION && /^[0-9a-f]{64}$/.test(String(row.robust || ''))
+    ? robustWords(String(row.robust)) : null;
+  return { file, feature:row.visualFeature, robust, aspect:aspectFor(file) };
 }
 
-function robustWords(value) {
-  return Array.from({ length:16 }, (_, index) => parseInt(value.slice(index * 4, index * 4 + 4), 16));
-}
-
-function hamming(left, right) {
-  let total = 0;
-  for (let index = 0; index < left.length; index++) total += POPCOUNT16[left[index] ^ right[index]];
-  return total;
-}
-
-function aspectFor(file) {
-  return Math.max(1e-6, (Number(file?.width) || 1) / (Number(file?.height) || 1));
-}
-
-function aspectDistance(left, right) {
-  return Math.abs(Math.log2(left / right));
-}
-
-function colorDistance(left, right) {
-  if (!left || !right) return 0;
-  let spatial = 0;
-  for (let block = 0; block < 5; block++) {
-    const offset = block * 3;
-    const dL = left.grid[offset] - right.grid[offset];
-    const da = left.grid[offset + 1] - right.grid[offset + 1];
-    const db = left.grid[offset + 2] - right.grid[offset + 2];
-    const distance = Math.sqrt(dL * dL * 1.15 + da * da * 1.8 + db * db * 1.8);
-    spatial += block ? distance : distance * 2.2;
+function layoutDistances(left, right) {
+  let color = 0;
+  let luma = 0;
+  for (let cell = 0; cell < 16; cell++) {
+    const offset = cell * 3;
+    const lL = uq01(left.layout[offset]);
+    const rL = uq01(right.layout[offset]);
+    const la = uab(left.layout[offset + 1]);
+    const ra = uab(right.layout[offset + 1]);
+    const lb = uab(left.layout[offset + 2]);
+    const rb = uab(right.layout[offset + 2]);
+    const dL = lL - rL;
+    const da = la - ra;
+    const db = lb - rb;
+    const center = cell === 5 || cell === 6 || cell === 9 || cell === 10;
+    const weight = center ? 1.25 : 1;
+    color += Math.sqrt(dL * dL + da * da * 2.2 + db * db * 2.2) * weight;
+    luma += Math.abs(dL) * weight;
   }
-  return Math.min(128, spatial / 6.2 * 220);
+  return { color:clamp(color / 17), luma:clamp(luma / 17) };
 }
 
-function roughDistance(target, candidate) {
-  const structure = hamming(target.words, candidate.words);
-  const aspect = Math.min(3, aspectDistance(target.aspect, candidate.aspect));
-  return structure + aspect * 4;
+function edgeDistance(left, right) {
+  let orientation = 0;
+  let energy = 0;
+  for (let cell = 0; cell < 16; cell++) {
+    let local = 0;
+    for (let bin = 0; bin < 4; bin++) local += Math.abs(uq01(left.edges[cell * 4 + bin]) - uq01(right.edges[cell * 4 + bin]));
+    orientation += Math.min(1, local / 2);
+    energy += Math.abs(uq01(left.energy[cell]) - uq01(right.energy[cell]));
+  }
+  return clamp((orientation / 16) * .78 + (energy / 16) * .22);
 }
 
-function flowDistance(target, candidate) {
-  const structure = hamming(target.words, candidate.words);
-  const aspect = Math.min(3, aspectDistance(target.aspect, candidate.aspect));
-  const color = colorDistance(target.color, candidate.color);
-  return structure * .72 + color * .28 + aspect * 2.5;
+function hueDistance(left, right) {
+  let distance = 0;
+  for (let index = 0; index < HUE_BINS; index++) distance += Math.abs(uq01(left.hues[index]) - uq01(right.hues[index]));
+  return clamp(distance / 2);
+}
+
+function statsDistance(left, right) {
+  return clamp((
+    Math.abs(uq01(left.contrast) - uq01(right.contrast)) +
+    Math.abs(uq01(left.colorfulness) - uq01(right.colorfulness)) +
+    Math.abs(uq01(left.edgeDensity) - uq01(right.edgeDensity))
+  ) / 3);
+}
+
+function visualDistance(left, right) {
+  const layout = layoutDistances(left.feature, right.feature);
+  const edges = edgeDistance(left.feature, right.feature);
+  const hues = hueDistance(left.feature, right.feature);
+  const stats = statsDistance(left.feature, right.feature);
+  const robust = left.robust && right.robust ? hamming(left.robust, right.robust) / 256 : .5;
+  const aspect = aspectDistance(left.aspect, right.aspect);
+  return layout.color * .30 + edges * .23 + hues * .18 + layout.luma * .10 + stats * .08 + robust * .05 + aspect * .06;
 }
 
 function similarityScore(distance) {
-  return Math.max(0, Math.min(100, Math.round(100 - Math.min(128, distance) * 100 / 128)));
-}
-
-function descriptor(file, row, needColor = false) {
-  if (!validRobust(row) || (needColor && !validColor(row))) return null;
-  return {
-    file,
-    words:robustWords(String(row.robust)),
-    aspect:aspectFor(file),
-    color:needColor ? row.visualColor : null
-  };
+  return Math.max(0, Math.min(100, Math.round((1 - clamp(distance)) * 100)));
 }
 
 async function rankCandidates(candidates, signal) {
   const media = [...candidates.values()].map(workerMedia);
-  let rows = await loadDescriptorRows();
-  if (media.some(file => !validRobust(rows.get(file.hash)))) {
-    await indexDescriptors(media, 'structure', signal, 'Indexing structure');
-    if (signal.aborted) throw signal.reason || new DOMException('Aborted','AbortError');
-    rows = await loadDescriptorRows();
-  }
+  await indexDescriptors(media, signal);
+  if (signal.aborted) throw signal.reason || new DOMException('Aborted','AbortError');
 
+  const rows = await loadDescriptorRows();
   const targetFile = candidates.get(targetHash);
   const target = descriptor(targetFile, rows.get(targetHash));
-  if (!target) throw new Error('This image has no usable thumbnail yet.');
+  if (!target) throw new Error('This image has no usable visual descriptor yet.');
 
-  const rough = [];
+  const ranked = [];
+  let indexed = 0;
   for (const file of candidates.values()) {
     if (file.hash === targetHash) continue;
     const value = descriptor(file, rows.get(file.hash));
     if (!value) continue;
-    rough.push({ file, distance:roughDistance(target, value) });
-  }
-  rough.sort((a, b) => a.distance - b.distance || String(a.file.hash).localeCompare(String(b.file.hash)));
-
-  const shortlistSize = Math.min(rough.length, Math.max(MIN_SHORTLIST, MAX_RESULTS * SHORTLIST_MULTIPLIER));
-  const shortlist = rough.slice(0, shortlistSize).map(item => item.file);
-  const colorMedia = [targetFile, ...shortlist].map(workerMedia);
-  if (colorMedia.some(file => !validRobust(rows.get(file.hash)) || !validColor(rows.get(file.hash)))) {
-    await indexDescriptors(colorMedia, 'flow', signal, 'Refining color');
-    if (signal.aborted) throw signal.reason || new DOMException('Aborted','AbortError');
-    rows = await loadDescriptorRows();
-  }
-
-  const refinedTarget = descriptor(targetFile, rows.get(targetHash), true);
-  if (!refinedTarget) throw new Error('This image has no usable visual descriptor yet.');
-
-  const ranked = [];
-  for (const file of shortlist) {
-    const value = descriptor(file, rows.get(file.hash), true);
-    if (!value) continue;
-    const distance = flowDistance(refinedTarget, value);
+    indexed++;
+    const distance = visualDistance(target, value);
     ranked.push({ file, distance, score:similarityScore(distance) });
   }
   ranked.sort((a, b) => a.distance - b.distance || String(a.file.hash).localeCompare(String(b.file.hash)));
-  return { ranked:ranked.slice(0, MAX_RESULTS), indexed:rough.length };
+  return { ranked:ranked.slice(0, MAX_RESULTS), indexed };
 }
 
 function setProgress(done, total, text) {
@@ -336,7 +335,7 @@ function fileTuple(file) {
 
 function modelForResults() {
   return {
-    version:`similarity-find:${targetHash}:${generation}`,
+    version:`similarity-find-v3:${targetHash}:${generation}`,
     sort:`similarity-find:${targetHash}`,
     items:resultOrder.map(hash => fileTuple(resultFiles.get(hash)))
   };
@@ -475,7 +474,7 @@ async function startSimilarity(hash, name) {
     scores = new Map(result.ranked.map(item => [item.file.hash, item.score]));
     indexing = false;
     document.documentElement.classList.remove('similarity-indexing');
-    setProgress(result.indexed, result.indexed, `${result.indexed.toLocaleString()} indexed · showing closest ${resultOrder.length.toLocaleString()}`);
+    setProgress(result.indexed, result.indexed, `${result.indexed.toLocaleString()} compared · showing closest ${resultOrder.length.toLocaleString()}`);
     installResultsModel();
   } catch (error) {
     if (mine !== generation || signal.aborted) return;
