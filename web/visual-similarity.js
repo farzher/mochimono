@@ -12,16 +12,15 @@ const rail = document.querySelector('#dateRail');
 const DB_NAME = 'mochimono-visual-similarity';
 const DB_VERSION = 1;
 const STORE = 'fingerprints';
-const PHASH_VERSION = 'phash16-dct8-v1';
+const ROBUST_VERSION = 'phash32-dct16-v1';
+const COLOR_VERSION = 'oklab-grid4-v2';
 const THUMB_VERSION = 3;
-const SAMPLE = 16;
-const LOW = 8;
-const BATCH = 16;
 const MAX_RESULTS = 500;
+const MIN_SHORTLIST = 1200;
+const SHORTLIST_MULTIPLIER = 4;
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
-const POPCOUNT = [0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4];
-const COS = Array.from({ length:LOW }, (_, u) => Array.from({ length:SAMPLE }, (_, x) => Math.cos((2 * x + 1) * u * Math.PI / (2 * SAMPLE))));
-const SCALE = Array.from({ length:LOW }, (_, u) => u === 0 ? Math.sqrt(1 / SAMPLE) : Math.sqrt(2 / SAMPLE));
+const POPCOUNT16 = new Uint8Array(1 << 16);
+for (let value = 1; value < POPCOUNT16.length; value++) POPCOUNT16[value] = POPCOUNT16[value >> 1] + (value & 1);
 
 let active = false;
 let indexing = false;
@@ -34,6 +33,10 @@ let resultOrder = [];
 let scores = new Map();
 let baseScrollY = 0;
 let installingModel = false;
+let resultModel = null;
+let resetResultsScroll = false;
+let wrappedGrid = null;
+let originalSetModel = null;
 
 const style = document.createElement('style');
 style.textContent = `
@@ -58,14 +61,16 @@ const findButton = document.createElement('button');
 findButton.type = 'button';
 findButton.className = 'viewer-menu-action';
 findButton.textContent = 'Find similar';
-findButton.title = 'Find visually similar images using thumbnail perceptual hashes';
+findButton.title = 'Find visually similar images';
 findButton.hidden = true;
 if (viewerMenu) viewerMenu.insertBefore(findButton, viewerInfoButton || viewerMenu.firstChild);
 
 function openDb() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => request.result.createObjectStore(STORE, { keyPath:'hash' });
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE, { keyPath:'hash' });
+    };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
@@ -79,25 +84,12 @@ function all(store) {
   });
 }
 
-async function loadFingerprints() {
+async function loadDescriptorRows() {
   const db = await openDb();
   try {
     const rows = await all(db.transaction(STORE, 'readonly').objectStore(STORE));
-    return new Map(rows.filter(row => row.version === PHASH_VERSION && /^[0-9a-f]{16}$/.test(String(row.value || ''))).map(row => [row.hash, row.value]));
+    return new Map(rows.map(row => [String(row.hash || ''), row]));
   } finally { db.close(); }
-}
-
-async function saveFingerprints(rows) {
-  if (!rows.length) return;
-  const db = await openDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    const store = tx.objectStore(STORE);
-    for (const row of rows) store.put(row);
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error || new Error('Could not save visual fingerprints'));
-  }).finally(() => db.close());
 }
 
 function extension(name) {
@@ -171,86 +163,157 @@ async function candidateImages() {
   return result;
 }
 
-async function pixels(hash, signal) {
-  const response = await fetch(`/api/thumbs/${hash}?v=${THUMB_VERSION}`, { cache:'force-cache', signal });
-  if (!response.ok) return null;
-  const blob = await response.blob();
-  let image = null;
-  let objectUrl = '';
-  try {
-    if ('createImageBitmap' in window) image = await createImageBitmap(blob);
-    else {
-      objectUrl = URL.createObjectURL(blob);
-      image = new Image();
-      image.src = objectUrl;
-      await new Promise((resolve, reject) => {
-        image.onload = resolve;
-        image.onerror = reject;
-        signal?.addEventListener('abort', () => reject(signal.reason || new DOMException('Aborted','AbortError')), { once:true });
-      });
-    }
-    const canvas = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(SAMPLE, SAMPLE) : Object.assign(document.createElement('canvas'), { width:SAMPLE, height:SAMPLE });
-    const context = canvas.getContext('2d', { willReadFrequently:true, alpha:false });
-    context.drawImage(image, 0, 0, SAMPLE, SAMPLE);
-    return context.getImageData(0, 0, SAMPLE, SAMPLE).data;
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    return null;
-  } finally {
-    image?.close?.();
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
-  }
+function workerMedia(file) {
+  return {
+    hash:String(file.hash || ''),
+    filename:String(file.filename || file.hash || ''),
+    type:'image',
+    width:Number(file.width) || 0,
+    height:Number(file.height) || 0,
+    dateMs:Date.parse(file.fileDate || file.createdAt || 0) || Number(file.dateMs) || 0,
+    size:Number(file.size) || 0
+  };
 }
 
-function pHash(data) {
-  const gray = new Float64Array(SAMPLE * SAMPLE);
-  for (let pixel = 0, index = 0; index < gray.length; index++, pixel += 4) gray[index] = data[pixel] * .299 + data[pixel + 1] * .587 + data[pixel + 2] * .114;
-
-  const horizontal = new Float64Array(SAMPLE * LOW);
-  for (let y = 0; y < SAMPLE; y++) {
-    for (let u = 0; u < LOW; u++) {
-      let sum = 0;
-      for (let x = 0; x < SAMPLE; x++) sum += gray[y * SAMPLE + x] * COS[u][x];
-      horizontal[y * LOW + u] = sum * SCALE[u];
-    }
-  }
-
-  const low = new Float64Array(LOW * LOW);
-  for (let v = 0; v < LOW; v++) {
-    for (let u = 0; u < LOW; u++) {
-      let sum = 0;
-      for (let y = 0; y < SAMPLE; y++) sum += horizontal[y * LOW + u] * COS[v][y];
-      low[v * LOW + u] = sum * SCALE[v];
-    }
-  }
-
-  const medianValues = [...low.slice(1)].sort((a, b) => a - b);
-  const median = medianValues[Math.floor(medianValues.length / 2)];
-  let hex = '';
-  for (let nibble = 0; nibble < 16; nibble++) {
-    let value = 0;
-    for (let bit = 0; bit < 4; bit++) {
-      const index = nibble * 4 + bit;
-      if (index && low[index] > median) value |= 1 << (3 - bit);
-    }
-    hex += value.toString(16);
-  }
-  return hex;
+function indexDescriptors(media, mode, signal, label) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./visual-order-worker.js', import.meta.url), { type:'module' });
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abort);
+      worker.terminate();
+      callback(value);
+    };
+    const abort = () => finish(reject, signal?.reason || new DOMException('Aborted','AbortError'));
+    if (signal?.aborted) return abort();
+    signal?.addEventListener('abort', abort, { once:true });
+    worker.onerror = event => finish(reject, new Error(event.message || 'Visual descriptor worker failed'));
+    worker.onmessage = event => {
+      const data = event.data || {};
+      if (data.type === 'error') return finish(reject, new Error(data.error || 'Could not index visual descriptors'));
+      if (data.type === 'progress') {
+        const done = Number(data.done) || 0;
+        const total = Number(data.total) || media.length;
+        if (data.stage === 'ordering') return finish(resolve);
+        setProgress(done, total, `${label} · ${done.toLocaleString()} / ${total.toLocaleString()}`);
+        return;
+      }
+      if (data.type === 'result') finish(resolve);
+    };
+    worker.postMessage({ media, mode });
+  });
 }
 
-async function fingerprint(hash, signal) {
-  const data = await pixels(hash, signal);
-  return data ? pHash(data) : '';
+function validRobust(row) {
+  return row?.robustVersion === ROBUST_VERSION && /^[0-9a-f]{64}$/.test(String(row.robust || ''));
 }
 
-function distance(left, right) {
+function validColor(row) {
+  const value = row?.visualColor;
+  return row?.visualColorVersion === COLOR_VERSION && Boolean(value) &&
+    Array.isArray(value.grid) && value.grid.length === 15 && value.grid.every(Number.isFinite) &&
+    ['meanChroma','colorFraction','meanSpread','dominantHue','dominantStrength'].every(key => Number.isFinite(value[key]));
+}
+
+function robustWords(value) {
+  return Array.from({ length:16 }, (_, index) => parseInt(value.slice(index * 4, index * 4 + 4), 16));
+}
+
+function hamming(left, right) {
   let total = 0;
-  for (let index = 0; index < 16; index++) total += POPCOUNT[parseInt(left[index], 16) ^ parseInt(right[index], 16)];
+  for (let index = 0; index < left.length; index++) total += POPCOUNT16[left[index] ^ right[index]];
   return total;
 }
 
-function score(distance) {
-  return Math.max(0, Math.round(100 - distance * 4));
+function aspectFor(file) {
+  return Math.max(1e-6, (Number(file?.width) || 1) / (Number(file?.height) || 1));
+}
+
+function aspectDistance(left, right) {
+  return Math.abs(Math.log2(left / right));
+}
+
+function colorDistance(left, right) {
+  if (!left || !right) return 0;
+  let spatial = 0;
+  for (let block = 0; block < 5; block++) {
+    const offset = block * 3;
+    const dL = left.grid[offset] - right.grid[offset];
+    const da = left.grid[offset + 1] - right.grid[offset + 1];
+    const db = left.grid[offset + 2] - right.grid[offset + 2];
+    const distance = Math.sqrt(dL * dL * 1.15 + da * da * 1.8 + db * db * 1.8);
+    spatial += block ? distance : distance * 2.2;
+  }
+  return Math.min(128, spatial / 6.2 * 220);
+}
+
+function roughDistance(target, candidate) {
+  const structure = hamming(target.words, candidate.words);
+  const aspect = Math.min(3, aspectDistance(target.aspect, candidate.aspect));
+  return structure + aspect * 4;
+}
+
+function flowDistance(target, candidate) {
+  const structure = hamming(target.words, candidate.words);
+  const aspect = Math.min(3, aspectDistance(target.aspect, candidate.aspect));
+  const color = colorDistance(target.color, candidate.color);
+  return structure * .72 + color * .28 + aspect * 2.5;
+}
+
+function similarityScore(distance) {
+  return Math.max(0, Math.min(100, Math.round(100 - Math.min(128, distance) * 100 / 128)));
+}
+
+function descriptor(file, row, needColor = false) {
+  if (!validRobust(row) || (needColor && !validColor(row))) return null;
+  return {
+    file,
+    words:robustWords(String(row.robust)),
+    aspect:aspectFor(file),
+    color:needColor ? row.visualColor : null
+  };
+}
+
+async function rankCandidates(candidates, signal) {
+  const media = [...candidates.values()].map(workerMedia);
+  await indexDescriptors(media, 'structure', signal, 'Indexing structure');
+  if (signal.aborted) throw signal.reason || new DOMException('Aborted','AbortError');
+
+  let rows = await loadDescriptorRows();
+  const targetFile = candidates.get(targetHash);
+  const target = descriptor(targetFile, rows.get(targetHash));
+  if (!target) throw new Error('This image has no usable thumbnail yet.');
+
+  const rough = [];
+  for (const file of candidates.values()) {
+    if (file.hash === targetHash) continue;
+    const value = descriptor(file, rows.get(file.hash));
+    if (!value) continue;
+    rough.push({ file, distance:roughDistance(target, value) });
+  }
+  rough.sort((a, b) => a.distance - b.distance || String(a.file.hash).localeCompare(String(b.file.hash)));
+
+  const shortlistSize = Math.min(rough.length, Math.max(MIN_SHORTLIST, MAX_RESULTS * SHORTLIST_MULTIPLIER));
+  const shortlist = rough.slice(0, shortlistSize).map(item => item.file);
+  const colorMedia = [targetFile, ...shortlist].map(workerMedia);
+  await indexDescriptors(colorMedia, 'flow', signal, 'Refining color');
+  if (signal.aborted) throw signal.reason || new DOMException('Aborted','AbortError');
+
+  rows = await loadDescriptorRows();
+  const refinedTarget = descriptor(targetFile, rows.get(targetHash), true);
+  if (!refinedTarget) throw new Error('This image has no usable visual descriptor yet.');
+
+  const ranked = [];
+  for (const file of shortlist) {
+    const value = descriptor(file, rows.get(file.hash), true);
+    if (!value) continue;
+    const distance = flowDistance(refinedTarget, value);
+    ranked.push({ file, distance, score:similarityScore(distance) });
+  }
+  ranked.sort((a, b) => a.distance - b.distance || String(a.file.hash).localeCompare(String(b.file.hash)));
+  return { ranked:ranked.slice(0, MAX_RESULTS), indexed:rough.length };
 }
 
 function setProgress(done, total, text) {
@@ -259,30 +322,31 @@ function setProgress(done, total, text) {
 }
 
 function fileTuple(file) {
-  const date = Date.parse(file.fileDate || file.createdAt || 0) || 0;
+  const date = Date.parse(file.fileDate || file.createdAt || 0) || Number(file.dateMs) || 0;
   return [file.hash, file.filename || file.hash, 'image', Number(file.width) || 0, Number(file.height) || 0, date, Number(file.size) || 0];
 }
 
 function modelForResults() {
   return {
-    version:`similarity:${targetHash}:${generation}`,
-    sort:'similarity',
+    version:`similarity-find:${targetHash}:${generation}`,
+    sort:`similarity-find:${targetHash}`,
     items:resultOrder.map(hash => fileTuple(resultFiles.get(hash)))
   };
 }
 
 function installResultsModel() {
   if (!active || indexing) return;
-  const model = modelForResults();
+  resultModel = modelForResults();
   installingModel = true;
-  window.mochimonoGridModel = model;
-  window.mochimonoStableGrid?.setModel?.(model);
+  window.mochimonoGridModel = resultModel;
+  window.mochimonoStableGrid?.setModel?.(resultModel);
   installingModel = false;
+  resetResultsScroll = true;
   if (rail) rail.hidden = true;
   if (fileCount) {
     fileCount.hidden = false;
     fileCount.textContent = `${resultOrder.length.toLocaleString()} similar images`;
-    fileCount.title = `Closest perceptual matches to ${targetName}`;
+    fileCount.title = `Closest visual matches to ${targetName}`;
   }
   requestAnimationFrame(() => decorateScores(files));
 }
@@ -298,8 +362,7 @@ function decorateScores(root) {
     const badge = document.createElement('span');
     badge.className = 'similarity-score';
     badge.textContent = String(value);
-    const rawDistance = Math.round((100 - value) / 4);
-    badge.title = `Similarity ${value} · pHash distance ${rawDistance}`;
+    badge.title = `Visual similarity ${value}`;
     card.append(badge);
   }
 }
@@ -329,6 +392,8 @@ function exitSimilarity(restore = true) {
   resultFiles.clear();
   resultOrder = [];
   scores.clear();
+  resultModel = null;
+  resetResultsScroll = false;
   document.documentElement.classList.remove('similarity-active','similarity-indexing');
   bar.hidden = true;
   window.mochimonoSelection?.clear?.();
@@ -353,75 +418,34 @@ async function startSimilarity(hash, name) {
   resultFiles.clear();
   resultOrder = [];
   scores.clear();
+  resultModel = null;
+  resetResultsScroll = false;
   document.documentElement.classList.add('similarity-active','similarity-indexing');
   showBar(hash, targetName);
   setProgress(0, 1, 'Reading image catalog…');
   viewerClose?.click();
-  window.scrollTo({ top:Math.max(0, bar.getBoundingClientRect().top + scrollY - 70), behavior:'auto' });
 
   try {
     const candidates = await candidateImages();
     if (mine !== generation || signal.aborted) return;
     if (!candidates.has(hash)) candidates.set(hash, { hash, filename:targetName, mime:'image/*' });
-    const fingerprints = await loadFingerprints();
+    const result = await rankCandidates(candidates, signal);
     if (mine !== generation || signal.aborted) return;
 
-    const hashes = [...candidates.keys()];
-    let completed = hashes.reduce((count, value) => count + Number(fingerprints.has(value)), 0);
-    let unavailable = 0;
-    setProgress(completed, hashes.length, `Indexing thumbnails · ${completed.toLocaleString()} / ${hashes.length.toLocaleString()}`);
-
-    if (!fingerprints.has(hash)) {
-      const value = await fingerprint(hash, signal);
-      if (!value) throw new Error('This image has no usable thumbnail yet.');
-      fingerprints.set(hash, value);
-      await saveFingerprints([{ hash, value, version:PHASH_VERSION, updatedAt:Date.now() }]);
-      completed++;
-      setProgress(completed, hashes.length, `Indexing thumbnails · ${completed.toLocaleString()} / ${hashes.length.toLocaleString()}`);
-    }
-
-    const missing = hashes.filter(value => value !== hash && !fingerprints.has(value));
-    for (let offset = 0; offset < missing.length; offset += BATCH) {
-      if (mine !== generation || signal.aborted) return;
-      const chunk = missing.slice(offset, offset + BATCH);
-      const values = await Promise.all(chunk.map(async itemHash => {
-        const value = await fingerprint(itemHash, signal);
-        return value ? { hash:itemHash, value, version:PHASH_VERSION, updatedAt:Date.now() } : null;
-      }));
-      const good = values.filter(Boolean);
-      for (const row of good) fingerprints.set(row.hash, row.value);
-      unavailable += values.length - good.length;
-      await saveFingerprints(good);
-      completed += chunk.length;
-      setProgress(completed, hashes.length, `Indexing thumbnails · ${completed.toLocaleString()} / ${hashes.length.toLocaleString()}${unavailable ? ` · ${unavailable.toLocaleString()} unavailable` : ''}`);
-      await new Promise(resolve => requestAnimationFrame(resolve));
-    }
-
-    if (mine !== generation || signal.aborted) return;
-    const target = fingerprints.get(hash);
-    const ranked = [];
-    for (const [candidateHash, file] of candidates) {
-      if (candidateHash === hash) continue;
-      const value = fingerprints.get(candidateHash);
-      if (!value) continue;
-      const delta = distance(target, value);
-      ranked.push({ hash:candidateHash, file, distance:delta, score:score(delta) });
-    }
-    ranked.sort((a, b) => a.distance - b.distance || a.hash.localeCompare(b.hash));
-    const shown = ranked.slice(0, MAX_RESULTS);
-    resultFiles = new Map(shown.map(item => [item.hash, item.file]));
-    resultOrder = shown.map(item => item.hash);
-    scores = new Map(shown.map(item => [item.hash, item.score]));
+    resultFiles = new Map(result.ranked.map(item => [item.file.hash, item.file]));
+    resultOrder = result.ranked.map(item => item.file.hash);
+    scores = new Map(result.ranked.map(item => [item.file.hash, item.score]));
     indexing = false;
     document.documentElement.classList.remove('similarity-indexing');
-    setProgress(hashes.length, hashes.length, `${ranked.length.toLocaleString()} indexed matches${ranked.length > shown.length ? ` · showing closest ${shown.length.toLocaleString()}` : ''}${unavailable ? ` · ${unavailable.toLocaleString()} without thumbnails` : ''}`);
+    setProgress(result.indexed, result.indexed, `${result.indexed.toLocaleString()} indexed · showing closest ${resultOrder.length.toLocaleString()}`);
     installResultsModel();
-    window.scrollTo({ top:Math.max(0, bar.getBoundingClientRect().top + scrollY - 70), behavior:'auto' });
   } catch (error) {
     if (mine !== generation || signal.aborted) return;
     indexing = false;
     document.documentElement.classList.remove('similarity-indexing');
     setProgress(0, 1, error.message || 'Could not find similar images');
+  } finally {
+    if (mine === generation) controller = null;
   }
 }
 
@@ -444,6 +468,25 @@ function syncViewerNav() {
   const next = document.querySelector('#viewer-next');
   if (previous) previous.disabled = index <= 0;
   if (next) next.disabled = index < 0 || index >= resultOrder.length - 1;
+}
+
+function wrapStableGrid() {
+  const grid = window.mochimonoStableGrid;
+  if (!grid) {
+    requestAnimationFrame(wrapStableGrid);
+    return;
+  }
+  if (wrappedGrid === grid) return;
+  wrappedGrid = grid;
+  originalSetModel = grid.setModel.bind(grid);
+  grid.setModel = snapshot => {
+    const own = String(snapshot?.sort || '').startsWith('similarity-find');
+    if (active && !installingModel && !own) {
+      if (resultModel) window.mochimonoGridModel = resultModel;
+      return true;
+    }
+    return originalSetModel(snapshot);
+  };
 }
 
 findButton.addEventListener('click', event => {
@@ -504,9 +547,14 @@ viewer && new MutationObserver(() => {
 }).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
 viewerOpen && new MutationObserver(() => requestAnimationFrame(syncViewerNav)).observe(viewerOpen, { attributes:true, attributeFilter:['href'] });
 
-window.addEventListener('mochimono:grid-model', () => {
-  if (!active || indexing || installingModel) return;
-  requestAnimationFrame(installResultsModel);
+window.addEventListener('mochimono:stable-grid-installed', () => {
+  if (!active) return;
+  requestAnimationFrame(() => {
+    decorateScores(files);
+    if (!resetResultsScroll) return;
+    resetResultsScroll = false;
+    window.mochimonoStableGrid?.scrollToIndex?.(0, 'start');
+  });
 });
 
 for (const control of ['#source','#collectionFilter','#locationFilter','#typeFilter','#sort']) {
@@ -520,7 +568,8 @@ views?.addEventListener('click', event => {
 window.mochimonoVisualSimilarity = {
   active:() => active,
   close:() => exitSimilarity(true),
-  find:hash => startSimilarity(String(hash || ''), '')
+  find:(hash, name = '') => startSimilarity(String(hash || ''), String(name || ''))
 };
 
+wrapStableGrid();
 updateFindButton();
