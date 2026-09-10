@@ -6,10 +6,20 @@ const views = document.querySelector('#views');
 const fileCount = document.querySelector('#fileCount');
 const commandbar = document.querySelector('.commandbar');
 const dateRail = document.querySelector('#dateRail');
+const mediaSize = document.querySelector('#mediaSize');
 
+const MODE_KEY = 'mochimono-visual-order-mode';
 const RESULT_CACHE_LIMIT = 6;
-const DESCRIPTION = 'Color + visual similarity';
+const MODES = {
+  flow:{ label:'Flow', description:'Visual neighborhoods + color' },
+  structure:{ label:'Structure', description:'Shape and composition' },
+  color:{ label:'Color', description:'Color wheel' }
+};
 
+let mode = (() => {
+  const saved = localStorage.getItem(MODE_KEY);
+  return MODES[saved] ? saved : 'flow';
+})();
 let wanted = false;
 let active = false;
 let indexing = false;
@@ -32,14 +42,11 @@ let lastRailMove = 0;
 let runningKey = '';
 let installedKey = '';
 const resultCache = new Map();
-const pauseReasons = new Set();
-
-try { localStorage.removeItem('mochimono-visual-order-mode'); } catch {}
 
 const option = document.createElement('option');
 option.value = 'visual';
 option.textContent = 'Visual';
-option.title = 'Arrange media by color and local visual similarity';
+option.title = 'Arrange all media into a continuous visual flow';
 if (sort && !sort.querySelector('option[value="visual"]')) {
   const similar = sort.querySelector('option[value="similar"]');
   similar ? similar.after(option) : sort.append(option);
@@ -48,7 +55,7 @@ if (sort && !sort.querySelector('option[value="visual"]')) {
 const style = document.createElement('style');
 style.textContent = `
 .visual-sort-bar{margin:10px 0 6px;padding:9px 10px;display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#171518;color:#d8cfcb}
-.visual-sort-bar[hidden],.visual-rail[hidden]{display:none!important}.visual-sort-copy{min-width:0;flex:1;display:grid;gap:5px}.visual-sort-head{display:flex;align-items:center;gap:9px;min-width:0}.visual-sort-head strong{font-size:11px;white-space:nowrap}.visual-sort-copy>span{color:#8e8582;font-size:10px}.visual-sort-progress{height:3px;overflow:hidden;border-radius:99px;background:#282429}.visual-sort-progress i{display:block;height:100%;width:0;background:#efa09a;transition:width .12s linear}.visual-sort-close{width:30px;height:30px;padding:0;display:grid;place-items:center;background:transparent;color:#9b9290;font-size:18px}.visual-sort-close:hover{background:#29252a;color:#fff}
+.visual-sort-bar[hidden],.visual-rail[hidden]{display:none!important}.visual-sort-copy{min-width:0;flex:1;display:grid;gap:5px}.visual-sort-head{display:flex;align-items:center;gap:9px;min-width:0}.visual-sort-head strong{font-size:11px;white-space:nowrap}.visual-sort-modes{display:flex;gap:3px;min-width:0}.visual-sort-modes button{height:25px;padding:0 8px;border:0;border-radius:7px;background:transparent;color:#8e8582;font-size:10px;font-weight:650}.visual-sort-modes button:hover{background:#252126;color:#ddd5d1}.visual-sort-modes button.active{background:#eee8e4;color:#171416}.visual-sort-copy>span{color:#8e8582;font-size:10px}.visual-sort-progress{height:3px;overflow:hidden;border-radius:99px;background:#282429}.visual-sort-progress i{display:block;height:100%;width:0;background:#efa09a;transition:width .12s linear}.visual-sort-close{width:30px;height:30px;padding:0;display:grid;place-items:center;background:transparent;color:#9b9290;font-size:18px}.visual-sort-close:hover{background:#29252a;color:#fff}
 html.visual-sort-indexing:not(.visual-sort-active) #files{visibility:hidden!important}
 html.visual-sort-active #dateRail,html.visual-sort-indexing #dateRail{display:none!important}
 `;
@@ -57,7 +64,7 @@ document.head.append(style);
 const bar = document.createElement('div');
 bar.className = 'visual-sort-bar';
 bar.hidden = true;
-bar.innerHTML = `<div class="visual-sort-copy"><div class="visual-sort-head"><strong>Visual order</strong></div><span></span><div class="visual-sort-progress"><i></i></div></div><button class="visual-sort-close" type="button" title="Return to newest" aria-label="Return to newest">×</button>`;
+bar.innerHTML = `<div class="visual-sort-copy"><div class="visual-sort-head"><strong>Visual order</strong><div class="visual-sort-modes">${Object.entries(MODES).map(([key, value]) => `<button type="button" data-visual-mode="${key}">${value.label}</button>`).join('')}</div></div><span></span><div class="visual-sort-progress"><i></i></div></div><button class="visual-sort-close" type="button" title="Return to newest" aria-label="Return to newest">×</button>`;
 files?.before(bar);
 const status = bar.querySelector('.visual-sort-copy > span');
 const progress = bar.querySelector('.visual-sort-progress > i');
@@ -67,6 +74,11 @@ visualRail.className = 'date-rail visual-rail';
 visualRail.hidden = true;
 visualRail.setAttribute('aria-label', 'Browse visual order');
 dateRail?.after(visualRail);
+
+function syncModeButtons() {
+  for (const button of bar.querySelectorAll('[data-visual-mode]')) button.classList.toggle('active', button.dataset.visualMode === mode);
+}
+syncModeButtons();
 
 function updateProgress(done, total, text) {
   status.textContent = text;
@@ -87,6 +99,16 @@ function modelMedia() {
     dateMs:Number(item[5]) || 0,
     size:Number(item[6]) || 0
   })).filter(file => /^[a-f0-9]{64}$/.test(file.hash));
+}
+
+function layoutHint() {
+  const rawWidth = Math.max(200, Math.round(files?.clientWidth || 0));
+  return {
+    // Small width changes should not invalidate an expensive visual route.
+    width:Math.max(200, Math.round(rawWidth / 32) * 32),
+    target:Math.max(72, Number(mediaSize?.value) || 170),
+    gap:4
+  };
 }
 
 function hashText(value, seed) {
@@ -110,8 +132,8 @@ function mediaIdentity(media) {
   return `${media.length}:${left.toString(36)}:${right.toString(36)}`;
 }
 
-function runKeyFor(media) {
-  return `visual-color-v2:${mediaIdentity(media)}`;
+function runKeyFor(media, layout) {
+  return `${mode}:${layout.width}x${layout.target}:${mediaIdentity(media)}`;
 }
 
 function cacheResult(key, result) {
@@ -120,6 +142,7 @@ function cacheResult(key, result) {
     hashes:(result.order || []).map(file => file.hash),
     indexed:Number(result.indexed) || 0,
     unavailable:Number(result.unavailable) || 0,
+    families:Number(result.families) || 0,
     rail:Array.isArray(result.rail) ? result.rail.map(entry => ({ ...entry })) : []
   });
   while (resultCache.size > RESULT_CACHE_LIMIT) resultCache.delete(resultCache.keys().next().value);
@@ -136,15 +159,10 @@ function cachedResult(key, media) {
   }
   resultCache.delete(key);
   resultCache.set(key, cached);
-  return {
-    order,
-    indexed:cached.indexed,
-    unavailable:cached.unavailable,
-    rail:cached.rail.map(entry => ({ ...entry }))
-  };
+  return { order, indexed:cached.indexed, unavailable:cached.unavailable, families:cached.families, rail:cached.rail.map(entry => ({ ...entry })) };
 }
 
-function runWorker(media, signal) {
+function runWorker(media, signal, layout) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./visual-order-worker.js', import.meta.url), { type:'module' });
     let settled = false;
@@ -170,9 +188,10 @@ function runWorker(media, signal) {
         return;
       }
       if (data.type === 'error') return finish(reject, new Error(data.error || 'Could not build visual order'));
-      if (data.type === 'result' && data.result) finish(resolve, data.result);
+      if (data.type !== 'result' || !data.result) return;
+      finish(resolve, data.result);
     };
-    worker.postMessage({ media });
+    worker.postMessage({ media, mode, layout });
   });
 }
 
@@ -265,13 +284,7 @@ function restorePendingScrollAnchor() {
   });
 }
 
-function railEntries() {
-  if (visualRailEntries.length) return visualRailEntries.map(entry => ({
-    index:Math.max(0, Math.min(ordered.length - 1, Number(entry.index) || 0)),
-    label:String(entry.label || ''),
-    short:String(entry.label || ''),
-    major:true
-  }));
+function genericRailEntries() {
   if (!ordered.length) return [];
   const ticks = Math.min(17, ordered.length);
   const indexes = [...new Set(Array.from({ length:ticks }, (_, index) => Math.round(index * (ordered.length - 1) / Math.max(1, ticks - 1))))];
@@ -282,8 +295,20 @@ function railEntries() {
   });
 }
 
+function railEntries() {
+  if (mode !== 'color' || !visualRailEntries.length) return genericRailEntries();
+  return visualRailEntries.map(entry => ({
+    index:Math.max(0, Math.min(ordered.length - 1, Number(entry.index) || 0)),
+    label:String(entry.label || ''),
+    short:String(entry.label || ''),
+    major:true
+  }));
+}
+
 function railLabelAt(index) {
-  if (!visualRailEntries.length) return `${Math.round(Math.max(0, Math.min(1, index / Math.max(1, ordered.length - 1))) * 100)}%`;
+  if (mode !== 'color' || !visualRailEntries.length) {
+    return `${Math.round(Math.max(0, Math.min(1, index / Math.max(1, ordered.length - 1))) * 100)}%`;
+  }
   let label = visualRailEntries[0]?.label || '';
   for (const entry of visualRailEntries) {
     if (Number(entry.index) > index) break;
@@ -320,7 +345,10 @@ function updateRail() {
   let nearestDistance = Infinity;
   for (const tick of visualRail.querySelectorAll('[data-index]')) {
     const delta = Math.abs(Number(tick.dataset.index) - index);
-    if (delta < nearestDistance) { nearest = tick; nearestDistance = delta; }
+    if (delta < nearestDistance) {
+      nearest = tick;
+      nearestDistance = delta;
+    }
   }
   for (const tick of visualRail.querySelectorAll('[data-index]')) tick.classList.toggle('active', tick === nearest);
 }
@@ -362,42 +390,24 @@ function install(result, media, resetScroll, key) {
   patchFilteredHashes();
 
   visualModel = {
-    version:`visual-flow:color:${generation}:${ordered.length}`,
-    sort:`visual-flow:color:${generation}`,
+    version:`visual-flow:${mode}:${generation}:${ordered.length}`,
+    sort:`visual-flow:${mode}:${generation}`,
     items:orderedMedia.map(tuple)
   };
   window.mochimonoGridModel = visualModel;
   originalSetModel?.(visualModel);
 
   bar.hidden = false;
+  syncModeButtons();
   const unavailable = Number(result.unavailable) || 0;
-  updateProgress(media.length, media.length, `${DESCRIPTION} · ${(Number(result.indexed) || 0).toLocaleString()} media${unavailable ? ` · ${unavailable.toLocaleString()} without thumbnails` : ''}`);
+  const description = MODES[mode].description;
+  const familyText = mode === 'color' ? '' : ` · ${(Number(result.families) || 0).toLocaleString()} visual neighborhoods`;
+  updateProgress(media.length, media.length, `${description} · ${(Number(result.indexed) || 0).toLocaleString()} media${familyText}${unavailable ? ` · ${unavailable.toLocaleString()} without thumbnails` : ''}`);
   if (fileCount) {
     fileCount.hidden = false;
     fileCount.textContent = `${ordered.length.toLocaleString()} media`;
-    fileCount.title = `Visual order: ${DESCRIPTION}`;
+    fileCount.title = `Visual order: ${description}`;
   }
-}
-
-function pause(reason = 'external') {
-  reason = String(reason || 'external');
-  if (pauseReasons.has(reason)) return;
-  pauseReasons.add(reason);
-  clearTimeout(rerunTimer);
-  if (!indexing) return;
-  generation++;
-  controller?.abort();
-  controller = null;
-  indexing = false;
-  runningKey = '';
-  document.documentElement.classList.remove('visual-sort-indexing');
-  if (!active) bar.hidden = true;
-}
-
-function resume(reason = 'external') {
-  pauseReasons.delete(String(reason || 'external'));
-  if (pauseReasons.size || !wanted || sort?.value !== 'visual') return;
-  scheduleActivate(40, false);
 }
 
 function deactivate() {
@@ -424,7 +434,7 @@ function deactivate() {
 }
 
 async function activate() {
-  if (pauseReasons.size || !wanted || sort?.value !== 'visual' || document.documentElement.classList.contains('similarity-active')) return;
+  if (!wanted || sort?.value !== 'visual' || document.documentElement.classList.contains('similarity-active')) return;
   const gridButton = views?.querySelector('[data-view="grid"]');
   if (!gridButton?.classList.contains('active')) {
     gridButton?.click();
@@ -437,6 +447,7 @@ async function activate() {
     if (current && !String(current.sort || '').startsWith('visual-flow') && !String(current.sort || '').startsWith('similarity')) sourceModel = current;
   }
   const media = modelMedia();
+  const layout = layoutHint();
   const resetScroll = resetScrollNext || !active;
   resetScrollNext = false;
   if (!media.length) {
@@ -449,7 +460,7 @@ async function activate() {
     return;
   }
 
-  const key = runKeyFor(media);
+  const key = runKeyFor(media, layout);
   if (active && installedKey === key) {
     indexing = false;
     document.documentElement.classList.remove('visual-sort-indexing');
@@ -475,12 +486,13 @@ async function activate() {
   runningKey = key;
   indexing = true;
   bar.hidden = false;
+  syncModeButtons();
   document.documentElement.classList.add('visual-sort-indexing');
   updateProgress(0, media.length, 'Reading visual descriptors…');
 
   try {
-    const result = await runWorker(media, signal);
-    if (mine !== generation || signal.aborted || !wanted || pauseReasons.size || document.documentElement.classList.contains('similarity-active')) return;
+    const result = await runWorker(media, signal, layout);
+    if (mine !== generation || signal.aborted || !wanted) return;
     cacheResult(key, result);
     install(result, media, resetScroll, key);
   } catch (error) {
@@ -496,8 +508,8 @@ async function activate() {
 
 function scheduleActivate(delay = 0, resetScroll = false) {
   clearTimeout(rerunTimer);
+  if (!wanted || sort?.value !== 'visual') return;
   resetScrollNext ||= resetScroll;
-  if (!wanted || sort?.value !== 'visual' || pauseReasons.size) return;
   bar.hidden = false;
   if (!active) document.documentElement.classList.add('visual-sort-indexing');
   rerunTimer = setTimeout(activate, Math.max(0, delay));
@@ -537,6 +549,15 @@ sort?.addEventListener('change', () => {
     deactivate();
   }
 }, true);
+
+bar.addEventListener('click', event => {
+  const button = event.target.closest('[data-visual-mode]');
+  if (!button || !MODES[button.dataset.visualMode] || button.dataset.visualMode === mode) return;
+  mode = button.dataset.visualMode;
+  localStorage.setItem(MODE_KEY, mode);
+  syncModeButtons();
+  scheduleActivate(0, true);
+});
 
 views?.addEventListener('click', event => {
   const view = event.target.closest('[data-view]')?.dataset.view;
@@ -621,6 +642,12 @@ window.addEventListener('scroll', () => {
   refreshPendingScrollAnchor();
   scheduleRail();
 }, { passive:true });
+window.addEventListener('resize', () => {
+  if (wanted && active) scheduleActivate(180, false);
+}, { passive:true });
+mediaSize?.addEventListener('input', () => {
+  if (wanted) scheduleActivate(80, false);
+});
 window.addEventListener('mochimono:stable-grid-installed', () => {
   if (!active) return;
   requestAnimationFrame(() => {
@@ -633,13 +660,10 @@ viewerOpen && new MutationObserver(() => { if (active) requestAnimationFrame(syn
 
 window.mochimonoVisualSort = {
   active:() => active,
-  mode:() => 'color',
+  mode:() => mode,
   orderedHashes:() => active ? [...ordered] : null,
   rail:() => visualRailEntries.map(entry => ({ ...entry })),
   refresh:() => scheduleActivate(0, false),
-  pause,
-  resume,
-  paused:() => [...pauseReasons],
   cache:() => ({ entries:resultCache.size, runningKey, installedKey })
 };
 
