@@ -7,6 +7,7 @@ import './browser-provenance.js';
 import './visual-similarity.js';
 import './ai-lab.js';
 import './ai-lab-controls.js';
+import './ai-transcribe.js';
 import './context-similarity.js';
 import './similarity-sort-lock.js';
 import './visual-sort.js';
