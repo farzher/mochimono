@@ -516,6 +516,16 @@ function buildNodes(media, descriptors) {
   return { nodes, unavailable };
 }
 
+function estimatedRowSpan(nodes, layout) {
+  const ratios = nodes.map(node => clamp(node.aspect, .4, 3)).sort((a, b) => a - b);
+  const typicalAspect = ratios[Math.floor(ratios.length / 2)] || 4 / 3;
+  const width = Math.max(200, Number(layout?.width) || 1000);
+  const target = Math.max(72, Number(layout?.target) || 170);
+  const gap = Math.max(0, Number(layout?.gap) || 4);
+  const typicalItemWidth = Math.max(32, target * typicalAspect);
+  return Math.max(2, Math.min(12, Math.round((width + gap) / (typicalItemWidth + gap))));
+}
+
 function projectionWeights(length, seed) {
   const weights = new Float32Array(length);
   let state = (seed * 2654435761) >>> 0;
@@ -587,21 +597,38 @@ function buildNeighborGraph(nodes, mode) {
   return { graph, projections };
 }
 
-function contextualCandidate(endpoint, context, graph, visited, nodes, mode) {
+function contextualCandidate(endpoint, context, graph, visited, nodes, mode, rowSpan) {
   let best = { index:-1, distance:Infinity, score:Infinity };
   let considered = 0;
   for (const edge of graph[endpoint]) {
     if (visited[edge.index]) continue;
-    let contextDistance = 0;
-    let contextCount = 0;
-    for (let cursor = context.length - 2; cursor >= 0 && contextCount < 6; cursor--, contextCount++) {
-      contextDistance += metric(nodes[context[cursor]], nodes[edge.index], mode);
+
+    let recentDistance = 0;
+    let recentCount = 0;
+    const recentLimit = Math.min(4, Math.max(2, rowSpan - 1));
+    for (let cursor = context.length - 2; cursor >= 0 && recentCount < recentLimit; cursor--, recentCount++) {
+      recentDistance += metric(nodes[context[cursor]], nodes[edge.index], mode);
     }
-    const score = edge.distance * .62 + (contextCount ? contextDistance / contextCount : edge.distance) * .38;
+    const recent = recentCount ? recentDistance / recentCount : edge.distance;
+
+    // Sequential order is rendered into justified rows. Items roughly one row
+    // span back are likely to appear above the candidate, so explicitly reward
+    // compatibility with the likely above-left / above / above-right trio.
+    let verticalDistance = 0;
+    let verticalCount = 0;
+    for (const offset of [rowSpan - 1, rowSpan, rowSpan + 1]) {
+      const cursor = context.length - 1 - offset;
+      if (cursor < 0 || cursor >= context.length - 1) continue;
+      verticalDistance += metric(nodes[context[cursor]], nodes[edge.index], mode);
+      verticalCount++;
+    }
+    const vertical = verticalCount ? verticalDistance / verticalCount : recent;
+    const score = edge.distance * .52 + recent * .22 + vertical * .26;
+
     if (score < best.score || (score === best.score && nodes[edge.index].hash < (nodes[best.index]?.hash || '~'))) {
       best = { index:edge.index, distance:edge.distance, score };
     }
-    if (++considered >= 10) break;
+    if (++considered >= 12) break;
   }
   return best;
 }
@@ -648,13 +675,14 @@ function optimizeRoute(route, nodes, mode) {
   return route;
 }
 
-function routeOrder(nodes, mode) {
-  if (nodes.length < 2) return { order:nodes.map((_, index) => index), graph:[] };
+function routeOrder(nodes, mode, layout = null) {
+  if (nodes.length < 2) return { order:nodes.map((_, index) => index), graph:[], rowSpan:1 };
   const { graph, projections } = buildNeighborGraph(nodes, mode);
   const fallback = orderWithPositions(nodes, colorKey);
   const orders = projections.length ? projections : [fallback];
   if (!projections.length) orders.push(fallback);
   const visited = new Uint8Array(nodes.length);
+  const rowSpan = estimatedRowSpan(nodes, layout);
 
   let seed = 0;
   let bestDensity = Infinity;
@@ -673,8 +701,8 @@ function routeOrder(nodes, mode) {
   let fallbackCursor = 0;
 
   while (count < nodes.length) {
-    let leftCandidate = contextualCandidate(left, leftPath, graph, visited, nodes, mode);
-    let rightCandidate = contextualCandidate(right, rightPath, graph, visited, nodes, mode);
+    let leftCandidate = contextualCandidate(left, leftPath, graph, visited, nodes, mode, rowSpan);
+    let rightCandidate = contextualCandidate(right, rightPath, graph, visited, nodes, mode, rowSpan);
     if (leftCandidate.index < 0) leftCandidate = nearestFromOrders(left, orders, visited, nodes, mode);
     if (rightCandidate.index < 0) rightCandidate = nearestFromOrders(right, orders, visited, nodes, mode);
 
@@ -698,7 +726,7 @@ function routeOrder(nodes, mode) {
   }
 
   const route = [...leftPath.slice(1).reverse(), seed, ...rightPath.slice(1)];
-  return { order:optimizeRoute(route, nodes, mode), graph };
+  return { order:optimizeRoute(route, nodes, mode), graph, rowSpan };
 }
 
 function countNeighborhoods(graph, threshold) {
@@ -727,7 +755,7 @@ function colorBucket(node) {
   return Math.floor(shiftedHue(node.hue) * COLOR_BUCKETS) % COLOR_BUCKETS;
 }
 
-function colorOrder(nodes) {
+function colorOrder(nodes, layout) {
   const buckets = new Map();
   for (let index = 0; index < nodes.length; index++) {
     const key = colorBucket(nodes[index]);
@@ -745,7 +773,7 @@ function colorOrder(nodes) {
     if (members.length <= 2) local = [...members].sort((a, b) => nodes[a].hash.localeCompare(nodes[b].hash));
     else {
       const subNodes = members.map(index => nodes[index]);
-      local = routeOrder(subNodes, 'color-detail').order.map(index => members[index]);
+      local = routeOrder(subNodes, 'color-detail', layout).order.map(index => members[index]);
     }
     if (previous >= 0 && local.length > 1) {
       const forward = metric(nodes[previous], nodes[local[0]], 'color-detail');
@@ -771,34 +799,37 @@ function colorRail(order, nodes, unavailableCount) {
   return entries;
 }
 
-async function build(media, mode) {
+async function build(media, mode, layout) {
   const descriptors = await ensureDescriptors(media);
   self.postMessage({ type:'progress', done:media.length, total:media.length, stage:'ordering' });
   const { nodes, unavailable } = buildNodes(media, descriptors);
   let nodeOrder = [];
   let families = nodes.length;
   let rail = [];
+  let rowSpan = estimatedRowSpan(nodes, layout);
 
   if (mode === 'color') {
-    nodeOrder = colorOrder(nodes);
+    nodeOrder = colorOrder(nodes, layout);
     rail = colorRail(nodeOrder, nodes, unavailable.length);
     families = new Set(nodeOrder.map(index => colorSection(nodes[index]))).size;
   } else {
-    const routed = routeOrder(nodes, mode === 'structure' ? 'structure' : 'flow');
+    const routed = routeOrder(nodes, mode === 'structure' ? 'structure' : 'flow', layout);
     nodeOrder = routed.order;
+    rowSpan = routed.rowSpan;
     families = countNeighborhoods(routed.graph, mode === 'structure' ? .23 : .25);
   }
 
   const order = nodeOrder.map(index => media[nodes[index].mediaIndex]);
   for (const mediaIndex of unavailable) order.push(media[mediaIndex]);
-  return { order, indexed:nodes.length, unavailable:unavailable.length, families, rail, featureVersion:FEATURE_VERSION };
+  return { order, indexed:nodes.length, unavailable:unavailable.length, families, rail, featureVersion:FEATURE_VERSION, rowSpan };
 }
 
 self.onmessage = async event => {
   try {
     const media = Array.isArray(event.data?.media) ? event.data.media : [];
     const mode = ['flow','structure','color'].includes(event.data?.mode) ? event.data.mode : 'flow';
-    const result = await build(media, mode);
+    const layout = event.data?.layout || null;
+    const result = await build(media, mode, layout);
     self.postMessage({ type:'result', result });
   } catch (error) {
     self.postMessage({ type:'error', error:error?.message || String(error) });
