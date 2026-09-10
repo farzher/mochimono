@@ -1,14 +1,14 @@
 const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
 const DB_NAME = 'mochimono-ai';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const EMBEDDINGS = 'embeddings';
 const METADATA = 'metadata';
 const THUMB_VERSION = 3;
-const EMBEDDING_SCHEMA = 2;
+const EMBEDDING_SCHEMA = 3;
 
 const MODELS = {
-  siglip2:{ id:'onnx-community/siglip2-base-patch16-224-ONNX', label:'SigLIP 2 Base', kind:'semantic', indexVersion:'siglip2-base-224-v1' },
-  dinov3:{ id:'onnx-community/dinov3-vitb16-pretrain-lvd1689m-ONNX', label:'DINOv3 ViT-B', kind:'visual', indexVersion:'dinov3-vitb16-v1' },
+  siglip2:{ id:'onnx-community/siglip2-base-patch16-224-ONNX', label:'SigLIP 2 Base', kind:'semantic', indexVersion:'siglip2-base-224-v2' },
+  dinov3:{ id:'onnx-community/dinov3-vitb16-pretrain-lvd1689m-ONNX', label:'DINOv3 ViT-B', kind:'visual', indexVersion:'dinov3-vitb16-v2' },
   qwen3vl:{ id:'onnx-community/Qwen3-VL-2B-Instruct-ONNX', label:'Qwen3-VL 2B', kind:'vlm' },
   sam:{ id:'onnx-community/sam-vit-base-ONNX', label:'SAM ViT-B', kind:'mask' }
 };
@@ -72,21 +72,25 @@ function tensorVector(tensor, strategy = 'auto') {
 }
 
 function quantize(vector) {
-  const data = new Int8Array(vector.length);
+  const source = vector instanceof Float32Array ? vector : Float32Array.from(vector || []);
+  let maxAbs = 0;
+  for (const value of source) maxAbs = Math.max(maxAbs, Math.abs(Number(value) || 0));
+  const multiplier = maxAbs > 0 ? 127 / maxAbs : 1;
+  const data = new Int8Array(source.length);
   let normSq = 0;
-  for (let index = 0; index < vector.length; index++) {
-    const value = Math.max(-127, Math.min(127, Math.round(vector[index] * 127)));
+  for (let index = 0; index < source.length; index++) {
+    const value = Math.max(-127, Math.min(127, Math.round((Number(source[index]) || 0) * multiplier)));
     data[index] = value;
     normSq += value * value;
   }
-  return { data, normSq:Math.max(1, normSq) };
+  return { data, normSq:Math.max(1, normSq), scale:maxAbs > 0 ? maxAbs / 127 : 1 };
 }
 
 function vectorRecord(value) {
   if (!value) return null;
   if (value.data && Number(value.normSq) > 0) {
     const data = value.data instanceof Int8Array ? value.data : Int8Array.from(value.data);
-    return { data, normSq:Number(value.normSq) };
+    return { data, normSq:Number(value.normSq), scale:Number(value.scale) || 1 };
   }
   const source = value instanceof Float32Array || value instanceof Int8Array
     ? value
@@ -97,7 +101,7 @@ function vectorRecord(value) {
   if (source instanceof Int8Array) {
     let normSq = 0;
     for (const item of source) normSq += item * item;
-    return { data:source, normSq:Math.max(1, normSq) };
+    return { data:source, normSq:Math.max(1, normSq), scale:Number(value?.scale) || 1 };
   }
   return quantize(normalize(Float32Array.from(source)));
 }
@@ -112,13 +116,13 @@ function dot(left, right) {
   return total / Math.sqrt(a.normSq * b.normSq);
 }
 
-function scoreFor(similarity) { return Math.round(Math.max(0, Math.min(100, (similarity + 1) * 50))); }
+function scoreFor(similarity) { return Math.round(Math.max(0, Math.min(1, Number(similarity) || 0)) * 100); }
 
 function openDb() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = event => {
       const db = request.result;
       if (!db.objectStoreNames.contains(EMBEDDINGS)) {
         const store = db.createObjectStore(EMBEDDINGS, { keyPath:'id' });
@@ -129,6 +133,9 @@ function openDb() {
         const store = db.createObjectStore(METADATA, { keyPath:'id' });
         store.createIndex('kind', 'kind', { unique:false });
         store.createIndex('hash', 'hash', { unique:false });
+      }
+      if (event.oldVersion < 2 && db.objectStoreNames.contains(EMBEDDINGS)) {
+        request.transaction.objectStore(EMBEDDINGS).clear();
       }
     };
     request.onsuccess = () => {
@@ -159,7 +166,9 @@ async function getEmbedding(model, hash) {
   const tx = db.transaction(EMBEDDINGS, 'readonly');
   const row = await requestResult(tx.objectStore(EMBEDDINGS).get(embeddingId(model, hash)));
   await transactionDone(tx).catch(() => {});
-  return row?.vector ? vectorRecord({ data:row.vector, normSq:row.normSq }) : null;
+  return row?.vector && Number(row.schema) === EMBEDDING_SCHEMA
+    ? vectorRecord({ data:row.vector, normSq:row.normSq, scale:row.scale })
+    : null;
 }
 
 async function putEmbedding(model, hash, vector) {
@@ -169,7 +178,7 @@ async function putEmbedding(model, hash, vector) {
   tx.objectStore(EMBEDDINGS).put({
     id:embeddingId(model, hash), model:modelIndexVersion(model), modelKey:model, hash,
     schema:EMBEDDING_SCHEMA, dimension:packed.data.length, vector:packed.data,
-    normSq:packed.normSq, updatedAt:Date.now()
+    normSq:packed.normSq, scale:packed.scale, updatedAt:Date.now()
   });
   await transactionDone(tx);
   return packed;
@@ -181,7 +190,7 @@ async function rowsForModel(model) {
   const index = tx.objectStore(EMBEDDINGS).index('model');
   const rows = await requestResult(index.getAll(IDBKeyRange.only(modelIndexVersion(model))));
   await transactionDone(tx).catch(() => {});
-  return rows || [];
+  return (rows || []).filter(row => Number(row.schema) === EMBEDDING_SCHEMA);
 }
 
 async function putMetadata(kind, hash, value) {
@@ -401,7 +410,7 @@ async function rankSimilar(id, model, media, targetHash, limit = 40) {
   const ranked = [];
   for (const row of rows) {
     if (!allowed.has(row.hash) || row.hash === targetHash || !row.vector) continue;
-    const similarity = dot(target, { data:row.vector, normSq:row.normSq });
+    const similarity = dot(target, { data:row.vector, normSq:row.normSq, scale:row.scale });
     ranked.push({ hash:row.hash, similarity, score:scoreFor(similarity) });
   }
   ranked.sort((a, b) => b.similarity - a.similarity || a.hash.localeCompare(b.hash));
@@ -420,7 +429,7 @@ async function semanticSearch(id, media, query, limit = 80) {
   const ranked = [];
   for (const row of rows) {
     if (!allowed.has(row.hash) || !row.vector) continue;
-    const similarity = dot(queryVector, { data:row.vector, normSq:row.normSq });
+    const similarity = dot(queryVector, { data:row.vector, normSq:row.normSq, scale:row.scale });
     ranked.push({ hash:row.hash, similarity, score:scoreFor(similarity) });
   }
   ranked.sort((a, b) => b.similarity - a.similarity || a.hash.localeCompare(b.hash));
@@ -456,7 +465,7 @@ async function autoGroups(id, media, limitPerGroup = 120) {
   const groups = GROUP_PROMPTS.map(([name]) => ({ name, matches:[] }));
   for (const row of rows) {
     if (!allowed.has(row.hash) || !row.vector) continue;
-    const vector = { data:row.vector, normSq:row.normSq };
+    const vector = { data:row.vector, normSq:row.normSq, scale:row.scale };
     for (let index = 0; index < groups.length; index++) {
       const similarity = dot(textVectors[index], vector);
       groups[index].matches.push({ hash:row.hash, similarity, score:scoreFor(similarity) });
@@ -525,7 +534,7 @@ async function subjectMasks(id, hash) {
 
 async function status() {
   const [siglipRows, dinoRows] = await Promise.all([rowsForModel('siglip2'), rowsForModel('dinov3')]);
-  return { webgpu:Boolean(self.navigator?.gpu), models:MODELS, indexed:{ siglip2:siglipRows.length, dinov3:dinoRows.length } };
+  return { webgpu:Boolean(self.navigator?.gpu), models:MODELS, embeddingSchema:EMBEDDING_SCHEMA, indexed:{ siglip2:siglipRows.length, dinov3:dinoRows.length } };
 }
 
 async function handle(id, action, payload) {
