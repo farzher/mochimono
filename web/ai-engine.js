@@ -96,7 +96,7 @@ function request(action, payload = {}, options = {}) {
     const signal = options.signal || null;
     const heavy = HEAVY_ACTIONS.has(action);
     const abort = () => {
-      target.postMessage({ id:`cancel-${id}`, action:'cancel', cancelId:id });
+      try { target.postMessage({ id:`cancel-${id}`, action:'cancel', cancelId:id }); } catch {}
       const job = settleJob(id);
       if (!job) return;
       reject(signal?.reason || new DOMException('Aborted', 'AbortError'));
@@ -105,7 +105,12 @@ function request(action, payload = {}, options = {}) {
     signal?.addEventListener('abort', abort, { once:true });
     pending.set(id, { resolve, reject, onProgress:options.onProgress, signal, abort, heavy, action });
     if (heavy) beginHeavy(action, id);
-    target.postMessage({ id, action, payload });
+    try {
+      target.postMessage({ id, action, payload });
+    } catch (error) {
+      settleJob(id);
+      reject(error);
+    }
   });
 }
 
