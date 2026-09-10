@@ -19,10 +19,8 @@ style.textContent = `
     border:1px solid rgba(224,159,151,.13);border-radius:999px;
     background:#2a2023;color:#dfaaa4;font-size:9px;font-weight:760;line-height:1.25;white-space:nowrap
   }
-  #storagePane .folder-item .storage-mode-chip.kind{
-    border-color:rgba(255,255,255,.08);background:#1c1a1d;color:#a7a09d
-  }
-  #storagePane .folder-item .storage-mode-chip.destination.local{
+  #storagePane .folder-item .storage-mode-chip.kind,
+  #storagePane .folder-item .storage-mode-chip.local{
     border-color:rgba(255,255,255,.08);background:#1c1a1d;color:#a7a09d
   }
 `;
@@ -85,12 +83,13 @@ function decorateNativeSource(row) {
   if (!badge) return;
   const cloud = row.classList.contains('cloud-folder');
   const scope = nativeScopeLabel(row);
-  const destination = cloud ? 'Local + Cloud' : 'Local only';
-  setChips(badge, [
-    { label:destination, className:`destination ${cloud ? 'cloud' : 'local'}` },
+  const chips = [
+    { label:'Local', className:'local' },
+    ...(cloud ? [{ label:'Cloud', className:'cloud' }] : []),
     { label:scope, className:'scope' }
-  ], cloud
-    ? `${scope === 'Everything' ? 'All files' : 'Photos and videos'} · original stays local · Cloud copy enabled`
+  ];
+  setChips(badge, chips, cloud
+    ? `${scope === 'Everything' ? 'All files' : 'Photos and videos'} · local original + Cloud copy`
     : `${scope === 'Everything' ? 'All files' : 'Photos and videos'} · local only`);
 }
 
@@ -99,12 +98,13 @@ function decorateBrowserSource(row) {
   if (!badge) return;
   const scope = String(row.querySelector('[data-browser-scope]')?.textContent || '').trim() === 'Everything' ? 'Everything' : 'Media';
   const cloud = String(row.querySelector('[data-browser-cloud]')?.textContent || '').trim() === 'Local';
-  const destination = cloud ? 'Local + Cloud' : 'Local only';
-  setChips(badge, [
+  const chips = [
     { label:'Browser', className:'kind' },
-    { label:destination, className:`destination ${cloud ? 'cloud' : 'local'}` },
+    { label:'Local', className:'local' },
+    ...(cloud ? [{ label:'Cloud', className:'cloud' }] : []),
     { label:scope, className:'scope' }
-  ], cloud ? 'Browser-style folder · local original + Cloud copy' : 'Browser-style folder · local only');
+  ];
+  setChips(badge, chips, cloud ? 'Browser-style folder · local original + Cloud copy' : 'Browser-style folder · local only');
   const preview = row.querySelector('.storage-folder-samples');
   if (preview) preview.title = 'View browser folder in Library';
 }
