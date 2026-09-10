@@ -14,13 +14,11 @@ const THUMB_VERSION = 3;
 const SAMPLE = 16;
 const LOW = 8;
 const INDEX_BATCH = 32;
-const CANDIDATE_DISTANCE = 15;
 const MODE_KEY = 'mochimono-similarity-mode';
 const MODES = {
   near:{ label:'Near duplicates', maxDistance:0, expandDistance:0, description:'100-score pHash matches' },
   similar:{ label:'Similar images', maxDistance:9, expandDistance:14, description:'Broader visual groups' }
 };
-const POPCOUNT = [0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4];
 const COS = Array.from({ length:LOW }, (_, u) => Array.from({ length:SAMPLE }, (_, x) => Math.cos((2 * x + 1) * u * Math.PI / (2 * SAMPLE))));
 const SCALE = Array.from({ length:LOW }, (_, u) => u === 0 ? Math.sqrt(1 / SAMPLE) : Math.sqrt(2 / SAMPLE));
 
@@ -211,16 +209,6 @@ async function fingerprint(hash, signal) {
   return data ? pHash(data) : '';
 }
 
-function distance(left, right) {
-  let total = 0;
-  for (let index = 0; index < 16; index++) total += POPCOUNT[parseInt(left[index], 16) ^ parseInt(right[index], 16)];
-  return total;
-}
-
-function similarityScore(delta) {
-  return Math.max(0, Math.round(100 - delta * 4));
-}
-
 function updateProgress(done, total, text) {
   status.textContent = text;
   progress.style.width = `${total ? Math.max(2, Math.min(100, done / total * 100)) : 0}%`;
@@ -251,213 +239,43 @@ async function ensureFingerprints(images, signal, mine) {
   return { fingerprints, unavailable };
 }
 
-function buildGroups(images, fingerprints, config) {
-  const maxDistance = Math.max(0, Number(config?.maxDistance) || 0);
-  const expandDistance = Math.min(CANDIDATE_DISTANCE, Math.max(maxDistance, Number(config?.expandDistance) || maxDistance));
-  const fileIndex = new Map(images.map((file, index) => [file.hash, index]));
-  const parent = Int32Array.from(images, (_, index) => index);
-  const best = new Uint8Array(images.length);
-  const partner = new Int32Array(images.length);
-  best.fill(64);
-  partner.fill(-1);
+function buildGroupsInWorker(images, fingerprints, config, signal) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./similarity-group-worker.js', import.meta.url), { type:'module' });
+    let settled = false;
 
-  const find = value => {
-    let root = value;
-    while (parent[root] !== root) root = parent[root];
-    while (parent[value] !== value) {
-      const next = parent[value];
-      parent[value] = root;
-      value = next;
-    }
-    return root;
-  };
-  const union = (left, right) => {
-    left = find(left); right = find(right);
-    if (left !== right) parent[right] = left;
-  };
-  const consider = (index, other, delta) => {
-    if (delta < best[index] || (delta === best[index] && (partner[index] < 0 || images[other].hash < images[partner[index]].hash))) {
-      best[index] = delta;
-      partner[index] = other;
-    }
-  };
-
-  const identical = new Map();
-  for (const file of images) {
-    const value = fingerprints.get(file.hash);
-    if (!value) continue;
-    let members = identical.get(value);
-    if (!members) identical.set(value, members = []);
-    members.push(fileIndex.get(file.hash));
-  }
-
-  const blockValues = value => Array.from({ length:8 }, (_, block) => parseInt(value.slice(block * 2, block * 2 + 2), 16));
-  const unique = [];
-  for (const [value, members] of identical) {
-    const first = members[0];
-    if (members.length > 1) {
-      for (let index = 0; index < members.length; index++) {
-        const member = members[index];
-        const other = members[index === 0 ? 1 : 0];
-        consider(member, other, 0);
-        if (index) union(first, member);
-      }
-    }
-    unique.push({ value, members, representative:first, blocks:blockValues(value) });
-  }
-
-  // Eight 8-bit blocks with a one-bit probe are exhaustive for any full
-  // 64-bit Hamming distance <= 15: at least one block must differ by <= 1 bit.
-  const buckets = Array.from({ length:8 }, () => new Map());
-  for (let index = 0; index < unique.length; index++) for (let block = 0; block < 8; block++) {
-    const value = unique[index].blocks[block];
-    let bucket = buckets[block].get(value);
-    if (!bucket) buckets[block].set(value, bucket = []);
-    bucket.push(index);
-  }
-
-  const candidatesForValue = (value, after = -1) => {
-    const candidates = new Set();
-    const blocks = blockValues(value);
-    for (let block = 0; block < 8; block++) {
-      const word = blocks[block];
-      const collect = key => {
-        for (const index of buckets[block].get(key) || []) if (index > after) candidates.add(index);
-      };
-      collect(word);
-      for (let bit = 0; bit < 8; bit++) collect(word ^ (1 << bit));
-    }
-    return candidates;
-  };
-
-  if (maxDistance > 0) {
-    for (let index = 0; index < unique.length; index++) {
-      const item = unique[index];
-      for (const otherIndex of candidatesForValue(item.value, index)) {
-        const other = unique[otherIndex];
-        const delta = distance(item.value, other.value);
-        if (delta > maxDistance) continue;
-        union(item.representative, other.representative);
-        const leftPartner = other.members[0];
-        const rightPartner = item.members[0];
-        for (const member of item.members) consider(member, leftPartner, delta);
-        for (const member of other.members) consider(member, rightPartner, delta);
-      }
-    }
-  }
-
-  const groupsByRoot = new Map();
-  for (let index = 0; index < images.length; index++) {
-    if (best[index] > maxDistance || partner[index] < 0) continue;
-    const root = find(index);
-    let group = groupsByRoot.get(root);
-    if (!group) {
-      group = { members:[], bestDistance:64, newest:0, key:images[index].hash };
-      groupsByRoot.set(root, group);
-    }
-    group.members.push(index);
-    group.bestDistance = Math.min(group.bestDistance, best[index]);
-    group.newest = Math.max(group.newest, images[index].dateMs || 0);
-    if (images[index].hash < group.key) group.key = images[index].hash;
-  }
-
-  const groups = [...groupsByRoot.values()].filter(group => group.members.length > 1);
-
-  if (expandDistance > maxDistance && groups.length) {
-    const owner = new Int32Array(images.length);
-    owner.fill(-1);
-    groups.forEach((group, groupId) => {
-      group.coreSize = group.members.length;
-      for (const index of group.members) owner[index] = groupId;
-    });
-
-    const centroid = members => {
-      const ones = new Uint32Array(64);
-      let count = 0;
-      for (const index of members) {
-        const value = fingerprints.get(images[index].hash);
-        if (!value) continue;
-        count++;
-        for (let nibble = 0; nibble < 16; nibble++) {
-          const valueNibble = parseInt(value[nibble], 16);
-          for (let bit = 0; bit < 4; bit++) if (valueNibble & (1 << (3 - bit))) ones[nibble * 4 + bit]++;
-        }
-      }
-      if (!count) return '';
-      let value = '';
-      for (let nibble = 0; nibble < 16; nibble++) {
-        let valueNibble = 0;
-        for (let bit = 0; bit < 4; bit++) if (ones[nibble * 4 + bit] * 2 >= count) valueNibble |= 1 << (3 - bit);
-        value += valueNibble.toString(16);
-      }
-      return value;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abort);
+      worker.terminate();
+      callback(value);
     };
+    const abort = () => finish(reject, signal?.reason || new DOMException('Aborted', 'AbortError'));
 
-    const assignments = new Map();
-    for (let groupId = 0; groupId < groups.length; groupId++) {
-      const group = groups[groupId];
-      const center = centroid(group.members);
-      if (!center) continue;
-      group.centroid = center;
-      for (const uniqueIndex of candidatesForValue(center)) {
-        const item = unique[uniqueIndex];
-        const delta = distance(center, item.value);
-        if (delta > expandDistance) continue;
-        for (const member of item.members) {
-          if (owner[member] >= 0) continue;
-          const previous = assignments.get(member);
-          if (previous && (previous.distance < delta || (previous.distance === delta && previous.coreSize >= group.coreSize))) continue;
-          assignments.set(member, { groupId, distance:delta, coreSize:group.coreSize });
-        }
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener('abort', abort, { once:true });
+    worker.onerror = event => finish(reject, new Error(event.message || 'Similarity worker failed'));
+    worker.onmessage = event => {
+      if (event.data?.error) {
+        finish(reject, new Error(event.data.error));
+        return;
       }
-    }
-
-    for (const [index, assignment] of assignments) {
-      const group = groups[assignment.groupId];
-      group.members.push(index);
-      best[index] = assignment.distance;
-      group.newest = Math.max(group.newest, images[index].dateMs || 0);
-      if (images[index].hash < group.key) group.key = images[index].hash;
-    }
-  }
-
-  const scoreMap = new Map();
-  const partnerMap = new Map();
-  for (const group of groups) for (const index of group.members) {
-    scoreMap.set(images[index].hash, similarityScore(best[index]));
-    if (partner[index] >= 0) partnerMap.set(images[index].hash, images[partner[index]].hash);
-  }
-
-  for (const group of groups) {
-    group.members.sort((a, b) =>
-      best[a] - best[b] ||
-      (images[b].dateMs || 0) - (images[a].dateMs || 0) ||
-      images[a].hash.localeCompare(images[b].hash)
-    );
-  }
-
-  groups.sort((a, b) =>
-    b.members.length - a.members.length ||
-    a.bestDistance - b.bestDistance ||
-    b.newest - a.newest ||
-    a.key.localeCompare(b.key)
-  );
-
-  const order = [];
-  const groupMap = new Map();
-  const info = [];
-  for (let groupId = 0; groupId < groups.length; groupId++) {
-    const group = groups[groupId];
-    const start = order.length;
-    for (const index of group.members) {
-      const file = images[index];
-      order.push(file);
-      groupMap.set(file.hash, groupId);
-    }
-    info.push({ id:groupId, start, size:group.members.length, bestDistance:group.bestDistance, bestScore:similarityScore(group.bestDistance) });
-  }
-
-  return { order, scores:scoreMap, partners:partnerMap, groupByHash:groupMap, groupInfo:info, groups:groups.length, matched:order.length };
+      const result = event.data?.result;
+      if (!result) {
+        finish(reject, new Error('Similarity worker returned no result'));
+        return;
+      }
+      result.scores = new Map(result.scores || []);
+      result.partners = new Map(result.partners || []);
+      result.groupByHash = new Map(result.groupByHash || []);
+      finish(resolve, result);
+    };
+    worker.postMessage({ images, fingerprints:[...fingerprints], config });
+  });
 }
 
 function tuple(file) {
@@ -710,7 +528,7 @@ async function activate() {
     if (!indexed || mine !== generation || signal.aborted || !wanted) return;
     updateProgress(images.length, images.length, 'Building visual groups…');
     await new Promise(resolve => requestAnimationFrame(resolve));
-    const result = buildGroups(images, indexed.fingerprints, MODES[mode]);
+    const result = await buildGroupsInWorker(images, indexed.fingerprints, MODES[mode], signal);
     if (mine !== generation || signal.aborted || !wanted) return;
     install(result, images, scrollYBefore, resetScroll);
   } catch (error) {
