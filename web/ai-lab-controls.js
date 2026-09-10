@@ -69,11 +69,36 @@ if (dialog && toolbar && !toolbar.querySelector('[data-ai-scope]')) {
       : 'AI scope · current view';
   });
 
+  function distinctGroups(groups) {
+    if (!Array.isArray(groups)) return [];
+    const best = new Map();
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+      for (const match of groups[groupIndex]?.matches || []) {
+        const hash = String(match?.hash || '');
+        if (!hash) continue;
+        const similarity = Number(match?.similarity);
+        const previous = best.get(hash);
+        if (!previous || similarity > previous.similarity ||
+            (similarity === previous.similarity && groupIndex < previous.groupIndex)) {
+          best.set(hash, { groupIndex, similarity, match });
+        }
+      }
+    }
+
+    const result = groups.map(group => ({ ...group, matches:[] }));
+    for (const choice of best.values()) result[choice.groupIndex]?.matches.push(choice.match);
+    for (const group of result) {
+      group.matches.sort((left, right) =>
+        Number(right.similarity) - Number(left.similarity) || String(left.hash).localeCompare(String(right.hash)));
+    }
+    return result.filter(group => group.matches.length);
+  }
+
   const scoped = options => ({ ...(options || {}), scope });
   ai.index = (model = 'siglip2', options = {}) => originals.index(model, scoped(options));
   ai.similar = (hash, model = 'siglip2', options = {}) => originals.similar(hash, model, scoped(options));
   ai.search = (query, options = {}) => originals.search(query, scoped(options));
-  ai.groups = (options = {}) => originals.groups(scoped(options));
+  ai.groups = async (options = {}) => distinctGroups(await originals.groups(scoped(options)));
 
   clear.addEventListener('click', async () => {
     if (busyDepth || ai.busy?.() || window.mochimonoAITranscription?.busy?.()) return;
