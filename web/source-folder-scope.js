@@ -29,6 +29,8 @@ style.textContent = `
 .source-folder-scopebar .scope-separator{color:#676061;font-size:12px}
 .source-folder-scopebar strong{min-width:0;overflow:hidden;text-overflow:ellipsis;color:#ddd4d0;font-size:12px;font-weight:650}
 .source-folder-scopebar .scope-clear{width:27px;height:27px;display:grid;place-items:center;padding:0;color:#817978;font-size:17px;line-height:1}
+html.source-scope-switching #files,
+html.source-scope-switching #gridFolderStrip{visibility:hidden!important}
 `;
 document.head.append(style);
 
@@ -166,6 +168,40 @@ function clearHashFilter() {
   }
 }
 
+function beginGridTransition() {
+  if (window.mochimonoLibrary?.state?.().view !== 'grid') return null;
+  document.documentElement.classList.add('source-scope-switching');
+
+  let settled = false;
+  let resolveReady;
+  let timer = 0;
+  const ready = new Promise(resolve => { resolveReady = resolve; });
+
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    window.removeEventListener('mochimono:stable-grid-installed', onInstalled);
+    requestAnimationFrame(() => {
+      document.documentElement.classList.remove('source-scope-switching');
+      resolveReady();
+    });
+  };
+  const onInstalled = () => finish();
+  window.addEventListener('mochimono:stable-grid-installed', onInstalled);
+  timer = setTimeout(finish, 1500);
+
+  return {
+    async wait() {
+      // Empty results and geometry-identical models install synchronously and do
+      // not emit a replacement-layout event. In those cases the grid is already safe.
+      if (!window.mochimonoStableGrid?.state?.().building) finish();
+      await ready;
+    },
+    finish
+  };
+}
+
 function clearApplied({ clearLibrary = true } = {}) {
   const mode = activeMode;
   activePath = '';
@@ -210,18 +246,37 @@ async function apply(path, { reset = false, browserId = '', importId = 0 } = {})
   activeImportId = 0;
   activeMode = '';
 
-  if (nativeImportId && applyImport(nativeImportId)) {
-    activeMode = 'import';
-    activeImportId = nativeImportId;
-    clearHashFilter();
-  } else {
-    const hashes = await resolveHashes(wanted, browserId);
-    if (token !== generation) return null;
-    activeMode = 'hash';
-    activeHashes = hashes;
-    window.mochimonoLibrary.setLocationFilter('source-folder', hashes);
+  if (nativeImportId) {
+    const transition = beginGridTransition();
+    try {
+      if (applyImport(nativeImportId)) {
+        activeMode = 'import';
+        activeImportId = nativeImportId;
+        clearHashFilter();
+        await transition?.wait();
+      } else transition?.finish();
+    } catch (error) {
+      transition?.finish();
+      throw error;
+    }
   }
 
+  if (!activeMode) {
+    const hashes = await resolveHashes(wanted, browserId);
+    if (token !== generation) return null;
+    const transition = beginGridTransition();
+    try {
+      activeMode = 'hash';
+      activeHashes = hashes;
+      window.mochimonoLibrary.setLocationFilter('source-folder', hashes);
+      await transition?.wait();
+    } catch (error) {
+      transition?.finish();
+      throw error;
+    }
+  }
+
+  if (token !== generation) return null;
   render(wanted);
   window.dispatchEvent(new CustomEvent('mochimono:filters-changed'));
   return { path:wanted };
