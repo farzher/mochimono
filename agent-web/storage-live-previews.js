@@ -11,7 +11,7 @@ if (frame && storagePane && folders) {
   `;
   document.head.append(style);
 
-  const pendingByRoot = new Map();
+  const latestByRoot = new Map();
   const pathKey = value => String(value || '').trim().replaceAll('/', '\\').replace(/[\\]+$/, '').toLowerCase();
   const media = file => String(file?.mime || '').startsWith('image/') || String(file?.mime || '').startsWith('video/');
 
@@ -63,11 +63,9 @@ if (frame && storagePane && folders) {
     return true;
   }
 
-  function flushPending() {
+  function refreshVisible() {
     if (storagePane.hidden) return;
-    for (const [root, file] of [...pendingByRoot]) {
-      if (installFile(file)) pendingByRoot.delete(root);
-    }
+    for (const file of latestByRoot.values()) installFile(file);
   }
 
   window.addEventListener('click', event => {
@@ -83,11 +81,11 @@ if (frame && storagePane && folders) {
       if (!media(file)) continue;
       const root = pathKey(file.rootPath);
       if (!root) continue;
-      pendingByRoot.set(root, file);
-      if (installFile(file)) pendingByRoot.delete(root);
+      latestByRoot.set(root, file);
+      installFile(file);
     }
   });
 
-  new MutationObserver(flushPending).observe(storagePane, { attributes:true, attributeFilter:['hidden'] });
-  new MutationObserver(flushPending).observe(folders, { childList:true, subtree:true });
+  new MutationObserver(refreshVisible).observe(storagePane, { attributes:true, attributeFilter:['hidden'] });
+  new MutationObserver(refreshVisible).observe(folders, { childList:true, subtree:true });
 }
