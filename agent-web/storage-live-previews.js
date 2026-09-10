@@ -5,7 +5,6 @@ const folders = document.querySelector('#folders');
 if (frame && storagePane && folders) {
   const style = document.createElement('style');
   style.textContent = `
-    #folders a.storage-folder-samples{display:grid!important}
     .storage-folder-sample.live-preview{position:relative;overflow:hidden}
     .storage-folder-sample.live-preview img{width:100%;height:100%;object-fit:cover}
     .storage-folder-sample.live-preview.pending img{opacity:0!important}
@@ -55,8 +54,6 @@ if (frame && storagePane && folders) {
       setTimeout(load, Math.min(1200, 180 * 2 ** attempts));
     };
 
-    // Thumbnail generation is demand-driven: only request it because Storage is
-    // visible and the new file has entered one of its three preview slots.
     fetch('/api/thumbs/check', {
       method:'POST',
       headers:{ 'content-type':'application/json' },
@@ -73,10 +70,8 @@ if (frame && storagePane && folders) {
     }
   }
 
-  // Modifier-clicks should behave like ordinary links (new tab/window). Stop the
-  // older Storage JS click handlers without canceling the browser's default link action.
   window.addEventListener('click', event => {
-    const link = event.target.closest?.('a.storage-folder-samples');
+    const link = event.target.closest?.('a.storage-source-link');
     if (!link || (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey)) return;
     event.stopImmediatePropagation();
   }, true);
