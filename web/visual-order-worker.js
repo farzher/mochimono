@@ -10,13 +10,13 @@ const LOW = 16;
 const GRID = 4;
 const HASH_RE = /^[0-9a-f]{64}$/;
 const BATCH = 12;
-const K_NEIGHBORS = 32;
-const PROJECTION_WINDOW = 44;
-const ROUTE_SEARCH_WINDOW = 110;
-const TWO_OPT_WINDOW = 32;
-const EXACT_GRAPH_LIMIT = 650;
 const HUE_BINS = 24;
-const COLOR_BUCKETS = 36;
+const HUE_WINDOW = 18 / 360;
+const HUE_FRONTIER_MIN = 18;
+const HUE_FRONTIER_MAX = 84;
+const GRAY_LIGHT_WINDOW = .14;
+const GRAY_FRONTIER_MIN = 12;
+const GRAY_FRONTIER_MAX = 56;
 
 const POPCOUNT16 = new Uint8Array(1 << 16);
 for (let value = 1; value < POPCOUNT16.length; value++) POPCOUNT16[value] = POPCOUNT16[value >> 1] + (value & 1);
@@ -426,23 +426,13 @@ function statsDistance(left, right) {
   ) / 3);
 }
 
-function metric(left, right, mode) {
-  const featureLeft = left.feature;
-  const featureRight = right.feature;
-  const layout = layoutDistances(featureLeft, featureRight);
-  const edges = edgeDistance(featureLeft, featureRight);
-  const hues = hueDistance(featureLeft, featureRight);
-  const stats = statsDistance(featureLeft, featureRight);
-  const robust = hamming(left.robustWords, right.robustWords) / 256;
+function localVisualDistance(left, right) {
+  const layout = layoutDistances(left.feature, right.feature);
+  const edges = edgeDistance(left.feature, right.feature);
+  const hues = hueDistance(left.feature, right.feature);
+  const stats = statsDistance(left.feature, right.feature);
   const aspect = aspectDistance(left.aspect, right.aspect);
-
-  if (mode === 'structure') {
-    return edges * .44 + layout.luma * .22 + robust * .12 + stats * .10 + layout.color * .06 + aspect * .06;
-  }
-  if (mode === 'color-detail') {
-    return layout.color * .34 + hues * .22 + edges * .20 + layout.luma * .10 + stats * .08 + aspect * .06;
-  }
-  return layout.color * .30 + edges * .23 + hues * .18 + layout.luma * .10 + stats * .08 + robust * .05 + aspect * .06;
+  return layout.color * .34 + hues * .22 + edges * .20 + layout.luma * .10 + stats * .08 + aspect * .06;
 }
 
 function shiftedHue(hue) {
@@ -454,37 +444,6 @@ function colorSection(node) {
   if (node.trueGray) return 'Gray';
   const sector = Math.floor(shiftedHue(node.hue) * 8) % 8;
   return ['Red','Orange','Yellow','Green','Cyan','Blue','Purple','Magenta'][sector];
-}
-
-function colorKey(node) {
-  if (node.trueGray) return [1, node.light, node.hash];
-  return [0, shiftedHue(node.hue), node.light, -node.colorfulness, node.hash];
-}
-
-function compareTuple(left, right) {
-  for (let index = 0; index < Math.max(left.length, right.length); index++) {
-    if (left[index] === right[index]) continue;
-    return left[index] < right[index] ? -1 : 1;
-  }
-  return 0;
-}
-
-function compactVector(feature) {
-  const vector = [];
-  for (let cell = 0; cell < 16; cell++) vector.push(uq01(feature.layout[cell * 3]));
-  for (let cell = 0; cell < 16; cell++) vector.push(uq01(feature.energy[cell]));
-  for (let group = 0; group < 8; group++) {
-    let sum = 0;
-    for (let offset = 0; offset < 3; offset++) sum += uq01(feature.hues[group * 3 + offset]);
-    vector.push(sum / 3);
-  }
-  for (let orientation = 0; orientation < 4; orientation++) {
-    let sum = 0;
-    for (let cell = 0; cell < 16; cell++) sum += uq01(feature.edges[cell * 4 + orientation]);
-    vector.push(sum / 16);
-  }
-  vector.push(uq01(feature.contrast), uq01(feature.colorfulness), uq01(feature.edgeDensity));
-  return vector;
 }
 
 function buildNodes(media, descriptors) {
@@ -501,14 +460,11 @@ function buildNodes(media, descriptors) {
     nodes.push({
       mediaIndex:index,
       hash:item.hash,
-      robust:descriptor.robust,
       robustWords:words256(descriptor.robust),
       color,
       feature:descriptor.feature,
-      vector:compactVector(descriptor.feature),
       aspect:aspectFor(item),
       light:global.L,
-      colorfulness:color.meanChroma + color.colorFraction * .05,
       trueGray,
       hue:dominantHue
     });
@@ -516,294 +472,137 @@ function buildNodes(media, descriptors) {
   return { nodes, unavailable };
 }
 
-function projectionWeights(length, seed) {
-  const weights = new Float32Array(length);
-  let state = (seed * 2654435761) >>> 0;
-  for (let index = 0; index < length; index++) {
-    state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
-    weights[index] = (state & 1) ? 1 : -1;
+function continuationCost(candidate, buffer, nodes) {
+  let best = Infinity;
+  const limit = Math.min(buffer.length, 12);
+  for (let index = 0; index < limit; index++) {
+    const other = buffer[index].index;
+    if (other === candidate) continue;
+    best = Math.min(best, localVisualDistance(nodes[candidate], nodes[other]));
   }
-  return weights;
+  return Number.isFinite(best) ? best : 0;
 }
 
-function projectionValue(node, weights) {
-  let value = 0;
-  for (let index = 0; index < node.vector.length; index++) value += node.vector[index] * weights[index];
-  return value;
-}
+function frontierOrder(indices, nodes, axis, windowSize, minFrontier, maxFrontier) {
+  if (indices.length < 2) return [...indices];
+  const sorted = [...indices].sort((a, b) => axis(nodes[a]) - axis(nodes[b]) || nodes[a].hash.localeCompare(nodes[b].hash));
+  const buffer = [];
+  const result = [];
+  const history = [];
+  let cursor = 0;
 
-function orderWithPositions(nodes, key) {
-  const order = nodes.map((_, index) => index).sort((a, b) => {
-    const left = key(nodes[a]);
-    const right = key(nodes[b]);
-    return typeof left === 'number' ? left - right : compareTuple(left, right);
-  });
-  const positions = new Uint32Array(nodes.length);
-  order.forEach((index, position) => { positions[index] = position; });
-  return { order, positions };
-}
-
-function addWindowCandidates(set, order, position, radius) {
-  const start = Math.max(0, position - radius);
-  const end = Math.min(order.length, position + radius + 1);
-  for (let cursor = start; cursor < end; cursor++) set.add(order[cursor]);
-}
-
-function buildNeighborGraph(nodes, mode) {
-  const graph = Array.from({ length:nodes.length }, () => []);
-  if (nodes.length <= EXACT_GRAPH_LIMIT) {
-    for (let left = 0; left < nodes.length; left++) {
-      const ranked = [];
-      for (let right = 0; right < nodes.length; right++) if (right !== left) ranked.push({ index:right, distance:metric(nodes[left], nodes[right], mode) });
-      ranked.sort((a, b) => a.distance - b.distance || nodes[a.index].hash.localeCompare(nodes[b.index].hash));
-      graph[left] = ranked.slice(0, K_NEIGHBORS);
+  const refill = () => {
+    if (!buffer.length && cursor < sorted.length) buffer.push({ index:sorted[cursor++], age:0 });
+    if (!buffer.length) return;
+    const base = axis(nodes[buffer[0].index]);
+    while (cursor < sorted.length && buffer.length < maxFrontier) {
+      const value = axis(nodes[sorted[cursor]]);
+      if (buffer.length >= minFrontier && value - base > windowSize) break;
+      buffer.push({ index:sorted[cursor++], age:0 });
     }
-    return { graph, projections:[] };
-  }
+  };
 
-  const vectorLength = nodes[0]?.vector.length || 1;
-  const projections = [1,2,3,4,5,6].map(seed => {
-    const weights = projectionWeights(vectorLength, seed);
-    return orderWithPositions(nodes, node => projectionValue(node, weights));
-  });
-  projections.push(orderWithPositions(nodes, colorKey));
-  projections.push(orderWithPositions(nodes, node => [node.light, node.feature.edgeDensity, node.hash]));
+  while (result.length < sorted.length) {
+    refill();
+    if (!buffer.length) break;
 
-  for (let index = 0; index < nodes.length; index++) {
-    const candidates = new Set();
-    for (const projection of projections) addWindowCandidates(candidates, projection.order, projection.positions[index], PROJECTION_WINDOW);
-    candidates.delete(index);
-    const ranked = [];
-    for (const other of candidates) ranked.push({ index:other, distance:metric(nodes[index], nodes[other], mode) });
-    ranked.sort((a, b) => a.distance - b.distance || nodes[a.index].hash.localeCompare(nodes[b.index].hash));
-    graph[index] = ranked.slice(0, K_NEIGHBORS);
-  }
+    let bestPosition = 0;
+    if (history.length) {
+      const previous = history.at(-1);
+      const base = axis(nodes[buffer[0].index]);
+      const far = axis(nodes[buffer.at(-1).index]);
+      const span = Math.max(.001, windowSize, far - base);
+      let bestScore = Infinity;
 
-  for (let index = 0; index < graph.length; index++) for (const edge of [...graph[index]]) {
-    const reverse = graph[edge.index];
-    if (!reverse.some(item => item.index === index)) reverse.push({ index, distance:edge.distance });
-  }
-  for (const edges of graph) edges.sort((a, b) => a.distance - b.distance);
-  return { graph, projections };
-}
+      for (let position = 0; position < buffer.length; position++) {
+        const entry = buffer[position];
+        const candidate = entry.index;
+        const direct = localVisualDistance(nodes[previous], nodes[candidate]);
 
-function contextualCandidate(endpoint, context, graph, visited, nodes, mode) {
-  let best = { index:-1, distance:Infinity, score:Infinity };
-  let considered = 0;
-  for (const edge of graph[endpoint]) {
-    if (visited[edge.index]) continue;
+        let context = 0;
+        let contextCount = 0;
+        for (let offset = 2; offset <= 3 && history.length >= offset; offset++) {
+          context += localVisualDistance(nodes[history.at(-offset)], nodes[candidate]);
+          contextCount++;
+        }
+        if (contextCount) context /= contextCount;
+        else context = direct;
 
-    let contextDistance = 0;
-    let contextCount = 0;
-    for (let cursor = context.length - 2; cursor >= 0 && contextCount < 3; cursor--, contextCount++) {
-      contextDistance += metric(nodes[context[cursor]], nodes[edge.index], mode);
-    }
-    const nearby = contextCount ? contextDistance / contextCount : edge.distance;
+        const axisAdvance = clamp((axis(nodes[candidate]) - base) / span);
+        const positionPenalty = position / Math.max(1, buffer.length - 1);
+        const continuation = continuationCost(candidate, buffer, nodes);
+        const ageBonus = Math.min(.18, entry.age * .014);
+        const score = direct * .55 + context * .13 + continuation * .08 + axisAdvance * .14 + positionPenalty * .10 - ageBonus;
 
-    // Keep the route locally coherent without making the result depend on how
-    // the gallery happens to wrap at the current window or thumbnail size.
-    const score = edge.distance * .74 + nearby * .26;
-    if (score < best.score || (score === best.score && nodes[edge.index].hash < (nodes[best.index]?.hash || '~'))) {
-      best = { index:edge.index, distance:edge.distance, score };
-    }
-    if (++considered >= 12) break;
-  }
-  return best;
-}
-
-function nearestFromOrders(endpoint, orders, visited, nodes, mode) {
-  let best = { index:-1, distance:Infinity, score:Infinity };
-  for (const projection of orders) {
-    const position = projection.positions[endpoint];
-    for (let delta = 1; delta <= ROUTE_SEARCH_WINDOW; delta++) {
-      for (const cursor of [position - delta, position + delta]) {
-        if (cursor < 0 || cursor >= projection.order.length) continue;
-        const candidate = projection.order[cursor];
-        if (visited[candidate]) continue;
-        const distance = metric(nodes[endpoint], nodes[candidate], mode);
-        if (distance < best.distance) best = { index:candidate, distance, score:distance };
-      }
-      if (best.index >= 0 && delta >= 18) break;
-    }
-  }
-  return best;
-}
-
-function optimizeRoute(route, nodes, mode) {
-  if (route.length < 5) return route;
-  for (let pass = 0; pass < 2; pass++) {
-    let improved = false;
-    for (let left = 0; left < route.length - 3; left++) {
-      const a = route[left];
-      const b = route[left + 1];
-      const limit = Math.min(route.length - 2, left + TWO_OPT_WINDOW);
-      for (let right = left + 2; right <= limit; right++) {
-        const c = route[right];
-        const d = route[right + 1];
-        const before = metric(nodes[a], nodes[b], mode) + metric(nodes[c], nodes[d], mode);
-        const after = metric(nodes[a], nodes[c], mode) + metric(nodes[b], nodes[d], mode);
-        if (after + .012 >= before) continue;
-        for (let i = left + 1, j = right; i < j; i++, j--) [route[i], route[j]] = [route[j], route[i]];
-        improved = true;
-        break;
+        if (score < bestScore || (score === bestScore && nodes[candidate].hash < nodes[buffer[bestPosition].index].hash)) {
+          bestScore = score;
+          bestPosition = position;
+        }
       }
     }
-    if (!improved) break;
-  }
-  return route;
-}
 
-function routeOrder(nodes, mode) {
-  if (nodes.length < 2) return { order:nodes.map((_, index) => index), graph:[] };
-  const { graph, projections } = buildNeighborGraph(nodes, mode);
-  const fallback = orderWithPositions(nodes, colorKey);
-  const orders = projections.length ? projections : [fallback];
-  if (!projections.length) orders.push(fallback);
-  const visited = new Uint8Array(nodes.length);
-
-  let seed = 0;
-  let bestDensity = Infinity;
-  for (let index = 0; index < nodes.length; index++) {
-    const edges = graph[index].slice(0, Math.min(8, graph[index].length));
-    const density = edges.length ? edges.reduce((sum, edge) => sum + edge.distance, 0) / edges.length : Infinity;
-    if (density < bestDensity) { bestDensity = density; seed = index; }
+    const [chosen] = buffer.splice(bestPosition, 1);
+    for (const entry of buffer) entry.age++;
+    result.push(chosen.index);
+    history.push(chosen.index);
+    if (history.length > 3) history.shift();
   }
 
-  const leftPath = [seed];
-  const rightPath = [seed];
-  let left = seed;
-  let right = seed;
-  visited[seed] = 1;
-  let count = 1;
-  let fallbackCursor = 0;
-
-  while (count < nodes.length) {
-    let leftCandidate = contextualCandidate(left, leftPath, graph, visited, nodes, mode);
-    let rightCandidate = contextualCandidate(right, rightPath, graph, visited, nodes, mode);
-    if (leftCandidate.index < 0) leftCandidate = nearestFromOrders(left, orders, visited, nodes, mode);
-    if (rightCandidate.index < 0) rightCandidate = nearestFromOrders(right, orders, visited, nodes, mode);
-
-    let next = -1;
-    let prepend = false;
-    if (leftCandidate.index >= 0 || rightCandidate.index >= 0) {
-      prepend = leftCandidate.score < rightCandidate.score;
-      next = (prepend ? leftCandidate : rightCandidate).index;
-    }
-    if (next < 0) {
-      while (fallbackCursor < fallback.order.length && visited[fallback.order[fallbackCursor]]) fallbackCursor++;
-      next = fallback.order[fallbackCursor] ?? -1;
-      prepend = false;
-    }
-    if (next < 0) break;
-
-    visited[next] = 1;
-    count++;
-    if (prepend) { leftPath.push(next); left = next; }
-    else { rightPath.push(next); right = next; }
-  }
-
-  const route = [...leftPath.slice(1).reverse(), seed, ...rightPath.slice(1)];
-  return { order:optimizeRoute(route, nodes, mode), graph };
-}
-
-function countNeighborhoods(graph, threshold) {
-  if (!graph.length) return 0;
-  const seen = new Uint8Array(graph.length);
-  let groups = 0;
-  for (let start = 0; start < graph.length; start++) {
-    if (seen[start]) continue;
-    groups++;
-    const stack = [start];
-    seen[start] = 1;
-    while (stack.length) {
-      const current = stack.pop();
-      for (const edge of graph[current]) {
-        if (edge.distance > threshold || seen[edge.index]) continue;
-        seen[edge.index] = 1;
-        stack.push(edge.index);
-      }
-    }
-  }
-  return groups;
-}
-
-function colorBucket(node) {
-  if (node.trueGray) return 1000 + Math.min(9, Math.floor(node.light * 10));
-  return Math.floor(shiftedHue(node.hue) * COLOR_BUCKETS) % COLOR_BUCKETS;
+  return result;
 }
 
 function colorOrder(nodes) {
-  const buckets = new Map();
-  for (let index = 0; index < nodes.length; index++) {
-    const key = colorBucket(nodes[index]);
-    let list = buckets.get(key);
-    if (!list) buckets.set(key, list = []);
-    list.push(index);
-  }
+  const chromatic = [];
+  const gray = [];
+  for (let index = 0; index < nodes.length; index++) (nodes[index].trueGray ? gray : chromatic).push(index);
 
-  const keys = [...buckets.keys()].sort((a, b) => a - b);
-  const result = [];
-  let previous = -1;
-  for (const key of keys) {
-    const members = buckets.get(key);
-    let local;
-    if (members.length <= 2) local = [...members].sort((a, b) => nodes[a].hash.localeCompare(nodes[b].hash));
-    else {
-      const subNodes = members.map(index => nodes[index]);
-      local = routeOrder(subNodes, 'color-detail').order.map(index => members[index]);
-    }
-    if (previous >= 0 && local.length > 1) {
-      const forward = metric(nodes[previous], nodes[local[0]], 'color-detail');
-      const reverse = metric(nodes[previous], nodes[local[local.length - 1]], 'color-detail');
-      if (reverse < forward) local.reverse();
-    }
-    result.push(...local);
-    previous = local.at(-1) ?? previous;
-  }
-  return result;
+  const chromaticOrder = frontierOrder(
+    chromatic,
+    nodes,
+    node => shiftedHue(node.hue),
+    HUE_WINDOW,
+    HUE_FRONTIER_MIN,
+    HUE_FRONTIER_MAX
+  );
+  const grayOrder = frontierOrder(
+    gray,
+    nodes,
+    node => node.light,
+    GRAY_LIGHT_WINDOW,
+    GRAY_FRONTIER_MIN,
+    GRAY_FRONTIER_MAX
+  );
+  return [...chromaticOrder, ...grayOrder];
 }
 
 function colorRail(order, nodes, unavailableCount) {
   const entries = [];
-  let previous = '';
+  const seen = new Set();
   for (let position = 0; position < order.length; position++) {
     const label = colorSection(nodes[order[position]]);
-    if (label === previous) continue;
-    previous = label;
+    if (seen.has(label)) continue;
+    seen.add(label);
     entries.push({ index:position, label });
   }
   if (unavailableCount) entries.push({ index:order.length, label:'Other' });
   return entries;
 }
 
-async function build(media, mode) {
+async function build(media) {
   const descriptors = await ensureDescriptors(media);
   self.postMessage({ type:'progress', done:media.length, total:media.length, stage:'ordering' });
   const { nodes, unavailable } = buildNodes(media, descriptors);
-  let nodeOrder = [];
-  let families = nodes.length;
-  let rail = [];
-
-  if (mode === 'color') {
-    nodeOrder = colorOrder(nodes);
-    rail = colorRail(nodeOrder, nodes, unavailable.length);
-    families = new Set(nodeOrder.map(index => colorSection(nodes[index]))).size;
-  } else {
-    const routed = routeOrder(nodes, mode === 'structure' ? 'structure' : 'flow');
-    nodeOrder = routed.order;
-    families = countNeighborhoods(routed.graph, mode === 'structure' ? .23 : .25);
-  }
-
+  const nodeOrder = colorOrder(nodes);
+  const rail = colorRail(nodeOrder, nodes, unavailable.length);
   const order = nodeOrder.map(index => media[nodes[index].mediaIndex]);
   for (const mediaIndex of unavailable) order.push(media[mediaIndex]);
-  return { order, indexed:nodes.length, unavailable:unavailable.length, families, rail, featureVersion:FEATURE_VERSION };
+  return { order, indexed:nodes.length, unavailable:unavailable.length, rail, featureVersion:FEATURE_VERSION };
 }
 
 self.onmessage = async event => {
   try {
     const media = Array.isArray(event.data?.media) ? event.data.media : [];
-    const mode = ['flow','structure','color'].includes(event.data?.mode) ? event.data.mode : 'flow';
-    const result = await build(media, mode);
+    const result = await build(media);
     self.postMessage({ type:'result', result });
   } catch (error) {
     self.postMessage({ type:'error', error:error?.message || String(error) });
