@@ -154,6 +154,18 @@ function applyImport(importId) {
   return true;
 }
 
+function clearImportFilter() {
+  if (!sourceFilter) return;
+  sourceFilter.value = '';
+  sourceFilter.dispatchEvent(new Event('change', { bubbles:true }));
+}
+
+function clearHashFilter() {
+  if (window.mochimonoLibrary?.state?.().locationFilter === 'source-folder') {
+    window.mochimonoLibrary.setLocationFilter('', null);
+  }
+}
+
 function clearApplied({ clearLibrary = true } = {}) {
   const mode = activeMode;
   activePath = '';
@@ -162,12 +174,8 @@ function clearApplied({ clearLibrary = true } = {}) {
   activeImportId = 0;
   render('');
   if (clearLibrary) {
-    if (mode === 'import' && sourceFilter) {
-      sourceFilter.value = '';
-      sourceFilter.dispatchEvent(new Event('change', { bubbles:true }));
-    } else if (mode === 'hash' && window.mochimonoLibrary?.state?.().locationFilter === 'source-folder') {
-      window.mochimonoLibrary.setLocationFilter('', null);
-    }
+    if (mode === 'import') clearImportFilter();
+    else if (mode === 'hash') clearHashFilter();
   }
   window.dispatchEvent(new CustomEvent('mochimono:filters-changed'));
 }
@@ -205,7 +213,7 @@ async function apply(path, { reset = false, browserId = '', importId = 0 } = {})
   if (nativeImportId && applyImport(nativeImportId)) {
     activeMode = 'import';
     activeImportId = nativeImportId;
-    if (window.mochimonoLibrary.state().locationFilter === 'source-folder') window.mochimonoLibrary.setLocationFilter('', null);
+    clearHashFilter();
   } else {
     const hashes = await resolveHashes(wanted, browserId);
     if (token !== generation) return null;
@@ -251,6 +259,7 @@ scopebar.addEventListener('click', event => {
 
 sourceFilter?.addEventListener('change', event => {
   if (!event.isTrusted || (!activePath && !urlPath())) return;
+  if (activeMode === 'hash') clearHashFilter();
   generation++;
   writeUrl('', 'replace');
   clearApplied({ clearLibrary:false });
@@ -258,6 +267,7 @@ sourceFilter?.addEventListener('change', event => {
 
 locationFilter?.addEventListener('change', event => {
   if (!event.isTrusted || (!activePath && !urlPath())) return;
+  if (activeMode === 'import') clearImportFilter();
   generation++;
   writeUrl('', 'replace');
   clearApplied({ clearLibrary:false });
