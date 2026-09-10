@@ -5,10 +5,11 @@ const sort = document.querySelector('#sort');
 const views = document.querySelector('#views');
 const fileCount = document.querySelector('#fileCount');
 const commandbar = document.querySelector('.commandbar');
+const dateRail = document.querySelector('#dateRail');
 
 const MODE_KEY = 'mochimono-visual-order-mode';
 const MODES = {
-  flow:{ label:'Flow', description:'Shape + color' },
+  flow:{ label:'Flow', description:'Visual neighborhoods + color' },
   structure:{ label:'Structure', description:'Shape and composition' },
   color:{ label:'Color', description:'Color wheel' }
 };
@@ -32,6 +33,10 @@ let wrappedGrid = null;
 let originalSetModel = null;
 let resetScrollNext = false;
 let pendingScrollAnchor = null;
+let visualRailEntries = [];
+let railDragging = false;
+let railFrame = 0;
+let lastRailMove = 0;
 
 const option = document.createElement('option');
 option.value = 'visual';
@@ -45,7 +50,7 @@ if (sort && !sort.querySelector('option[value="visual"]')) {
 const style = document.createElement('style');
 style.textContent = `
 .visual-sort-bar{margin:10px 0 6px;padding:9px 10px;display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#171518;color:#d8cfcb}
-.visual-sort-bar[hidden]{display:none!important}.visual-sort-copy{min-width:0;flex:1;display:grid;gap:5px}.visual-sort-head{display:flex;align-items:center;gap:9px;min-width:0}.visual-sort-head strong{font-size:11px;white-space:nowrap}.visual-sort-modes{display:flex;gap:3px;min-width:0}.visual-sort-modes button{height:25px;padding:0 8px;border:0;border-radius:7px;background:transparent;color:#8e8582;font-size:10px;font-weight:650}.visual-sort-modes button:hover{background:#252126;color:#ddd5d1}.visual-sort-modes button.active{background:#eee8e4;color:#171416}.visual-sort-copy>span{color:#8e8582;font-size:10px}.visual-sort-progress{height:3px;overflow:hidden;border-radius:99px;background:#282429}.visual-sort-progress i{display:block;height:100%;width:0;background:#efa09a;transition:width .12s linear}.visual-sort-close{width:30px;height:30px;padding:0;display:grid;place-items:center;background:transparent;color:#9b9290;font-size:18px}.visual-sort-close:hover{background:#29252a;color:#fff}
+.visual-sort-bar[hidden],.visual-rail[hidden]{display:none!important}.visual-sort-copy{min-width:0;flex:1;display:grid;gap:5px}.visual-sort-head{display:flex;align-items:center;gap:9px;min-width:0}.visual-sort-head strong{font-size:11px;white-space:nowrap}.visual-sort-modes{display:flex;gap:3px;min-width:0}.visual-sort-modes button{height:25px;padding:0 8px;border:0;border-radius:7px;background:transparent;color:#8e8582;font-size:10px;font-weight:650}.visual-sort-modes button:hover{background:#252126;color:#ddd5d1}.visual-sort-modes button.active{background:#eee8e4;color:#171416}.visual-sort-copy>span{color:#8e8582;font-size:10px}.visual-sort-progress{height:3px;overflow:hidden;border-radius:99px;background:#282429}.visual-sort-progress i{display:block;height:100%;width:0;background:#efa09a;transition:width .12s linear}.visual-sort-close{width:30px;height:30px;padding:0;display:grid;place-items:center;background:transparent;color:#9b9290;font-size:18px}.visual-sort-close:hover{background:#29252a;color:#fff}
 html.visual-sort-indexing:not(.visual-sort-active) #files{visibility:hidden!important}
 html.visual-sort-active #dateRail,html.visual-sort-indexing #dateRail{display:none!important}
 `;
@@ -58,6 +63,12 @@ bar.innerHTML = `<div class="visual-sort-copy"><div class="visual-sort-head"><st
 files?.before(bar);
 const status = bar.querySelector('.visual-sort-copy > span');
 const progress = bar.querySelector('.visual-sort-progress > i');
+
+const visualRail = document.createElement('nav');
+visualRail.className = 'date-rail visual-rail';
+visualRail.hidden = true;
+visualRail.setAttribute('aria-label', 'Browse visual order');
+dateRail?.after(visualRail);
 
 function syncModeButtons() {
   for (const button of bar.querySelectorAll('[data-visual-mode]')) button.classList.toggle('active', button.dataset.visualMode === mode);
@@ -83,10 +94,6 @@ function modelMedia() {
     dateMs:Number(item[5]) || 0,
     size:Number(item[6]) || 0
   })).filter(file => /^[a-f0-9]{64}$/.test(file.hash));
-}
-
-function otherItems(mediaHashes) {
-  return sourceItems().filter(item => !mediaHashes.has(String(item?.[0] || '')));
 }
 
 function runWorker(media, signal) {
@@ -211,16 +218,103 @@ function restorePendingScrollAnchor() {
   });
 }
 
+function genericRailEntries() {
+  if (!ordered.length) return [];
+  const ticks = Math.min(17, ordered.length);
+  const indexes = [...new Set(Array.from({ length:ticks }, (_, index) => Math.round(index * (ordered.length - 1) / Math.max(1, ticks - 1))))];
+  return indexes.map((index, position) => {
+    const percent = Math.round(index / Math.max(1, ordered.length - 1) * 100);
+    const major = position === 0 || position === indexes.length - 1 || position % 4 === 0;
+    return { index, label:`${percent}%`, short:major ? `${percent}%` : '', major };
+  });
+}
+
+function railEntries() {
+  if (mode !== 'color' || !visualRailEntries.length) return genericRailEntries();
+  return visualRailEntries.map(entry => ({
+    index:Math.max(0, Math.min(ordered.length - 1, Number(entry.index) || 0)),
+    label:String(entry.label || ''),
+    short:String(entry.label || ''),
+    major:true
+  }));
+}
+
+function railLabelAt(index) {
+  if (mode !== 'color' || !visualRailEntries.length) {
+    return `${Math.round(Math.max(0, Math.min(1, index / Math.max(1, ordered.length - 1))) * 100)}%`;
+  }
+  let label = visualRailEntries[0]?.label || '';
+  for (const entry of visualRailEntries) {
+    if (Number(entry.index) > index) break;
+    label = entry.label || label;
+  }
+  return label;
+}
+
+function buildRail() {
+  if (!active || !ordered.length) {
+    visualRail.hidden = true;
+    visualRail.replaceChildren();
+    return;
+  }
+  const entries = railEntries();
+  visualRail.hidden = false;
+  document.documentElement.classList.add('library-scroll');
+  visualRail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `<button data-index="${entry.index}" class="rail-tick ${entry.major ? 'major' : ''}" style="top:${(entry.index / Math.max(1, ordered.length - 1) * 100).toFixed(3)}%" title="${entry.label}"><span>${entry.short}</span></button>`).join('')}<div id="visualRailThumb" class="rail-thumb"><span></span><i></i></div>`;
+  updateRail();
+}
+
+function updateRail() {
+  railFrame = 0;
+  if (!active || visualRail.hidden || !ordered.length) return;
+  const index = Math.max(0, Math.min(ordered.length - 1, Number(window.mochimonoStableGrid?.visibleIndex?.()) || 0));
+  const thumb = visualRail.querySelector('#visualRailThumb');
+  if (thumb) {
+    thumb.style.top = `${(ordered.length === 1 ? 0 : index / (ordered.length - 1)) * 100}%`;
+    const label = thumb.querySelector('span');
+    if (label) label.textContent = railLabelAt(index);
+  }
+
+  let nearest = null;
+  let nearestDistance = Infinity;
+  for (const tick of visualRail.querySelectorAll('[data-index]')) {
+    const delta = Math.abs(Number(tick.dataset.index) - index);
+    if (delta < nearestDistance) {
+      nearest = tick;
+      nearestDistance = delta;
+    }
+  }
+  for (const tick of visualRail.querySelectorAll('[data-index]')) tick.classList.toggle('active', tick === nearest);
+}
+
+function scheduleRail() {
+  if (!active || railFrame) return;
+  railFrame = requestAnimationFrame(updateRail);
+}
+
+function railIndexFromPointer(event) {
+  if (!ordered.length) return 0;
+  const rect = visualRail.getBoundingClientRect();
+  return Math.round(Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height))) * (ordered.length - 1));
+}
+
+function moveRail(event, final = false) {
+  const now = performance.now();
+  if (!final && now - lastRailMove < 32) return;
+  lastRailMove = now;
+  window.mochimonoStableGrid?.scrollToIndex?.(railIndexFromPointer(event), 'center');
+  scheduleRail();
+}
+
 function install(result, media, resetScroll) {
   pendingScrollAnchor = resetScroll
     ? { reset:true }
     : captureScrollAnchor() || { preserve:true, hash:'', offset:0, y:scrollY };
 
   const orderedMedia = Array.isArray(result.order) ? result.order : [];
-  const mediaHashes = new Set(orderedMedia.map(file => file.hash));
-  const others = otherItems(mediaHashes);
   orderedFiles = new Map(orderedMedia.map(file => [file.hash, file]));
-  ordered = [...orderedMedia.map(file => file.hash), ...others.map(item => String(item?.[0] || '')).filter(Boolean)];
+  ordered = orderedMedia.map(file => file.hash);
+  visualRailEntries = Array.isArray(result.rail) ? result.rail : [];
   active = true;
   indexing = false;
   document.documentElement.classList.add('visual-sort-active');
@@ -230,7 +324,7 @@ function install(result, media, resetScroll) {
   visualModel = {
     version:`visual-flow:${mode}:${generation}:${ordered.length}`,
     sort:`visual-flow:${mode}:${generation}`,
-    items:[...orderedMedia.map(tuple), ...others]
+    items:orderedMedia.map(tuple)
   };
   window.mochimonoGridModel = visualModel;
   originalSetModel?.(visualModel);
@@ -239,10 +333,11 @@ function install(result, media, resetScroll) {
   syncModeButtons();
   const unavailable = Number(result.unavailable) || 0;
   const description = MODES[mode].description;
-  updateProgress(media.length, media.length, `${description} · ${(Number(result.indexed) || 0).toLocaleString()} media${unavailable ? ` · ${unavailable.toLocaleString()} without thumbnails` : ''}`);
+  const familyText = mode === 'color' ? '' : ` · ${(Number(result.families) || 0).toLocaleString()} visual neighborhoods`;
+  updateProgress(media.length, media.length, `${description} · ${(Number(result.indexed) || 0).toLocaleString()} media${familyText}${unavailable ? ` · ${unavailable.toLocaleString()} without thumbnails` : ''}`);
   if (fileCount) {
     fileCount.hidden = false;
-    fileCount.textContent = `${ordered.length.toLocaleString()} files`;
+    fileCount.textContent = `${ordered.length.toLocaleString()} media`;
     fileCount.title = `Visual order: ${description}`;
   }
 }
@@ -257,10 +352,15 @@ function deactivate() {
   visualModel = null;
   ordered = [];
   orderedFiles.clear();
+  visualRailEntries = [];
   pendingScrollAnchor = null;
   restoreFilteredHashes();
   document.documentElement.classList.remove('visual-sort-active','visual-sort-indexing');
   bar.hidden = true;
+  visualRail.hidden = true;
+  visualRail.replaceChildren();
+  if (railFrame) cancelAnimationFrame(railFrame);
+  railFrame = 0;
 }
 
 async function activate() {
@@ -283,6 +383,7 @@ async function activate() {
     indexing = false;
     document.documentElement.classList.remove('visual-sort-indexing');
     bar.hidden = false;
+    visualRail.hidden = true;
     updateProgress(0, 1, 'No images or videos in this view.');
     return;
   }
@@ -324,9 +425,8 @@ function currentViewerHash() {
 
 function navigateViewer(step) {
   if (!active || viewer?.hidden !== false) return false;
-  const mediaOrder = ordered.filter(hash => orderedFiles.has(hash));
-  const index = mediaOrder.indexOf(currentViewerHash());
-  const hash = mediaOrder[index + step];
+  const index = ordered.indexOf(currentViewerHash());
+  const hash = ordered[index + step];
   if (!hash) return false;
   window.mochimonoOpenViewer?.(hash, orderedFiles.get(hash));
   requestAnimationFrame(syncViewerNav);
@@ -335,12 +435,11 @@ function navigateViewer(step) {
 
 function syncViewerNav() {
   if (!active || viewer?.hidden !== false) return;
-  const mediaOrder = ordered.filter(hash => orderedFiles.has(hash));
-  const index = mediaOrder.indexOf(currentViewerHash());
+  const index = ordered.indexOf(currentViewerHash());
   const previous = document.querySelector('#viewer-prev');
   const next = document.querySelector('#viewer-next');
   if (previous) previous.disabled = index <= 0;
-  if (next) next.disabled = index < 0 || index >= mediaOrder.length - 1;
+  if (next) next.disabled = index < 0 || index >= ordered.length - 1;
 }
 
 sort?.addEventListener('change', () => {
@@ -408,10 +507,51 @@ bar.querySelector('.visual-sort-close').addEventListener('click', () => {
   sort.dispatchEvent(new Event('change', { bubbles:true }));
 });
 
-window.addEventListener('scroll', refreshPendingScrollAnchor, { passive:true });
+visualRail.addEventListener('pointerdown', event => {
+  if (!active || visualRail.hidden) return;
+  railDragging = true;
+  visualRail.classList.add('dragging');
+  try { visualRail.setPointerCapture(event.pointerId); } catch {}
+  moveRail(event, true);
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+visualRail.addEventListener('pointermove', event => {
+  if (!railDragging) return;
+  moveRail(event);
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+visualRail.addEventListener('pointerup', event => {
+  if (!railDragging) return;
+  railDragging = false;
+  visualRail.classList.remove('dragging');
+  moveRail(event, true);
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+visualRail.addEventListener('pointercancel', () => {
+  railDragging = false;
+  visualRail.classList.remove('dragging');
+}, true);
+visualRail.addEventListener('click', event => {
+  const tick = event.target.closest('[data-index]');
+  if (!active || !tick) return;
+  window.mochimonoStableGrid?.scrollToIndex?.(Number(tick.dataset.index), 'center');
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+
+window.addEventListener('scroll', () => {
+  refreshPendingScrollAnchor();
+  scheduleRail();
+}, { passive:true });
 window.addEventListener('mochimono:stable-grid-installed', () => {
   if (!active) return;
-  requestAnimationFrame(restorePendingScrollAnchor);
+  requestAnimationFrame(() => {
+    restorePendingScrollAnchor();
+    buildRail();
+  });
 });
 viewer && new MutationObserver(() => { if (active && !viewer.hidden) requestAnimationFrame(syncViewerNav); }).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
 viewerOpen && new MutationObserver(() => { if (active) requestAnimationFrame(syncViewerNav); }).observe(viewerOpen, { attributes:true, attributeFilter:['href'] });
@@ -420,6 +560,7 @@ window.mochimonoVisualSort = {
   active:() => active,
   mode:() => mode,
   orderedHashes:() => active ? [...ordered] : null,
+  rail:() => visualRailEntries.map(entry => ({ ...entry })),
   refresh:() => scheduleActivate(0, false)
 };
 
