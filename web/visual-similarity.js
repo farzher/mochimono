@@ -44,7 +44,7 @@ const style = document.createElement('style');
 style.textContent = `
 .similarity-bar{margin:10px 0 6px;padding:9px 10px;display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#171518;color:#d8cfcb}
 .similarity-bar[hidden]{display:none!important}.similarity-bar img{width:42px;height:42px;flex:0 0 auto;object-fit:cover;border-radius:7px;background:#0b0a0c}.similarity-copy{min-width:0;flex:1;display:grid;gap:3px}.similarity-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.similarity-copy span{color:#8e8582;font-size:10px}.similarity-progress{height:3px;overflow:hidden;border-radius:99px;background:#282429}.similarity-progress i{display:block;height:100%;width:0;background:#efa09a;transition:width .12s linear}.similarity-close{width:30px;height:30px;padding:0;display:grid;place-items:center;background:transparent;color:#9b9290;font-size:18px;font-weight:400}.similarity-close:hover{background:#29252a;color:#fff}
-html.similarity-indexing #files{visibility:hidden!important}.similarity-score{position:absolute;z-index:8;right:6px;top:6px;min-width:27px;height:19px;padding:0 6px;display:grid;place-items:center;border-radius:999px;background:rgba(13,12,14,.76);box-shadow:0 1px 6px rgba(0,0,0,.35);color:#f2eae6;font-size:9px;font-weight:800;line-height:1;pointer-events:none;backdrop-filter:blur(6px)}
+html.similarity-indexing #files{visibility:hidden!important}.visual-similarity-score{position:absolute;z-index:8;right:6px;top:6px;min-width:27px;height:19px;padding:0 6px;display:grid;place-items:center;border-radius:999px;background:rgba(13,12,14,.76);box-shadow:0 1px 6px rgba(0,0,0,.35);color:#f2eae6;font-size:9px;font-weight:800;line-height:1;pointer-events:none;backdrop-filter:blur(6px)}
 html.similarity-active .date-rail{display:none!important}
 `;
 document.head.append(style);
@@ -365,9 +365,9 @@ function decorateScores(root) {
   root.querySelectorAll?.('.file-card[data-hash]').forEach(card => cards.push(card));
   for (const card of cards) {
     const value = scores.get(card.dataset.hash);
-    if (value == null || card.querySelector(':scope > .similarity-score')) continue;
+    if (value == null || card.querySelector(':scope > .visual-similarity-score')) continue;
     const badge = document.createElement('span');
-    badge.className = 'similarity-score';
+    badge.className = 'visual-similarity-score';
     badge.textContent = String(value);
     badge.title = `Visual similarity ${value}`;
     card.append(badge);
@@ -403,6 +403,7 @@ function consumeRestoreScroll() {
 }
 
 function exitSimilarity(restore = true) {
+  const wasActive = active;
   const restoreModel = baseGridModel;
   const restoreY = baseScrollY;
   const displacedGrid = Boolean(resultModel);
@@ -425,6 +426,7 @@ function exitSimilarity(restore = true) {
   document.documentElement.classList.remove('similarity-active','similarity-indexing');
   bar.hidden = true;
   window.mochimonoSelection?.clear?.();
+  if (wasActive) window.dispatchEvent(new CustomEvent('mochimono:visual-similarity-end'));
   if (!restore) return;
 
   if (displacedGrid && restoreModel?.items) {
@@ -437,11 +439,12 @@ function exitSimilarity(restore = true) {
 
 async function startSimilarity(hash, name) {
   if (!/^[a-f0-9]{64}$/.test(hash)) return;
+  const entering = !active;
   const mine = ++generation;
   controller?.abort();
   controller = new AbortController();
   const signal = controller.signal;
-  if (!active) {
+  if (entering) {
     baseScrollY = scrollY;
     baseGridModel = window.mochimonoGridModel || null;
   }
@@ -458,6 +461,7 @@ async function startSimilarity(hash, name) {
   resultModel = null;
   resetResultsScroll = false;
   document.documentElement.classList.add('similarity-active','similarity-indexing');
+  if (entering) window.dispatchEvent(new CustomEvent('mochimono:visual-similarity-start', { detail:{ hash, name:targetName } }));
   showBar(hash, targetName);
   setProgress(0, 1, 'Reading image catalog…');
   viewerClose?.click();
