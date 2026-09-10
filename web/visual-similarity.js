@@ -34,6 +34,7 @@ let scores = new Map();
 let baseScrollY = 0;
 let baseGridModel = null;
 let pendingRestoreScrollY = null;
+let restoreFallbackTimer = 0;
 let installingModel = false;
 let resultModel = null;
 let resetResultsScroll = false;
@@ -384,13 +385,28 @@ function showBar(hash, name) {
   barImage.src = `/api/thumbs/${hash}?v=${THUMB_VERSION}`;
 }
 
-function restoreNormalGrid() {
-  document.querySelector('#sort')?.dispatchEvent(new Event('change', { bubbles:true }));
+function restoreLibraryGrid() {
+  const control = document.querySelector('#sort');
+  if (control && window.mochimonoLibrary?.setSort) {
+    window.mochimonoLibrary.setSort(control.value);
+    return;
+  }
+  control?.dispatchEvent(new Event('change', { bubbles:true }));
+}
+
+function consumeRestoreScroll() {
+  if (pendingRestoreScrollY == null || active) return;
+  const y = pendingRestoreScrollY;
+  pendingRestoreScrollY = null;
+  clearTimeout(restoreFallbackTimer);
+  restoreFallbackTimer = 0;
+  requestAnimationFrame(() => scrollTo({ top:y, left:0, behavior:'auto' }));
 }
 
 function exitSimilarity(restore = true) {
   const restoreModel = baseGridModel;
   const restoreY = baseScrollY;
+  const displacedGrid = Boolean(resultModel);
   generation++;
   controller?.abort();
   controller = null;
@@ -404,17 +420,20 @@ function exitSimilarity(restore = true) {
   resultModel = null;
   resetResultsScroll = false;
   baseGridModel = null;
-  pendingRestoreScrollY = restore ? restoreY : null;
+  clearTimeout(restoreFallbackTimer);
+  restoreFallbackTimer = 0;
+  pendingRestoreScrollY = restore && displacedGrid ? restoreY : null;
   document.documentElement.classList.remove('similarity-active','similarity-indexing');
   bar.hidden = true;
   window.mochimonoSelection?.clear?.();
-  if (restore) {
-    if (restoreModel?.items) {
-      window.mochimonoGridModel = restoreModel;
-      window.mochimonoStableGrid?.setModel?.(restoreModel);
-    }
-    restoreNormalGrid();
+  if (!restore) return;
+
+  if (displacedGrid && restoreModel?.items) {
+    window.mochimonoGridModel = restoreModel;
+    window.mochimonoStableGrid?.setModel?.(restoreModel);
   }
+  restoreLibraryGrid();
+  if (pendingRestoreScrollY != null) restoreFallbackTimer = setTimeout(consumeRestoreScroll, 160);
 }
 
 async function startSimilarity(hash, name) {
@@ -427,6 +446,8 @@ async function startSimilarity(hash, name) {
     baseScrollY = scrollY;
     baseGridModel = window.mochimonoGridModel || null;
   }
+  clearTimeout(restoreFallbackTimer);
+  restoreFallbackTimer = 0;
   pendingRestoreScrollY = null;
   active = true;
   indexing = true;
@@ -566,10 +587,7 @@ viewerOpen && new MutationObserver(() => requestAnimationFrame(syncViewerNav)).o
 
 window.addEventListener('mochimono:stable-grid-installed', () => {
   if (!active) {
-    if (pendingRestoreScrollY == null) return;
-    const y = pendingRestoreScrollY;
-    pendingRestoreScrollY = null;
-    requestAnimationFrame(() => scrollTo({ top:y, left:0, behavior:'auto' }));
+    consumeRestoreScroll();
     return;
   }
   requestAnimationFrame(() => {
