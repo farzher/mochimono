@@ -1,3 +1,4 @@
+import './catalog-upsert-stability.js';
 import './file-context-menu.js';
 import './random-sort.js';
 import './viewer-grid-return.js';
