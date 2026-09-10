@@ -17,7 +17,8 @@ style.textContent = `
   .storage-folder-samples{
     width:260px;height:140px;display:grid;
     grid-template-columns:1.55fr 1fr 1fr;grid-template-rows:1fr 1fr;
-    gap:3px;overflow:hidden;border-radius:13px;background:#0a090b;cursor:pointer
+    gap:3px;overflow:hidden;border-radius:13px;background:#0a090b;cursor:pointer;
+    color:inherit;text-decoration:none
   }
   .storage-folder-sample{
     position:relative;display:grid;place-items:center;min-width:0;min-height:0;
@@ -190,24 +191,17 @@ function previewCandidates(files) {
   return [...ready, ...unchecked];
 }
 
-function sampleGlyph(file) {
-  return mediaKind(file) === 'video' ? '▶' : '▧';
-}
-
-function thumbUrl(hash) {
-  return `/api/thumbs/${encodeURIComponent(hash)}`;
-}
+function sampleGlyph(file) { return mediaKind(file) === 'video' ? '▶' : '▧'; }
+function thumbUrl(hash) { return `/api/thumbs/${encodeURIComponent(hash)}`; }
 
 function nearlyBlackVideoThumb(img) {
   try {
     const canvas = document.createElement('canvas');
-    canvas.width = 24;
-    canvas.height = 24;
+    canvas.width = 24; canvas.height = 24;
     const context = canvas.getContext('2d', { willReadFrequently:true });
     context.drawImage(img, 0, 0, canvas.width, canvas.height);
     const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-    let dark = 0;
-    let luminance = 0;
+    let dark = 0, luminance = 0;
     const count = pixels.length / 4;
     for (let i = 0; i < pixels.length; i += 4) {
       const value = .2126 * pixels[i] + .7152 * pixels[i + 1] + .0722 * pixels[i + 2];
@@ -215,9 +209,7 @@ function nearlyBlackVideoThumb(img) {
       if (value < 18) dark++;
     }
     return count > 0 && dark / count > .94 && luminance / count < 14;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 function installThumb(img, cell, hash, onReject) {
@@ -243,32 +235,21 @@ function sampleCell(file, index, onReject) {
   if (!file) {
     if (index === 0) {
       const glyph = document.createElement('span');
-      glyph.className = 'sample-glyph';
-      glyph.textContent = '▱';
-      cell.append(glyph);
+      glyph.className = 'sample-glyph'; glyph.textContent = '▱'; cell.append(glyph);
     }
     return cell;
   }
-
   const filename = String(file.filename || '');
   const kind = mediaKind(file);
   const hash = String(file.hash || '');
   cell.title = filename;
   if (kind === 'video') cell.classList.add('video');
-
-  const glyph = document.createElement('span');
-  glyph.className = 'sample-glyph';
-  glyph.textContent = sampleGlyph(file);
-  const name = document.createElement('small');
-  name.className = 'sample-name';
-  name.textContent = filename;
+  const glyph = document.createElement('span'); glyph.className = 'sample-glyph'; glyph.textContent = sampleGlyph(file);
+  const name = document.createElement('small'); name.className = 'sample-name'; name.textContent = filename;
   cell.append(glyph, name);
-
   if (kind && /^[a-f0-9]{64}$/.test(hash)) {
     const img = document.createElement('img');
-    img.alt = '';
-    img.loading = 'eager';
-    img.decoding = 'async';
+    img.alt = ''; img.loading = 'eager'; img.decoding = 'async';
     installThumb(img, cell, hash, onReject);
     img.src = thumbUrl(hash);
     cell.append(img);
@@ -281,18 +262,18 @@ function renderFolderPreview(row) {
   const candidates = previewCandidates(sample?.files);
   let strip = row.querySelector('.storage-folder-samples');
   if (!strip) {
-    strip = document.createElement('div');
-    strip.className = 'storage-folder-samples';
+    strip = document.createElement('a');
+    strip.className = 'storage-folder-samples storage-source-link';
+    strip.href = '#';
     row.prepend(strip);
   }
   row.classList.add('has-folder-preview');
-  strip.dataset.openLibraryFolder = '';
-  strip.title = 'Open in Mochimono';
+  strip.removeAttribute('data-open-library-folder');
+  strip.title = 'View in Library';
 
   const key = candidates.slice(0, 16).map(file => `${readyPreviewHashes.has(String(file.hash || '')) ? 1 : 0}:${file.hash}:${file.filename}:${file.mime}`).join('|') || 'empty';
   if (strip.dataset.key === key) return;
   strip.dataset.key = key;
-
   let cursor = 0;
   const nextCell = index => {
     const file = candidates[cursor++] || null;
@@ -320,22 +301,13 @@ async function liveSample(path) {
 }
 
 async function refreshReadyPreviewHashes() {
-  const hashes = [...new Set([...previewSamples.values()].flatMap(sample =>
-    rankPreviewFiles(sample?.files).map(file => String(file.hash || ''))
-  ))];
-  if (!hashes.length) {
-    readyPreviewHashes.clear();
-    return;
-  }
-
+  const hashes = [...new Set([...previewSamples.values()].flatMap(sample => rankPreviewFiles(sample?.files).map(file => String(file.hash || ''))))];
+  if (!hashes.length) { readyPreviewHashes.clear(); return; }
   const next = new Set();
   for (let offset = 0; offset < hashes.length; offset += 500) {
     const batch = hashes.slice(offset, offset + 500);
     try {
-      const data = await request('/api/thumbs/check', {
-        method:'POST',
-        body:JSON.stringify({ hashes:batch, background:true })
-      });
+      const data = await request('/api/thumbs/check', { method:'POST', body:JSON.stringify({ hashes:batch, background:true }) });
       for (const item of data.thumbnails || []) {
         const hash = String(item?.hash || '');
         if (hash) next.add(hash);
@@ -344,7 +316,6 @@ async function refreshReadyPreviewHashes() {
       for (const hash of batch) if (readyPreviewHashes.has(hash)) next.add(hash);
     }
   }
-
   readyPreviewHashes.clear();
   for (const hash of next) readyPreviewHashes.add(hash);
 }
@@ -360,54 +331,33 @@ async function refreshFolderPreviews(force = false) {
     if (empty) schedulePreviewRefresh(maxAge);
     return;
   }
-
   previewLoading = true;
   try {
     const data = await request('/api/client/local-catalog?limit=5');
     previewSamples.clear();
-    for (const sample of data.folderSamples || []) {
-      previewSamples.set(pathKey(sample.path), { ...sample, files:rankPreviewFiles(sample.files) });
-    }
-
+    for (const sample of data.folderSamples || []) previewSamples.set(pathKey(sample.path), { ...sample, files:rankPreviewFiles(sample.files) });
     const weakRows = rows.filter(row => {
       const files = rankPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files);
       return files.filter(file => mediaKind(file) === 'image').length < 3;
     });
     if (weakRows.length) {
-      const live = await Promise.all(weakRows.map(row =>
-        liveSample(row.dataset.folderPath).catch(() => null)
-      ));
-      for (const sample of live) {
-        if (sample?.files?.length) previewSamples.set(pathKey(sample.path), sample);
-      }
+      const live = await Promise.all(weakRows.map(row => liveSample(row.dataset.folderPath).catch(() => null)));
+      for (const sample of live) if (sample?.files?.length) previewSamples.set(pathKey(sample.path), sample);
     }
-
     await refreshReadyPreviewHashes();
-
     previewLoadedAt = Date.now();
     renderFolderPreviews();
     const stillEmpty = rows.some(row => !readyPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files).length);
-    if (stillEmpty) {
-      emptyPreviewRetries++;
-      schedulePreviewRefresh(1800);
-    } else {
-      emptyPreviewRetries = 0;
-    }
+    if (stillEmpty) { emptyPreviewRetries++; schedulePreviewRefresh(1800); }
+    else emptyPreviewRetries = 0;
   } catch {
-    emptyPreviewRetries++;
-    schedulePreviewRefresh(2500);
-  } finally {
-    previewLoading = false;
-  }
+    emptyPreviewRetries++; schedulePreviewRefresh(2500);
+  } finally { previewLoading = false; }
 }
 
 async function annotate() {
-  if (annotating) {
-    annotateQueued = true;
-    return;
-  }
-  annotating = true;
-  annotateQueued = false;
+  if (annotating) { annotateQueued = true; return; }
+  annotating = true; annotateQueued = false;
   try {
     const state = await request('/api/state');
     const configured = state.settings?.folders || [];
@@ -435,7 +385,6 @@ async function openLibraryFolder(row) {
   const child = frame?.contentWindow;
   const library = child?.mochimonoLibrary;
   if (!library?.openFolder) throw new Error('Library is still loading.');
-
   child.mochimonoHome?.('replace');
   const gridButton = frame.contentDocument?.querySelector('#views [data-view="grid"]');
   if (gridButton && !gridButton.classList.contains('active')) gridButton.click();
@@ -446,49 +395,22 @@ async function openLibraryFolder(row) {
 }
 
 folders?.addEventListener('click', async event => {
-  const libraryOpen = event.target.closest('[data-open-library-folder]');
-  if (libraryOpen) {
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    try {
-      await openLibraryFolder(libraryOpen.closest('[data-folder-path]'));
-    } catch (error) {
-      toast(error.message);
-    }
-    return;
-  }
-
   const open = event.target.closest('[data-open-native-folder-path]');
   if (open) {
-    event.preventDefault();
-    event.stopImmediatePropagation();
+    event.preventDefault(); event.stopImmediatePropagation();
     const path = open.dataset.openNativeFolderPath;
-    try {
-      await request('/api/open-folder', { method:'POST', body:JSON.stringify({ path }) });
-    } catch (error) {
-      toast(error.message);
-    }
+    try { await request('/api/open-folder', { method:'POST', body:JSON.stringify({ path }) }); }
+    catch (error) { toast(error.message); }
     return;
   }
-
   const cloud = event.target.closest('[data-protect-folder]');
   if (!cloud) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  cloud.disabled = true;
+  event.preventDefault(); event.stopImmediatePropagation(); cloud.disabled = true;
   try {
-    await request('/api/browse-folders/protect', {
-      method:'POST', body:JSON.stringify({ path:cloud.dataset.protectFolder })
-    });
-    previewLoadedAt = 0;
-    emptyPreviewRetries = 0;
-    annotateSoon();
-    setTimeout(refreshLibrary, 250);
-  } catch (error) {
-    toast(error.message);
-  } finally {
-    cloud.disabled = false;
-  }
+    await request('/api/browse-folders/protect', { method:'POST', body:JSON.stringify({ path:cloud.dataset.protectFolder }) });
+    previewLoadedAt = 0; emptyPreviewRetries = 0; annotateSoon(); setTimeout(refreshLibrary, 250);
+  } catch (error) { toast(error.message); }
+  finally { cloud.disabled = false; }
 }, true);
 
 if (folders) {
