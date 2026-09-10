@@ -155,25 +155,19 @@ function sourceLibraryUrl(path) {
 
 const sourceLinkStyle = document.createElement('style');
 sourceLinkStyle.textContent = `
-#folders a.storage-source-link{display:block;color:inherit;text-decoration:none}
+#folders a.storage-source-link{color:inherit;text-decoration:none}
 #folders a.storage-source-link.opening{opacity:.62;cursor:progress;pointer-events:none}
 `;
 document.head.append(sourceLinkStyle);
 
 function decorateSourceLinks() {
   if (!folders) return;
-  for (const preview of folders.querySelectorAll('.storage-folder-samples')) {
-    const row = preview.closest('[data-folder-path],[data-browser-folder]');
+  for (const link of folders.querySelectorAll('a.storage-folder-samples')) {
+    const row = link.closest('[data-folder-path],[data-browser-folder]');
     const path = sourcePath(row);
     if (!row || !path) continue;
-    preview.removeAttribute('data-open-library-folder');
-    let link = preview.parentElement?.matches('a.storage-source-link') ? preview.parentElement : null;
-    if (!link) {
-      link = document.createElement('a');
-      link.className = 'storage-source-link';
-      preview.before(link);
-      link.append(preview);
-    }
+    link.classList.add('storage-source-link');
+    link.removeAttribute('data-open-library-folder');
     link.href = sourceLibraryUrl(path).href;
     link.title = `View ${path} in Library`;
   }
@@ -187,8 +181,6 @@ async function openSourceFolder(row, link) {
   const child = frame?.contentWindow;
   const scope = child?.mochimonoSourceFolder;
 
-  // If the iframe is not ready, use the real link as a hard-navigation fallback
-  // instead of polling internal state and leaving the click apparently stuck.
   if (!scope?.apply || !scope?.commit || !child?.mochimonoHome) {
     location.href = link.href;
     return;
