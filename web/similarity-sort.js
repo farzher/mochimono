@@ -26,10 +26,12 @@ let controller = null;
 let ordered = [];
 let orderedFiles = new Map();
 let scores = new Map();
+let partners = new Map();
 let closeGroups = 0;
-let installing = false;
 let rerunTimer = 0;
+let railFrame = 0;
 let originalFilteredHashes = null;
+let sourceModel = window.mochimonoGridModel?.sort === 'similarity' ? null : window.mochimonoGridModel || null;
 
 const option = document.createElement('option');
 option.value = 'similar';
@@ -41,8 +43,9 @@ const style = document.createElement('style');
 style.textContent = `
 .similarity-sort-bar{margin:10px 0 6px;padding:9px 10px;display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#171518;color:#d8cfcb}
 .similarity-sort-bar[hidden]{display:none!important}.similarity-sort-copy{min-width:0;flex:1;display:grid;gap:4px}.similarity-sort-copy strong{font-size:11px}.similarity-sort-copy span{color:#8e8582;font-size:10px}.similarity-sort-progress{height:3px;overflow:hidden;border-radius:99px;background:#282429}.similarity-sort-progress i{display:block;height:100%;width:0;background:#efa09a;transition:width .12s linear}.similarity-sort-close{width:30px;height:30px;padding:0;display:grid;place-items:center;background:transparent;color:#9b9290;font-size:18px}.similarity-sort-close:hover{background:#29252a;color:#fff}
-html.similarity-sort-indexing #files{visibility:hidden!important}html.similarity-sort-active .date-rail{display:none!important}
-html.similarity-sort-active .file-card>.similarity-score{position:absolute;z-index:8;right:6px;top:6px;min-width:27px;height:19px;padding:0 6px;display:grid;place-items:center;border-radius:999px;background:rgba(13,12,14,.76);box-shadow:0 1px 6px rgba(0,0,0,.35);color:#f2eae6;font-size:9px;font-weight:800;line-height:1;pointer-events:none;backdrop-filter:blur(6px)}
+html.similarity-sort-indexing #files{visibility:hidden!important}
+html.similarity-sort-active .file-card>.similarity-score{position:absolute;z-index:8;right:6px;top:6px;min-width:27px;height:19px;padding:0 6px;display:grid;place-items:center;border-radius:999px;background:rgba(13,12,14,.78);box-shadow:0 1px 6px rgba(0,0,0,.35);color:#f2eae6;font-size:9px;font-weight:800;line-height:1;pointer-events:none;backdrop-filter:blur(6px)}
+html.similarity-sort-active .file-card>.similarity-match{position:absolute;z-index:7;left:6px;right:42px;bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 6px;border-radius:6px;background:rgba(13,12,14,.72);color:#d8cfcb;font-size:9px;font-weight:650;line-height:1.2;pointer-events:none;backdrop-filter:blur(5px)}
 `;
 document.head.append(style);
 
@@ -97,7 +100,8 @@ async function saveFingerprints(rows) {
 }
 
 function currentImages() {
-  const items = window.mochimonoGridModel?.items || [];
+  const model = sourceModel || (window.mochimonoGridModel?.sort === 'similarity' ? null : window.mochimonoGridModel);
+  const items = model?.items || [];
   return items.filter(item => item?.[2] === 'image').map(item => ({
     hash:String(item[0] || ''),
     filename:String(item[1] || ''),
@@ -226,7 +230,9 @@ function closestOrder(images, fingerprints) {
   const fileIndex = new Map(images.map((file, index) => [file.hash, index]));
   const parent = Int32Array.from(images, (_, index) => index);
   const best = new Uint8Array(images.length);
+  const partner = new Int32Array(images.length);
   best.fill(64);
+  partner.fill(-1);
 
   const find = value => {
     let root = value;
@@ -239,8 +245,15 @@ function closestOrder(images, fingerprints) {
     return root;
   };
   const union = (left, right) => {
-    left = find(left); right = find(right);
+    left = find(left);
+    right = find(right);
     if (left !== right) parent[right] = left;
+  };
+  const consider = (index, other, delta) => {
+    if (delta < best[index] || (delta === best[index] && (partner[index] < 0 || String(images[other]?.hash || '') < String(images[partner[index]]?.hash || '')))) {
+      best[index] = delta;
+      partner[index] = other;
+    }
   };
 
   const identical = new Map();
@@ -256,10 +269,11 @@ function closestOrder(images, fingerprints) {
   for (const [value, members] of identical) {
     const first = members[0];
     if (members.length > 1) {
-      best[first] = 0;
-      for (let index = 1; index < members.length; index++) {
-        best[members[index]] = 0;
-        union(first, members[index]);
+      for (let index = 0; index < members.length; index++) {
+        const member = members[index];
+        const other = members[index === 0 ? 1 : 0];
+        consider(member, other, 0);
+        if (index) union(first, member);
       }
     }
     unique.push({ value, members, representative:first, words:[0,4,8,12].map(offset => parseInt(value.slice(offset, offset + 4), 16)) });
@@ -291,8 +305,10 @@ function closestOrder(images, fingerprints) {
       const delta = distance(item.value, other.value);
       if (delta > MAX_DISTANCE) continue;
       union(item.representative, other.representative);
-      for (const member of item.members) if (delta < best[member]) best[member] = delta;
-      for (const member of other.members) if (delta < best[member]) best[member] = delta;
+      const leftPartner = other.members[0];
+      const rightPartner = item.members[0];
+      for (const member of item.members) consider(member, leftPartner, delta);
+      for (const member of other.members) consider(member, rightPartner, delta);
     }
   }
 
@@ -319,12 +335,27 @@ function closestOrder(images, fingerprints) {
 
   const order = [...clustered.flat(), ...singles].map(index => images[index]);
   const scoreMap = new Map();
-  for (let index = 0; index < images.length; index++) if (best[index] <= MAX_DISTANCE) scoreMap.set(images[index].hash, similarityScore(best[index]));
-  return { order, scores:scoreMap, groups:clustered.length, matched:scoreMap.size };
+  const partnerMap = new Map();
+  for (let index = 0; index < images.length; index++) {
+    if (best[index] > MAX_DISTANCE || partner[index] < 0) continue;
+    scoreMap.set(images[index].hash, similarityScore(best[index]));
+    partnerMap.set(images[index].hash, images[partner[index]].hash);
+  }
+  return { order, scores:scoreMap, partners:partnerMap, groups:clustered.length, matched:scoreMap.size };
 }
 
 function tuple(file) {
-  return [file.hash, file.filename || file.hash, 'image', file.width || 0, file.height || 0, file.dateMs || 0, file.size || 0];
+  return [
+    file.hash,
+    file.filename || file.hash,
+    'image',
+    file.width || 0,
+    file.height || 0,
+    file.dateMs || 0,
+    file.size || 0,
+    scores.get(file.hash) ?? -1,
+    partners.get(file.hash) || ''
+  ];
 }
 
 function decorate(root = files) {
@@ -333,14 +364,24 @@ function decorate(root = files) {
   if (root instanceof Element && root.matches?.('.file-card[data-hash]')) cards.push(root);
   root.querySelectorAll?.('.file-card[data-hash]').forEach(card => cards.push(card));
   for (const card of cards) {
-    const value = scores.get(card.dataset.hash);
     card.querySelector(':scope > .similarity-score')?.remove();
-    if (value == null) continue;
+    card.querySelector(':scope > .similarity-match')?.remove();
+    const hash = card.dataset.hash;
+    const value = scores.get(hash);
+    const partnerHash = partners.get(hash);
+    const partnerFile = partnerHash ? orderedFiles.get(partnerHash) : null;
+    if (value == null || !partnerFile) continue;
+
     const badge = document.createElement('span');
     badge.className = 'similarity-score';
     badge.textContent = String(value);
-    badge.title = `Similarity ${value} · closest perceptual match`;
-    card.append(badge);
+    badge.title = `Similarity ${value} · closest match: ${partnerFile.filename || partnerHash}`;
+
+    const match = document.createElement('span');
+    match.className = 'similarity-match';
+    match.textContent = `↔ ${partnerFile.filename || partnerHash}`;
+    match.title = `Closest match · similarity ${value}`;
+    card.append(badge, match);
   }
 }
 
@@ -357,28 +398,84 @@ function restoreFilteredHashes() {
   originalFilteredHashes = null;
 }
 
+function railText(index) {
+  const hash = ordered[Math.max(0, Math.min(ordered.length - 1, Number(index) || 0))];
+  const value = scores.get(hash);
+  return value == null ? 'Other' : String(value);
+}
+
+function buildSimilarityRail() {
+  if (!active || !rail || !ordered.length) return;
+  const entries = [];
+  let previous = null;
+  for (let index = 0; index < ordered.length; index++) {
+    const value = scores.get(ordered[index]);
+    const token = value == null ? 'other' : String(value);
+    if (token === previous) continue;
+    previous = token;
+    entries.push({
+      index,
+      label:value == null ? 'Other images' : `Similarity ${value}`,
+      short:value == null ? 'Other' : String(value),
+      position:ordered.length === 1 ? 0 : index / (ordered.length - 1)
+    });
+  }
+
+  rail.hidden = false;
+  document.documentElement.classList.add('library-scroll');
+  rail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `<button data-index="${entry.index}" class="rail-tick major" style="top:${(entry.position * 100).toFixed(3)}%" title="${entry.label}"><span>${entry.short}</span></button>`).join('')}<div id="railThumb" class="rail-thumb"><span></span><i></i></div>`;
+  updateSimilarityRail();
+}
+
+function updateSimilarityRail() {
+  railFrame = 0;
+  if (!active || !rail || rail.hidden || !ordered.length) return;
+  const grid = window.mochimonoStableGrid;
+  const index = Math.max(0, Math.min(ordered.length - 1, Number(grid?.visibleIndex?.()) || 0));
+  const thumb = rail.querySelector('#railThumb');
+  if (thumb) {
+    thumb.style.top = `${(ordered.length === 1 ? 0 : index / (ordered.length - 1)) * 100}%`;
+    const label = thumb.querySelector('span');
+    if (label) label.textContent = railText(index);
+  }
+  let nearest = null;
+  let nearestDistance = Infinity;
+  for (const tick of rail.querySelectorAll('[data-index]')) {
+    const delta = Math.abs(Number(tick.dataset.index) - index);
+    if (delta < nearestDistance) {
+      nearestDistance = delta;
+      nearest = tick;
+    }
+  }
+  for (const tick of rail.querySelectorAll('[data-index]')) tick.classList.toggle('active', tick === nearest);
+}
+
+function scheduleRailUpdate() {
+  if (!active || railFrame) return;
+  railFrame = requestAnimationFrame(updateSimilarityRail);
+}
+
 function install(result, images) {
   orderedFiles = new Map(images.map(file => [file.hash, file]));
   ordered = result.order.map(file => file.hash);
   scores = result.scores;
+  partners = result.partners;
   closeGroups = result.groups;
   active = true;
   indexing = false;
   document.documentElement.classList.add('similarity-sort-active');
   document.documentElement.classList.remove('similarity-sort-indexing');
   patchFilteredHashes();
+
   const model = {
     version:`similar-sort:${generation}:${ordered.length}`,
     sort:'similarity',
     items:result.order.map(tuple)
   };
-  installing = true;
   window.mochimonoGridModel = model;
   window.mochimonoStableGrid?.setModel?.(model);
-  installing = false;
-  if (rail) rail.hidden = true;
   bar.hidden = false;
-  updateProgress(images.length, images.length, `${result.matched.toLocaleString()} images have a close match · ${result.groups.toLocaleString()} groups · ${images.length.toLocaleString()} images indexed`);
+  updateProgress(images.length, images.length, `${result.matched.toLocaleString()} images have a close match · ${result.groups.toLocaleString()} groups · each ↔ label names the closest match`);
   if (fileCount) {
     fileCount.hidden = false;
     fileCount.textContent = `${images.length.toLocaleString()} images`;
@@ -390,6 +487,7 @@ function install(result, images) {
 
 function deactivate() {
   generation++;
+  clearTimeout(rerunTimer);
   controller?.abort();
   controller = null;
   active = false;
@@ -397,10 +495,13 @@ function deactivate() {
   ordered = [];
   orderedFiles.clear();
   scores.clear();
+  partners.clear();
   closeGroups = 0;
   restoreFilteredHashes();
   document.documentElement.classList.remove('similarity-sort-active','similarity-sort-indexing');
   bar.hidden = true;
+  if (railFrame) cancelAnimationFrame(railFrame);
+  railFrame = 0;
 }
 
 async function activate() {
@@ -408,7 +509,7 @@ async function activate() {
   const gridButton = views?.querySelector('[data-view="grid"]');
   if (!gridButton?.classList.contains('active')) {
     gridButton?.click();
-    setTimeout(scheduleActivate, 0);
+    scheduleActivate(0);
     return;
   }
 
@@ -420,6 +521,7 @@ async function activate() {
   indexing = true;
   ordered = [];
   scores.clear();
+  partners.clear();
   restoreFilteredHashes();
   document.documentElement.classList.remove('similarity-sort-active');
   document.documentElement.classList.add('similarity-sort-indexing');
@@ -439,9 +541,11 @@ async function activate() {
     if (!indexed || mine !== generation || signal.aborted) return;
     updateProgress(images.length, images.length, 'Finding closest matches…');
     await new Promise(resolve => requestAnimationFrame(resolve));
-    const result = closestOrder(images.filter(file => indexed.fingerprints.has(file.hash)), indexed.fingerprints);
+    const usable = images.filter(file => indexed.fingerprints.has(file.hash));
+    const result = closestOrder(usable, indexed.fingerprints);
     if (mine !== generation || signal.aborted) return;
-    install(result, images.filter(file => indexed.fingerprints.has(file.hash)));
+    install(result, usable);
+    if (indexed.unavailable) status.textContent += ` · ${indexed.unavailable.toLocaleString()} without thumbnails`;
   } catch (error) {
     if (mine !== generation || signal.aborted) return;
     indexing = false;
@@ -452,11 +556,11 @@ async function activate() {
 
 function scheduleActivate(delay = 0) {
   clearTimeout(rerunTimer);
-  if (sort?.value !== 'similar') return;
+  if (sort?.value !== 'similar' || document.documentElement.classList.contains('similarity-active')) return;
   document.documentElement.classList.add('similarity-sort-indexing');
   bar.hidden = false;
-  status.textContent = 'Updating similarity order…';
-  rerunTimer = setTimeout(activate, delay);
+  status.textContent = active ? 'Updating similarity order…' : 'Preparing similarity order…';
+  rerunTimer = setTimeout(activate, Math.max(0, delay));
 }
 
 function currentViewerHash() {
@@ -487,10 +591,6 @@ sort?.addEventListener('change', () => {
   else deactivate();
 }, true);
 
-for (const selector of ['#source','#collectionFilter','#locationFilter','#typeFilter']) {
-  document.querySelector(selector)?.addEventListener('change', () => { if (sort?.value === 'similar') scheduleActivate(0); }, true);
-}
-document.querySelector('#search')?.addEventListener('input', () => { if (sort?.value === 'similar') scheduleActivate(90); }, true);
 views?.addEventListener('click', event => {
   const view = event.target.closest('[data-view]')?.dataset.view;
   if (sort?.value === 'similar' && view && view !== 'grid') {
@@ -541,11 +641,25 @@ viewerOpen && new MutationObserver(() => { if (active) requestAnimationFrame(syn
 
 new MutationObserver(() => {
   if (!document.documentElement.classList.contains('similarity-active')) return;
-  if (active || indexing) {
-    deactivate();
-    if (fileCount) fileCount.hidden = true;
-  }
+  if (active || indexing) deactivate();
 }).observe(document.documentElement, { attributes:true, attributeFilter:['class'] });
+
+window.addEventListener('mochimono:grid-model', event => {
+  const model = event.detail;
+  if (!model || !Array.isArray(model.items) || model.sort === 'similarity') return;
+  sourceModel = model;
+  if (sort?.value === 'similar' && !document.documentElement.classList.contains('similarity-active')) scheduleActivate(45);
+});
+
+window.addEventListener('mochimono:stable-grid-installed', () => {
+  if (!active) return;
+  requestAnimationFrame(() => {
+    buildSimilarityRail();
+    decorate(files);
+  });
+});
+window.addEventListener('scroll', scheduleRailUpdate, { passive:true });
+window.addEventListener('mochimono:grid-interaction-end', scheduleRailUpdate);
 
 setTimeout(() => {
   try {
@@ -561,6 +675,7 @@ window.mochimonoSimilaritySort = {
   active:() => active,
   orderedHashes:() => active ? [...ordered] : null,
   score:hash => scores.get(String(hash || '')) ?? null,
+  partner:hash => partners.get(String(hash || '')) || '',
   groups:() => closeGroups,
   refresh:() => scheduleActivate(0)
 };
