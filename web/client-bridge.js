@@ -21,6 +21,13 @@ if (location.pathname.startsWith('/files')) {
     window.parent.postMessage({ type: 'mochimono-library-scroll', y }, location.origin);
   };
 
+  // The Agent shell owns Storage UI. Forward only actual local catalog changes
+  // so Storage can update its three-photo source previews without polling.
+  addEventListener('mochimono:local-catalog-event', event => {
+    const files = Array.isArray(event.detail?.files) ? event.detail.files : [];
+    if (files.length) window.parent.postMessage({ type:'mochimono-local-catalog-event', files }, location.origin);
+  });
+
   setTimeout(() => {
     const cloudChoice = document.querySelector('[data-drop-copy]');
     const title = cloudChoice?.querySelector('b');
