@@ -3,10 +3,7 @@ const similar = () => window.mochimonoSimilaritySort;
 const sort = document.querySelector('#sort');
 const reasons = new Set();
 let suspendedVisualSort = false;
-
-function visualBusy() {
-  return document.documentElement.classList.contains('visual-sort-indexing') || Boolean(visual()?.cache?.().runningKey);
-}
+let aiDepth = 0;
 
 function pause(reason) {
   reason = String(reason || 'external');
@@ -14,7 +11,10 @@ function pause(reason) {
 
   const visualApi = visual();
   if (typeof visualApi?.pause === 'function') visualApi.pause(reason);
-  else if (!suspendedVisualSort && sort?.value === 'visual' && visualBusy()) {
+  else if (!suspendedVisualSort && sort?.value === 'visual') {
+    // The restored Visual controller can have a delayed geometry rerun queued
+    // without reporting an active worker yet. Suspend whenever Visual is
+    // selected so exclusive AI/Finder work cannot race that pending rerun.
     suspendedVisualSort = true;
     sort.value = 'date-desc';
     sort.dispatchEvent(new Event('change', { bubbles:true }));
@@ -38,12 +38,20 @@ function resume(reason) {
 
 window.addEventListener('mochimono:visual-similarity-start', () => pause('find-similar'));
 window.addEventListener('mochimono:visual-similarity-end', () => resume('find-similar'));
-window.addEventListener('mochimono:ai-work-start', () => pause('ai'));
-window.addEventListener('mochimono:ai-work-end', () => resume('ai'));
+window.addEventListener('mochimono:ai-work-start', () => {
+  aiDepth++;
+  if (aiDepth === 1) pause('ai');
+});
+window.addEventListener('mochimono:ai-work-end', () => {
+  if (!aiDepth) return;
+  aiDepth--;
+  if (!aiDepth) resume('ai');
+});
 
 window.mochimonoVisualWorkCoordinator = {
   pause,
   resume,
   reasons:() => [...reasons],
-  suspended:() => suspendedVisualSort
+  suspended:() => suspendedVisualSort,
+  aiDepth:() => aiDepth
 };
