@@ -11,8 +11,9 @@ const style = document.createElement('style');
 style.textContent = `
 .files.grid .file-card,.files.grid .file-card *{user-select:none;-webkit-user-select:none}
 .files.grid .file-card img{-webkit-user-drag:none;user-drag:none}
+.files.grid .file-card:hover{box-shadow:inset 0 0 0 2px rgba(239,160,154,.45)!important}
 .files.grid .file-card:focus{outline:none}
-.files.grid .file-card:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(239,160,154,.65)}
+.files.grid .file-card:focus-visible{outline:none;box-shadow:inset 0 0 0 2px rgba(239,160,154,.65)!important}
 .grid-drag-selection-box{position:fixed;z-index:1000;pointer-events:none;border:1px solid rgba(239,160,154,.95);border-radius:3px;background:rgba(239,160,154,.14);box-shadow:0 0 0 1px rgba(0,0,0,.2),0 4px 18px rgba(0,0,0,.16)}
 .file-card.grid-drag-hit:not(.media-card){box-shadow:inset 0 0 0 2px rgba(239,160,154,.78)!important}
 .file-card.media-card.grid-drag-hit:after{opacity:.68!important}
@@ -151,16 +152,17 @@ window.addEventListener('blur', () => {
   cleanupDrag();
 });
 
-// library-ui owns selection state and stops matching file clicks during capture.
-// Observe the click one level earlier, then check after its handler has toggled the
-// item. If that click removed the final selected file, leave selection mode too.
+// The final selected item is a special case: clear selection before library-ui's
+// capture handler can leave selectionMode active with an empty set. Stop this click
+// here so clearing the selection cannot fall through and open the viewer.
 document.addEventListener('click', event => {
+  if (event.shiftKey) return;
   const selection = window.mochimonoSelection;
   const item = event.target.closest?.('#files [data-hash]');
   if (!item?.classList.contains('selected') || selection?.count?.() !== 1) return;
-  queueMicrotask(() => {
-    if (selection.count?.() === 0) selection.clear?.();
-  });
+  selection.clear?.();
+  event.preventDefault();
+  event.stopImmediatePropagation();
 }, true);
 
 document.addEventListener('click', event => {
