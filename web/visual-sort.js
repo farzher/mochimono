@@ -32,6 +32,7 @@ let lastRailMove = 0;
 let runningKey = '';
 let installedKey = '';
 const resultCache = new Map();
+const pauseReasons = new Set();
 
 try { localStorage.removeItem('mochimono-visual-order-mode'); } catch {}
 
@@ -378,6 +379,27 @@ function install(result, media, resetScroll, key) {
   }
 }
 
+function pause(reason = 'external') {
+  reason = String(reason || 'external');
+  if (pauseReasons.has(reason)) return;
+  pauseReasons.add(reason);
+  clearTimeout(rerunTimer);
+  if (!indexing) return;
+  generation++;
+  controller?.abort();
+  controller = null;
+  indexing = false;
+  runningKey = '';
+  document.documentElement.classList.remove('visual-sort-indexing');
+  if (!active) bar.hidden = true;
+}
+
+function resume(reason = 'external') {
+  pauseReasons.delete(String(reason || 'external'));
+  if (pauseReasons.size || !wanted || sort?.value !== 'visual') return;
+  scheduleActivate(40, false);
+}
+
 function deactivate() {
   generation++;
   clearTimeout(rerunTimer);
@@ -402,7 +424,7 @@ function deactivate() {
 }
 
 async function activate() {
-  if (!wanted || sort?.value !== 'visual' || document.documentElement.classList.contains('similarity-active')) return;
+  if (pauseReasons.size || !wanted || sort?.value !== 'visual' || document.documentElement.classList.contains('similarity-active')) return;
   const gridButton = views?.querySelector('[data-view="grid"]');
   if (!gridButton?.classList.contains('active')) {
     gridButton?.click();
@@ -458,7 +480,7 @@ async function activate() {
 
   try {
     const result = await runWorker(media, signal);
-    if (mine !== generation || signal.aborted || !wanted) return;
+    if (mine !== generation || signal.aborted || !wanted || pauseReasons.size || document.documentElement.classList.contains('similarity-active')) return;
     cacheResult(key, result);
     install(result, media, resetScroll, key);
   } catch (error) {
@@ -474,8 +496,8 @@ async function activate() {
 
 function scheduleActivate(delay = 0, resetScroll = false) {
   clearTimeout(rerunTimer);
-  if (!wanted || sort?.value !== 'visual') return;
   resetScrollNext ||= resetScroll;
+  if (!wanted || sort?.value !== 'visual' || pauseReasons.size) return;
   bar.hidden = false;
   if (!active) document.documentElement.classList.add('visual-sort-indexing');
   rerunTimer = setTimeout(activate, Math.max(0, delay));
@@ -615,6 +637,9 @@ window.mochimonoVisualSort = {
   orderedHashes:() => active ? [...ordered] : null,
   rail:() => visualRailEntries.map(entry => ({ ...entry })),
   refresh:() => scheduleActivate(0, false),
+  pause,
+  resume,
+  paused:() => [...pauseReasons],
   cache:() => ({ entries:resultCache.size, runningKey, installedKey })
 };
 
