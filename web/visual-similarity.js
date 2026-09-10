@@ -32,6 +32,8 @@ let resultFiles = new Map();
 let resultOrder = [];
 let scores = new Map();
 let baseScrollY = 0;
+let baseGridModel = null;
+let pendingRestoreScrollY = null;
 let installingModel = false;
 let resultModel = null;
 let resetResultsScroll = false;
@@ -278,10 +280,13 @@ function descriptor(file, row, needColor = false) {
 
 async function rankCandidates(candidates, signal) {
   const media = [...candidates.values()].map(workerMedia);
-  await indexDescriptors(media, 'structure', signal, 'Indexing structure');
-  if (signal.aborted) throw signal.reason || new DOMException('Aborted','AbortError');
-
   let rows = await loadDescriptorRows();
+  if (media.some(file => !validRobust(rows.get(file.hash)))) {
+    await indexDescriptors(media, 'structure', signal, 'Indexing structure');
+    if (signal.aborted) throw signal.reason || new DOMException('Aborted','AbortError');
+    rows = await loadDescriptorRows();
+  }
+
   const targetFile = candidates.get(targetHash);
   const target = descriptor(targetFile, rows.get(targetHash));
   if (!target) throw new Error('This image has no usable thumbnail yet.');
@@ -298,10 +303,12 @@ async function rankCandidates(candidates, signal) {
   const shortlistSize = Math.min(rough.length, Math.max(MIN_SHORTLIST, MAX_RESULTS * SHORTLIST_MULTIPLIER));
   const shortlist = rough.slice(0, shortlistSize).map(item => item.file);
   const colorMedia = [targetFile, ...shortlist].map(workerMedia);
-  await indexDescriptors(colorMedia, 'flow', signal, 'Refining color');
-  if (signal.aborted) throw signal.reason || new DOMException('Aborted','AbortError');
+  if (colorMedia.some(file => !validRobust(rows.get(file.hash)) || !validColor(rows.get(file.hash)))) {
+    await indexDescriptors(colorMedia, 'flow', signal, 'Refining color');
+    if (signal.aborted) throw signal.reason || new DOMException('Aborted','AbortError');
+    rows = await loadDescriptorRows();
+  }
 
-  rows = await loadDescriptorRows();
   const refinedTarget = descriptor(targetFile, rows.get(targetHash), true);
   if (!refinedTarget) throw new Error('This image has no usable visual descriptor yet.');
 
@@ -382,6 +389,8 @@ function restoreNormalGrid() {
 }
 
 function exitSimilarity(restore = true) {
+  const restoreModel = baseGridModel;
+  const restoreY = baseScrollY;
   generation++;
   controller?.abort();
   controller = null;
@@ -394,13 +403,17 @@ function exitSimilarity(restore = true) {
   scores.clear();
   resultModel = null;
   resetResultsScroll = false;
+  baseGridModel = null;
+  pendingRestoreScrollY = restore ? restoreY : null;
   document.documentElement.classList.remove('similarity-active','similarity-indexing');
   bar.hidden = true;
   window.mochimonoSelection?.clear?.();
   if (restore) {
+    if (restoreModel?.items) {
+      window.mochimonoGridModel = restoreModel;
+      window.mochimonoStableGrid?.setModel?.(restoreModel);
+    }
     restoreNormalGrid();
-    const y = baseScrollY;
-    requestAnimationFrame(() => requestAnimationFrame(() => scrollTo({ top:y, left:0, behavior:'auto' })));
   }
 }
 
@@ -410,7 +423,11 @@ async function startSimilarity(hash, name) {
   controller?.abort();
   controller = new AbortController();
   const signal = controller.signal;
-  if (!active) baseScrollY = scrollY;
+  if (!active) {
+    baseScrollY = scrollY;
+    baseGridModel = window.mochimonoGridModel || null;
+  }
+  pendingRestoreScrollY = null;
   active = true;
   indexing = true;
   targetHash = hash;
@@ -548,7 +565,13 @@ viewer && new MutationObserver(() => {
 viewerOpen && new MutationObserver(() => requestAnimationFrame(syncViewerNav)).observe(viewerOpen, { attributes:true, attributeFilter:['href'] });
 
 window.addEventListener('mochimono:stable-grid-installed', () => {
-  if (!active) return;
+  if (!active) {
+    if (pendingRestoreScrollY == null) return;
+    const y = pendingRestoreScrollY;
+    pendingRestoreScrollY = null;
+    requestAnimationFrame(() => scrollTo({ top:y, left:0, behavior:'auto' }));
+    return;
+  }
   requestAnimationFrame(() => {
     decorateScores(files);
     if (!resetResultsScroll) return;
