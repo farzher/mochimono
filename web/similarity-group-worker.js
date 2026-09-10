@@ -8,6 +8,7 @@ const ROBUST_LOW = 16;
 const HASH64_RE = /^[0-9a-f]{16}$/;
 const HASH256_RE = /^[0-9a-f]{64}$/;
 const HASH_BATCH = 16;
+const GROUP_ORDER_DISTANCE = 112;
 
 const POPCOUNT16 = new Uint8Array(1 << 16);
 for (let value = 1; value < POPCOUNT16.length; value++) POPCOUNT16[value] = POPCOUNT16[value >> 1] + (value & 1);
@@ -244,6 +245,207 @@ function nodeCompatible(candidate, accepted, nodes, robustDiameter, maxAspectDis
   return true;
 }
 
+function uniqueGroupNodes(group, nodeLookup) {
+  const seen = new Set();
+  const result = [];
+  for (const imageIndex of group.members) {
+    const node = nodeLookup.get(imageIndex);
+    if (!node || seen.has(node)) continue;
+    seen.add(node);
+    result.push(node);
+  }
+  return result;
+}
+
+function medoidForNodes(nodes) {
+  if (!nodes.length) return null;
+  if (nodes.length === 1) return nodes[0];
+  let best = nodes[0];
+  let bestTotal = Infinity;
+  for (const candidate of nodes) {
+    let total = 0;
+    for (const other of nodes) {
+      if (candidate === other) continue;
+      total += hamming(candidate.robustWords, other.robustWords) * Math.max(1, other.members?.length || 1);
+    }
+    if (total < bestTotal || (total === bestTotal && candidate.robust < best.robust)) {
+      best = candidate;
+      bestTotal = total;
+    }
+  }
+  return best;
+}
+
+function robustBytes(node) {
+  if (node.robustBytes) return node.robustBytes;
+  node.robustBytes = Array.from({ length:32 }, (_, index) => parseInt(node.robust.slice(index * 2, index * 2 + 2), 16));
+  return node.robustBytes;
+}
+
+function eachByteNeighbor(value, radius, visit) {
+  visit(value);
+  if (radius < 1) return;
+  for (let a = 0; a < 8; a++) {
+    const one = value ^ (1 << a);
+    visit(one);
+    if (radius < 2) continue;
+    for (let b = a + 1; b < 8; b++) {
+      const two = one ^ (1 << b);
+      visit(two);
+      if (radius < 3) continue;
+      for (let c = b + 1; c < 8; c++) visit(two ^ (1 << c));
+    }
+  }
+}
+
+function robustGroupPairs(metas, maxDistance) {
+  if (metas.length < 2) return [];
+  const buckets = Array.from({ length:32 }, () => new Map());
+  for (let index = 0; index < metas.length; index++) {
+    const bytes = robustBytes(metas[index].medoid);
+    for (let block = 0; block < 32; block++) {
+      let bucket = buckets[block].get(bytes[block]);
+      if (!bucket) buckets[block].set(bytes[block], bucket = []);
+      bucket.push(index);
+    }
+  }
+
+  // With 32 independent 8-bit blocks, a total Hamming distance <= D must
+  // have at least one block within floor(D / 32). This keeps the group-level
+  // pass exhaustive at our thresholds without an O(group^2) scan.
+  const radius = Math.max(0, Math.min(3, Math.floor(maxDistance / 32)));
+  const pairs = [];
+  for (let index = 0; index < metas.length; index++) {
+    const bytes = robustBytes(metas[index].medoid);
+    const candidates = new Set();
+    for (let block = 0; block < 32; block++) {
+      eachByteNeighbor(bytes[block], radius, key => {
+        for (const other of buckets[block].get(key) || []) if (other > index) candidates.add(other);
+      });
+    }
+    for (const other of candidates) {
+      const distance = hamming(metas[index].medoid.robustWords, metas[other].medoid.robustWords);
+      if (distance <= maxDistance) pairs.push({ left:index, right:other, distance });
+    }
+  }
+  return pairs;
+}
+
+function crossCompatible(leftNodes, rightNodes, robustDiameter, maxAspectDistance) {
+  for (const left of leftNodes) for (const right of rightNodes) {
+    if (hamming(left.robustWords, right.robustWords) > robustDiameter) return false;
+    if (aspectDistance(left.aspect, right.aspect) > maxAspectDistance) return false;
+  }
+  return true;
+}
+
+function mergeSiblingGroups(groups, nodeLookup, mergeDistance, robustDiameter, maxAspectDistance) {
+  if (groups.length < 2) return groups;
+  const metas = groups.map(group => {
+    const nodes = uniqueGroupNodes(group, nodeLookup);
+    return { group, nodes, medoid:medoidForNodes(nodes) };
+  }).filter(meta => meta.medoid);
+  if (metas.length < 2) return groups;
+
+  const pairs = robustGroupPairs(metas, mergeDistance).sort((a, b) =>
+    a.distance - b.distance ||
+    (metas[b.left].group.members.length + metas[b.right].group.members.length) -
+      (metas[a.left].group.members.length + metas[a.right].group.members.length)
+  );
+  const parent = Int32Array.from(metas, (_, index) => index);
+  const state = metas.map(meta => ({ group:meta.group, nodes:[...meta.nodes] }));
+  const find = value => {
+    let root = value;
+    while (parent[root] !== root) root = parent[root];
+    while (parent[value] !== value) {
+      const next = parent[value];
+      parent[value] = root;
+      value = next;
+    }
+    return root;
+  };
+
+  for (const pair of pairs) {
+    let left = find(pair.left);
+    let right = find(pair.right);
+    if (left === right) continue;
+    if (!crossCompatible(state[left].nodes, state[right].nodes, robustDiameter, maxAspectDistance)) continue;
+    if (state[right].group.members.length > state[left].group.members.length) [left, right] = [right, left];
+    parent[right] = left;
+    state[left] = {
+      group:{
+        members:[...state[left].group.members, ...state[right].group.members],
+        newest:Math.max(state[left].group.newest || 0, state[right].group.newest || 0),
+        key:[state[left].group.key, state[right].group.key].filter(Boolean).sort()[0] || ''
+      },
+      nodes:[...new Set([...state[left].nodes, ...state[right].nodes])]
+    };
+  }
+
+  const merged = [];
+  for (let index = 0; index < metas.length; index++) if (find(index) === index) merged.push(state[index].group);
+  return merged;
+}
+
+function orderGroupsBySimilarity(groups, nodeLookup) {
+  if (groups.length < 2) return groups;
+  const metas = groups.map((group, index) => {
+    const nodes = uniqueGroupNodes(group, nodeLookup);
+    return { index, group, medoid:medoidForNodes(nodes) };
+  });
+  if (metas.some(meta => !meta.medoid)) return groups;
+
+  // Ordering is intentionally looser than membership. It is safe for two
+  // separate groups to be neighbors in the Grid even when they are not close
+  // enough to merge. A nearest-first graph keeps related visual families
+  // contiguous without weakening group correctness.
+  const adjacency = Array.from({ length:groups.length }, () => []);
+  for (const pair of robustGroupPairs(metas, GROUP_ORDER_DISTANCE)) {
+    adjacency[pair.left].push({ index:pair.right, distance:pair.distance });
+    adjacency[pair.right].push({ index:pair.left, distance:pair.distance });
+  }
+  for (let index = 0; index < adjacency.length; index++) {
+    adjacency[index].sort((a, b) =>
+      a.distance - b.distance ||
+      groups[b.index].members.length - groups[a.index].members.length ||
+      groups[a.index].key.localeCompare(groups[b.index].key)
+    );
+  }
+
+  const visited = new Uint8Array(groups.length);
+  const ordered = [];
+  const starts = groups.map((_, index) => index).sort((a, b) =>
+    groups[b].members.length - groups[a].members.length ||
+    (groups[b].newest || 0) - (groups[a].newest || 0) ||
+    groups[a].key.localeCompare(groups[b].key)
+  );
+
+  const visit = start => {
+    const stack = [{ index:start, edge:0 }];
+    visited[start] = 1;
+    ordered.push(groups[start]);
+    while (stack.length) {
+      const top = stack[stack.length - 1];
+      const edges = adjacency[top.index];
+      let next = -1;
+      while (top.edge < edges.length) {
+        const candidate = edges[top.edge++].index;
+        if (!visited[candidate]) { next = candidate; break; }
+      }
+      if (next < 0) {
+        stack.pop();
+        continue;
+      }
+      visited[next] = 1;
+      ordered.push(groups[next]);
+      stack.push({ index:next, edge:0 });
+    }
+  };
+
+  for (const start of starts) if (!visited[start]) visit(start);
+  return ordered;
+}
+
 function nearestScores(images, groups, nodeLookup) {
   const scoreByIndex = new Map();
   const partnerByIndex = new Map();
@@ -275,12 +477,7 @@ function nearestScores(images, groups, nodeLookup) {
 function finalizeGroups(images, groups, nodeLookup) {
   const { scoreByIndex, partnerByIndex } = nearestScores(images, groups, nodeLookup);
   groups = groups.filter(group => group.members.length > 1 && group.members.every(index => scoreByIndex.has(index)));
-  groups.sort((a, b) =>
-    b.members.length - a.members.length ||
-    a.worstNearestDistance - b.worstNearestDistance ||
-    b.newest - a.newest ||
-    a.key.localeCompare(b.key)
-  );
+  groups = orderGroupsBySimilarity(groups, nodeLookup);
 
   const order = [];
   const scores = [];
@@ -407,7 +604,8 @@ async function buildGroups(images, fingerprintEntries, config) {
   }
 
   if (!groups.length || coarseExpandDistance <= coarseCoreDistance || robustExpandDistance <= robustCoreDistance) {
-    return finalizeGroups(images, groups, nodeLookup);
+    const merged = mergeSiblingGroups(groups, nodeLookup, robustCoreDistance, robustDiameter, maxAspectDistance);
+    return finalizeGroups(images, merged, nodeLookup);
   }
 
   // Stage 2: only inspect loose candidates surrounding groups that survived
@@ -483,7 +681,8 @@ async function buildGroups(images, fingerprintEntries, config) {
     }
   }
 
-  return finalizeGroups(images, groups, nodeLookup);
+  const merged = mergeSiblingGroups(groups, nodeLookup, robustCoreDistance, robustDiameter, maxAspectDistance);
+  return finalizeGroups(images, merged, nodeLookup);
 }
 
 self.onmessage = async event => {
