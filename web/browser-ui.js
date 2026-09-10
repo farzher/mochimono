@@ -5,6 +5,7 @@ import './browser-folder-client-loader.js';
 import './browser-provenance.js';
 import './visual-similarity.js';
 import './context-similarity.js';
+import './similarity-sort-lock.js';
 import './similarity-sort-owned.js';
 import './similarity-sort-startup.js';
 import './navigation-state.js';
