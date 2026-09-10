@@ -52,7 +52,6 @@ style.textContent = `
 html.similarity-sort-indexing:not(.similarity-sort-active) #files{visibility:hidden!important}
 html.similarity-sort-active #dateRail{display:none!important}
 html.similarity-sort-active .file-card>.similarity-score{position:absolute;z-index:8;right:6px;top:6px;min-width:27px;height:19px;padding:0 6px;display:grid;place-items:center;border-radius:999px;background:rgba(13,12,14,.8);box-shadow:0 1px 6px rgba(0,0,0,.35);color:#f2eae6;font-size:9px;font-weight:800;line-height:1;pointer-events:none;backdrop-filter:blur(6px)}
-html.similarity-sort-active .file-card>.similarity-match{position:absolute;z-index:7;left:6px;right:42px;bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 6px;border-radius:6px;background:rgba(13,12,14,.74);color:#e1d8d4;font-size:9px;font-weight:650;line-height:1.2;pointer-events:none;backdrop-filter:blur(5px)}
 `;
 document.head.append(style);
 
@@ -315,45 +314,57 @@ function closestOrder(images, fingerprints) {
     }
   }
 
-  const componentMembers = new Map();
-  for (let index = 0; index < images.length; index++) {
-    if (best[index] > MAX_DISTANCE || partner[index] < 0) continue;
-    const root = find(index);
-    let count = componentMembers.get(root) || 0;
-    componentMembers.set(root, count + 1);
-  }
-
   const scoreMap = new Map();
   const partnerMap = new Map();
-  const matched = [];
+  const groupsByRoot = new Map();
   const other = [];
+  let matched = 0;
+
   for (let index = 0; index < images.length; index++) {
     if (best[index] <= MAX_DISTANCE && partner[index] >= 0) {
       scoreMap.set(images[index].hash, similarityScore(best[index]));
       partnerMap.set(images[index].hash, images[partner[index]].hash);
-      matched.push(index);
+      const root = find(index);
+      let group = groupsByRoot.get(root);
+      if (!group) {
+        group = { members:[], bestDistance:64, newest:0, key:images[index].hash };
+        groupsByRoot.set(root, group);
+      }
+      group.members.push(index);
+      group.bestDistance = Math.min(group.bestDistance, best[index]);
+      group.newest = Math.max(group.newest, images[index].dateMs || 0);
+      if (images[index].hash < group.key) group.key = images[index].hash;
+      matched++;
     } else other.push(index);
   }
 
-  const pairKey = index => {
-    const a = images[index].hash;
-    const b = partner[index] >= 0 ? images[partner[index]].hash : '';
-    return a < b ? `${a}:${b}` : `${b}:${a}`;
-  };
-  matched.sort((a, b) => best[a] - best[b] || pairKey(a).localeCompare(pairKey(b)) || (images[b].dateMs || 0) - (images[a].dateMs || 0));
+  const matchGroups = [...groupsByRoot.values()];
+  for (const group of matchGroups) {
+    group.members.sort((a, b) =>
+      best[a] - best[b] ||
+      (images[b].dateMs || 0) - (images[a].dateMs || 0) ||
+      images[a].hash.localeCompare(images[b].hash)
+    );
+  }
+  matchGroups.sort((a, b) =>
+    a.bestDistance - b.bestDistance ||
+    b.members.length - a.members.length ||
+    b.newest - a.newest ||
+    a.key.localeCompare(b.key)
+  );
   other.sort((a, b) => (images[b].dateMs || 0) - (images[a].dateMs || 0));
 
   return {
-    order:[...matched, ...other].map(index => images[index]),
+    order:[...matchGroups.flatMap(group => group.members), ...other].map(index => images[index]),
     scores:scoreMap,
     partners:partnerMap,
-    groups:componentMembers.size,
-    matched:matched.length
+    groups:matchGroups.length,
+    matched
   };
 }
 
 function tuple(file) {
-  return [file.hash, file.filename || file.hash, 'image', file.width || 0, file.height || 0, file.dateMs || 0, file.size || 0, scores.get(file.hash) ?? -1, partners.get(file.hash) || ''];
+  return [file.hash, file.filename || file.hash, 'image', file.width || 0, file.height || 0, file.dateMs || 0, file.size || 0, scores.get(file.hash) ?? -1];
 }
 
 function decorate(root = files) {
@@ -364,20 +375,13 @@ function decorate(root = files) {
   for (const card of cards) {
     card.querySelector(':scope > .similarity-score')?.remove();
     card.querySelector(':scope > .similarity-match')?.remove();
-    const hash = String(card.dataset.hash || '');
-    const value = scores.get(hash);
-    const partnerHash = partners.get(hash);
-    const partnerFile = partnerHash ? orderedFiles.get(partnerHash) : null;
-    if (value == null || !partnerFile) continue;
+    const value = scores.get(String(card.dataset.hash || ''));
+    if (value == null) continue;
     const badge = document.createElement('span');
     badge.className = 'similarity-score';
     badge.textContent = String(value);
-    badge.title = `Similarity ${value} to ${partnerFile.filename || partnerHash}`;
-    const match = document.createElement('span');
-    match.className = 'similarity-match';
-    match.textContent = `↔ ${partnerFile.filename || partnerHash}`;
-    match.title = `Closest match · similarity ${value}`;
-    card.append(badge, match);
+    badge.title = `Similarity ${value}`;
+    card.append(badge);
   }
 }
 
@@ -499,7 +503,7 @@ function install(result, images) {
   window.mochimonoGridModel = similarityModel;
   originalSetModel?.(similarityModel);
   bar.hidden = false;
-  updateProgress(images.length, images.length, `${result.matched.toLocaleString()} images have a close match · ${groups.toLocaleString()} groups · ↔ shows each image's closest match`);
+  updateProgress(images.length, images.length, `${result.matched.toLocaleString()} images have a close match · ${groups.toLocaleString()} groups`);
   if (fileCount) {
     fileCount.hidden = false;
     fileCount.textContent = `${images.length.toLocaleString()} images`;
