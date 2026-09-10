@@ -1,39 +1,21 @@
 const visual = () => window.mochimonoVisualSort;
 const similar = () => window.mochimonoSimilaritySort;
-const sort = document.querySelector('#sort');
 const reasons = new Set();
-let suspendedVisualSort = false;
 let aiDepth = 0;
 
 function pause(reason) {
   reason = String(reason || 'external');
+  if (reasons.has(reason)) return;
   reasons.add(reason);
-
-  const visualApi = visual();
-  if (typeof visualApi?.pause === 'function') visualApi.pause(reason);
-  else if (!suspendedVisualSort && sort?.value === 'visual') {
-    // The restored Visual controller can have a delayed geometry rerun queued
-    // without reporting an active worker yet. Suspend whenever Visual is
-    // selected so exclusive AI/Finder work cannot race that pending rerun.
-    suspendedVisualSort = true;
-    sort.value = 'date-desc';
-    sort.dispatchEvent(new Event('change', { bubbles:true }));
-  }
-
+  visual()?.pause?.(reason);
   similar()?.pause?.(reason);
 }
 
 function resume(reason) {
   reason = String(reason || 'external');
-  reasons.delete(reason);
+  if (!reasons.delete(reason)) return;
   visual()?.resume?.(reason);
   similar()?.resume?.(reason);
-
-  if (!reasons.size && suspendedVisualSort && sort) {
-    suspendedVisualSort = false;
-    sort.value = 'visual';
-    sort.dispatchEvent(new Event('change', { bubbles:true }));
-  }
 }
 
 window.addEventListener('mochimono:visual-similarity-start', () => pause('find-similar'));
@@ -52,6 +34,5 @@ window.mochimonoVisualWorkCoordinator = {
   pause,
   resume,
   reasons:() => [...reasons],
-  suspended:() => suspendedVisualSort,
   aiDepth:() => aiDepth
 };
