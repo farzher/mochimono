@@ -12,7 +12,9 @@ import { handleClientProviderApi } from './lib/client-providers.js';
 import { handleCompressionWorkApi } from './lib/compression-work.js';
 import { handleImageOptimizeApi } from './lib/image-optimize.js';
 import { handleVideoOptimizeApi } from './lib/video-optimize.js';
+import { acquireLiveLibraryWatchers } from './lib/live-library-watch.js';
 import { localDuplicateStats } from './lib/local-duplicate-stats.js';
+import { subscribeLocalCatalogChanges } from './lib/local-catalog-events.js';
 import { localCandidate, localCandidates, localCatalog, localLocations } from './lib/local-locations.js';
 import { providerThumbnail, providerThumbnailFailure, queueProviderThumbnail, serveProviderThumbnail } from './lib/provider-thumbs.js';
 import { queueRemoteThumbnail, thumbnailFailure } from './lib/thumbnail-agent.js';
@@ -71,6 +73,30 @@ async function login(req, res) {
   });
   const data = await response.json().catch(() => ({}));
   return json(res, response.status, response.ok ? { token: data.token, username: data.username } : { error: data.error || 'Login failed' });
+}
+
+function streamLocalCatalogEvents(req, res) {
+  res.writeHead(200, {
+    'content-type':'text/event-stream; charset=utf-8',
+    'cache-control':'no-cache, no-store',
+    'connection':'keep-alive',
+    'x-accel-buffering':'no'
+  });
+  res.write('retry: 5000\n\n');
+  let closed = false;
+  const releaseWatchers = acquireLiveLibraryWatchers();
+  const unsubscribe = subscribeLocalCatalogChanges(payload => {
+    if (closed || res.destroyed || res.writableEnded) return;
+    res.write(`event: catalog\ndata: ${JSON.stringify(payload)}\n\n`);
+  });
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    unsubscribe();
+    releaseWatchers();
+  };
+  req.once('close', close);
+  res.once('close', close);
 }
 
 async function serverThumbnails(hashes) {
@@ -302,6 +328,10 @@ async function proxyApi(req, res, url) {
 }
 
 export async function handleClientGateway(req, res, url) {
+  if (req.method === 'GET' && url.pathname === '/api/client/catalog-events') {
+    streamLocalCatalogEvents(req, res);
+    return true;
+  }
   if (req.method === 'GET' && url.pathname === '/api/health') {
     json(res, 200, { ok: true });
     return true;

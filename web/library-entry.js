@@ -1,7 +1,7 @@
 const CLIENT = document.documentElement.classList.contains('client-library');
 const PAGE = 5000;
 const ACTIVE_POLL_MS = 2_000;
-const IDLE_POLL_MS = 60_000;
+const IDLE_POLL_MS = 5 * 60_000;
 const nativeFetch = window.fetch.bind(window);
 
 const runtime = {
@@ -271,6 +271,21 @@ async function hydrateLive() {
   return runtime.hydrating;
 }
 
+function applyLiveFiles(files) {
+  const incoming = (files || []).filter(file => /^[a-f0-9]{64}$/.test(String(file?.hash || '')));
+  if (!incoming.length) return;
+  window.mochimonoLibrary?.upsertMany?.(incoming);
+  const byHash = new Map((runtime.offlineSnapshot.files || []).map(file => [String(file.hash || ''), file]).filter(([hash]) => hash));
+  for (const file of incoming) {
+    const hash = String(file.hash);
+    const previous = byHash.get(hash) || {};
+    byHash.set(hash, { ...previous, ...file });
+    runtime.localHashes.add(hash);
+  }
+  runtime.offlineSnapshot = { ...runtime.offlineSnapshot, files:[...byHash.values()] };
+  window.dispatchEvent(new CustomEvent('mochimono:local-catalog-event', { detail:{ files:incoming } }));
+}
+
 if (CLIENT) {
   await prepareOfflineCatalog().catch(error => console.warn('Local catalog bootstrap failed.', error));
   installOfflineCatalogFallback();
@@ -287,6 +302,25 @@ await import('./library-app.js');
 if (CLIENT) {
   let timer = null;
   let polling = false;
+  let events = null;
+
+  function disconnectEvents() {
+    events?.close();
+    events = null;
+  }
+
+  function connectEvents() {
+    if (document.hidden || events || typeof EventSource !== 'function') return;
+    const source = new EventSource('/api/client/catalog-events');
+    source.addEventListener('catalog', event => {
+      try {
+        const payload = JSON.parse(event.data || '{}');
+        applyLiveFiles(payload.files);
+        if (payload.reset) void hydrateLive();
+      } catch {}
+    });
+    events = source;
+  }
 
   function schedule(delay) {
     clearTimeout(timer);
@@ -316,12 +350,20 @@ if (CLIENT) {
     }
   }
 
+  connectEvents();
   schedule(0);
-  addEventListener('beforeunload', () => clearTimeout(timer), { once:true });
+  addEventListener('beforeunload', () => {
+    clearTimeout(timer);
+    disconnectEvents();
+  }, { once:true });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       clearTimeout(timer);
       timer = null;
-    } else schedule(0);
+      disconnectEvents();
+    } else {
+      connectEvents();
+      schedule(0);
+    }
   });
 }

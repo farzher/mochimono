@@ -4,6 +4,7 @@ const CACHE_MS = 30000;
 
 let activePath = '';
 let activeKind = 'Source folder';
+let activeHashes = null;
 let generation = 0;
 const cache = new Map();
 
@@ -176,6 +177,7 @@ function clearApplied({ clearLibrary = true } = {}) {
   const owned = window.mochimonoLibrary?.state?.().locationFilter === 'source-folder';
   activePath = '';
   activeKind = 'Source folder';
+  activeHashes = null;
   render('');
   if (clearLibrary && owned) window.mochimonoLibrary?.setLocationFilter?.('', null);
   window.dispatchEvent(new CustomEvent('mochimono:filters-changed'));
@@ -197,10 +199,11 @@ async function apply(path, { reset = false, browserId = '' } = {}) {
 
   activePath = wanted;
   activeKind = membership.kind;
-  window.mochimonoLibrary.setLocationFilter('source-folder', membership.hashes);
-  render(wanted, membership.kind, membership.hashes.size);
+  activeHashes = membership.hashes;
+  window.mochimonoLibrary.setLocationFilter('source-folder', activeHashes);
+  render(wanted, membership.kind, activeHashes.size);
   window.dispatchEvent(new CustomEvent('mochimono:filters-changed'));
-  return { path:wanted, kind:membership.kind, count:membership.hashes.size };
+  return { path:wanted, kind:membership.kind, count:activeHashes.size };
 }
 
 function commit(path, mode = 'replace') {
@@ -242,6 +245,21 @@ locationFilter?.addEventListener('change', event => {
 window.addEventListener('popstate', () => void restore());
 window.addEventListener('mochimono:catalog-updated', () => cache.clear());
 window.addEventListener('mochimono:browser-folder-sync', () => cache.clear());
+window.addEventListener('mochimono:local-catalog-event', event => {
+  const root = activePath || urlPath();
+  if (!root || !activeHashes || window.mochimonoLibrary?.state?.().locationFilter !== 'source-folder') return;
+  let changed = false;
+  for (const file of event.detail?.files || []) {
+    if (pathKey(file?.rootPath) !== pathKey(root)) continue;
+    const hash = String(file?.hash || '');
+    if (!/^[a-f0-9]{64}$/.test(hash) || activeHashes.has(hash)) continue;
+    activeHashes.add(hash);
+    changed = true;
+  }
+  if (!changed) return;
+  window.mochimonoLibrary.setLocationFilter('source-folder', activeHashes);
+  render(root, activeKind, activeHashes.size);
+});
 
 window.mochimonoSourceFolder = {
   apply,
