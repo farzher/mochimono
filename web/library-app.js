@@ -407,7 +407,6 @@ function trimRenderedEnd(count) {
   if (!cards.length) return 0;
   for (const card of cards) card.remove();
   cleanupEmptyDateGroups();
-  restoreAnchor(anchor);
   return cards.length;
 }
 
