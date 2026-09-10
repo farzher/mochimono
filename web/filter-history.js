@@ -98,14 +98,15 @@ function restoreSource(url = new URL(location.href)) {
   }
 }
 
-function restoreFilters(preserveInitialSimilar = false) {
+function restoreFilters(preserveInitialOwnedSort = false) {
   const url = new URL(location.href);
 
-  // Similar can be restored from local UI state before this module installs.
-  // Preserve that initial choice and make the URL canonical instead of
-  // immediately interpreting the absent sort= parameter as Newest.
-  if (preserveInitialSimilar && !url.searchParams.has('sort') && sort?.value === 'similar') {
-    url.searchParams.set('sort', 'similar');
+  // Similar and Visual can be restored from local UI state before this module
+  // installs. Preserve that initial choice and make the URL canonical instead
+  // of interpreting an absent sort= parameter as Newest.
+  const initialSort = String(sort?.value || '');
+  if (preserveInitialOwnedSort && !url.searchParams.has('sort') && ['similar','visual'].includes(initialSort)) {
+    url.searchParams.set('sort', initialSort);
     history.replaceState(history.state, '', url);
   }
 
@@ -144,6 +145,6 @@ window.addEventListener('popstate', () => {
 views?.addEventListener('click', () => queueMicrotask(() => restoreFilters(false)));
 // Import/source option lists are rebuilt when catalog data changes. That DOM
 // mutation only needs to restore the source selection; restoring every control
-// here can silently replace a user-selected sort such as Similar.
+// here can silently replace a user-selected sort such as Similar or Visual.
 if (source) new MutationObserver(() => restoreSource()).observe(source, { childList:true, subtree:true });
 queueMicrotask(() => restoreFilters(true));
