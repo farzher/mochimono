@@ -17,8 +17,7 @@ const INDEX_BATCH = 32;
 const CANDIDATE_DISTANCE = 7;
 const MODE_KEY = 'mochimono-similarity-mode';
 const MODES = {
-  duplicates:{ label:'Duplicates', maxDistance:0, description:'100-score perceptual matches' },
-  near:{ label:'Near duplicates', maxDistance:3, description:'Very close perceptual matches' },
+  near:{ label:'Near duplicates', maxDistance:0, description:'100-score pHash matches' },
   similar:{ label:'Similar images', maxDistance:7, description:'Broader visual groups' }
 };
 const POPCOUNT = [0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4];
@@ -49,13 +48,14 @@ let resetScrollNext = false;
 let pendingScrollY = null;
 let mode = (() => {
   const saved = localStorage.getItem(MODE_KEY);
+  if (saved === 'duplicates') return 'near';
   return MODES[saved] ? saved : 'similar';
 })();
 
 const option = document.createElement('option');
 option.value = 'similar';
 option.textContent = 'Similar';
-option.title = 'Browse perceptual duplicate and similarity groups';
+option.title = 'Browse near-duplicate and visually similar image groups';
 if (sort && !sort.querySelector('option[value="similar"]')) sort.append(option);
 
 const style = document.createElement('style');
