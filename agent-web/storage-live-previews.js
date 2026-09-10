@@ -7,7 +7,7 @@ if (frame && storagePane && folders) {
   style.textContent = `
     .storage-folder-sample.live-preview{position:relative;overflow:hidden}
     .storage-folder-sample.live-preview img{width:100%;height:100%;object-fit:cover}
-    .storage-folder-sample.live-preview.pending img{opacity:0}
+    .storage-folder-sample.live-preview.pending img{opacity:0!important}
   `;
   document.head.append(style);
 
@@ -19,24 +19,20 @@ if (frame && storagePane && folders) {
     return String(row?.dataset.folderPath || row?.querySelector('.storage-title strong')?.title || '').trim();
   }
 
-  function previewForRow(row) {
-    return row?.querySelector('.storage-folder-samples') || null;
-  }
-
   function installFile(file) {
     if (!media(file) || storagePane.hidden) return false;
     const root = pathKey(file.rootPath);
     if (!root) return false;
     const row = [...folders.querySelectorAll(':scope > [data-folder-path],:scope > [data-browser-folder]')]
       .find(item => pathKey(rowPath(item)) === root);
-    const strip = previewForRow(row);
+    const strip = row?.querySelector('.storage-folder-samples');
     if (!strip) return false;
     const hash = String(file.hash || '');
     if (!/^[a-f0-9]{64}$/.test(hash)) return false;
-    if (strip.querySelector(`[data-live-hash="${CSS.escape(hash)}"]`)) return true;
+    if (strip.querySelector(`[data-live-hash="${CSS.escape(hash)}"]`) || [...strip.querySelectorAll('img')].some(img => img.src.includes(hash))) return true;
 
     const cell = document.createElement('span');
-    cell.className = 'storage-folder-sample live-preview pending';
+    cell.className = `storage-folder-sample live-preview pending${String(file.mime).startsWith('video/') ? ' video' : ''}`;
     cell.dataset.liveHash = hash;
     cell.title = file.filename || '';
     const image = document.createElement('img');
@@ -49,7 +45,10 @@ if (frame && storagePane && folders) {
 
     let attempts = 0;
     const load = () => { image.src = `/api/thumbs/${encodeURIComponent(hash)}?v=3&live=${Date.now()}`; };
-    image.onload = () => cell.classList.remove('pending');
+    image.onload = () => {
+      cell.classList.remove('pending');
+      cell.classList.add('thumb-ready');
+    };
     image.onerror = () => {
       if (++attempts > 6 || storagePane.hidden || !cell.isConnected) return;
       setTimeout(load, Math.min(1200, 180 * 2 ** attempts));
