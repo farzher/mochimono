@@ -1,33 +1,32 @@
 const THUMB_VERSION = 3;
-const DHASH_VERSION = 'dhash9x8-v1';
 const DB_NAME = 'mochimono-visual-similarity';
 const DB_VERSION = 1;
 const STORE = 'fingerprints';
+const DHASH_VERSION = 'dhash9x8-v1';
+const AHASH_VERSION = 'ahash8x8-v1';
+const HASH_RE = /^[0-9a-f]{16}$/;
+
 const CORE_BLOCK_RADIUS = 2;
 const EXPAND_BLOCK_RADIUS = 3;
 const CORE_DHASH_DISTANCE = 20;
+const CORE_AHASH_DISTANCE = 18;
 const EXPAND_DHASH_DISTANCE = 24;
-const GROUP_PHASH_DIAMETER = 18;
-const GROUP_DHASH_DIAMETER = 28;
-const EXPAND_GROUP_PHASH_DIAMETER = 20;
-const EXPAND_GROUP_DHASH_DIAMETER = 28;
-const HASH_RE = /^[0-9a-f]{16}$/;
+const EXPAND_AHASH_DISTANCE = 22;
+const GROUP_PHASH_DIAMETER = 14;
+const GROUP_DHASH_DIAMETER = 24;
+const GROUP_AHASH_DIAMETER = 22;
+const MAX_ASPECT_LOG2_DISTANCE = 1;
 
 const POPCOUNT16 = new Uint8Array(1 << 16);
 for (let value = 1; value < POPCOUNT16.length; value++) POPCOUNT16[value] = POPCOUNT16[value >> 1] + (value & 1);
 
 const wordsFor = value => [0,4,8,12].map(offset => parseInt(value.slice(offset, offset + 4), 16));
-
-function distanceWords(left, right) {
-  return POPCOUNT16[left[0] ^ right[0]] +
-    POPCOUNT16[left[1] ^ right[1]] +
-    POPCOUNT16[left[2] ^ right[2]] +
-    POPCOUNT16[left[3] ^ right[3]];
-}
-
-function similarityScore(delta) {
-  return Math.max(0, Math.round(100 - delta * 4));
-}
+const distanceWords = (left, right) =>
+  POPCOUNT16[left[0] ^ right[0]] + POPCOUNT16[left[1] ^ right[1]] +
+  POPCOUNT16[left[2] ^ right[2]] + POPCOUNT16[left[3] ^ right[3]];
+const similarityScore = delta => Math.max(0, Math.round(100 - delta * 4));
+const aspectFor = image => Math.max(1e-6, (Number(image?.width) || 1) / (Number(image?.height) || 1));
+const aspectDistance = (left, right) => Math.abs(Math.log2(left / right));
 
 function eachNeighbor(word, radius, visit) {
   visit(word);
@@ -77,86 +76,85 @@ async function saveRows(rows) {
     for (const row of rows) store.put(row);
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error || new Error('Could not cache gradient hashes'));
+    tx.onabort = () => reject(tx.error || new Error('Could not cache visual hashes'));
   }).finally(() => db.close());
 }
 
-async function dHashFor(hash) {
+function hashBits(bits) {
+  let hex = '';
+  for (let nibble = 0; nibble < 16; nibble++) {
+    let value = 0;
+    for (let bit = 0; bit < 4; bit++) if (bits[nibble * 4 + bit]) value |= 1 << (3 - bit);
+    hex += value.toString(16);
+  }
+  return hex;
+}
+
+async function visualHashesFor(hash) {
   const response = await fetch(`/api/thumbs/${hash}?v=${THUMB_VERSION}`, { cache:'force-cache' });
-  if (!response.ok) return '';
-  const blob = await response.blob();
-  const bitmap = await createImageBitmap(blob);
+  if (!response.ok) return null;
+  const bitmap = await createImageBitmap(await response.blob());
   try {
-    const canvas = new OffscreenCanvas(9, 8);
-    const context = canvas.getContext('2d', { willReadFrequently:true, alpha:false });
-    context.drawImage(bitmap, 0, 0, 9, 8);
-    const data = context.getImageData(0, 0, 9, 8).data;
-    const gray = new Float32Array(72);
-    for (let pixel = 0, index = 0; index < gray.length; index++, pixel += 4) gray[index] = data[pixel] * .299 + data[pixel + 1] * .587 + data[pixel + 2] * .114;
-    let hex = '';
-    for (let nibble = 0; nibble < 16; nibble++) {
-      let value = 0;
-      for (let bit = 0; bit < 4; bit++) {
-        const index = nibble * 4 + bit;
-        const y = Math.floor(index / 8);
-        const x = index % 8;
-        if (gray[y * 9 + x + 1] > gray[y * 9 + x]) value |= 1 << (3 - bit);
-      }
-      hex += value.toString(16);
+    const dCanvas = new OffscreenCanvas(9, 8);
+    const dContext = dCanvas.getContext('2d', { willReadFrequently:true, alpha:false });
+    dContext.drawImage(bitmap, 0, 0, 9, 8);
+    const dData = dContext.getImageData(0, 0, 9, 8).data;
+    const dGray = new Float32Array(72);
+    for (let pixel = 0, index = 0; index < dGray.length; index++, pixel += 4) dGray[index] = dData[pixel] * .299 + dData[pixel + 1] * .587 + dData[pixel + 2] * .114;
+    const dBits = new Uint8Array(64);
+    for (let index = 0; index < 64; index++) {
+      const y = Math.floor(index / 8);
+      const x = index % 8;
+      dBits[index] = dGray[y * 9 + x + 1] > dGray[y * 9 + x] ? 1 : 0;
     }
-    return hex;
+
+    const aCanvas = new OffscreenCanvas(8, 8);
+    const aContext = aCanvas.getContext('2d', { willReadFrequently:true, alpha:false });
+    aContext.drawImage(bitmap, 0, 0, 8, 8);
+    const aData = aContext.getImageData(0, 0, 8, 8).data;
+    const aGray = new Float32Array(64);
+    let mean = 0;
+    for (let pixel = 0, index = 0; index < 64; index++, pixel += 4) {
+      const value = aData[pixel] * .299 + aData[pixel + 1] * .587 + aData[pixel + 2] * .114;
+      aGray[index] = value;
+      mean += value;
+    }
+    mean /= 64;
+    const aBits = new Uint8Array(64);
+    for (let index = 0; index < 64; index++) aBits[index] = aGray[index] > mean ? 1 : 0;
+    return { dhash:hashBits(dBits), ahash:hashBits(aBits) };
   } finally { bitmap.close?.(); }
 }
 
-async function ensureDHashes(hashes, pHashes, known = new Map()) {
+async function ensureVisualHashes(hashes, pHashes, known = new Map()) {
   const unique = [...new Set(hashes)].filter(hash => !known.has(hash));
   if (!unique.length) return known;
   const rows = await readRows(unique);
   const missing = [];
   for (const hash of unique) {
     const row = rows.get(hash);
-    if (row?.dhashVersion === DHASH_VERSION && HASH_RE.test(String(row.dhash || ''))) known.set(hash, String(row.dhash));
-    else missing.push(hash);
+    if (row?.dhashVersion === DHASH_VERSION && row?.ahashVersion === AHASH_VERSION &&
+        HASH_RE.test(String(row.dhash || '')) && HASH_RE.test(String(row.ahash || ''))) {
+      known.set(hash, { dhash:String(row.dhash), ahash:String(row.ahash) });
+    } else missing.push(hash);
   }
 
   const writes = [];
   for (let offset = 0; offset < missing.length; offset += 24) {
     const chunk = missing.slice(offset, offset + 24);
     const computed = await Promise.all(chunk.map(async hash => {
-      try { return [hash, await dHashFor(hash)]; }
-      catch { return [hash, '']; }
+      try { return [hash, await visualHashesFor(hash)]; }
+      catch { return [hash, null]; }
     }));
-    for (const [hash, value] of computed) {
-      if (!HASH_RE.test(value)) continue;
-      known.set(hash, value);
+    for (const [hash, visual] of computed) {
+      if (!visual || !HASH_RE.test(visual.dhash) || !HASH_RE.test(visual.ahash)) continue;
+      known.set(hash, visual);
       const old = rows.get(hash) || { hash, value:pHashes.get(hash) || '' };
-      writes.push({ ...old, hash, dhash:value, dhashVersion:DHASH_VERSION });
+      writes.push({ ...old, hash, ...visual, dhashVersion:DHASH_VERSION, ahashVersion:AHASH_VERSION });
     }
   }
   try { await saveRows(writes); } catch {}
   return known;
-}
-
-function exactPHashGroups(images, pHashes) {
-  const byValue = new Map();
-  for (let index = 0; index < images.length; index++) {
-    const value = pHashes.get(images[index].hash);
-    if (!HASH_RE.test(String(value || ''))) continue;
-    let members = byValue.get(value);
-    if (!members) byValue.set(value, members = []);
-    members.push(index);
-  }
-
-  const groups = [...byValue.values()]
-    .filter(members => members.length > 1)
-    .map(members => ({
-      members,
-      representative:members[0],
-      bestDistance:0,
-      newest:Math.max(...members.map(index => images[index].dateMs || 0)),
-      key:members.map(index => images[index].hash).sort()[0]
-    }));
-  return finalizeGroups(images, groups, new Map(groups.flatMap(group => group.members.map(index => [index, 0]))));
 }
 
 function buildBuckets(nodes) {
@@ -172,20 +170,81 @@ function buildBuckets(nodes) {
 
 function candidatesForWords(words, buckets, radius, after = -1) {
   const candidates = new Set();
-  for (let block = 0; block < 4; block++) {
-    eachNeighbor(words[block], radius, key => {
-      for (const index of buckets[block].get(key) || []) if (index > after) candidates.add(index);
-    });
-  }
+  for (let block = 0; block < 4; block++) eachNeighbor(words[block], radius, key => {
+    for (const index of buckets[block].get(key) || []) if (index > after) candidates.add(index);
+  });
   return candidates;
 }
 
-function compatible(node, accepted, nodes, pLimit, dLimit) {
-  for (const index of accepted) {
-    const other = nodes[index];
-    if (distanceWords(node.pWords, other.pWords) > pLimit) return false;
-    if (distanceWords(node.dWords, other.dWords) > dLimit) return false;
+function exactPHashGroups(images, pHashes) {
+  const byValue = new Map();
+  for (let index = 0; index < images.length; index++) {
+    const value = pHashes.get(images[index].hash);
+    if (!HASH_RE.test(String(value || ''))) continue;
+    let members = byValue.get(value);
+    if (!members) byValue.set(value, members = []);
+    members.push(index);
   }
+  const groups = [...byValue.values()].filter(members => members.length > 1).map(members => ({
+    members,
+    bestDistance:0,
+    newest:Math.max(...members.map(index => images[index].dateMs || 0)),
+    key:members.map(index => images[index].hash).sort()[0]
+  }));
+  return finalizeGroups(images, groups, new Map(groups.flatMap(group => group.members.map(index => [index, 0]))));
+}
+
+function coarseNodes(images, pHashes) {
+  const byPHash = new Map();
+  for (let index = 0; index < images.length; index++) {
+    const pHash = pHashes.get(images[index].hash);
+    if (!HASH_RE.test(String(pHash || ''))) continue;
+    let members = byPHash.get(pHash);
+    if (!members) byPHash.set(pHash, members = []);
+    members.push(index);
+  }
+  return [...byPHash].map(([pHash, members]) => ({ pHash, pWords:wordsFor(pHash), members }));
+}
+
+function visualNodes(images, imageIndices, pHashes, visuals) {
+  const byKey = new Map();
+  for (const index of imageIndices) {
+    const hash = images[index].hash;
+    const pHash = pHashes.get(hash);
+    const visual = visuals.get(hash);
+    if (!HASH_RE.test(String(pHash || '')) || !visual) continue;
+    const aspect = aspectFor(images[index]);
+    const aspectBucket = Math.round(Math.log2(aspect) * 4);
+    const key = `${pHash}:${visual.dhash}:${visual.ahash}:${aspectBucket}`;
+    let node = byKey.get(key);
+    if (!node) {
+      node = {
+        pHash,
+        pWords:wordsFor(pHash),
+        dHash:visual.dhash,
+        dWords:wordsFor(visual.dhash),
+        aHash:visual.ahash,
+        aWords:wordsFor(visual.ahash),
+        aspect,
+        members:[]
+      };
+      byKey.set(key, node);
+    }
+    node.members.push(index);
+  }
+  return [...byKey.values()];
+}
+
+function pairCompatible(left, right, pLimit, dLimit, aLimit) {
+  if (distanceWords(left.pWords, right.pWords) > pLimit) return false;
+  if (distanceWords(left.dWords, right.dWords) > dLimit) return false;
+  if (distanceWords(left.aWords, right.aWords) > aLimit) return false;
+  if (aspectDistance(left.aspect, right.aspect) > MAX_ASPECT_LOG2_DISTANCE) return false;
+  return true;
+}
+
+function compatibleWithGroup(candidate, accepted, nodes, pLimit, dLimit, aLimit) {
+  for (const index of accepted) if (!pairCompatible(candidate, nodes[index], pLimit, dLimit, aLimit)) return false;
   return true;
 }
 
@@ -195,21 +254,11 @@ function finalizeGroups(images, groups, pDistanceByIndex, partnerByIndex = new M
   const order = [];
   const groupByHash = [];
   const groupInfo = [];
-
-  groups.sort((a, b) =>
-    b.members.length - a.members.length ||
-    a.bestDistance - b.bestDistance ||
-    b.newest - a.newest ||
-    a.key.localeCompare(b.key)
-  );
-
+  groups.sort((a, b) => b.members.length - a.members.length || a.bestDistance - b.bestDistance || b.newest - a.newest || a.key.localeCompare(b.key));
   for (let groupId = 0; groupId < groups.length; groupId++) {
     const group = groups[groupId];
-    group.members.sort((a, b) =>
-      (pDistanceByIndex.get(a) ?? 64) - (pDistanceByIndex.get(b) ?? 64) ||
-      (images[b].dateMs || 0) - (images[a].dateMs || 0) ||
-      images[a].hash.localeCompare(images[b].hash)
-    );
+    group.members.sort((a, b) => (pDistanceByIndex.get(a) ?? 64) - (pDistanceByIndex.get(b) ?? 64) ||
+      (images[b].dateMs || 0) - (images[a].dateMs || 0) || images[a].hash.localeCompare(images[b].hash));
     const start = order.length;
     for (const index of group.members) {
       const file = images[index];
@@ -225,44 +274,11 @@ function finalizeGroups(images, groups, pDistanceByIndex, partnerByIndex = new M
   return { order, scores, partners, groupByHash, groupInfo, groups:groups.length, matched:order.length };
 }
 
-function pHashNodes(images, pHashes) {
-  const byPHash = new Map();
-  for (let index = 0; index < images.length; index++) {
-    const pHash = pHashes.get(images[index].hash);
-    if (!HASH_RE.test(String(pHash || ''))) continue;
-    let members = byPHash.get(pHash);
-    if (!members) byPHash.set(pHash, members = []);
-    members.push(index);
-  }
-  return [...byPHash].map(([pHash, members]) => ({ pHash, pWords:wordsFor(pHash), members }));
-}
-
-function visualNodes(images, imageIndices, pHashes, dHashes) {
-  const byKey = new Map();
-  for (const index of imageIndices) {
-    const hash = images[index].hash;
-    const pHash = pHashes.get(hash);
-    const dHash = dHashes.get(hash);
-    if (!HASH_RE.test(String(pHash || '')) || !HASH_RE.test(String(dHash || ''))) continue;
-    const key = `${pHash}:${dHash}`;
-    let node = byKey.get(key);
-    if (!node) {
-      node = { pHash, dHash, pWords:wordsFor(pHash), dWords:wordsFor(dHash), members:[] };
-      byKey.set(key, node);
-    }
-    node.members.push(index);
-  }
-  return [...byKey.values()];
-}
-
 async function buildSimilarGroups(images, pHashes, maxDistance, expandDistance) {
-  const coarse = pHashNodes(images, pHashes);
+  const coarse = coarseNodes(images, pHashes);
   const coarseBuckets = buildBuckets(coarse);
   const coreNeeded = new Set();
 
-  // Only images that participate in a strong pHash edge need the secondary
-  // hash for core grouping. The previous implementation generated dHash for
-  // every loose <=14 candidate up front, which made first-time grouping slow.
   for (let index = 0; index < coarse.length; index++) {
     const item = coarse[index];
     if (item.members.length > 1) for (const member of item.members) coreNeeded.add(member);
@@ -273,8 +289,8 @@ async function buildSimilarGroups(images, pHashes, maxDistance, expandDistance) 
     }
   }
 
-  const dHashes = await ensureDHashes([...coreNeeded].map(index => images[index].hash), pHashes);
-  const nodes = visualNodes(images, coreNeeded, pHashes, dHashes);
+  const visuals = await ensureVisualHashes([...coreNeeded].map(index => images[index].hash), pHashes);
+  const nodes = visualNodes(images, coreNeeded, pHashes, visuals);
   const buckets = buildBuckets(nodes);
   const neighbors = Array.from({ length:nodes.length }, () => []);
 
@@ -286,19 +302,16 @@ async function buildSimilarGroups(images, pHashes, maxDistance, expandDistance) 
       if (pDistance > maxDistance) continue;
       const dDistance = distanceWords(item.dWords, other.dWords);
       if (dDistance > CORE_DHASH_DISTANCE) continue;
-      neighbors[index].push({ index:otherIndex, pDistance, dDistance });
-      neighbors[otherIndex].push({ index, pDistance, dDistance });
+      const aDistance = distanceWords(item.aWords, other.aWords);
+      if (aDistance > CORE_AHASH_DISTANCE) continue;
+      if (aspectDistance(item.aspect, other.aspect) > MAX_ASPECT_LOG2_DISTANCE) continue;
+      neighbors[index].push({ index:otherIndex, pDistance, dDistance, aDistance });
+      neighbors[otherIndex].push({ index, pDistance, dDistance, aDistance });
     }
   }
 
-  const weight = nodes.map((node, index) =>
-    node.members.length + neighbors[index].reduce((sum, edge) => sum + nodes[edge.index].members.length, 0)
-  );
-  const seedOrder = nodes.map((_, index) => index).sort((a, b) =>
-    weight[b] - weight[a] ||
-    nodes[b].members.length - nodes[a].members.length ||
-    nodes[a].pHash.localeCompare(nodes[b].pHash)
-  );
+  const weight = nodes.map((node, index) => node.members.length + neighbors[index].reduce((sum, edge) => sum + nodes[edge.index].members.length, 0));
+  const seedOrder = nodes.map((_, index) => index).sort((a, b) => weight[b] - weight[a] || nodes[b].members.length - nodes[a].members.length || nodes[a].pHash.localeCompare(nodes[b].pHash));
   const nodeOwner = new Int32Array(nodes.length);
   nodeOwner.fill(-1);
   const imageOwner = new Int32Array(images.length);
@@ -309,13 +322,11 @@ async function buildSimilarGroups(images, pHashes, maxDistance, expandDistance) 
 
   for (const seed of seedOrder) {
     if (nodeOwner[seed] >= 0) continue;
-    const candidates = neighbors[seed]
-      .filter(edge => nodeOwner[edge.index] < 0)
-      .sort((a, b) => a.pDistance - b.pDistance || a.dDistance - b.dDistance || nodes[b.index].members.length - nodes[a.index].members.length);
-
+    const candidates = neighbors[seed].filter(edge => nodeOwner[edge.index] < 0)
+      .sort((a, b) => a.pDistance - b.pDistance || a.dDistance - b.dDistance || a.aDistance - b.aDistance || nodes[b.index].members.length - nodes[a.index].members.length);
     const accepted = [seed];
     for (const edge of candidates) {
-      if (compatible(nodes[edge.index], accepted, nodes, GROUP_PHASH_DIAMETER, GROUP_DHASH_DIAMETER)) accepted.push(edge.index);
+      if (compatibleWithGroup(nodes[edge.index], accepted, nodes, GROUP_PHASH_DIAMETER, GROUP_DHASH_DIAMETER, GROUP_AHASH_DIAMETER)) accepted.push(edge.index);
     }
     if (accepted.reduce((sum, nodeIndex) => sum + nodes[nodeIndex].members.length, 0) < 2) continue;
 
@@ -337,12 +348,8 @@ async function buildSimilarGroups(images, pHashes, maxDistance, expandDistance) 
     groups.push(group);
   }
 
-  if (!groups.length || expandDistance <= maxDistance) {
-    return finalizeGroups(images, groups, pDistanceByIndex, partnerByIndex);
-  }
+  if (!groups.length || expandDistance <= maxDistance) return finalizeGroups(images, groups, pDistanceByIndex, partnerByIndex);
 
-  // Find loose pHash candidates only around actual accepted group
-  // representatives. This avoids hashing the entire loose candidate graph.
   const expansionImageIndices = new Set();
   for (const group of groups) {
     const representative = nodes[group.representative];
@@ -353,8 +360,8 @@ async function buildSimilarGroups(images, pHashes, maxDistance, expandDistance) 
     }
   }
 
-  await ensureDHashes([...expansionImageIndices].map(index => images[index].hash), pHashes, dHashes);
-  const expansionNodes = visualNodes(images, expansionImageIndices, pHashes, dHashes);
+  await ensureVisualHashes([...expansionImageIndices].map(index => images[index].hash), pHashes, visuals);
+  const expansionNodes = visualNodes(images, expansionImageIndices, pHashes, visuals);
   const assignments = new Map();
 
   for (let candidateIndex = 0; candidateIndex < expansionNodes.length; candidateIndex++) {
@@ -366,17 +373,17 @@ async function buildSimilarGroups(images, pHashes, maxDistance, expandDistance) 
       if (pDistance > expandDistance) continue;
       const dDistance = distanceWords(representative.dWords, candidate.dWords);
       if (dDistance > EXPAND_DHASH_DISTANCE) continue;
-      if (!compatible(candidate, group.nodeIndices, nodes, EXPAND_GROUP_PHASH_DIAMETER, EXPAND_GROUP_DHASH_DIAMETER)) continue;
-
-      const closeness = pDistance * EXPAND_DHASH_DISTANCE + dDistance * expandDistance;
+      const aDistance = distanceWords(representative.aWords, candidate.aWords);
+      if (aDistance > EXPAND_AHASH_DISTANCE) continue;
+      if (aspectDistance(representative.aspect, candidate.aspect) > MAX_ASPECT_LOG2_DISTANCE) continue;
+      if (!compatibleWithGroup(candidate, group.nodeIndices, nodes, GROUP_PHASH_DIAMETER, GROUP_DHASH_DIAMETER, GROUP_AHASH_DIAMETER)) continue;
+      const closeness = pDistance * 12 + dDistance + aDistance;
       const previous = assignments.get(candidateIndex);
       if (previous && (previous.closeness < closeness || (previous.closeness === closeness && groups[previous.groupId].members.length >= group.members.length))) continue;
       assignments.set(candidateIndex, { groupId, pDistance, closeness });
     }
   }
 
-  // Add loose members one at a time and keep checking against the group as it
-  // grows. A later member cannot make two mutually dissimilar images coexist.
   const expansionByGroup = new Map();
   for (const [candidateIndex, assignment] of assignments) {
     let list = expansionByGroup.get(assignment.groupId);
@@ -390,19 +397,14 @@ async function buildSimilarGroups(images, pHashes, maxDistance, expandDistance) 
     const acceptedExpansion = [];
     for (const assignment of list) {
       const candidate = expansionNodes[assignment.candidateIndex];
-      let okay = compatible(candidate, group.nodeIndices, nodes, EXPAND_GROUP_PHASH_DIAMETER, EXPAND_GROUP_DHASH_DIAMETER);
-      if (okay) {
-        for (const otherIndex of acceptedExpansion) {
-          const other = expansionNodes[otherIndex];
-          if (distanceWords(candidate.pWords, other.pWords) > EXPAND_GROUP_PHASH_DIAMETER ||
-              distanceWords(candidate.dWords, other.dWords) > EXPAND_GROUP_DHASH_DIAMETER) {
-            okay = false;
-            break;
-          }
+      let okay = compatibleWithGroup(candidate, group.nodeIndices, nodes, GROUP_PHASH_DIAMETER, GROUP_DHASH_DIAMETER, GROUP_AHASH_DIAMETER);
+      if (okay) for (const otherIndex of acceptedExpansion) {
+        if (!pairCompatible(candidate, expansionNodes[otherIndex], GROUP_PHASH_DIAMETER, GROUP_DHASH_DIAMETER, GROUP_AHASH_DIAMETER)) {
+          okay = false;
+          break;
         }
       }
       if (!okay) continue;
-
       acceptedExpansion.push(assignment.candidateIndex);
       for (const member of candidate.members) {
         imageOwner[member] = groupId;
