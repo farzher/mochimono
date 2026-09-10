@@ -7,6 +7,13 @@ const compress = viewer?.querySelector('.viewer-optimize-trigger');
 if (viewer && stage) {
   const style = document.createElement('style');
   style.textContent = `
+.viewer-media>video{
+  width:100vw!important;
+  height:100dvh!important;
+  max-width:none!important;
+  max-height:none!important;
+  object-fit:contain!important;
+}
 .viewer-actions>.viewer-optimize-trigger{
   position:static!important;
   z-index:auto!important;
