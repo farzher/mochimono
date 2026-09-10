@@ -14,7 +14,13 @@ const THUMB_VERSION = 3;
 const SAMPLE = 16;
 const LOW = 8;
 const INDEX_BATCH = 32;
-const MAX_DISTANCE = 7;
+const CANDIDATE_DISTANCE = 7;
+const MODE_KEY = 'mochimono-similarity-mode';
+const MODES = {
+  duplicates:{ label:'Duplicates', maxDistance:0, description:'100-score perceptual matches' },
+  near:{ label:'Near duplicates', maxDistance:3, description:'Very close perceptual matches' },
+  similar:{ label:'Similar images', maxDistance:7, description:'Broader visual groups' }
+};
 const POPCOUNT = [0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4];
 const COS = Array.from({ length:LOW }, (_, u) => Array.from({ length:SAMPLE }, (_, x) => Math.cos((2 * x + 1) * u * Math.PI / (2 * SAMPLE))));
 const SCALE = Array.from({ length:LOW }, (_, u) => u === 0 ? Math.sqrt(1 / SAMPLE) : Math.sqrt(2 / SAMPLE));
@@ -31,24 +37,31 @@ let ordered = [];
 let orderedFiles = new Map();
 let scores = new Map();
 let partners = new Map();
-let groups = 0;
+let groupByHash = new Map();
+let groupInfo = [];
 let originalFilteredHashes = null;
 let wrappedGrid = null;
 let originalSetModel = null;
 let railDragging = false;
 let lastRailMove = 0;
 let railFrame = 0;
+let resetScrollNext = false;
+let pendingScrollY = null;
+let mode = (() => {
+  const saved = localStorage.getItem(MODE_KEY);
+  return MODES[saved] ? saved : 'similar';
+})();
 
 const option = document.createElement('option');
 option.value = 'similar';
 option.textContent = 'Similar';
-option.title = 'Images with the strongest perceptual matches first';
+option.title = 'Browse perceptual duplicate and similarity groups';
 if (sort && !sort.querySelector('option[value="similar"]')) sort.append(option);
 
 const style = document.createElement('style');
 style.textContent = `
 .similarity-sort-bar{margin:10px 0 6px;padding:9px 10px;display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#171518;color:#d8cfcb}
-.similarity-sort-bar[hidden],.similarity-rail[hidden]{display:none!important}.similarity-sort-copy{min-width:0;flex:1;display:grid;gap:4px}.similarity-sort-copy strong{font-size:11px}.similarity-sort-copy span{color:#8e8582;font-size:10px}.similarity-sort-progress{height:3px;overflow:hidden;border-radius:99px;background:#282429}.similarity-sort-progress i{display:block;height:100%;width:0;background:#efa09a;transition:width .12s linear}.similarity-sort-close{width:30px;height:30px;padding:0;display:grid;place-items:center;background:transparent;color:#9b9290;font-size:18px}.similarity-sort-close:hover{background:#29252a;color:#fff}
+.similarity-sort-bar[hidden],.similarity-rail[hidden]{display:none!important}.similarity-sort-copy{min-width:0;flex:1;display:grid;gap:5px}.similarity-sort-head{display:flex;align-items:center;gap:9px;min-width:0}.similarity-sort-head strong{font-size:11px;white-space:nowrap}.similarity-sort-modes{display:flex;gap:3px;min-width:0}.similarity-sort-modes button{height:25px;padding:0 8px;border:0;border-radius:7px;background:transparent;color:#8e8582;font-size:10px;font-weight:650}.similarity-sort-modes button:hover{background:#252126;color:#ddd5d1}.similarity-sort-modes button.active{background:#eee8e4;color:#171416}.similarity-sort-copy>span{color:#8e8582;font-size:10px}.similarity-sort-progress{height:3px;overflow:hidden;border-radius:99px;background:#282429}.similarity-sort-progress i{display:block;height:100%;width:0;background:#efa09a;transition:width .12s linear}.similarity-sort-close{width:30px;height:30px;padding:0;display:grid;place-items:center;background:transparent;color:#9b9290;font-size:18px}.similarity-sort-close:hover{background:#29252a;color:#fff}
 html.similarity-sort-indexing:not(.similarity-sort-active) #files{visibility:hidden!important}
 html.similarity-sort-active #dateRail{display:none!important}
 html.similarity-sort-active .file-card>.similarity-score{position:absolute;z-index:8;right:6px;top:6px;min-width:27px;height:19px;padding:0 6px;display:grid;place-items:center;border-radius:999px;background:rgba(13,12,14,.8);box-shadow:0 1px 6px rgba(0,0,0,.35);color:#f2eae6;font-size:9px;font-weight:800;line-height:1;pointer-events:none;backdrop-filter:blur(6px)}
@@ -58,16 +71,21 @@ document.head.append(style);
 const bar = document.createElement('div');
 bar.className = 'similarity-sort-bar';
 bar.hidden = true;
-bar.innerHTML = '<div class="similarity-sort-copy"><strong>Most similar images</strong><span></span><div class="similarity-sort-progress"><i></i></div></div><button class="similarity-sort-close" type="button" title="Return to newest" aria-label="Return to newest">×</button>';
+bar.innerHTML = `<div class="similarity-sort-copy"><div class="similarity-sort-head"><strong>Visual matches</strong><div class="similarity-sort-modes">${Object.entries(MODES).map(([key, value]) => `<button type="button" data-similarity-mode="${key}">${value.label}</button>`).join('')}</div></div><span></span><div class="similarity-sort-progress"><i></i></div></div><button class="similarity-sort-close" type="button" title="Return to newest" aria-label="Return to newest">×</button>`;
 files?.before(bar);
-const status = bar.querySelector('span');
-const progress = bar.querySelector('i');
+const status = bar.querySelector('.similarity-sort-copy > span');
+const progress = bar.querySelector('.similarity-sort-progress > i');
 
 const rail = document.createElement('nav');
 rail.className = 'date-rail similarity-rail';
 rail.hidden = true;
-rail.setAttribute('aria-label', 'Browse by similarity');
+rail.setAttribute('aria-label', 'Browse similarity groups');
 dateRail?.after(rail);
+
+function syncModeButtons() {
+  for (const button of bar.querySelectorAll('[data-similarity-mode]')) button.classList.toggle('active', button.dataset.similarityMode === mode);
+}
+syncModeButtons();
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -158,21 +176,22 @@ async function pixels(hash, signal) {
 
 function pHash(data) {
   const gray = new Float64Array(SAMPLE * SAMPLE);
-  for (let pixel = 0, index = 0; index < gray.length; index++, pixel += 4) {
-    gray[index] = data[pixel] * .299 + data[pixel + 1] * .587 + data[pixel + 2] * .114;
-  }
+  for (let pixel = 0, index = 0; index < gray.length; index++, pixel += 4) gray[index] = data[pixel] * .299 + data[pixel + 1] * .587 + data[pixel + 2] * .114;
+
   const horizontal = new Float64Array(SAMPLE * LOW);
   for (let y = 0; y < SAMPLE; y++) for (let u = 0; u < LOW; u++) {
     let sum = 0;
     for (let x = 0; x < SAMPLE; x++) sum += gray[y * SAMPLE + x] * COS[u][x];
     horizontal[y * LOW + u] = sum * SCALE[u];
   }
+
   const low = new Float64Array(LOW * LOW);
   for (let v = 0; v < LOW; v++) for (let u = 0; u < LOW; u++) {
     let sum = 0;
     for (let y = 0; y < SAMPLE; y++) sum += horizontal[y * LOW + u] * COS[v][y];
     low[v * LOW + u] = sum * SCALE[v];
   }
+
   const values = [...low.slice(1)].sort((a, b) => a - b);
   const median = values[Math.floor(values.length / 2)];
   let hex = '';
@@ -214,6 +233,7 @@ async function ensureFingerprints(images, signal, mine) {
   let done = images.length - missing.length;
   let unavailable = 0;
   updateProgress(done, images.length, `Indexing thumbnails · ${done.toLocaleString()} / ${images.length.toLocaleString()}`);
+
   for (let offset = 0; offset < missing.length; offset += INDEX_BATCH) {
     if (mine !== generation || signal.aborted) return null;
     const chunk = missing.slice(offset, offset + INDEX_BATCH);
@@ -231,7 +251,7 @@ async function ensureFingerprints(images, signal, mine) {
   return { fingerprints, unavailable };
 }
 
-function closestOrder(images, fingerprints) {
+function buildGroups(images, fingerprints, maxDistance) {
   const fileIndex = new Map(images.map((file, index) => [file.hash, index]));
   const parent = Int32Array.from(images, (_, index) => index);
   const best = new Uint8Array(images.length);
@@ -283,88 +303,103 @@ function closestOrder(images, fingerprints) {
     unique.push({ value, members, representative:first, words:[0,4,8,12].map(offset => parseInt(value.slice(offset, offset + 4), 16)) });
   }
 
-  const buckets = Array.from({ length:4 }, () => new Map());
-  for (let index = 0; index < unique.length; index++) for (let block = 0; block < 4; block++) {
-    const word = unique[index].words[block];
-    let bucket = buckets[block].get(word);
-    if (!bucket) buckets[block].set(word, bucket = []);
-    bucket.push(index);
-  }
-
-  for (let index = 0; index < unique.length; index++) {
-    const item = unique[index];
-    const candidates = new Set();
-    for (let block = 0; block < 4; block++) {
-      const word = item.words[block];
-      const collect = key => {
-        for (const other of buckets[block].get(key) || []) if (other > index) candidates.add(other);
-      };
-      collect(word);
-      for (let bit = 0; bit < 16; bit++) collect(word ^ (1 << bit));
+  if (maxDistance > 0) {
+    const buckets = Array.from({ length:4 }, () => new Map());
+    for (let index = 0; index < unique.length; index++) for (let block = 0; block < 4; block++) {
+      const word = unique[index].words[block];
+      let bucket = buckets[block].get(word);
+      if (!bucket) buckets[block].set(word, bucket = []);
+      bucket.push(index);
     }
-    for (const otherIndex of candidates) {
-      const other = unique[otherIndex];
-      const delta = distance(item.value, other.value);
-      if (delta > MAX_DISTANCE) continue;
-      union(item.representative, other.representative);
-      const leftPartner = other.members[0];
-      const rightPartner = item.members[0];
-      for (const member of item.members) consider(member, leftPartner, delta);
-      for (const member of other.members) consider(member, rightPartner, delta);
+
+    for (let index = 0; index < unique.length; index++) {
+      const item = unique[index];
+      const candidates = new Set();
+      for (let block = 0; block < 4; block++) {
+        const word = item.words[block];
+        const collect = key => {
+          for (const other of buckets[block].get(key) || []) if (other > index) candidates.add(other);
+        };
+        collect(word);
+        for (let bit = 0; bit < 16; bit++) collect(word ^ (1 << bit));
+      }
+      for (const otherIndex of candidates) {
+        const other = unique[otherIndex];
+        const delta = distance(item.value, other.value);
+        if (delta > maxDistance || delta > CANDIDATE_DISTANCE) continue;
+        union(item.representative, other.representative);
+        const leftPartner = other.members[0];
+        const rightPartner = item.members[0];
+        for (const member of item.members) consider(member, leftPartner, delta);
+        for (const member of other.members) consider(member, rightPartner, delta);
+      }
     }
   }
 
   const scoreMap = new Map();
   const partnerMap = new Map();
   const groupsByRoot = new Map();
-  const other = [];
-  let matched = 0;
-
   for (let index = 0; index < images.length; index++) {
-    if (best[index] <= MAX_DISTANCE && partner[index] >= 0) {
-      scoreMap.set(images[index].hash, similarityScore(best[index]));
-      partnerMap.set(images[index].hash, images[partner[index]].hash);
-      const root = find(index);
-      let group = groupsByRoot.get(root);
-      if (!group) {
-        group = { members:[], bestDistance:64, newest:0, key:images[index].hash };
-        groupsByRoot.set(root, group);
-      }
-      group.members.push(index);
-      group.bestDistance = Math.min(group.bestDistance, best[index]);
-      group.newest = Math.max(group.newest, images[index].dateMs || 0);
-      if (images[index].hash < group.key) group.key = images[index].hash;
-      matched++;
-    } else other.push(index);
+    if (best[index] > maxDistance || partner[index] < 0) continue;
+    scoreMap.set(images[index].hash, similarityScore(best[index]));
+    partnerMap.set(images[index].hash, images[partner[index]].hash);
+    const root = find(index);
+    let group = groupsByRoot.get(root);
+    if (!group) {
+      group = { members:[], bestDistance:64, newest:0, key:images[index].hash };
+      groupsByRoot.set(root, group);
+    }
+    group.members.push(index);
+    group.bestDistance = Math.min(group.bestDistance, best[index]);
+    group.newest = Math.max(group.newest, images[index].dateMs || 0);
+    if (images[index].hash < group.key) group.key = images[index].hash;
   }
 
-  const matchGroups = [...groupsByRoot.values()];
-  for (const group of matchGroups) {
+  const groups = [...groupsByRoot.values()].filter(group => group.members.length > 1);
+  for (const group of groups) {
     group.members.sort((a, b) =>
       best[a] - best[b] ||
       (images[b].dateMs || 0) - (images[a].dateMs || 0) ||
       images[a].hash.localeCompare(images[b].hash)
     );
   }
-  matchGroups.sort((a, b) =>
-    a.bestDistance - b.bestDistance ||
+
+  groups.sort((a, b) =>
     b.members.length - a.members.length ||
+    a.bestDistance - b.bestDistance ||
     b.newest - a.newest ||
     a.key.localeCompare(b.key)
   );
-  other.sort((a, b) => (images[b].dateMs || 0) - (images[a].dateMs || 0));
 
-  return {
-    order:[...matchGroups.flatMap(group => group.members), ...other].map(index => images[index]),
-    scores:scoreMap,
-    partners:partnerMap,
-    groups:matchGroups.length,
-    matched
-  };
+  const order = [];
+  const groupMap = new Map();
+  const info = [];
+  for (let groupId = 0; groupId < groups.length; groupId++) {
+    const group = groups[groupId];
+    const start = order.length;
+    for (const index of group.members) {
+      const file = images[index];
+      order.push(file);
+      groupMap.set(file.hash, groupId);
+    }
+    info.push({ id:groupId, start, size:group.members.length, bestDistance:group.bestDistance, bestScore:similarityScore(group.bestDistance) });
+  }
+
+  return { order, scores:scoreMap, partners:partnerMap, groupByHash:groupMap, groupInfo:info, groups:groups.length, matched:order.length };
 }
 
 function tuple(file) {
-  return [file.hash, file.filename || file.hash, 'image', file.width || 0, file.height || 0, file.dateMs || 0, file.size || 0, scores.get(file.hash) ?? -1];
+  return [
+    file.hash,
+    file.filename || file.hash,
+    'image',
+    file.width || 0,
+    file.height || 0,
+    file.dateMs || 0,
+    file.size || 0,
+    scores.get(file.hash) ?? -1,
+    groupByHash.get(file.hash) ?? -1
+  ];
 }
 
 function decorate(root = files) {
@@ -399,9 +434,10 @@ function restoreFilteredHashes() {
 }
 
 function captureSourceModel(snapshot) {
-  if (!snapshot || !Array.isArray(snapshot.items) || snapshot.sort === 'similarity') return;
+  const modelSort = String(snapshot?.sort || '');
+  if (!snapshot || !Array.isArray(snapshot.items) || modelSort.startsWith('similarity')) return;
   sourceModel = snapshot;
-  if (wanted) scheduleActivate(active ? 80 : 20);
+  if (wanted && !document.documentElement.classList.contains('similarity-active')) scheduleActivate(active ? 90 : 20, false);
 }
 
 function wrapStableGrid() {
@@ -414,7 +450,8 @@ function wrapStableGrid() {
   wrappedGrid = grid;
   originalSetModel = grid.setModel.bind(grid);
   grid.setModel = snapshot => {
-    if (wanted && snapshot?.sort !== 'similarity') {
+    if (document.documentElement.classList.contains('similarity-active')) return originalSetModel(snapshot);
+    if (wanted && !String(snapshot?.sort || '').startsWith('similarity')) {
       captureSourceModel(snapshot);
       if (similarityModel) window.mochimonoGridModel = similarityModel;
       return true;
@@ -423,43 +460,48 @@ function wrapStableGrid() {
   };
 }
 
+function groupAt(index) {
+  let answer = null;
+  for (const group of groupInfo) {
+    if (group.start > index) break;
+    answer = group;
+  }
+  return answer;
+}
+
 function buildRail() {
-  if (!active || !ordered.length) {
+  if (!active || !ordered.length || !groupInfo.length) {
     rail.hidden = true;
     rail.replaceChildren();
     return;
   }
+
   const entries = [];
-  let previous = null;
-  for (let index = 0; index < ordered.length; index++) {
-    const value = scores.get(ordered[index]);
-    const token = value == null ? 'other' : String(value);
-    if (token === previous) continue;
-    previous = token;
-    entries.push({ index, label:value == null ? 'Other images' : `Similarity ${value}`, short:value == null ? 'Other' : String(value) });
+  let previousSize = -1;
+  for (const group of groupInfo) {
+    if (group.size === previousSize) continue;
+    previousSize = group.size;
+    entries.push({ index:group.start, size:group.size });
   }
+
   rail.hidden = false;
   document.documentElement.classList.add('library-scroll');
-  rail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `<button data-index="${entry.index}" class="rail-tick major" style="top:${(ordered.length === 1 ? 0 : entry.index / (ordered.length - 1) * 100).toFixed(3)}%" title="${entry.label}"><span>${entry.short}</span></button>`).join('')}<div id="similarityRailThumb" class="rail-thumb"><span></span><i></i></div>`;
+  rail.innerHTML = `<div class="rail-track"></div>${entries.map(entry => `<button data-index="${entry.index}" class="rail-tick major" style="top:${(ordered.length === 1 ? 0 : entry.index / (ordered.length - 1) * 100).toFixed(3)}%" title="Groups of ${entry.size} images"><span>${entry.size}×</span></button>`).join('')}<div id="similarityRailThumb" class="rail-thumb"><span></span><i></i></div>`;
   updateRail();
-}
-
-function railLabel(index) {
-  const hash = ordered[Math.max(0, Math.min(ordered.length - 1, index))];
-  const value = scores.get(hash);
-  return value == null ? 'Other' : String(value);
 }
 
 function updateRail() {
   railFrame = 0;
   if (!active || rail.hidden || !ordered.length) return;
   const index = Math.max(0, Math.min(ordered.length - 1, Number(window.mochimonoStableGrid?.visibleIndex?.()) || 0));
+  const group = groupAt(index);
   const thumb = rail.querySelector('#similarityRailThumb');
   if (thumb) {
     thumb.style.top = `${(ordered.length === 1 ? 0 : index / (ordered.length - 1)) * 100}%`;
     const label = thumb.querySelector('span');
-    if (label) label.textContent = railLabel(index);
+    if (label) label.textContent = group ? `${group.size}×` : '';
   }
+
   let nearest = null;
   let nearestDistance = Infinity;
   for (const tick of rail.querySelectorAll('[data-index]')) {
@@ -477,43 +519,58 @@ function scheduleRail() {
 function railIndexFromPointer(event) {
   if (!ordered.length) return 0;
   const rect = rail.getBoundingClientRect();
-  return Math.round(Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height))) * (ordered.length - 1));
+  const raw = Math.round(Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height))) * (ordered.length - 1));
+  const group = groupAt(raw);
+  return group?.start ?? raw;
 }
 
 function moveRail(event, final = false) {
   const now = performance.now();
   if (!final && now - lastRailMove < 32) return;
   lastRailMove = now;
-  window.mochimonoStableGrid?.scrollToIndex?.(railIndexFromPointer(event), 'center');
+  window.mochimonoStableGrid?.scrollToIndex?.(railIndexFromPointer(event), 'start');
   scheduleRail();
 }
 
-function install(result, images) {
-  orderedFiles = new Map(images.map(file => [file.hash, file]));
+function install(result, images, scrollYBefore, resetScroll) {
+  orderedFiles = new Map(result.order.map(file => [file.hash, file]));
   ordered = result.order.map(file => file.hash);
   scores = result.scores;
   partners = result.partners;
-  groups = result.groups;
+  groupByHash = result.groupByHash;
+  groupInfo = result.groupInfo;
   active = true;
   indexing = false;
   document.documentElement.classList.add('similarity-sort-active');
   document.documentElement.classList.remove('similarity-sort-indexing');
   patchFilteredHashes();
-  similarityModel = { version:`similarity:${generation}:${ordered.length}`, sort:'similarity', items:result.order.map(tuple) };
+
+  similarityModel = {
+    version:`similarity-groups:${mode}:${generation}:${ordered.length}`,
+    sort:`similarity-groups:${mode}:${generation}`,
+    items:result.order.map(tuple)
+  };
   window.mochimonoGridModel = similarityModel;
+  pendingScrollY = resetScroll ? 0 : scrollYBefore;
   originalSetModel?.(similarityModel);
+
   bar.hidden = false;
-  updateProgress(images.length, images.length, `${result.matched.toLocaleString()} images have a close match · ${groups.toLocaleString()} groups`);
+  syncModeButtons();
+  const config = MODES[mode];
+  updateProgress(images.length, images.length, result.groups
+    ? `${result.groups.toLocaleString()} groups · ${result.matched.toLocaleString()} images · largest group ${result.groupInfo[0]?.size || 0}`
+    : `No ${config.label.toLowerCase()} found`);
+
   if (fileCount) {
     fileCount.hidden = false;
-    fileCount.textContent = `${images.length.toLocaleString()} images`;
-    fileCount.title = `${result.matched.toLocaleString()} with a close perceptual match`;
+    fileCount.textContent = `${result.matched.toLocaleString()} images`;
+    fileCount.title = `${result.groups.toLocaleString()} similarity groups`;
   }
+
   requestAnimationFrame(() => {
     decorate(files);
     buildRail();
   });
-  scrollTo({ top:0, left:0, behavior:'auto' });
 }
 
 function deactivate() {
@@ -528,7 +585,9 @@ function deactivate() {
   orderedFiles.clear();
   scores.clear();
   partners.clear();
-  groups = 0;
+  groupByHash.clear();
+  groupInfo = [];
+  pendingScrollY = null;
   restoreFilteredHashes();
   document.documentElement.classList.remove('similarity-sort-active','similarity-sort-indexing');
   bar.hidden = true;
@@ -543,14 +602,19 @@ async function activate() {
   const gridButton = views?.querySelector('[data-view="grid"]');
   if (!gridButton?.classList.contains('active')) {
     gridButton?.click();
-    scheduleActivate(20);
+    scheduleActivate(20, resetScrollNext);
     return;
   }
+
   if (!sourceModel) {
     const current = window.mochimonoGridModel;
-    if (current?.sort !== 'similarity') sourceModel = current;
+    if (current && !String(current.sort || '').startsWith('similarity')) sourceModel = current;
   }
+
   const images = modelImages();
+  const resetScroll = resetScrollNext || !active;
+  resetScrollNext = false;
+  const scrollYBefore = scrollY;
   if (!images.length) {
     indexing = false;
     document.documentElement.classList.remove('similarity-sort-indexing');
@@ -563,32 +627,32 @@ async function activate() {
   controller?.abort();
   controller = new AbortController();
   const signal = controller.signal;
-  const firstRun = !active;
   indexing = true;
   document.documentElement.classList.add('similarity-sort-indexing');
   bar.hidden = false;
-  if (firstRun) updateProgress(0, 1, 'Reading images…');
-  else status.textContent = 'Updating similarity order…';
+  syncModeButtons();
+  updateProgress(0, 1, active ? 'Updating visual groups…' : 'Reading images…');
 
   try {
     const indexed = await ensureFingerprints(images, signal, mine);
     if (!indexed || mine !== generation || signal.aborted || !wanted) return;
-    updateProgress(images.length, images.length, 'Finding closest matches…');
+    updateProgress(images.length, images.length, 'Building visual groups…');
     await new Promise(resolve => requestAnimationFrame(resolve));
-    const result = closestOrder(images, indexed.fingerprints);
+    const result = buildGroups(images, indexed.fingerprints, MODES[mode].maxDistance);
     if (mine !== generation || signal.aborted || !wanted) return;
-    install(result, images);
+    install(result, images, scrollYBefore, resetScroll);
   } catch (error) {
     if (mine !== generation || signal.aborted) return;
     indexing = false;
     document.documentElement.classList.remove('similarity-sort-indexing');
-    updateProgress(0, 1, error.message || 'Could not sort similar images');
+    updateProgress(0, 1, error.message || 'Could not build visual groups');
   }
 }
 
-function scheduleActivate(delay = 0) {
+function scheduleActivate(delay = 0, resetScroll = false) {
   clearTimeout(rerunTimer);
   if (!wanted || sort?.value !== 'similar') return;
+  resetScrollNext ||= resetScroll;
   bar.hidden = false;
   if (!active) document.documentElement.classList.add('similarity-sort-indexing');
   rerunTimer = setTimeout(activate, Math.max(0, delay));
@@ -621,18 +685,28 @@ sort?.addEventListener('change', () => {
   if (sort.value === 'similar') {
     wanted = true;
     const current = window.mochimonoGridModel;
-    if (current?.sort !== 'similarity') sourceModel = current;
-    scheduleActivate(30);
+    if (current && !String(current.sort || '').startsWith('similarity')) sourceModel = current;
+    scheduleActivate(30, true);
   } else {
     wanted = false;
     deactivate();
   }
 }, true);
 
+bar.addEventListener('click', event => {
+  const button = event.target.closest('[data-similarity-mode]');
+  if (!button || !MODES[button.dataset.similarityMode] || button.dataset.similarityMode === mode) return;
+  mode = button.dataset.similarityMode;
+  localStorage.setItem(MODE_KEY, mode);
+  syncModeButtons();
+  scheduleActivate(0, true);
+});
+
 views?.addEventListener('click', event => {
   const view = event.target.closest('[data-view]')?.dataset.view;
   if (wanted && view && view !== 'grid') {
     wanted = false;
+    window.mochimonoSimilaritySortLock?.release?.();
     sort.value = 'date-desc';
     sort.dispatchEvent(new Event('change', { bubbles:true }));
   }
@@ -666,6 +740,7 @@ files?.addEventListener('click', event => {
 
 bar.querySelector('.similarity-sort-close').addEventListener('click', () => {
   wanted = false;
+  window.mochimonoSimilaritySortLock?.release?.();
   if (!sort) return;
   sort.value = 'date-desc';
   sort.dispatchEvent(new Event('change', { bubbles:true }));
@@ -701,7 +776,7 @@ rail.addEventListener('pointercancel', () => {
 rail.addEventListener('click', event => {
   const tick = event.target.closest('[data-index]');
   if (!active || !tick) return;
-  window.mochimonoStableGrid?.scrollToIndex?.(Number(tick.dataset.index), 'center');
+  window.mochimonoStableGrid?.scrollToIndex?.(Number(tick.dataset.index), 'start');
   event.preventDefault();
   event.stopImmediatePropagation();
 }, true);
@@ -719,26 +794,22 @@ window.addEventListener('mochimono:stable-grid-installed', () => {
   requestAnimationFrame(() => {
     decorate(files);
     buildRail();
+    if (pendingScrollY != null) {
+      const y = pendingScrollY;
+      pendingScrollY = null;
+      requestAnimationFrame(() => scrollTo({ top:y, left:0, behavior:'auto' }));
+    }
   });
 });
-
-setTimeout(() => {
-  try {
-    const saved = JSON.parse(localStorage.getItem('mochimono-library-ui') || '{}');
-    if (saved?.sort === 'similar' && sort) {
-      sort.value = 'similar';
-      sort.dispatchEvent(new Event('change', { bubbles:true }));
-    }
-  } catch {}
-}, 0);
 
 window.mochimonoSimilaritySort = {
   active:() => active,
   orderedHashes:() => active ? [...ordered] : null,
   score:hash => scores.get(String(hash || '')) ?? null,
   partner:hash => partners.get(String(hash || '')) || '',
-  groups:() => groups,
-  refresh:() => scheduleActivate(0)
+  mode:() => mode,
+  groups:() => groupInfo.map(group => ({ ...group })),
+  refresh:() => scheduleActivate(0, false)
 };
 
 wrapStableGrid();
