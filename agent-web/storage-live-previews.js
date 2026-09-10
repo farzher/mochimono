@@ -5,6 +5,7 @@ const folders = document.querySelector('#folders');
 if (frame && storagePane && folders) {
   const style = document.createElement('style');
   style.textContent = `
+    #folders a.storage-folder-samples{display:grid!important}
     .storage-folder-sample.live-preview{position:relative;overflow:hidden}
     .storage-folder-sample.live-preview img{width:100%;height:100%;object-fit:cover}
     .storage-folder-sample.live-preview.pending img{opacity:0!important}
@@ -71,6 +72,14 @@ if (frame && storagePane && folders) {
       if (installFile(file)) pendingByRoot.delete(root);
     }
   }
+
+  // Modifier-clicks should behave like ordinary links (new tab/window). Stop the
+  // older Storage JS click handlers without canceling the browser's default link action.
+  window.addEventListener('click', event => {
+    const link = event.target.closest?.('a.storage-folder-samples');
+    if (!link || (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey)) return;
+    event.stopImmediatePropagation();
+  }, true);
 
   window.addEventListener('message', event => {
     if (event.source !== frame.contentWindow || event.origin !== location.origin) return;
