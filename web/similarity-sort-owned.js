@@ -15,6 +15,7 @@ const THUMB_VERSION = 3;
 const SAMPLE = 16;
 const LOW = 8;
 const INDEX_BATCH = 32;
+const RESULT_CACHE_LIMIT = 4;
 const MODE_KEY = 'mochimono-similarity-mode';
 const MODES = {
   near:{ label:'Near duplicates', maxDistance:0, expandDistance:0, description:'100-score pHash matches' },
@@ -45,6 +46,9 @@ let lastRailMove = 0;
 let railFrame = 0;
 let resetScrollNext = false;
 let pendingScrollAnchor = null;
+let runningKey = '';
+let installedKey = '';
+const resultCache = new Map();
 let mode = (() => {
   const saved = localStorage.getItem(MODE_KEY);
   if (saved === 'duplicates') return 'near';
@@ -121,7 +125,11 @@ async function saveFingerprints(rows) {
   await new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     const store = tx.objectStore(STORE);
-    for (const row of rows) store.put(row);
+    for (const row of rows) {
+      const request = store.get(row.hash);
+      request.onsuccess = () => store.put({ ...(request.result || {}), ...row });
+      request.onerror = () => tx.abort();
+    }
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error || new Error('Could not save similarity fingerprints'));
@@ -138,6 +146,67 @@ function modelImages() {
     dateMs:Number(item[5]) || 0,
     size:Number(item[6]) || 0
   })).filter(file => /^[a-f0-9]{64}$/.test(file.hash));
+}
+
+function hashText(value, seed) {
+  let hash = seed >>> 0;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  hash ^= hash >>> 16;
+  return hash >>> 0;
+}
+
+function imageIdentity(images) {
+  const tokens = images.map(file => `${file.hash}:${file.width}x${file.height}`).sort();
+  let left = 2166136261;
+  let right = 2246822507;
+  for (const token of tokens) {
+    left = hashText(token, left);
+    right = hashText(token, right ^ 0x9e3779b9);
+  }
+  return `${images.length}:${left.toString(36)}:${right.toString(36)}`;
+}
+
+function runKeyFor(images) {
+  return `${mode}:${imageIdentity(images)}`;
+}
+
+function cacheResult(key, result) {
+  resultCache.delete(key);
+  resultCache.set(key, {
+    hashes:(result.order || []).map(file => file.hash),
+    scores:[...result.scores],
+    partners:[...result.partners],
+    groupByHash:[...result.groupByHash],
+    groupInfo:(result.groupInfo || []).map(group => ({ ...group })),
+    groups:Number(result.groups) || 0,
+    matched:Number(result.matched) || 0
+  });
+  while (resultCache.size > RESULT_CACHE_LIMIT) resultCache.delete(resultCache.keys().next().value);
+}
+
+function cachedResult(key, images) {
+  const cached = resultCache.get(key);
+  if (!cached) return null;
+  const byHash = new Map(images.map(file => [file.hash, file]));
+  const order = cached.hashes.map(hash => byHash.get(hash)).filter(Boolean);
+  if (order.length !== cached.hashes.length) {
+    resultCache.delete(key);
+    return null;
+  }
+  resultCache.delete(key);
+  resultCache.set(key, cached);
+  return {
+    order,
+    scores:new Map(cached.scores),
+    partners:new Map(cached.partners),
+    groupByHash:new Map(cached.groupByHash),
+    groupInfo:cached.groupInfo.map(group => ({ ...group })),
+    groups:cached.groups,
+    matched:cached.matched
+  };
 }
 
 async function pixels(hash, signal) {
@@ -476,7 +545,7 @@ function restorePendingScrollAnchor() {
   });
 }
 
-function install(result, images, resetScroll) {
+function install(result, images, resetScroll, key) {
   pendingScrollAnchor = resetScroll
     ? { reset:true }
     : captureScrollAnchor() || { preserve:true, hash:'', offset:0, y:scrollY };
@@ -489,6 +558,8 @@ function install(result, images, resetScroll) {
   groupInfo = result.groupInfo;
   active = true;
   indexing = false;
+  installedKey = key;
+  runningKey = '';
   document.documentElement.classList.add('similarity-sort-active');
   document.documentElement.classList.remove('similarity-sort-indexing');
   patchFilteredHashes();
@@ -525,6 +596,8 @@ function deactivate() {
   clearTimeout(rerunTimer);
   controller?.abort();
   controller = null;
+  runningKey = '';
+  installedKey = '';
   active = false;
   indexing = false;
   similarityModel = null;
@@ -563,9 +636,29 @@ async function activate() {
   resetScrollNext = false;
   if (!images.length) {
     indexing = false;
+    runningKey = '';
     document.documentElement.classList.remove('similarity-sort-indexing');
     bar.hidden = false;
     updateProgress(0, 1, 'No images in this view.');
+    return;
+  }
+
+  const key = runKeyFor(images);
+  if (active && installedKey === key) {
+    indexing = false;
+    document.documentElement.classList.remove('similarity-sort-indexing');
+    return;
+  }
+  if (indexing && runningKey === key) return;
+
+  const cached = cachedResult(key, images);
+  if (cached) {
+    generation++;
+    controller?.abort();
+    controller = null;
+    indexing = false;
+    runningKey = '';
+    install(cached, images, resetScroll, key);
     return;
   }
 
@@ -573,6 +666,7 @@ async function activate() {
   controller?.abort();
   controller = new AbortController();
   const signal = controller.signal;
+  runningKey = key;
   indexing = true;
   document.documentElement.classList.add('similarity-sort-indexing');
   bar.hidden = false;
@@ -586,12 +680,16 @@ async function activate() {
     await new Promise(resolve => requestAnimationFrame(resolve));
     const result = await buildGroupsInWorker(images, indexed.fingerprints, MODES[mode], signal);
     if (mine !== generation || signal.aborted || !wanted) return;
-    install(result, images, resetScroll);
+    cacheResult(key, result);
+    install(result, images, resetScroll, key);
   } catch (error) {
     if (mine !== generation || signal.aborted) return;
     indexing = false;
+    runningKey = '';
     document.documentElement.classList.remove('similarity-sort-indexing');
     updateProgress(0, 1, error.message || 'Could not build visual groups');
+  } finally {
+    if (mine === generation) controller = null;
   }
 }
 
@@ -754,7 +852,8 @@ window.mochimonoSimilaritySort = {
   partner:hash => partners.get(String(hash || '')) || '',
   mode:() => mode,
   groups:() => groupInfo.map(group => ({ ...group })),
-  refresh:() => scheduleActivate(0, false)
+  refresh:() => scheduleActivate(0, false),
+  cache:() => ({ entries:resultCache.size, runningKey, installedKey })
 };
 
 wrapStableGrid();
