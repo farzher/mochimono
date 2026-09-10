@@ -11,6 +11,8 @@ const style = document.createElement('style');
 style.textContent = `
 .files.grid .file-card,.files.grid .file-card *{user-select:none;-webkit-user-select:none}
 .files.grid .file-card img{-webkit-user-drag:none;user-drag:none}
+.files.grid .file-card:focus{outline:none}
+.files.grid .file-card:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(239,160,154,.65)}
 .grid-drag-selection-box{position:fixed;z-index:1000;pointer-events:none;border:1px solid rgba(239,160,154,.95);border-radius:3px;background:rgba(239,160,154,.14);box-shadow:0 0 0 1px rgba(0,0,0,.2),0 4px 18px rgba(0,0,0,.16)}
 .file-card.grid-drag-hit:not(.media-card){box-shadow:inset 0 0 0 2px rgba(239,160,154,.78)!important}
 .file-card.media-card.grid-drag-hit:after{opacity:.68!important}
@@ -148,6 +150,18 @@ window.addEventListener('blur', () => {
   if (drag.active) suppressClickUntil = performance.now() + CLICK_SUPPRESS_MS;
   cleanupDrag();
 });
+
+// library-ui owns selection state and stops matching file clicks during capture.
+// Observe the click one level earlier, then check after its handler has toggled the
+// item. If that click removed the final selected file, leave selection mode too.
+document.addEventListener('click', event => {
+  const selection = window.mochimonoSelection;
+  const item = event.target.closest?.('#files [data-hash]');
+  if (!item?.classList.contains('selected') || selection?.count?.() !== 1) return;
+  queueMicrotask(() => {
+    if (selection.count?.() === 0) selection.clear?.();
+  });
+}, true);
 
 document.addEventListener('click', event => {
   if (performance.now() >= suppressClickUntil) return;
