@@ -9,16 +9,4 @@ if (clientLibrary) {
     .compression-work-button:has([data-work-count][hidden]){display:none!important}
   `;
   document.head.append(style);
-
-  const syncWork = () => {
-    const button = document.querySelector('.compression-work-button');
-    if (!button) return;
-    const badge = button.querySelector('[data-work-count]');
-    const count = Number(String(badge?.textContent || '').replace(/[^0-9]/g, '')) || 0;
-    button.hidden = !count;
-  };
-
-  const observer = new MutationObserver(syncWork);
-  observer.observe(document.body, { childList:true, subtree:true, characterData:true, attributes:true, attributeFilter:['hidden'] });
-  syncWork();
 }
