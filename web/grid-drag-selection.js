@@ -11,9 +11,9 @@ const style = document.createElement('style');
 style.textContent = `
 .files.grid .file-card,.files.grid .file-card *{user-select:none;-webkit-user-select:none}
 .files.grid .file-card img{-webkit-user-drag:none;user-drag:none}
-.files.grid .file-card:hover{box-shadow:inset 0 0 0 2px rgba(239,160,154,.45)!important}
+.files.grid .file-card:not(.selected):hover{outline:2px solid rgba(239,160,154,.45);outline-offset:-2px;box-shadow:none!important}
 .files.grid .file-card:focus{outline:none}
-.files.grid .file-card:focus-visible{outline:none;box-shadow:inset 0 0 0 2px rgba(239,160,154,.65)!important}
+.files.grid .file-card:not(.selected):focus-visible{outline:2px solid rgba(239,160,154,.65);outline-offset:-2px;box-shadow:none!important}
 .grid-drag-selection-box{position:fixed;z-index:1000;pointer-events:none;border:1px solid rgba(239,160,154,.95);border-radius:3px;background:rgba(239,160,154,.14);box-shadow:0 0 0 1px rgba(0,0,0,.2),0 4px 18px rgba(0,0,0,.16)}
 .file-card.grid-drag-hit:not(.media-card){box-shadow:inset 0 0 0 2px rgba(239,160,154,.78)!important}
 .file-card.media-card.grid-drag-hit:after{opacity:.68!important}
