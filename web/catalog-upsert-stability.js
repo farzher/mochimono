@@ -61,15 +61,16 @@ function install() {
       }
 
       const searchText = String(raw?.searchText || '');
-      const repeatedSearch = lastSearchText.has(hash) && lastSearchText.get(hash) === searchText;
+      const repeatedSearch = Boolean(searchText) && lastSearchText.get(hash) === searchText;
       signatures.set(hash, nextSignature);
-      lastSearchText.set(hash, searchText);
+      if (searchText) lastSearchText.set(hash, searchText);
       metrics.accepted++;
 
       // library-app merges incoming searchText into the current record. When an
       // update only changes availability/metadata, do not append the exact same
-      // search corpus again and let it grow forever.
-      accepted.push(repeatedSearch && searchText ? { ...raw, searchText:'' } : raw);
+      // search corpus again and let it grow forever. Partial events with no
+      // searchText must not erase this memory of the last full corpus.
+      accepted.push(repeatedSearch ? { ...raw, searchText:'' } : raw);
     }
     if (accepted.length) return originalUpsertMany(accepted);
   };
