@@ -3,12 +3,24 @@ const root = document.documentElement;
 let replaying = false;
 let worker = null;
 let generation = 0;
+let preparedKey = '';
 
 function imageHashes() {
   return [...new Set((window.mochimonoGridModel?.items || [])
     .filter(item => item?.[2] === 'image')
     .map(item => String(item?.[0] || ''))
-    .filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
+    .filter(hash => /^[a-f0-9]{64}$/.test(hash)))].sort();
+}
+
+function hashKey(hashes) {
+  let value = 2166136261;
+  for (const hash of hashes) {
+    for (let index = 0; index < hash.length; index++) {
+      value ^= hash.charCodeAt(index);
+      value = Math.imul(value, 16777619) >>> 0;
+    }
+  }
+  return `${hashes.length}:${value.toString(36)}`;
 }
 
 function progressUi(done, total) {
@@ -25,7 +37,7 @@ function cancel() {
   generation++;
   worker?.terminate();
   worker = null;
-  root.classList.remove('similarity-preindexing');
+  root.classList.remove('similarity-preindexing','similarity-sort-indexing');
 }
 
 function prepare(hashes, mine) {
@@ -68,21 +80,36 @@ sort?.addEventListener('change', event => {
 
   const hashes = imageHashes();
   if (!hashes.length) return;
+  const key = hashKey(hashes);
+  if (key === preparedKey) return;
+
   event.preventDefault();
   event.stopImmediatePropagation();
 
+  // Keep library-app's private sort/filter state synchronized even though this
+  // first event is intercepted before its normal change listener. This also
+  // restores the clean base grid after leaving Visual, so Similar never adopts
+  // a visual-flow result as its source model.
+  window.mochimonoLibrary?.setSort?.('similar');
+
   const mine = ++generation;
-  root.classList.add('similarity-preindexing');
+  root.classList.add('similarity-preindexing','similarity-sort-indexing');
   progressUi(0, hashes.length);
-  prepare(hashes, mine).catch(() => {}).finally(() => {
+  let succeeded = false;
+  prepare(hashes, mine).then(() => { succeeded = true; }).catch(() => {}).finally(() => {
     if (mine !== generation) return;
     worker = null;
     root.classList.remove('similarity-preindexing');
-    if (sort.value !== 'similar') return;
+    if (succeeded) preparedKey = key;
+    if (sort.value !== 'similar') {
+      root.classList.remove('similarity-sort-indexing');
+      return;
+    }
     replaying = true;
     try { sort.dispatchEvent(new Event('change', { bubbles:true })); }
     finally { replaying = false; }
   });
 }, true);
 
+window.addEventListener('mochimono:catalog-updated', () => { preparedKey = ''; });
 addEventListener('beforeunload', cancel, { once:true });
