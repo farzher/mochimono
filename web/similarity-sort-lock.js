@@ -1,11 +1,12 @@
 const sort = document.querySelector('#sort');
 const views = document.querySelector('#views');
+const OWNED_SORTS = new Set(['similar','visual']);
 
-let locked = false;
+let lockedValue = '';
 let sortIntentUntil = 0;
 
 function syncClass() {
-  document.documentElement.classList.toggle('similarity-sort-locked', locked);
+  document.documentElement.classList.toggle('similarity-sort-locked', Boolean(lockedValue));
 }
 
 function markSortIntent() {
@@ -21,44 +22,44 @@ sort?.addEventListener('change', event => {
   sortIntentUntil = 0;
 
   if (deliberateUserChange) {
-    locked = value === 'similar';
+    lockedValue = OWNED_SORTS.has(value) ? value : '';
     syncClass();
-    if (locked) queueMicrotask(() => sort.blur());
+    if (lockedValue) queueMicrotask(() => sort.blur());
     return;
   }
 
-  if (value === 'similar') {
-    locked = true;
+  if (OWNED_SORTS.has(value) && !lockedValue) {
+    lockedValue = value;
     syncClass();
     queueMicrotask(() => sort.blur());
     return;
   }
 
-  if (!locked) return;
+  if (!lockedValue || value === lockedValue) return;
 
-  // Similar is a user-selected Library mode. Background/history/catalog code
-  // and wheel/focus behavior must not silently replace it with another sort.
-  // Only a deliberate click/tap/keyboard action on Sort may leave the mode.
-  sort.value = 'similar';
+  // Similar and Visual are user-selected Library modes. Background/history/
+  // catalog code and wheel/focus behavior must not silently replace them.
+  // Only a deliberate interaction with Sort may leave the current mode.
+  sort.value = lockedValue;
   syncClass();
   event.preventDefault();
   event.stopImmediatePropagation();
 }, true);
 
 sort?.addEventListener('wheel', () => {
-  if (locked) sort.blur();
+  if (lockedValue) sort.blur();
 }, { capture:true, passive:true });
 
 views?.addEventListener('click', event => {
   const view = event.target.closest('[data-view]')?.dataset.view;
   if (!event.isTrusted || !view || view === 'grid') return;
-  locked = false;
+  lockedValue = '';
   syncClass();
 }, true);
 
 document.addEventListener('click', event => {
-  if (!event.isTrusted || !event.target.closest('.similarity-sort-close')) return;
-  locked = false;
+  if (!event.isTrusted || !event.target.closest('.similarity-sort-close,.visual-sort-close')) return;
+  lockedValue = '';
   syncClass();
 }, true);
 
@@ -67,9 +68,10 @@ style.textContent = 'html.similarity-sort-locked #dateRail{display:none!importan
 document.head.append(style);
 
 window.mochimonoSimilaritySortLock = {
-  active: () => locked,
+  active: () => Boolean(lockedValue),
+  value: () => lockedValue,
   release() {
-    locked = false;
+    lockedValue = '';
     sortIntentUntil = 0;
     syncClass();
   }
