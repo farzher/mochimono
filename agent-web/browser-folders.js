@@ -65,7 +65,7 @@ if (folders && frame) {
 
   function previews(source) {
     const items = source.previews || [];
-    return `<div class="storage-folder-samples" title="Browser folder">${[0,1,2].map(index => previewCell(items[index], index)).join('')}</div>`;
+    return `<a class="storage-folder-samples storage-source-link" href="#" title="View in Library">${[0,1,2].map(index => previewCell(items[index], index)).join('')}</a>`;
   }
 
   function card(source) {
@@ -100,11 +100,7 @@ if (folders && frame) {
 
   function sourceRenderKey(source) {
     const previewKey = (source.previews || []).slice(0, 3).map(file => [file?.hash || '', file?.filename || '', file?.mime || '']);
-    return [
-      source.id || '', source.name || '', source.rootPath || '', source.permission || 'prompt',
-      source.scope || 'media', Boolean(source.cloud), Number(source.files) || 0, Number(source.bytes) || 0,
-      source.lastError || '', previewKey
-    ];
+    return [source.id || '', source.name || '', source.rootPath || '', source.permission || 'prompt', source.scope || 'media', Boolean(source.cloud), Number(source.files) || 0, Number(source.bytes) || 0, source.lastError || '', previewKey];
   }
 
   function updateRowState(source) {
@@ -125,7 +121,6 @@ if (folders && frame) {
       for (const source of sources || []) updateRowState(source);
       return;
     }
-
     renderedKey = nextKey;
     writingRows = true;
     for (const row of folders.querySelectorAll(':scope > [data-browser-folder]')) row.remove();
@@ -142,9 +137,8 @@ if (folders && frame) {
     const bridge = api();
     if (!bridge?.list) return;
     rendering = true;
-    try {
-      replaceBrowserRows(await bridge.list());
-    } catch {} finally { rendering = false; }
+    try { replaceBrowserRows(await bridge.list()); }
+    catch {} finally { rendering = false; }
   }
 
   function schedule(delay = 80) {
@@ -160,11 +154,9 @@ if (folders && frame) {
     const id = row.dataset.browserFolder;
 
     if (event.target.closest('[data-browser-sync]')) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      event.preventDefault(); event.stopImmediatePropagation();
       const button = event.target.closest('[data-browser-sync]');
-      button.disabled = true;
-      button.textContent = 'Working…';
+      button.disabled = true; button.textContent = 'Working…';
       try { await bridge.sync(id, { userGesture:true }); }
       catch (error) { button.title = error.message || String(error); }
       finally { schedule(0); }
@@ -172,21 +164,18 @@ if (folders && frame) {
     }
 
     if (event.target.closest('[data-browser-scope]')) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      event.preventDefault(); event.stopImmediatePropagation();
       const sources = await bridge.list();
       const source = sources.find(item => item.id === id);
       if (!source) return;
       const next = source.scope === 'all' ? 'media' : 'all';
       await bridge.setScope(id, next);
       await bridge.sync(id, { userGesture:true });
-      schedule(0);
-      return;
+      schedule(0); return;
     }
 
     if (event.target.closest('[data-browser-cloud]')) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      event.preventDefault(); event.stopImmediatePropagation();
       const sources = await bridge.list();
       const source = sources.find(item => item.id === id);
       if (!source) return;
@@ -197,28 +186,23 @@ if (folders && frame) {
         await bridge.setCloud(id, true);
         await bridge.sync(id, { userGesture:true });
       }
-      schedule(0);
-      return;
+      schedule(0); return;
     }
 
     if (event.target.closest('[data-browser-path]')) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      event.preventDefault(); event.stopImmediatePropagation();
       const sources = await bridge.list();
       const source = sources.find(item => item.id === id);
       if (!source) return;
       const value = prompt('Full folder path', source.rootPath || source.name);
       if (value == null) return;
       await bridge.setRootPath(id, value);
-      schedule(0);
-      return;
+      schedule(0); return;
     }
 
     if (event.target.closest('[data-browser-remove]')) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      await bridge.remove(id);
-      schedule(0);
+      event.preventDefault(); event.stopImmediatePropagation();
+      await bridge.remove(id); schedule(0);
     }
   }, true);
 
