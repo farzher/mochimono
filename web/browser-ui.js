@@ -104,3 +104,9 @@ files.addEventListener('contextmenu', event => {
   const item = event.target.closest('[data-hash]');
   if (item && item.dataset.hash === suppressHash && performance.now() <= suppressUntil) event.preventDefault();
 });
+
+window.addEventListener('mochimono:grid-model', () => {
+  if (document.querySelector('#sort')?.value !== 'similar') return;
+  if (document.documentElement.classList.contains('similarity-active')) return;
+  queueMicrotask(() => window.mochimonoSimilaritySort?.refresh?.());
+});
