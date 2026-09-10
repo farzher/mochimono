@@ -7,18 +7,9 @@ const fileCount = document.querySelector('#fileCount');
 const commandbar = document.querySelector('.commandbar');
 const dateRail = document.querySelector('#dateRail');
 
-const MODE_KEY = 'mochimono-visual-order-mode';
 const RESULT_CACHE_LIMIT = 6;
-const MODES = {
-  flow:{ label:'Flow', description:'Visual neighborhoods + color' },
-  structure:{ label:'Structure', description:'Shape and composition' },
-  color:{ label:'Color', description:'Color wheel' }
-};
+const DESCRIPTION = 'Color + visual similarity';
 
-let mode = (() => {
-  const saved = localStorage.getItem(MODE_KEY);
-  return MODES[saved] ? saved : 'flow';
-})();
 let wanted = false;
 let active = false;
 let indexing = false;
@@ -42,10 +33,12 @@ let runningKey = '';
 let installedKey = '';
 const resultCache = new Map();
 
+try { localStorage.removeItem('mochimono-visual-order-mode'); } catch {}
+
 const option = document.createElement('option');
 option.value = 'visual';
 option.textContent = 'Visual';
-option.title = 'Arrange all media into a continuous visual flow';
+option.title = 'Arrange media by color and local visual similarity';
 if (sort && !sort.querySelector('option[value="visual"]')) {
   const similar = sort.querySelector('option[value="similar"]');
   similar ? similar.after(option) : sort.append(option);
@@ -54,7 +47,7 @@ if (sort && !sort.querySelector('option[value="visual"]')) {
 const style = document.createElement('style');
 style.textContent = `
 .visual-sort-bar{margin:10px 0 6px;padding:9px 10px;display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#171518;color:#d8cfcb}
-.visual-sort-bar[hidden],.visual-rail[hidden]{display:none!important}.visual-sort-copy{min-width:0;flex:1;display:grid;gap:5px}.visual-sort-head{display:flex;align-items:center;gap:9px;min-width:0}.visual-sort-head strong{font-size:11px;white-space:nowrap}.visual-sort-modes{display:flex;gap:3px;min-width:0}.visual-sort-modes button{height:25px;padding:0 8px;border:0;border-radius:7px;background:transparent;color:#8e8582;font-size:10px;font-weight:650}.visual-sort-modes button:hover{background:#252126;color:#ddd5d1}.visual-sort-modes button.active{background:#eee8e4;color:#171416}.visual-sort-copy>span{color:#8e8582;font-size:10px}.visual-sort-progress{height:3px;overflow:hidden;border-radius:99px;background:#282429}.visual-sort-progress i{display:block;height:100%;width:0;background:#efa09a;transition:width .12s linear}.visual-sort-close{width:30px;height:30px;padding:0;display:grid;place-items:center;background:transparent;color:#9b9290;font-size:18px}.visual-sort-close:hover{background:#29252a;color:#fff}
+.visual-sort-bar[hidden],.visual-rail[hidden]{display:none!important}.visual-sort-copy{min-width:0;flex:1;display:grid;gap:5px}.visual-sort-head{display:flex;align-items:center;gap:9px;min-width:0}.visual-sort-head strong{font-size:11px;white-space:nowrap}.visual-sort-copy>span{color:#8e8582;font-size:10px}.visual-sort-progress{height:3px;overflow:hidden;border-radius:99px;background:#282429}.visual-sort-progress i{display:block;height:100%;width:0;background:#efa09a;transition:width .12s linear}.visual-sort-close{width:30px;height:30px;padding:0;display:grid;place-items:center;background:transparent;color:#9b9290;font-size:18px}.visual-sort-close:hover{background:#29252a;color:#fff}
 html.visual-sort-indexing:not(.visual-sort-active) #files{visibility:hidden!important}
 html.visual-sort-active #dateRail,html.visual-sort-indexing #dateRail{display:none!important}
 `;
@@ -63,7 +56,7 @@ document.head.append(style);
 const bar = document.createElement('div');
 bar.className = 'visual-sort-bar';
 bar.hidden = true;
-bar.innerHTML = `<div class="visual-sort-copy"><div class="visual-sort-head"><strong>Visual order</strong><div class="visual-sort-modes">${Object.entries(MODES).map(([key, value]) => `<button type="button" data-visual-mode="${key}">${value.label}</button>`).join('')}</div></div><span></span><div class="visual-sort-progress"><i></i></div></div><button class="visual-sort-close" type="button" title="Return to newest" aria-label="Return to newest">×</button>`;
+bar.innerHTML = `<div class="visual-sort-copy"><div class="visual-sort-head"><strong>Visual order</strong></div><span></span><div class="visual-sort-progress"><i></i></div></div><button class="visual-sort-close" type="button" title="Return to newest" aria-label="Return to newest">×</button>`;
 files?.before(bar);
 const status = bar.querySelector('.visual-sort-copy > span');
 const progress = bar.querySelector('.visual-sort-progress > i');
@@ -73,11 +66,6 @@ visualRail.className = 'date-rail visual-rail';
 visualRail.hidden = true;
 visualRail.setAttribute('aria-label', 'Browse visual order');
 dateRail?.after(visualRail);
-
-function syncModeButtons() {
-  for (const button of bar.querySelectorAll('[data-visual-mode]')) button.classList.toggle('active', button.dataset.visualMode === mode);
-}
-syncModeButtons();
 
 function updateProgress(done, total, text) {
   status.textContent = text;
@@ -122,7 +110,7 @@ function mediaIdentity(media) {
 }
 
 function runKeyFor(media) {
-  return `${mode}:${mediaIdentity(media)}`;
+  return `visual-color-v2:${mediaIdentity(media)}`;
 }
 
 function cacheResult(key, result) {
@@ -131,7 +119,6 @@ function cacheResult(key, result) {
     hashes:(result.order || []).map(file => file.hash),
     indexed:Number(result.indexed) || 0,
     unavailable:Number(result.unavailable) || 0,
-    families:Number(result.families) || 0,
     rail:Array.isArray(result.rail) ? result.rail.map(entry => ({ ...entry })) : []
   });
   while (resultCache.size > RESULT_CACHE_LIMIT) resultCache.delete(resultCache.keys().next().value);
@@ -148,7 +135,12 @@ function cachedResult(key, media) {
   }
   resultCache.delete(key);
   resultCache.set(key, cached);
-  return { order, indexed:cached.indexed, unavailable:cached.unavailable, families:cached.families, rail:cached.rail.map(entry => ({ ...entry })) };
+  return {
+    order,
+    indexed:cached.indexed,
+    unavailable:cached.unavailable,
+    rail:cached.rail.map(entry => ({ ...entry }))
+  };
 }
 
 function runWorker(media, signal) {
@@ -177,10 +169,9 @@ function runWorker(media, signal) {
         return;
       }
       if (data.type === 'error') return finish(reject, new Error(data.error || 'Could not build visual order'));
-      if (data.type !== 'result' || !data.result) return;
-      finish(resolve, data.result);
+      if (data.type === 'result' && data.result) finish(resolve, data.result);
     };
-    worker.postMessage({ media, mode });
+    worker.postMessage({ media });
   });
 }
 
@@ -273,7 +264,13 @@ function restorePendingScrollAnchor() {
   });
 }
 
-function genericRailEntries() {
+function railEntries() {
+  if (visualRailEntries.length) return visualRailEntries.map(entry => ({
+    index:Math.max(0, Math.min(ordered.length - 1, Number(entry.index) || 0)),
+    label:String(entry.label || ''),
+    short:String(entry.label || ''),
+    major:true
+  }));
   if (!ordered.length) return [];
   const ticks = Math.min(17, ordered.length);
   const indexes = [...new Set(Array.from({ length:ticks }, (_, index) => Math.round(index * (ordered.length - 1) / Math.max(1, ticks - 1))))];
@@ -284,20 +281,8 @@ function genericRailEntries() {
   });
 }
 
-function railEntries() {
-  if (mode !== 'color' || !visualRailEntries.length) return genericRailEntries();
-  return visualRailEntries.map(entry => ({
-    index:Math.max(0, Math.min(ordered.length - 1, Number(entry.index) || 0)),
-    label:String(entry.label || ''),
-    short:String(entry.label || ''),
-    major:true
-  }));
-}
-
 function railLabelAt(index) {
-  if (mode !== 'color' || !visualRailEntries.length) {
-    return `${Math.round(Math.max(0, Math.min(1, index / Math.max(1, ordered.length - 1))) * 100)}%`;
-  }
+  if (!visualRailEntries.length) return `${Math.round(Math.max(0, Math.min(1, index / Math.max(1, ordered.length - 1))) * 100)}%`;
   let label = visualRailEntries[0]?.label || '';
   for (const entry of visualRailEntries) {
     if (Number(entry.index) > index) break;
@@ -334,10 +319,7 @@ function updateRail() {
   let nearestDistance = Infinity;
   for (const tick of visualRail.querySelectorAll('[data-index]')) {
     const delta = Math.abs(Number(tick.dataset.index) - index);
-    if (delta < nearestDistance) {
-      nearest = tick;
-      nearestDistance = delta;
-    }
+    if (delta < nearestDistance) { nearest = tick; nearestDistance = delta; }
   }
   for (const tick of visualRail.querySelectorAll('[data-index]')) tick.classList.toggle('active', tick === nearest);
 }
@@ -379,23 +361,20 @@ function install(result, media, resetScroll, key) {
   patchFilteredHashes();
 
   visualModel = {
-    version:`visual-flow:${mode}:${generation}:${ordered.length}`,
-    sort:`visual-flow:${mode}:${generation}`,
+    version:`visual-flow:color:${generation}:${ordered.length}`,
+    sort:`visual-flow:color:${generation}`,
     items:orderedMedia.map(tuple)
   };
   window.mochimonoGridModel = visualModel;
   originalSetModel?.(visualModel);
 
   bar.hidden = false;
-  syncModeButtons();
   const unavailable = Number(result.unavailable) || 0;
-  const description = MODES[mode].description;
-  const familyText = mode === 'color' ? '' : ` · ${(Number(result.families) || 0).toLocaleString()} visual neighborhoods`;
-  updateProgress(media.length, media.length, `${description} · ${(Number(result.indexed) || 0).toLocaleString()} media${familyText}${unavailable ? ` · ${unavailable.toLocaleString()} without thumbnails` : ''}`);
+  updateProgress(media.length, media.length, `${DESCRIPTION} · ${(Number(result.indexed) || 0).toLocaleString()} media${unavailable ? ` · ${unavailable.toLocaleString()} without thumbnails` : ''}`);
   if (fileCount) {
     fileCount.hidden = false;
     fileCount.textContent = `${ordered.length.toLocaleString()} media`;
-    fileCount.title = `Visual order: ${description}`;
+    fileCount.title = `Visual order: ${DESCRIPTION}`;
   }
 }
 
@@ -474,7 +453,6 @@ async function activate() {
   runningKey = key;
   indexing = true;
   bar.hidden = false;
-  syncModeButtons();
   document.documentElement.classList.add('visual-sort-indexing');
   updateProgress(0, media.length, 'Reading visual descriptors…');
 
@@ -537,15 +515,6 @@ sort?.addEventListener('change', () => {
     deactivate();
   }
 }, true);
-
-bar.addEventListener('click', event => {
-  const button = event.target.closest('[data-visual-mode]');
-  if (!button || !MODES[button.dataset.visualMode] || button.dataset.visualMode === mode) return;
-  mode = button.dataset.visualMode;
-  localStorage.setItem(MODE_KEY, mode);
-  syncModeButtons();
-  scheduleActivate(0, true);
-});
 
 views?.addEventListener('click', event => {
   const view = event.target.closest('[data-view]')?.dataset.view;
@@ -642,7 +611,7 @@ viewerOpen && new MutationObserver(() => { if (active) requestAnimationFrame(syn
 
 window.mochimonoVisualSort = {
   active:() => active,
-  mode:() => mode,
+  mode:() => 'color',
   orderedHashes:() => active ? [...ordered] : null,
   rail:() => visualRailEntries.map(entry => ({ ...entry })),
   refresh:() => scheduleActivate(0, false),
