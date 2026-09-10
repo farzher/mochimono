@@ -6,7 +6,6 @@ const views = document.querySelector('#views');
 const fileCount = document.querySelector('#fileCount');
 const commandbar = document.querySelector('.commandbar');
 const dateRail = document.querySelector('#dateRail');
-const mediaSize = document.querySelector('#mediaSize');
 
 const MODE_KEY = 'mochimono-visual-order-mode';
 const RESULT_CACHE_LIMIT = 6;
@@ -101,16 +100,6 @@ function modelMedia() {
   })).filter(file => /^[a-f0-9]{64}$/.test(file.hash));
 }
 
-function layoutHint() {
-  const rawWidth = Math.max(200, Math.round(files?.clientWidth || 0));
-  return {
-    // Small width changes should not invalidate an expensive visual route.
-    width:Math.max(200, Math.round(rawWidth / 32) * 32),
-    target:Math.max(72, Number(mediaSize?.value) || 170),
-    gap:4
-  };
-}
-
 function hashText(value, seed) {
   let hash = seed >>> 0;
   for (let index = 0; index < value.length; index++) {
@@ -132,8 +121,8 @@ function mediaIdentity(media) {
   return `${media.length}:${left.toString(36)}:${right.toString(36)}`;
 }
 
-function runKeyFor(media, layout) {
-  return `${mode}:${layout.width}x${layout.target}:${mediaIdentity(media)}`;
+function runKeyFor(media) {
+  return `${mode}:${mediaIdentity(media)}`;
 }
 
 function cacheResult(key, result) {
@@ -162,7 +151,7 @@ function cachedResult(key, media) {
   return { order, indexed:cached.indexed, unavailable:cached.unavailable, families:cached.families, rail:cached.rail.map(entry => ({ ...entry })) };
 }
 
-function runWorker(media, signal, layout) {
+function runWorker(media, signal) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./visual-order-worker.js', import.meta.url), { type:'module' });
     let settled = false;
@@ -191,7 +180,7 @@ function runWorker(media, signal, layout) {
       if (data.type !== 'result' || !data.result) return;
       finish(resolve, data.result);
     };
-    worker.postMessage({ media, mode, layout });
+    worker.postMessage({ media, mode });
   });
 }
 
@@ -447,7 +436,6 @@ async function activate() {
     if (current && !String(current.sort || '').startsWith('visual-flow') && !String(current.sort || '').startsWith('similarity')) sourceModel = current;
   }
   const media = modelMedia();
-  const layout = layoutHint();
   const resetScroll = resetScrollNext || !active;
   resetScrollNext = false;
   if (!media.length) {
@@ -460,7 +448,7 @@ async function activate() {
     return;
   }
 
-  const key = runKeyFor(media, layout);
+  const key = runKeyFor(media);
   if (active && installedKey === key) {
     indexing = false;
     document.documentElement.classList.remove('visual-sort-indexing');
@@ -491,7 +479,7 @@ async function activate() {
   updateProgress(0, media.length, 'Reading visual descriptors…');
 
   try {
-    const result = await runWorker(media, signal, layout);
+    const result = await runWorker(media, signal);
     if (mine !== generation || signal.aborted || !wanted) return;
     cacheResult(key, result);
     install(result, media, resetScroll, key);
@@ -642,12 +630,6 @@ window.addEventListener('scroll', () => {
   refreshPendingScrollAnchor();
   scheduleRail();
 }, { passive:true });
-window.addEventListener('resize', () => {
-  if (wanted && active) scheduleActivate(180, false);
-}, { passive:true });
-mediaSize?.addEventListener('input', () => {
-  if (wanted) scheduleActivate(80, false);
-});
 window.addEventListener('mochimono:stable-grid-installed', () => {
   if (!active) return;
   requestAnimationFrame(() => {
