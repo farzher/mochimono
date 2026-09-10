@@ -1,15 +1,16 @@
 const sort = document.querySelector('#sort');
 
 const style = document.createElement('style');
-style.textContent = 'html.similarity-sort-indexing #dateRail{display:none!important}';
+style.textContent = 'html.similarity-sort-indexing #dateRail,html.visual-sort-indexing #dateRail{display:none!important}';
 document.head.append(style);
 
-let restoreSimilar = false;
+let restoreSort = '';
 try {
-  restoreSimilar = JSON.parse(localStorage.getItem('mochimono-library-ui') || '{}')?.sort === 'similar';
+  const saved = JSON.parse(localStorage.getItem('mochimono-library-ui') || '{}')?.sort;
+  if (saved === 'similar' || saved === 'visual') restoreSort = saved;
 } catch {}
 
-if (restoreSimilar && sort?.querySelector('option[value="similar"]')) {
-  sort.value = 'similar';
+if (restoreSort && sort?.querySelector(`option[value="${restoreSort}"]`)) {
+  sort.value = restoreSort;
   sort.dispatchEvent(new Event('change', { bubbles:true }));
 }
