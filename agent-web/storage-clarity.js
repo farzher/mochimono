@@ -8,6 +8,26 @@ let cacheLoadedAt = 0;
 let cacheLoading = null;
 let decorateTimer = 0;
 
+const style = document.createElement('style');
+style.textContent = `
+  #storagePane .folder-item .storage-modes.storage-mode-group{
+    display:flex;align-items:center;gap:5px;flex-wrap:wrap;
+    padding:0;border:0;background:transparent;color:inherit;border-radius:0
+  }
+  #storagePane .folder-item .storage-mode-chip{
+    display:inline-flex;align-items:center;min-height:20px;padding:3px 7px;
+    border:1px solid rgba(224,159,151,.13);border-radius:999px;
+    background:#2a2023;color:#dfaaa4;font-size:9px;font-weight:760;line-height:1.25;white-space:nowrap
+  }
+  #storagePane .folder-item .storage-mode-chip.kind{
+    border-color:rgba(255,255,255,.08);background:#1c1a1d;color:#a7a09d
+  }
+  #storagePane .folder-item .storage-mode-chip.destination.local{
+    border-color:rgba(255,255,255,.08);background:#1c1a1d;color:#a7a09d
+  }
+`;
+document.head.append(style);
+
 function toast(text) {
   if (!toastNode) return;
   toastNode.textContent = text;
@@ -39,6 +59,22 @@ function setText(node, value) {
   if (node && node.textContent !== value) node.textContent = value;
 }
 
+function setChips(node, chips, title = '') {
+  if (!node) return;
+  const key = chips.map(chip => `${chip.label}:${chip.className || ''}`).join('|');
+  if (node.dataset.chipKey !== key) {
+    node.dataset.chipKey = key;
+    node.className = 'storage-modes storage-mode-group';
+    node.replaceChildren(...chips.map(chip => {
+      const span = document.createElement('span');
+      span.className = `storage-mode-chip ${chip.className || ''}`.trim();
+      span.textContent = chip.label;
+      return span;
+    }));
+  }
+  node.title = title;
+}
+
 function nativeScopeLabel(row) {
   const badge = row.querySelector('.storage-modes');
   return /everything/i.test(badge?.textContent || '') ? 'Everything' : 'Media';
@@ -50,10 +86,12 @@ function decorateNativeSource(row) {
   const cloud = row.classList.contains('cloud-folder');
   const scope = nativeScopeLabel(row);
   const destination = cloud ? 'Local + Cloud' : 'Local only';
-  setText(badge, `${destination} · ${scope}`);
-  badge.title = cloud
+  setChips(badge, [
+    { label:destination, className:`destination ${cloud ? 'cloud' : 'local'}` },
+    { label:scope, className:'scope' }
+  ], cloud
     ? `${scope === 'Everything' ? 'All files' : 'Photos and videos'} · original stays local · Cloud copy enabled`
-    : `${scope === 'Everything' ? 'All files' : 'Photos and videos'} · local only`;
+    : `${scope === 'Everything' ? 'All files' : 'Photos and videos'} · local only`);
 }
 
 function decorateBrowserSource(row) {
@@ -62,12 +100,13 @@ function decorateBrowserSource(row) {
   const scope = String(row.querySelector('[data-browser-scope]')?.textContent || '').trim() === 'Everything' ? 'Everything' : 'Media';
   const cloud = String(row.querySelector('[data-browser-cloud]')?.textContent || '').trim() === 'Local';
   const destination = cloud ? 'Local + Cloud' : 'Local only';
-  setText(badge, `Browser · ${destination} · ${scope}`);
-  badge.title = cloud
-    ? 'Browser-style folder · local original + Cloud copy'
-    : 'Browser-style folder · local only';
+  setChips(badge, [
+    { label:'Browser', className:'kind' },
+    { label:destination, className:`destination ${cloud ? 'cloud' : 'local'}` },
+    { label:scope, className:'scope' }
+  ], cloud ? 'Browser-style folder · local original + Cloud copy' : 'Browser-style folder · local only');
   const preview = row.querySelector('.storage-folder-samples');
-  if (preview) preview.title = 'Open browser folder in Mochimono';
+  if (preview) preview.title = 'View browser folder in Library';
 }
 
 function decorateSources() {
@@ -91,18 +130,15 @@ async function loadCacheStats(force = false) {
 function decorateCacheCard() {
   const card = document.querySelector('[data-location-id="local-cache"]');
   if (!card || !cacheStats) return;
-
   const indexed = Math.max(0, Number(cacheStats.indexedFiles) || 0);
   const path = String(cacheStats.path || '');
   const meta = card.querySelector('.managed-storage-meta');
   setText(meta, `${indexed.toLocaleString()} files indexed${path ? ` · ${path}` : ''}`);
   if (meta) meta.title = path;
-
   const used = card.querySelector('.managed-storage-space > span:first-child');
   setText(used, `${bytes(cacheStats.bytes)} cache`);
   const free = card.querySelector('.managed-storage-space .free');
   if (free && Number(cacheStats.freeBytes) > 0) setText(free, `${bytes(cacheStats.freeBytes)} free`);
-
   card.title = path ? `Open ${path} in Explorer` : 'Open Local cache in Explorer';
 }
 
