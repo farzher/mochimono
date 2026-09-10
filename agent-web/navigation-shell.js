@@ -155,8 +155,8 @@ function sourceLibraryUrl(path) {
 
 const sourceLinkStyle = document.createElement('style');
 sourceLinkStyle.textContent = `
-#folders a.storage-folder-samples{display:block;color:inherit;text-decoration:none;cursor:pointer}
-#folders a.storage-folder-samples.opening{opacity:.62;cursor:progress;pointer-events:none}
+#folders a.storage-source-link{display:block;color:inherit;text-decoration:none}
+#folders a.storage-source-link.opening{opacity:.62;cursor:progress;pointer-events:none}
 `;
 document.head.append(sourceLinkStyle);
 
@@ -166,23 +166,20 @@ function decorateSourceLinks() {
     const row = preview.closest('[data-folder-path],[data-browser-folder]');
     const path = sourcePath(row);
     if (!row || !path) continue;
-    let link = preview;
-    if (preview.tagName !== 'A') {
+    preview.removeAttribute('data-open-library-folder');
+    let link = preview.parentElement?.matches('a.storage-source-link') ? preview.parentElement : null;
+    if (!link) {
       link = document.createElement('a');
-      for (const attribute of preview.attributes) {
-        if (attribute.name === 'data-open-library-folder') continue;
-        link.setAttribute(attribute.name, attribute.value);
-      }
-      link.innerHTML = preview.innerHTML;
-      preview.replaceWith(link);
+      link.className = 'storage-source-link';
+      preview.before(link);
+      link.append(preview);
     }
-    link.removeAttribute('data-open-library-folder');
     link.href = sourceLibraryUrl(path).href;
     link.title = `View ${path} in Library`;
   }
 }
 
-async function openSourceFolder(row, preview) {
+async function openSourceFolder(row, link) {
   const path = sourcePath(row);
   if (!path) throw new Error('Folder path is unavailable.');
   const browserId = String(row?.dataset.browserFolder || '').trim();
@@ -193,11 +190,11 @@ async function openSourceFolder(row, preview) {
   // If the iframe is not ready, use the real link as a hard-navigation fallback
   // instead of polling internal state and leaving the click apparently stuck.
   if (!scope?.apply || !scope?.commit || !child?.mochimonoHome) {
-    location.href = preview.href;
+    location.href = link.href;
     return;
   }
 
-  preview.classList.add('opening');
+  link.classList.add('opening');
   try {
     const result = await scope.apply(path, { reset:true, browserId, importId });
     if (!result) return;
@@ -210,20 +207,20 @@ async function openSourceFolder(row, preview) {
     }
     child.focus();
   } finally {
-    preview.classList.remove('opening');
+    link.classList.remove('opening');
   }
 }
 
 folders?.addEventListener('click', event => {
-  const preview = event.target.closest?.('a.storage-folder-samples');
-  if (!preview) return;
+  const link = event.target.closest?.('a.storage-source-link');
+  if (!link) return;
   if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-  const row = preview.closest('[data-folder-path],[data-browser-folder]');
+  const row = link.closest('[data-folder-path],[data-browser-folder]');
   if (!row) return;
   event.preventDefault();
   event.stopPropagation();
   event.stopImmediatePropagation();
-  openSourceFolder(row, preview).catch(error => toast(error.message));
+  openSourceFolder(row, link).catch(error => toast(error.message));
 }, true);
 
 if (folders) {
