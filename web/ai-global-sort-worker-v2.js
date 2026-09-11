@@ -1,543 +1,61 @@
-const AI_DB = 'mochimono-ai';
-const AI_DB_VERSION = 2;
-const EMBEDDINGS = 'embeddings';
-const EMBEDDING_SCHEMA = 3;
-const DINO_VERSION = 'dinov3-vitb16-v2';
-const SIGLIP_VERSION = 'siglip2-base-224-v2';
-const VISUAL_DB = 'mochimono-visual-similarity';
-const VISUAL_STORE = 'fingerprints';
-const VISUAL_DB_VERSION = 1;
-const PROJECTION_DIMS = 96;
-const HASH_RE = /^[a-f0-9]{64}$/;
+const A='mochimono-ai',AV=2,E='embeddings',S=3,DV='dinov3-vitb16-v2',SV='siglip2-base-224-v2';
+const VDB='mochimono-visual-similarity',VS='fingerprints',VV=1,TV=3,FV='ai-color-flow-v4';
+const R=/^[a-f0-9]{64}$/,ED=112,CD=56,N=20,HB=20,LB=5,NB=7,BATCH=24;
+const INFO={flow:'Flow',families:'Families',color:'Color',structure:'Structure',meaning:'Meaning',hybrid:'Hybrid',moments:'Moments'};
+let canceled=false;
+const post=(type,p={})=>self.postMessage({type,...p});
+const prog=(done,total,detail,stage='ordering')=>post('progress',{done,total,detail,stage});
+const abort=()=>{if(canceled)throw new DOMException('Aborted','AbortError')};
+const clamp=(v,a=0,b=1)=>Math.max(a,Math.min(b,v));
 
-const MODE_INFO = {
-  flow:{ label:'Flow' },
-  families:{ label:'Families' },
-  color:{ label:'Color' },
-  structure:{ label:'Structure' },
-  meaning:{ label:'Meaning' },
-  topics:{ label:'Topics' },
-  hybrid:{ label:'Hybrid' },
-  moments:{ label:'Moments' }
-};
+function odb(name,ver,up){return new Promise((ok,no)=>{const q=indexedDB.open(name,ver);q.onupgradeneeded=()=>up?.(q.result);q.onsuccess=()=>ok(q.result);q.onerror=()=>no(q.error)})}
+function aidb(){return odb(A,AV,db=>{if(!db.objectStoreNames.contains(E)){const s=db.createObjectStore(E,{keyPath:'id'});s.createIndex('model','model');s.createIndex('hash','hash')}if(!db.objectStoreNames.contains('metadata')){const s=db.createObjectStore('metadata',{keyPath:'id'});s.createIndex('kind','kind');s.createIndex('hash','hash')}})}
+function vdb(){return odb(VDB,VV,db=>{if(!db.objectStoreNames.contains(VS))db.createObjectStore(VS,{keyPath:'hash'})})}
+function space(count,dim=ED){return{count,dim,data:new Float32Array(count*dim),available:new Uint8Array(count)}}
+function norm(data,o,d){let n=0;for(let i=0;i<d;i++)n+=data[o+i]*data[o+i];n=Math.sqrt(n)||1;for(let i=0;i<d;i++)data[o+i]/=n}
+const maps=new Map;
+function pmap(len){if(maps.has(len))return maps.get(len);const a=new Uint16Array(len),b=new Uint16Array(len),s=new Int8Array(len*2);for(let i=0;i<len;i++){const x=Math.imul(i+1,0x9e3779b1)>>>0,y=Math.imul(i+17,0x85ebca6b)>>>0;a[i]=x%ED;b[i]=y%ED;s[i*2]=x&0x80000000?-1:1;s[i*2+1]=y&0x40000000?-1:1}const m={a,b,s};maps.set(len,m);return m}
+function project(src,dst,o){const m=pmap(src.length);for(let i=0;i<src.length;i++){const v=Number(src[i])||0;dst[o+m.a[i]]+=v*m.s[i*2];dst[o+m.b[i]]+=v*m.s[i*2+1]}norm(dst,o,ED)}
+async function loadModel(model,media,byHash){const visual=model==='dinov3',version=visual?DV:SV,label=visual?'visual':'semantic',out=space(media.length);const db=await aidb();let loaded=0;prog(0,media.length,`Reading saved ${label} AI index…`,'embeddings');try{const q=db.transaction(E,'readonly').objectStore(E).index('model').openCursor(IDBKeyRange.only(version));await new Promise((ok,no)=>{q.onerror=()=>no(q.error);q.onsuccess=()=>{if(canceled)return no(new DOMException('Aborted','AbortError'));const c=q.result;if(!c)return ok();const r=c.value||{},i=byHash.get(String(r.hash||''));if(i!=null&&Number(r.schema)===S&&r.vector?.length){project(r.vector,out.data,i*ED);out.available[i]=1;loaded++;if(!(loaded%3000))prog(loaded,media.length,`Reading saved ${label} AI index · ${loaded.toLocaleString()} matched…`,'embeddings')}c.continue()}})}finally{db.close()}out.loaded=loaded;prog(loaded,media.length,`${visual?'Visual':'Semantic'} AI index · ${loaded.toLocaleString()} ready`,'embeddings');return out}
 
-let canceled = false;
-const post = (type, payload = {}) => self.postMessage({ type, ...payload });
-const progress = (done, total, detail, stage = 'ordering') => post('progress', { done, total, detail, stage });
-const abortIfNeeded = () => { if (canceled) throw new DOMException('Aborted', 'AbortError'); };
-const clamp = (value, low = 0, high = 1) => Math.max(low, Math.min(high, value));
+function dot(sp,a,b){let x=a*sp.dim,y=b*sp.dim,t=0;for(let d=0;d<sp.dim;d++)t+=sp.data[x+d]*sp.data[y+d];return t}
+function dist(sp,a,b){return 1-dot(sp,a,b)}
+function far(sp,sample,src){let best=src,bd=-1;for(const i of sample){const d=dist(sp,src,i);if(d>bd){bd=d;best=i}}return best}
+function split(xs,sp,scratch){if(xs.length<2)return[xs,[]];const k=Math.min(28,xs.length),sam=Array.from({length:k},(_,i)=>xs[Math.min(xs.length-1,Math.floor((i+.5)*xs.length/k))]),a=far(sp,sam,sam[0]),b=far(sp,sam,a),axis=new Float32Array(sp.dim);for(let d=0;d<sp.dim;d++)axis[d]=sp.data[b*sp.dim+d]-sp.data[a*sp.dim+d];for(const i of xs){let v=0,o=i*sp.dim;for(let d=0;d<sp.dim;d++)v+=sp.data[o+d]*axis[d];scratch[i]=v}xs.sort((x,y)=>scratch[x]-scratch[y]||x-y);const m=Math.ceil(xs.length/2);return[xs.slice(0,m),xs.slice(m)]}
+function greedy(xs,sp){if(xs.length<3)return xs.slice();const left=xs.slice(),out=[left.shift()];while(left.length){const cur=out.at(-1);let bi=0,bd=Infinity;for(let i=0;i<left.length;i++){const d=dist(sp,cur,left[i]);if(d<bd){bd=d;bi=i}}out.push(left.splice(bi,1)[0])}return out}
+function join(a,b,sp){if(!a.length)return b;if(!b.length)return a;const c=[[dist(sp,a.at(-1),b[0]),0,0],[dist(sp,a.at(-1),b.at(-1)),0,1],[dist(sp,a[0],b[0]),1,0],[dist(sp,a[0],b.at(-1)),1,1]].sort((x,y)=>x[0]-y[0])[0];if(c[1])a.reverse();if(c[2])b.reverse();return a.concat(b)}
+function route(xs,sp,leaf=30,scratch=new Float32Array(sp.count)){abort();if(xs.length<=leaf)return greedy(xs,sp);const[a,b]=split(xs.slice(),sp,scratch);return join(route(a,sp,leaf,scratch),route(b,sp,leaf,scratch),sp)}
+function available(sp){const a=[];for(let i=0;i<sp.count;i++)if(sp.available[i])a.push(i);return a}
 
-function openDb(name, version, upgrade) {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(name, version);
-    request.onupgradeneeded = () => upgrade?.(request.result);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
+function lin(v){v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}
+function lab(r,g,b){r=lin(r);g=lin(g);b=lin(b);const l=Math.cbrt(.4122214708*r+.5363325363*g+.0514459929*b),m=Math.cbrt(.2119034982*r+.6806995451*g+.1073969566*b),s=Math.cbrt(.0883024619*r+.2817188376*g+.6299787005*b);return[.2104542553*l+.793617785*m-.0040720468*s,1.9779984951*l-2.428592205*m+.4505937099*s,.0259040371*l+.7827717662*m-.808675766*s]}
+function dhab(gray){let h='',n=0,b=0;for(let y=0;y<8;y++){const sy=Math.min(N-1,Math.floor((y+.5)*N/8));for(let x=0;x<8;x++){const lx=Math.min(N-2,Math.floor(x*(N-1)/8)),rx=Math.min(N-1,lx+2);n=(n<<1)|(gray[sy*N+lx]<gray[sy*N+rx]?1:0);if(++b===4){h+=n.toString(16);n=b=0}}}return h}
+function fromPixels(px){const cells=Array.from({length:16},()=>[0,0,0,0]),hist=new Float64Array(8),gray=new Float32Array(N*N);let ls=0,l2=0,cs=0,cf=0,hx=0,hy=0,hw=0;for(let y=0;y<N;y++)for(let x=0;x<N;x++){const i=y*N+x,p=i*4,[L,a,b]=lab(px[p],px[p+1],px[p+2]),c=Math.hypot(a,b);gray[i]=L;ls+=L;l2+=L*L;cs+=c;if(c>.015)cf++;const q=Math.floor(y*4/N)*4+Math.floor(x*4/N),z=cells[q];z[0]+=L;z[1]+=a;z[2]+=b;z[3]++;if(c>.008){let ang=Math.atan2(b,a);if(ang<0)ang+=Math.PI*2;const w=c*c,bin=Math.min(7,Math.floor(ang/(Math.PI*2)*8));hist[bin]+=w;hx+=Math.cos(ang)*w;hy+=Math.sin(ang)*w;hw+=w}}const cnt=N*N,L=ls/cnt,C=cs/cnt,F=cf/cnt,con=Math.sqrt(Math.max(0,l2/cnt-L*L));let H=Math.atan2(hy,hx)/(Math.PI*2);if(H<0)H++;if(!Number.isFinite(H)||!hw)H=0;const st=Math.min(1,Math.hypot(hx,hy)/Math.max(1e-9,hw)),v=new Float32Array(CD);let at=0;for(const z of cells){const q=z[3]||1;v[at++]=z[0]/q;v[at++]=z[1]/q*2.5;v[at++]=z[2]/q*2.5}const ht=hist.reduce((a,b)=>a+b,0)||1;for(let i=0;i<8;i++)v[at++]=Math.sqrt(hist[i]/ht)*1.2;norm(v,0,CD);return{v,h:H,l:L,c:C,f:F,hash:dhab(gray),con}}
+async function calc(hash){const r=await fetch(`/api/thumbs/${hash}?v=${TV}`,{cache:'force-cache'});if(!r.ok)throw Error('Thumbnail unavailable');const b=await createImageBitmap(await r.blob());try{const c=new OffscreenCanvas(N,N),x=c.getContext('2d',{willReadFrequently:true,alpha:false});x.drawImage(b,0,0,N,N);return fromPixels(x.getImageData(0,0,N,N).data)}finally{b.close?.()}}
+function legacy(row){const c=row?.visualColor,f=row?.visualFeature,l=Array.isArray(f?.layout)?f.layout:[];if(!c||l.length!==48)return null;const H=Number(c.dominantHue)||0,L=(Number(f.meanLuma)||0)/255,C=Number(c.meanChroma)||0,F=Number(c.colorFraction)||0,v=new Float32Array(CD);let at=0;for(let i=0;i<16;i++){v[at++]=(Number(l[i*3])||0)/255;v[at++]=(((Number(l[i*3+1])||0)/255*.7-.35))*2.5;v[at++]=(((Number(l[i*3+2])||0)/255*.7-.35))*2.5}const hues=Array.isArray(f.hues)?f.hues:[];for(let i=0;i<8;i++){let t=0;for(let j=0;j<3;j++)t+=(Number(hues[i*3+j])||0)/255;v[at++]=Math.sqrt(t/3)*1.2}norm(v,0,CD);return{v,h:H,l:L,c:C,f:F,hash:/^[a-f0-9]{16,64}$/i.test(String(row.robust||''))?String(row.robust).toLowerCase():'',con:(Number(f.contrast)||0)/255}}
+function cached(row){const x=row?.aiColorFlow;if(row?.aiColorFlowVersion!==FV||!x||!Array.isArray(x.v)||x.v.length!==CD)return null;return{v:Float32Array.from(x.v),h:+x.h||0,l:+x.l||0,c:+x.c||0,f:+x.f||0,hash:String(x.hash||''),con:+x.con||0}}
+async function saveDesc(rows){if(!rows.length)return;const db=await vdb();try{await new Promise((ok,no)=>{const tx=db.transaction(VS,'readwrite'),st=tx.objectStore(VS);for(const r of rows){const q=st.get(r.hash);q.onsuccess=()=>st.put({...q.result,hash:r.hash,aiColorFlowVersion:FV,aiColorFlow:{v:[...r.d.v],h:r.d.h,l:r.d.l,c:r.d.c,f:r.d.f,hash:r.d.hash,con:r.d.con},updatedAt:Date.now()});q.onerror=()=>tx.abort()}tx.oncomplete=ok;tx.onerror=()=>no(tx.error);tx.onabort=()=>no(tx.error)})}finally{db.close()}}
+async function colors(media,byHash,basis){const out={data:new Float32Array(media.length*CD),available:new Uint8Array(media.length),h:new Float32Array(media.length),l:new Float32Array(media.length),c:new Float32Array(media.length),f:new Float32Array(media.length),hash:Array(media.length).fill(''),loaded:0,computed:0};const put=(i,d)=>{out.data.set(d.v,i*CD);out.available[i]=1;out.h[i]=clamp(d.h);out.l[i]=clamp(d.l);out.c[i]=Math.max(0,d.c);out.f[i]=clamp(d.f);out.hash[i]=d.hash||''};const db=await vdb();prog(0,media.length,'Reading rich color descriptors…','color');try{const q=db.transaction(VS,'readonly').objectStore(VS).openCursor();await new Promise((ok,no)=>{q.onerror=()=>no(q.error);q.onsuccess=()=>{const cur=q.result;if(!cur)return ok();const row=cur.value||{},i=byHash.get(String(row.hash||''));if(i!=null&&basis[i]){const d=cached(row)||legacy(row);if(d){put(i,d);out.loaded++}}cur.continue()}})}finally{db.close()}const miss=[];for(let i=0;i<media.length;i++)if(basis[i]&&!out.available[i])miss.push(i);for(let o=0;o<miss.length;o+=BATCH){abort();const chunk=miss.slice(o,o+BATCH),rr=await Promise.allSettled(chunk.map(i=>calc(media[i].hash))),writes=[];for(let j=0;j<rr.length;j++)if(rr[j].status==='fulfilled'){const i=chunk[j],d=rr[j].value;put(i,d);out.computed++;writes.push({hash:media[i].hash,d})}await saveDesc(writes).catch(()=>{});prog(out.loaded+Math.min(miss.length,o+chunk.length),media.length,`Color descriptors · ${Math.min(miss.length,o+chunk.length).toLocaleString()} / ${miss.length.toLocaleString()} missing filled`,'color')}return out}
+function cdist(c,a,b){if(!c.available[a]||!c.available[b])return 1;let x=a*CD,y=b*CD,t=0;for(let d=0;d<CD;d++)t+=c.data[x+d]*c.data[y+d];return 1-t}
+const pc=[0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4];
+function ham(a,b){if(!a||a.length!==b.length||![16,64].includes(a.length))return 999;let n=0;for(let i=0;i<a.length;i++)n+=pc[parseInt(a[i],16)^parseInt(b[i],16)];return n}
+class UF{constructor(n){this.p=new Int32Array(n);this.r=new Uint8Array(n);for(let i=0;i<n;i++)this.p[i]=i}f(x){let r=x;while(this.p[r]!==r)r=this.p[r];while(this.p[x]!==x){const n=this.p[x];this.p[x]=r;x=n}return r}u(a,b){a=this.f(a);b=this.f(b);if(a===b)return 0;if(this.r[a]<this.r[b])[a,b]=[b,a];this.p[b]=a;if(this.r[a]===this.r[b])this.r[a]++;return 1}}
+function family(a,b,d,c){const x=dist(d,a,b);if(x<.045)return 1;if(x<.22){const h=ham(c.hash[a],c.hash[b]),bits=c.hash[a]?.length===64?256:64;if(h<=bits*.045)return 1;if(h<=bits*.085&&x<.145)return 1}if(x>.105)return 0;const y=cdist(c,a,b);return (x<.082&&y<.13)||(x<.105&&y<.055)}
+function makeFamilies(xs,d,c){prog(0,xs.length,'Locking near-duplicates and visual variants…','families');const u=new UF(d.count),bands=new Map;for(let step=0;step<xs.length;step++){const i=xs[step],h=c.hash[i];if(h&&[16,64].includes(h.length)){const keys=[],cand=new Set;for(let b=0;b<h.length/4;b++){const k=`${h.length}:${b}:${h.slice(b*4,b*4+4)}`;keys.push(k);const z=bands.get(k)||[];for(let q=z.length-1;q>=0&&cand.size<32;q--)cand.add(z[q])}for(const j of cand)if(family(i,j,d,c))u.u(i,j);for(const k of keys){let z=bands.get(k);if(!z)bands.set(k,z=[]);z.push(i);if(z.length>40)z.shift()}}}const base=route(xs,d,30);for(let p=0;p<base.length;p++)for(let q=p+1;q<Math.min(base.length,p+14);q++)if(family(base[p],base[q],d,c))u.u(base[p],base[q]);const by=new Map;for(const i of xs){const r=u.f(i);if(!by.has(r))by.set(r,[]);by.get(r).push(i)}const groups=[...by.values()],locked=groups.filter(g=>g.length>1).length,kept=groups.reduce((n,g)=>n+(g.length>1?g.length:0),0);prog(xs.length,xs.length,`Visual families · ${locked.toLocaleString()} groups · ${kept.toLocaleString()} media locked together`,'families');return{groups,locked}}
+function centroid(groups,d){const s=space(groups.length);for(let g=0;g<groups.length;g++){for(const i of groups[g])for(let k=0;k<ED;k++)s.data[g*ED+k]+=d.data[i*ED+k];norm(s.data,g*ED,ED);s.available[g]=1}return s}
+function meta(g,c){let x=0,y=0,w=0,l=0,ch=0,f=0,n=0;for(const i of g)if(c.available[i]){const ww=.1+Math.min(1,c.c[i]*7)*c.f[i],a=c.h[i]*Math.PI*2;x+=Math.cos(a)*ww;y+=Math.sin(a)*ww;w+=ww;l+=c.l[i];ch+=c.c[i];f+=c.f[i];n++}if(!n)return{ok:0,h:0,l:.5,c:0,f:0};let h=Math.atan2(y,x)/(Math.PI*2);if(h<0)h++;return{ok:1,h,l:l/n,c:ch/n,f:f/n}}
+function mcolor(a,b){if(!a.ok||!b.ok)return 1;let h=Math.abs(a.h-b.h);h=Math.min(h,1-h)*2;return h*(.35+.65*Math.min(1,(a.c+b.c)*5))+Math.abs(a.l-b.l)*.8+Math.abs(a.c-b.c)*2}
+function ec(a,b,sp,m){return dist(sp,a,b)*.58+mcolor(m[a],m[b])*.42}
+function smooth(run,sp,m,w=14){for(let p=0;p<run.length-2;p++){let bi=p+1,bd=ec(run[p],run[bi],sp,m);for(let q=p+2;q<Math.min(run.length,p+1+w);q++){const d=ec(run[p],run[q],sp,m);if(d<bd){bd=d;bi=q}}if(bi!==p+1)[run[p+1],run[bi]]=[run[bi],run[p+1]]}return run}
+function memberSmooth(run,d,c,w=10){for(let p=0;p<run.length-2;p++){let bi=p+1,bd=dist(d,run[p],run[bi])*.62+cdist(c,run[p],run[bi])*.38;for(let q=p+2;q<Math.min(run.length,p+1+w);q++){const z=dist(d,run[p],run[q])*.62+cdist(c,run[p],run[q])*.38;if(z<bd){bd=z;bi=q}}if(bi!==p+1)[run[p+1],run[bi]]=[run[bi],run[p+1]]}return run}
+function colorOrder(groups,d,c){const cs=centroid(groups,d),m=groups.map(g=>meta(g,c)),neutral=Array.from({length:NB},()=>[]),grid=Array.from({length:HB},()=>Array.from({length:LB},()=>[])),other=[];for(let g=0;g<groups.length;g++){const z=m[g];if(!z.ok)other.push(g);else if(z.f<.095||z.c<.014)neutral[Math.min(NB-1,Math.floor(z.l*NB))].push(g);else grid[Math.min(HB-1,Math.floor(((z.h+1/(HB*2))%1)*HB))][Math.min(LB-1,Math.floor(z.l*LB))].push(g)}const go=[],rail=[];let prev=null;const add=(cell)=>{if(!cell.length)return;let r=smooth(route(cell,cs,20),cs,m);if(prev!=null&&r.length>1&&ec(prev,r.at(-1),cs,m)<ec(prev,r[0],cs,m))r.reverse();go.push(...r);prev=r.at(-1)};if(neutral.some(x=>x.length))rail.push({g:0,label:'Neutral'});for(const x of neutral)add(x);const labels=new Map([[0,'Red'],[2,'Orange'],[4,'Yellow'],[7,'Green'],[10,'Cyan'],[13,'Blue'],[16,'Purple'],[18,'Magenta']]);for(let h=0;h<HB;h++){if(grid[h].some(x=>x.length)&&labels.has(h))rail.push({g:go.length,label:labels.get(h)});if(!(h%2))for(let l=LB-1;l>=0;l--)add(grid[h][l]);else for(let l=0;l<LB;l++)add(grid[h][l])}if(other.length){rail.push({g:go.length,label:'Other'});add(other)}const out=[],rr=[];let rp=0;for(let p=0;p<go.length;p++){while(rp<rail.length&&rail[rp].g===p){rr.push({index:out.length,label:rail[rp++].label})}const mem=groups[go[p]];let inside=mem.length>1?memberSmooth(route(mem,d,25),d,c):mem.slice();if(out.length&&inside.length>1&&dist(d,out.at(-1),inside.at(-1))<dist(d,out.at(-1),inside[0]))inside.reverse();out.push(...inside)}return{route:out,rail:rr}}
+function colorMode(media,d,c){const xs=[],missing=[];for(let i=0;i<media.length;i++)d.available[i]&&c.available[i]?xs.push(i):missing.push(i);if(!xs.length)throw Error('No media has both visual AI and color descriptors.');const fam=makeFamilies(xs,d,c);prog(0,fam.groups.length,`Weaving ${fam.groups.length.toLocaleString()} visual blocks through the palette…`,'ordering');const out=colorOrder(fam.groups,d,c);out.route.push(...missing);prog(media.length,media.length,`Color flow ready · ${fam.locked.toLocaleString()} visual families kept intact`,'ordering');return{...out,indexed:xs.length,unavailable:missing.length,families:fam.locked}}
 
-function openAiDb() {
-  return openDb(AI_DB, AI_DB_VERSION, db => {
-    if (!db.objectStoreNames.contains(EMBEDDINGS)) {
-      const store = db.createObjectStore(EMBEDDINGS, { keyPath:'id' });
-      store.createIndex('model', 'model', { unique:false });
-      store.createIndex('hash', 'hash', { unique:false });
-    }
-    if (!db.objectStoreNames.contains('metadata')) {
-      const store = db.createObjectStore('metadata', { keyPath:'id' });
-      store.createIndex('kind', 'kind', { unique:false });
-      store.createIndex('hash', 'hash', { unique:false });
-    }
-  });
-}
-
-function openVisualDb() {
-  return openDb(VISUAL_DB, VISUAL_DB_VERSION, db => {
-    if (!db.objectStoreNames.contains(VISUAL_STORE)) db.createObjectStore(VISUAL_STORE, { keyPath:'hash' });
-  });
-}
-
-function createSpace(count, dim = PROJECTION_DIMS) {
-  return { count, dim, data:new Float32Array(count * dim), available:new Uint8Array(count) };
-}
-
-function normalizeSegment(data, offset, dim) {
-  let norm = 0;
-  for (let d = 0; d < dim; d++) norm += data[offset + d] * data[offset + d];
-  norm = Math.sqrt(norm) || 1;
-  for (let d = 0; d < dim; d++) data[offset + d] /= norm;
-}
-
-const projectionMaps = new Map();
-function projectionMap(length) {
-  if (projectionMaps.has(length)) return projectionMaps.get(length);
-  const first = new Uint16Array(length);
-  const second = new Uint16Array(length);
-  const signs = new Int8Array(length * 2);
-  for (let j = 0; j < length; j++) {
-    const h1 = Math.imul(j + 1, 0x9e3779b1) >>> 0;
-    const h2 = Math.imul(j + 17, 0x85ebca6b) >>> 0;
-    first[j] = h1 % PROJECTION_DIMS;
-    second[j] = h2 % PROJECTION_DIMS;
-    signs[j * 2] = h1 & 0x80000000 ? -1 : 1;
-    signs[j * 2 + 1] = h2 & 0x40000000 ? -1 : 1;
-  }
-  const value = { first, second, signs };
-  projectionMaps.set(length, value);
-  return value;
-}
-
-function projectVector(source, target, offset) {
-  const map = projectionMap(source.length);
-  for (let j = 0; j < source.length; j++) {
-    const value = Number(source[j]) || 0;
-    target[offset + map.first[j]] += value * map.signs[j * 2];
-    target[offset + map.second[j]] += value * map.signs[j * 2 + 1];
-  }
-  normalizeSegment(target, offset, PROJECTION_DIMS);
-}
-
-function versionFor(model) { return model === 'siglip2' ? SIGLIP_VERSION : DINO_VERSION; }
-function labelFor(model) { return model === 'siglip2' ? 'semantic' : 'visual'; }
-
-async function loadEmbeddingSpace(model, media, indexByHash) {
-  const space = createSpace(media.length);
-  const version = versionFor(model);
-  const db = await openAiDb();
-  let loaded = 0;
-  progress(0, media.length, `Reading saved ${labelFor(model)} AI index…`, 'embeddings');
-  try {
-    const tx = db.transaction(EMBEDDINGS, 'readonly');
-    const store = tx.objectStore(EMBEDDINGS);
-    const index = store.index('model');
-    const request = index.openCursor(IDBKeyRange.only(version));
-    await new Promise((resolve, reject) => {
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        if (canceled) return reject(new DOMException('Aborted', 'AbortError'));
-        const cursor = request.result;
-        if (!cursor) return resolve();
-        const row = cursor.value || {};
-        const mediaIndex = indexByHash.get(String(row.hash || ''));
-        if (mediaIndex != null && Number(row.schema) === EMBEDDING_SCHEMA && row.vector?.length) {
-          projectVector(row.vector, space.data, mediaIndex * PROJECTION_DIMS);
-          space.available[mediaIndex] = 1;
-          loaded++;
-          if (loaded % 2000 === 0) progress(loaded, media.length, `Reading saved ${labelFor(model)} AI index · ${loaded.toLocaleString()} matched…`, 'embeddings');
-        }
-        cursor.continue();
-      };
-    });
-  } finally { db.close(); }
-  space.loaded = loaded;
-  progress(loaded, media.length, `${model === 'siglip2' ? 'Semantic' : 'Visual'} AI index · ${loaded.toLocaleString()} media ready`, 'embeddings');
-  return space;
-}
-
-function descriptorSpace(count) {
-  return {
-    color:new Float32Array(count * 5),
-    structure:new Float32Array(count * 16),
-    available:new Uint8Array(count)
-  };
-}
-
-function descriptorFromRow(row) {
-  const color = row?.visualColor;
-  const feature = row?.visualFeature;
-  if (!color || !feature) return null;
-  const grid = Array.isArray(color.grid) ? color.grid : [];
-  const layout = Array.isArray(feature.layout) ? feature.layout : [];
-  const energy = Array.isArray(feature.energy) ? feature.energy : [];
-  const edges = Array.isArray(feature.edges) ? feature.edges : [];
-  if (grid.length < 3) return null;
-  const hue = Number(color.dominantHue);
-  const strength = Number(color.dominantStrength);
-  const meanLuma = Number(feature.meanLuma) / 255;
-  const meanChroma = Number(color.meanChroma);
-  const resultColor = new Float32Array([
-    Number.isFinite(hue) ? hue : 0,
-    Number.isFinite(strength) ? strength : 0,
-    Number.isFinite(meanLuma) ? meanLuma : clamp(Number(grid[0]) || 0),
-    Number.isFinite(meanChroma) ? meanChroma : Math.hypot(Number(grid[1]) || 0, Number(grid[2]) || 0),
-    Number(color.colorFraction) || 0
-  ]);
-  const structure = new Float32Array(16);
-  for (let q = 0; q < 4; q++) {
-    let luma = 0, edge = 0, n = 0;
-    const x0 = q % 2 ? 2 : 0;
-    const y0 = q >= 2 ? 2 : 0;
-    for (let y = y0; y < y0 + 2; y++) for (let x = x0; x < x0 + 2; x++) {
-      const cell = y * 4 + x;
-      luma += (Number(layout[cell * 3]) || 0) / 255;
-      edge += (Number(energy[cell]) || 0) / 255;
-      n++;
-    }
-    structure[q] = luma / Math.max(1, n);
-    structure[4 + q] = edge / Math.max(1, n);
-  }
-  let horizontal = 0, vertical = 0;
-  for (let cell = 0; cell < 16; cell++) {
-    horizontal += (Number(edges[cell * 4]) || 0) / 255 + (Number(edges[cell * 4 + 2]) || 0) / 255;
-    vertical += (Number(edges[cell * 4 + 1]) || 0) / 255 + (Number(edges[cell * 4 + 3]) || 0) / 255;
-  }
-  structure[8] = horizontal / 32;
-  structure[9] = vertical / 32;
-  structure[10] = (Number(feature.contrast) || 0) / 255;
-  structure[11] = (Number(feature.edgeDensity) || 0) / 255;
-  structure[12] = (Number(feature.colorfulness) || 0) / 255;
-  structure[13] = resultColor[2];
-  structure[14] = resultColor[3] * 4;
-  structure[15] = resultColor[4];
-  return { color:resultColor, structure };
-}
-
-async function loadDescriptors(media, indexByHash) {
-  const result = descriptorSpace(media.length);
-  const db = await openVisualDb();
-  let loaded = 0;
-  progress(0, media.length, 'Reading saved color / structure descriptors…', 'descriptors');
-  try {
-    const tx = db.transaction(VISUAL_STORE, 'readonly');
-    const request = tx.objectStore(VISUAL_STORE).openCursor();
-    await new Promise((resolve, reject) => {
-      request.onerror = () => reject(request.error);
-      request.onsuccess = () => {
-        if (canceled) return reject(new DOMException('Aborted', 'AbortError'));
-        const cursor = request.result;
-        if (!cursor) return resolve();
-        const row = cursor.value || {};
-        const index = indexByHash.get(String(row.hash || ''));
-        if (index != null) {
-          const descriptor = descriptorFromRow(row);
-          if (descriptor) {
-            result.color.set(descriptor.color, index * 5);
-            result.structure.set(descriptor.structure, index * 16);
-            result.available[index] = 1;
-            loaded++;
-          }
-        }
-        cursor.continue();
-      };
-    });
-  } finally { db.close(); }
-  result.loaded = loaded;
-  progress(loaded, media.length, `Color / structure descriptors · ${loaded.toLocaleString()} available`, 'descriptors');
-  return result;
-}
-
-function distance(space, left, right) {
-  const a = left * space.dim;
-  const b = right * space.dim;
-  let dot = 0;
-  for (let d = 0; d < space.dim; d++) dot += space.data[a + d] * space.data[b + d];
-  return 1 - dot;
-}
-
-function projection(space, index, axis) {
-  const offset = index * space.dim;
-  let total = 0;
-  for (let d = 0; d < space.dim; d++) total += space.data[offset + d] * axis[d];
-  return total;
-}
-
-function farthestFrom(space, sample, source) {
-  let best = source;
-  let bestDistance = -Infinity;
-  for (const index of sample) {
-    const value = distance(space, source, index);
-    if (value > bestDistance) { bestDistance = value; best = index; }
-  }
-  return best;
-}
-
-function splitIndexes(indexes, space, scratch) {
-  if (indexes.length < 2) return [indexes, []];
-  const sampleCount = Math.min(32, indexes.length);
-  const sample = Array.from({ length:sampleCount }, (_, i) => indexes[Math.min(indexes.length - 1, Math.floor((i + .5) * indexes.length / sampleCount))]);
-  const first = farthestFrom(space, sample, sample[0]);
-  const second = farthestFrom(space, sample, first);
-  const axis = new Float32Array(space.dim);
-  const a = first * space.dim;
-  const b = second * space.dim;
-  let norm = 0;
-  for (let d = 0; d < space.dim; d++) { axis[d] = space.data[b + d] - space.data[a + d]; norm += axis[d] * axis[d]; }
-  if (norm < 1e-9) axis[0] = 1;
-  for (const index of indexes) scratch[index] = projection(space, index, axis);
-  indexes.sort((x, y) => scratch[x] - scratch[y] || x - y);
-  const middle = Math.ceil(indexes.length / 2);
-  return [indexes.slice(0, middle), indexes.slice(middle)];
-}
-
-function greedyLeaf(indexes, space) {
-  if (indexes.length < 3) return indexes.slice();
-  const remaining = indexes.slice();
-  const route = [remaining.shift()];
-  while (remaining.length) {
-    const current = route.at(-1);
-    let bestAt = 0;
-    let best = Infinity;
-    for (let i = 0; i < remaining.length; i++) {
-      const value = distance(space, current, remaining[i]);
-      if (value < best) { best = value; bestAt = i; }
-    }
-    route.push(remaining.splice(bestAt, 1)[0]);
-  }
-  return route;
-}
-
-function orientJoin(left, right, space) {
-  if (!left.length) return right;
-  if (!right.length) return left;
-  const choices = [
-    [distance(space, left.at(-1), right[0]), false, false],
-    [distance(space, left.at(-1), right.at(-1)), false, true],
-    [distance(space, left[0], right[0]), true, false],
-    [distance(space, left[0], right.at(-1)), true, true]
-  ].sort((a, b) => a[0] - b[0]);
-  if (choices[0][1]) left.reverse();
-  if (choices[0][2]) right.reverse();
-  return left.concat(right);
-}
-
-function route(indexes, space, leafSize = 36, scratch = new Float32Array(space.count)) {
-  abortIfNeeded();
-  if (indexes.length <= leafSize) return greedyLeaf(indexes, space);
-  const [leftPart, rightPart] = splitIndexes(indexes.slice(), space, scratch);
-  const left = route(leftPart, space, leafSize, scratch);
-  const right = route(rightPart, space, leafSize, scratch);
-  return orientJoin(left, right, space);
-}
-
-function recursiveGroups(indexes, space, wanted) {
-  const scratch = new Float32Array(space.count);
-  const groups = [indexes.slice()];
-  while (groups.length < wanted) {
-    abortIfNeeded();
-    let largest = -1;
-    for (let i = 0; i < groups.length; i++) if (groups[i].length > 24 && (largest < 0 || groups[i].length > groups[largest].length)) largest = i;
-    if (largest < 0) break;
-    const [left, right] = splitIndexes(groups.splice(largest, 1)[0], space, scratch);
-    groups.push(left, right);
-  }
-  return groups.filter(group => group.length);
-}
-
-function centroidSpace(groups, source) {
-  const result = createSpace(groups.length, source.dim);
-  for (let g = 0; g < groups.length; g++) {
-    const target = g * source.dim;
-    for (const index of groups[g]) {
-      const offset = index * source.dim;
-      for (let d = 0; d < source.dim; d++) result.data[target + d] += source.data[offset + d];
-    }
-    normalizeSegment(result.data, target, source.dim);
-    result.available[g] = 1;
-  }
-  return result;
-}
-
-function groupedRoute(indexes, clusterSpace, innerSpace, targetGroups, label = 'Family') {
-  const groups = recursiveGroups(indexes, clusterSpace, targetGroups);
-  const centroids = centroidSpace(groups, clusterSpace);
-  const groupOrder = route([...groups.keys()], centroids, 8);
-  const result = [];
-  const rail = [];
-  let previous = -1;
-  for (let orderIndex = 0; orderIndex < groupOrder.length; orderIndex++) {
-    const group = groups[groupOrder[orderIndex]];
-    let inside = route(group, innerSpace, 32);
-    if (previous >= 0 && inside.length > 1 && distance(innerSpace, previous, inside.at(-1)) < distance(innerSpace, previous, inside[0])) inside.reverse();
-    rail.push({ index:result.length, label:`${label} ${orderIndex + 1}` });
-    result.push(...inside);
-    previous = inside.at(-1);
-  }
-  return { route:result, rail, families:groups.length };
-}
-
-function combinedSpace(left, right, leftWeight = 1, rightWeight = 1) {
-  const count = Math.max(left?.count || 0, right?.count || 0);
-  const leftDim = left?.dim || 0;
-  const rightDim = right?.dim || 0;
-  const result = createSpace(count, leftDim + rightDim);
-  for (let i = 0; i < count; i++) {
-    if (!left?.available[i] || !right?.available[i]) continue;
-    const out = i * result.dim;
-    const a = i * leftDim;
-    const b = i * rightDim;
-    for (let d = 0; d < leftDim; d++) result.data[out + d] = left.data[a + d] * leftWeight;
-    for (let d = 0; d < rightDim; d++) result.data[out + leftDim + d] = right.data[b + d] * rightWeight;
-    normalizeSegment(result.data, out, result.dim);
-    result.available[i] = 1;
-  }
-  return result;
-}
-
-function structureSpace(dino, descriptors) {
-  const result = createSpace(dino.count, dino.dim + 16);
-  for (let i = 0; i < dino.count; i++) {
-    if (!dino.available[i]) continue;
-    const out = i * result.dim;
-    const source = i * dino.dim;
-    for (let d = 0; d < dino.dim; d++) result.data[out + d] = dino.data[source + d] * .55;
-    if (descriptors?.available[i]) {
-      let norm = 0;
-      for (let d = 0; d < 16; d++) { const value = descriptors.structure[i * 16 + d]; norm += value * value; }
-      norm = Math.sqrt(norm) || 1;
-      for (let d = 0; d < 16; d++) result.data[out + dino.dim + d] = descriptors.structure[i * 16 + d] / norm * 1.15;
-    }
-    normalizeSegment(result.data, out, result.dim);
-    result.available[i] = 1;
-  }
-  return result;
-}
-
-function availableIndexes(space) {
-  const result = [];
-  for (let i = 0; i < space.count; i++) if (space.available[i]) result.push(i);
-  return result;
-}
-
-function colorRoute(indexes, dino, descriptors) {
-  const hueBins = Array.from({ length:30 }, () => []);
-  const grayBins = Array.from({ length:10 }, () => []);
-  const unknown = [];
-  for (const index of indexes) {
-    if (!descriptors?.available[index]) { unknown.push(index); continue; }
-    const offset = index * 5;
-    const hue = descriptors.color[offset];
-    const strength = descriptors.color[offset + 1];
-    const luma = clamp(descriptors.color[offset + 2]);
-    const chroma = descriptors.color[offset + 3];
-    const colorful = descriptors.color[offset + 4];
-    if (strength < .08 || chroma < .012 || colorful < .08) grayBins[Math.min(9, Math.floor(luma * 10))].push(index);
-    else hueBins[Math.min(29, Math.floor(((hue + 1 / 24) % 1) * 30))].push(index);
-  }
-  const result = [];
-  const rail = [];
-  const labels = new Map([[0,'Red'],[4,'Orange'],[7,'Yellow'],[10,'Green'],[14,'Cyan'],[18,'Blue'],[22,'Purple'],[26,'Magenta']]);
-  const scratch = new Float32Array(dino.count);
-  for (let bin = 0; bin < hueBins.length; bin++) {
-    if (!hueBins[bin].length) continue;
-    if (labels.has(bin)) rail.push({ index:result.length, label:labels.get(bin) });
-    result.push(...route(hueBins[bin], dino, 30, scratch));
-  }
-  if (grayBins.some(group => group.length)) rail.push({ index:result.length, label:'Neutral' });
-  for (const group of grayBins) if (group.length) result.push(...route(group, dino, 30, scratch));
-  if (unknown.length) {
-    rail.push({ index:result.length, label:'Other' });
-    result.push(...route(unknown, dino, 30, scratch));
-  }
-  return { route:result, rail, families:hueBins.filter(group => group.length).length + grayBins.filter(group => group.length).length + (unknown.length ? 1 : 0) };
-}
-
-function momentsRoute(indexes, innerSpace, media) {
-  const groups = new Map();
-  const undated = [];
-  for (const index of indexes) {
-    const ms = Number(media[index]?.dateMs) || 0;
-    if (!ms) { undated.push(index); continue; }
-    const date = new Date(ms);
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(index);
-  }
-  const keys = [...groups.keys()].sort().reverse();
-  const result = [];
-  const rail = [];
-  let lastYear = '';
-  for (const key of keys) {
-    const year = key.slice(0, 4);
-    if (year !== lastYear) rail.push({ index:result.length, label:year });
-    lastYear = year;
-    result.push(...route(groups.get(key), innerSpace, 28));
-  }
-  if (undated.length) {
-    rail.push({ index:result.length, label:'Undated' });
-    result.push(...route(undated, innerSpace, 28));
-  }
-  return { route:result, rail, families:keys.length + (undated.length ? 1 : 0) };
-}
-
-function genericRail(length) {
-  if (!length) return [];
-  const ticks = Math.min(17, length);
-  return [...new Set(Array.from({ length:ticks }, (_, i) => Math.round(i * (length - 1) / Math.max(1, ticks - 1))))]
-    .map(index => ({ index, label:`${Math.round(index / Math.max(1, length - 1) * 100)}%` }));
-}
-
-async function buildOrder(payload) {
-  const mode = MODE_INFO[payload?.mode] ? payload.mode : 'flow';
-  const media = Array.isArray(payload?.media) ? payload.media.filter(item => HASH_RE.test(String(item?.hash || ''))) : [];
-  if (!media.length) return { order:[], indexed:0, unavailable:0, families:0, rail:[] };
-  const indexByHash = new Map(media.map((item, index) => [String(item.hash), index]));
-  progress(0, media.length, `Opening ${MODE_INFO[mode].label} AI order…`, 'opening');
-
-  const needDino = ['flow','families','color','structure','topics','hybrid','moments'].includes(mode);
-  const needSiglip = ['meaning','topics','hybrid','moments'].includes(mode);
-  const needDescriptors = ['color','structure'].includes(mode);
-
-  const dino = needDino ? await loadEmbeddingSpace('dinov3', media, indexByHash) : null;
-  abortIfNeeded();
-  const siglip = needSiglip ? await loadEmbeddingSpace('siglip2', media, indexByHash) : null;
-  abortIfNeeded();
-  const descriptors = needDescriptors ? await loadDescriptors(media, indexByHash) : null;
-  abortIfNeeded();
-
-  if (needDino && !dino.loaded) throw new Error('Visual AI index is empty for this view.');
-  if (needSiglip && !siglip.loaded) throw new Error('Semantic AI index is empty for this view.');
-
-  let space = dino || siglip;
-  let built;
-  if (mode === 'structure') space = structureSpace(dino, descriptors);
-  else if (mode === 'hybrid') space = combinedSpace(siglip, dino, 1.05, .9);
-  else if (mode === 'moments') space = siglip?.loaded && dino?.loaded ? combinedSpace(siglip, dino, .8, .8) : (dino || siglip);
-
-  const indexed = availableIndexes(space);
-  if (!indexed.length) throw new Error('No indexed media matched this view.');
-  progress(0, indexed.length, `Arranging ${indexed.length.toLocaleString()} media with ${MODE_INFO[mode].label}…`, 'ordering');
-
-  if (mode === 'families') {
-    const groups = Math.max(20, Math.min(72, Math.round(Math.sqrt(indexed.length / 22))));
-    built = groupedRoute(indexed, dino, dino, groups, 'Visual family');
-  } else if (mode === 'color') {
-    built = colorRoute(indexed, dino, descriptors);
-  } else if (mode === 'topics') {
-    const groups = Math.max(20, Math.min(64, Math.round(Math.sqrt(indexed.length / 26))));
-    built = groupedRoute(indexed, siglip, dino?.loaded ? dino : siglip, groups, 'Semantic topic');
-  } else if (mode === 'moments') {
-    built = momentsRoute(indexed, space, media);
-  } else {
-    built = { route:route(indexed, space, mode === 'flow' || mode === 'meaning' ? 28 : 34), rail:[], families:0 };
-  }
-
-  const missing = [];
-  for (let i = 0; i < media.length; i++) if (!space.available[i]) missing.push(i);
-  built.route.push(...missing);
-  if (!built.rail.length) built.rail = genericRail(built.route.length);
-  progress(built.route.length, media.length, `${MODE_INFO[mode].label} AI order ready`, 'ordering');
-
-  return {
-    order:built.route.map(index => media[index].hash),
-    indexed:indexed.length,
-    unavailable:missing.length,
-    families:built.families || 0,
-    rail:built.rail,
-    dinoIndexed:dino?.loaded || 0,
-    semanticIndexed:siglip?.loaded || 0,
-    descriptorIndexed:descriptors?.loaded || 0
-  };
-}
-
-self.onmessage = async event => {
-  const data = event.data || {};
-  if (data.action === 'cancel') { canceled = true; return; }
-  canceled = false;
-  try {
-    const result = await buildOrder(data.payload || {});
-    abortIfNeeded();
-    post('result', { result });
-  } catch (error) {
-    post('error', { error:error?.name === 'AbortError' ? 'Canceled' : (error?.message || String(error)), aborted:error?.name === 'AbortError' });
-  }
-};
+function recGroups(xs,sp,want){const scratch=new Float32Array(sp.count),g=[xs.slice()];while(g.length<want){let at=-1;for(let i=0;i<g.length;i++)if(g[i].length>24&&(at<0||g[i].length>g[at].length))at=i;if(at<0)break;const[a,b]=split(g.splice(at,1)[0],sp,scratch);g.push(a,b)}return g}
+function grouped(xs,sp,want){const g=recGroups(xs,sp,want),c=centroid(g,sp),order=route([...g.keys()],c,8),out=[],rail=[];for(let p=0;p<order.length;p++){rail.push({index:out.length,label:`Visual family ${p+1}`});out.push(...route(g[order[p]],sp,28))}return{route:out,rail,families:g.length}}
+function mix(a,b,wa,wb){const s=space(Math.max(a.count,b.count));for(let i=0;i<s.count;i++)if(a.available[i]&&b.available[i]){for(let d=0;d<ED;d++)s.data[i*ED+d]=a.data[i*ED+d]*wa+b.data[i*ED+d]*wb;norm(s.data,i*ED,ED);s.available[i]=1}return s}
+function colorSpace(c){const s=space(c.available.length);for(let i=0;i<s.count;i++)if(c.available[i]){for(let d=0;d<CD;d++)s.data[i*ED+d]=c.data[i*CD+d];norm(s.data,i*ED,ED);s.available[i]=1}return s}
+function moments(xs,sp,media){const g=new Map,u=[];for(const i of xs){const ms=+media[i]?.dateMs||0;if(!ms){u.push(i);continue}const d=new Date(ms),k=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;if(!g.has(k))g.set(k,[]);g.get(k).push(i)}const out=[],rail=[];let y='';for(const k of [...g.keys()].sort().reverse()){if(k.slice(0,4)!==y){y=k.slice(0,4);rail.push({index:out.length,label:y})}out.push(...route(g.get(k),sp,25))}if(u.length){rail.push({index:out.length,label:'Undated'});out.push(...route(u,sp,25))}return{route:out,rail,families:g.size+(u.length?1:0)}}
+function generic(n){return Array.from({length:Math.min(17,n)},(_,i)=>{const x=Math.round(i*(n-1)/Math.max(1,Math.min(16,n-1)));return{index:x,label:`${Math.round(x/Math.max(1,n-1)*100)}%`}})}
+async function build(p){const mode=INFO[p?.mode]?p.mode:'flow',media=Array.isArray(p?.media)?p.media.filter(x=>R.test(String(x?.hash||''))):[];if(!media.length)return{order:[],indexed:0,unavailable:0,families:0,rail:[]};const by=new Map(media.map((x,i)=>[String(x.hash),i]));prog(0,media.length,`Opening ${INFO[mode]} AI order…`,'opening');const needD=!['meaning'].includes(mode),needS=['meaning','hybrid','moments'].includes(mode),needC=['color','structure'].includes(mode);const d=needD?await loadModel('dinov3',media,by):null;abort();const s=needS?await loadModel('siglip2',media,by):null;abort();if(needD&&!d.loaded)throw Error('Visual AI index is empty for this view.');if(needS&&!s.loaded)throw Error('Semantic AI index is empty for this view.');const c=needC?await colors(media,by,d.available):null;abort();if(mode==='color'){const z=colorMode(media,d,c);return{order:z.route.map(i=>media[i].hash),indexed:z.indexed,unavailable:z.unavailable,families:z.families,rail:z.rail,dinoIndexed:d.loaded,descriptorIndexed:c.loaded+c.computed,colorComputed:c.computed}}let sp=d||s;if(mode==='structure')sp=mix(d,colorSpace(c),.58,1.05);else if(mode==='hybrid'||mode==='moments')sp=mix(s,d,.85,.85);const xs=available(sp);if(!xs.length)throw Error('No indexed media matched this view.');prog(0,xs.length,`Arranging ${xs.length.toLocaleString()} media with ${INFO[mode]}…`);let z;if(mode==='families')z=grouped(xs,d,Math.max(20,Math.min(70,Math.round(Math.sqrt(xs.length/24)))));else if(mode==='moments')z=moments(xs,sp,media);else z={route:route(xs,sp,28),rail:[],families:0};const missing=[];for(let i=0;i<media.length;i++)if(!sp.available[i])missing.push(i);z.route.push(...missing);if(!z.rail.length)z.rail=generic(z.route.length);prog(media.length,media.length,`${INFO[mode]} AI order ready`);return{order:z.route.map(i=>media[i].hash),indexed:xs.length,unavailable:missing.length,families:z.families||0,rail:z.rail,dinoIndexed:d?.loaded||0,semanticIndexed:s?.loaded||0}}
+self.onmessage=async e=>{const d=e.data||{};if(d.action==='cancel'){canceled=true;return}canceled=false;try{const result=await build(d.payload||{});abort();post('result',{result})}catch(error){post('error',{error:error?.name==='AbortError'?'Canceled':(error?.message||String(error)),aborted:error?.name==='AbortError'})}};
