@@ -114,7 +114,7 @@ async function loadProjected(model, media, indexByHash) {
       };
     });
   } finally { db.close(); }
-  return { model, data, available, loaded, dim:PROJECTION_DIMS };
+  return { model, count, data, available, loaded, dim:PROJECTION_DIMS };
 }
 
 function oklab(red, green, blue) {
