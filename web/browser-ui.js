@@ -11,6 +11,7 @@ import './ai-transcribe.js';
 import './context-similarity.js';
 import './similarity-sort-lock.js';
 import './visual-sort.js';
+import './ai-global-sort.js';
 import './similarity-sort-owned.js';
 import './visual-work-coordinator.js';
 import './similarity-sort-startup.js';
