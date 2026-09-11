@@ -59,11 +59,30 @@ async function sort(payload) {
     stage:'families'
   });
 
-  return runWorker(
-    './ai-global-color-family-worker.js?v=20260911-1',
-    { action:'consolidate', payload:{ media:payload.media, result:base } },
-    result => result
-  );
+  let familyResult = base;
+  try {
+    familyResult = await runWorker(
+      './ai-global-color-family-worker.js?v=20260911-2',
+      { action:'consolidate', payload:{ media:payload.media, result:base } },
+      result => result
+    );
+  } catch (error) {
+    if (canceled || error?.name === 'AbortError') throw error;
+    self.postMessage({ type:'progress', done:0, total:1, detail:`Color family pass skipped · ${error.message || error}`, stage:'families' });
+  }
+  if (canceled) return familyResult;
+
+  try {
+    return await runWorker(
+      './ai-global-color-gap-heal-worker.js?v=20260911-1',
+      { action:'heal', payload:{ media:payload.media, result:familyResult } },
+      result => result
+    );
+  } catch (error) {
+    if (canceled || error?.name === 'AbortError') throw error;
+    self.postMessage({ type:'progress', done:1, total:1, detail:`Color gap healing skipped · ${error.message || error}`, stage:'gap-heal' });
+    return familyResult;
+  }
 }
 
 self.onmessage = async event => {
