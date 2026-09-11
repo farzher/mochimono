@@ -2,6 +2,13 @@ self.postMessage({ type:'progress', done:0, total:1, detail:'Starting AI sort wo
 
 let child = null;
 let canceled = false;
+const RUN_REVISION = new URL(self.location.href).searchParams.get('run') || `${Date.now()}`;
+
+const childUrl = path => {
+  const url = new URL(path, import.meta.url);
+  url.searchParams.set('run', RUN_REVISION);
+  return url;
+};
 
 const stopChild = () => {
   if (!child) return;
@@ -10,9 +17,9 @@ const stopChild = () => {
   child = null;
 };
 
-function runWorker(url, message, onMessage) {
+function runWorker(path, message, onMessage) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL(url, import.meta.url), { type:'module' });
+    const worker = new Worker(childUrl(path), { type:'module' });
     child = worker;
     let settled = false;
     const finish = (fn, value) => {
@@ -45,7 +52,7 @@ function runWorker(url, message, onMessage) {
 async function sort(payload) {
   const mode = String(payload?.mode || 'flow');
   const base = await runWorker(
-    './ai-global-sort-worker-core-v5.js?v=20260911-3',
+    './ai-global-sort-worker-core-v5.js',
     { action:'sort', payload },
     result => result
   );
@@ -62,7 +69,7 @@ async function sort(payload) {
   let familyResult = base;
   try {
     familyResult = await runWorker(
-      './ai-global-color-family-worker.js?v=20260911-2',
+      './ai-global-color-family-worker.js',
       { action:'consolidate', payload:{ media:payload.media, result:base } },
       result => result
     );
@@ -73,11 +80,19 @@ async function sort(payload) {
   if (canceled) return familyResult;
 
   try {
-    return await runWorker(
-      './ai-global-color-gap-heal-worker.js?v=20260911-1',
+    const healed = await runWorker(
+      './ai-global-color-gap-heal-worker.js',
       { action:'heal', payload:{ media:payload.media, result:familyResult } },
       result => result
     );
+    self.postMessage({
+      type:'progress',
+      done:Array.isArray(payload?.media) ? payload.media.length : 1,
+      total:Array.isArray(payload?.media) ? payload.media.length : 1,
+      detail:`Color final pass · ${(Number(healed.gapHealedRuns)||0).toLocaleString()} strict runs · ${(Number(healed.gapHealedMoved)||0).toLocaleString()} positions changed`,
+      stage:'gap-heal'
+    });
+    return healed;
   } catch (error) {
     if (canceled || error?.name === 'AbortError') throw error;
     self.postMessage({ type:'progress', done:1, total:1, detail:`Color gap healing skipped · ${error.message || error}`, stage:'gap-heal' });
