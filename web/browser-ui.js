@@ -13,6 +13,7 @@ import './similarity-sort-lock.js';
 import './visual-sort.js';
 import './ai-global-sort.js';
 import './ai-global-sort-rail.js';
+import './experimental-views.js';
 import './similarity-sort-owned.js';
 import './visual-work-coordinator.js';
 import './similarity-sort-startup.js';
