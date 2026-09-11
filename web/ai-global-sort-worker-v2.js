@@ -58,54 +58,13 @@ async function sort(payload) {
   );
   if (canceled || mode !== 'color') return base;
 
-  self.postMessage({
-    type:'progress',
-    done:0,
-    total:Array.isArray(payload?.media) ? payload.media.length : 1,
-    detail:'Locking canonical visual families into Color order…',
-    stage:'families'
-  });
-
-  let familyResult = base;
-  try {
-    familyResult = await runWorker(
-      './ai-global-color-family-worker.js',
-      { action:'consolidate', payload:{ media:payload.media, result:base } },
-      result => result
-    );
-  } catch (error) {
-    if (canceled || error?.name === 'AbortError') throw error;
-    self.postMessage({ type:'progress', done:0, total:1, detail:`Color family pass skipped · ${error.message || error}`, stage:'families' });
-  }
-  if (canceled) return familyResult;
-
-  let healedResult = familyResult;
-  try {
-    healedResult = await runWorker(
-      './ai-global-color-gap-heal-worker.js',
-      { action:'heal', payload:{ media:payload.media, result:familyResult } },
-      result => result
-    );
-    self.postMessage({
-      type:'progress',
-      done:Array.isArray(payload?.media) ? payload.media.length : 1,
-      total:Array.isArray(payload?.media) ? payload.media.length : 1,
-      detail:`Color gap pass · ${(Number(healedResult.gapHealedRuns)||0).toLocaleString()} strict runs · ${(Number(healedResult.gapHealedMoved)||0).toLocaleString()} positions changed`,
-      stage:'gap-heal'
-    });
-  } catch (error) {
-    if (canceled || error?.name === 'AbortError') throw error;
-    self.postMessage({ type:'progress', done:1, total:1, detail:`Color gap healing skipped · ${error.message || error}`, stage:'gap-heal' });
-  }
-  if (canceled) return healedResult;
-
-  // Color is the primary invariant of this mode. Earlier family/AI passes may
-  // improve local similarity, but the final result must never regress back to
-  // red media deep inside Blue (or any other cross-palette jump).
+  // Color is the invariant of this mode. Keep the base palette flow, then do
+  // only palette-local family healing. The older global family/gap passes could
+  // move visually similar but differently colored media across the spectrum.
   try {
     const guarded = await runWorker(
       './ai-global-color-palette-guard-worker.js',
-      { action:'guard', payload:{ media:payload.media, result:healedResult } },
+      { action:'guard', payload:{ media:payload.media, result:base } },
       result => result
     );
     self.postMessage({
@@ -119,7 +78,7 @@ async function sort(payload) {
   } catch (error) {
     if (canceled || error?.name === 'AbortError') throw error;
     self.postMessage({ type:'progress', done:1, total:1, detail:`Color palette guard skipped · ${error.message || error}`, stage:'palette-guard' });
-    return healedResult;
+    return base;
   }
 }
 
