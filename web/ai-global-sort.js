@@ -8,6 +8,7 @@ const dateRail = document.querySelector('#dateRail');
 
 const MODE_KEY = 'mochimono-ai-global-sort-mode';
 const CACHE_LIMIT = 3;
+const WORKER_REVISION = '20260911-3';
 const MODES = {
   flow:{ label:'Flow', description:'DINO visual continuum', index:'Visual' },
   families:{ label:'Families', description:'DINO visual families', index:'Visual' },
@@ -126,7 +127,7 @@ function cachedResult(key, media) {
 
 function runWorker(media) {
   return new Promise((resolve, reject) => {
-    const target = new Worker(new URL('./ai-global-sort-worker.js', import.meta.url), { type:'module' });
+    const target = new Worker(new URL(`./ai-global-sort-worker.js?v=${WORKER_REVISION}`, import.meta.url), { type:'module' });
     worker = target;
     let settled = false;
     const finish = (callback, value) => {
