@@ -143,10 +143,17 @@ function requestOn(target, map, action, payload = {}, options = {}, meta = {}) {
     const signal = options.signal || null;
     const heavy = HEAVY_ACTIONS.has(action);
     const abort = () => {
-      try { target.postMessage({ id:`cancel-${id}`, action:'cancel', cancelId:id }); } catch {}
+      const reason = signal?.reason || new DOMException('Aborted', 'AbortError');
+      if (meta.terminateOnAbort) {
+        try { target.terminate(); } catch {}
+        if (target === indexWorker) indexWorker = null;
+      } else {
+        try { target.postMessage({ id:`cancel-${id}`, action:'cancel', cancelId:id }); } catch {}
+      }
       const job = settleJob(map, id);
       if (!job) return;
-      reject(signal?.reason || new DOMException('Aborted', 'AbortError'));
+      if (meta.terminateOnAbort) rejectAll(map, reason);
+      reject(reason);
     };
     if (signal?.aborted) return reject(signal.reason || new DOMException('Aborted', 'AbortError'));
     signal?.addEventListener('abort', abort, { once:true });
@@ -167,7 +174,7 @@ function request(action, payload = {}, options = {}) {
 
 function requestIndex(action, payload = {}, options = {}) {
   const model = payload.model === 'dinov3' ? 'dinov3' : (payload.model === 'siglip2' || action === 'search' || action === 'groups' ? 'siglip2' : '');
-  return requestOn(ensureIndexWorker(), indexPending, action, payload, options, { model });
+  return requestOn(ensureIndexWorker(), indexPending, action, payload, options, { model, terminateOnAbort:true });
 }
 
 async function catalogMedia() {
