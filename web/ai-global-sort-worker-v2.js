@@ -49,6 +49,25 @@ function runWorker(path, message, onMessage) {
   });
 }
 
+function remapRail(rail, oldOrder, newOrder) {
+  if (!Array.isArray(rail) || !rail.length || !oldOrder?.length || !newOrder?.length) return [];
+  const newPosition = new Map(newOrder.map((hash, index) => [String(hash), index]));
+  return rail.map(entry => {
+    const oldIndex = Math.max(0, Math.min(oldOrder.length - 1, Number(entry.index) || 0));
+    const hash = String(oldOrder[oldIndex] || '');
+    return { ...entry, index:newPosition.get(hash) ?? oldIndex };
+  }).sort((left, right) => left.index - right.index);
+}
+
+function repairColorRail(base, guarded) {
+  const expected = new Set(['Red','Orange','Yellow','Green','Cyan','Blue','Purple','Magenta','Neutral']);
+  const labels = Array.isArray(guarded?.rail) ? guarded.rail.map(entry => String(entry?.label || '')) : [];
+  const useful = new Set(labels.filter(label => expected.has(label)));
+  if (useful.size >= 3) return guarded;
+  const fallback = remapRail(base?.rail, Array.from(base?.order || [], String), Array.from(guarded?.order || [], String));
+  return fallback.length ? { ...guarded, rail:fallback, paletteRailFallback:true } : guarded;
+}
+
 async function sort(payload) {
   const mode = String(payload?.mode || 'flow');
   const base = await runWorker(
@@ -62,11 +81,12 @@ async function sort(payload) {
   // only palette-local family healing. The older global family/gap passes could
   // move visually similar but differently colored media across the spectrum.
   try {
-    const guarded = await runWorker(
+    const rawGuarded = await runWorker(
       './ai-global-color-palette-guard-worker.js',
       { action:'guard', payload:{ media:payload.media, result:base } },
       result => result
     );
+    const guarded = repairColorRail(base, rawGuarded);
     self.postMessage({
       type:'progress',
       done:Array.isArray(payload?.media) ? payload.media.length : 1,
