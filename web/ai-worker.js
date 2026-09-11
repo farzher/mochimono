@@ -1,6 +1,7 @@
 const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
 const DB_NAME = 'mochimono-ai';
 const DB_VERSION = 2;
+const EMBEDDINGS = 'embeddings';
 const METADATA = 'metadata';
 const THUMB_VERSION = 3;
 
@@ -26,6 +27,20 @@ function openDb() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = event => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(EMBEDDINGS)) {
+        const store = db.createObjectStore(EMBEDDINGS, { keyPath:'id' });
+        store.createIndex('model', 'model', { unique:false });
+        store.createIndex('hash', 'hash', { unique:false });
+      }
+      if (!db.objectStoreNames.contains(METADATA)) {
+        const store = db.createObjectStore(METADATA, { keyPath:'id' });
+        store.createIndex('kind', 'kind', { unique:false });
+        store.createIndex('hash', 'hash', { unique:false });
+      }
+      if (event.oldVersion < 2 && db.objectStoreNames.contains(EMBEDDINGS)) request.transaction.objectStore(EMBEDDINGS).clear();
+    };
     request.onsuccess = () => {
       const db = request.result;
       db.onversionchange = () => { db.close(); dbPromise = null; };
