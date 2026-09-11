@@ -10,7 +10,6 @@ if (rail) {
 .ai-global-rail{pointer-events:auto!important;touch-action:none;user-select:none;-webkit-user-select:none;cursor:ns-resize;z-index:35}
 .ai-global-rail.dragging{cursor:grabbing}
 .ai-global-rail>.rail-thumb{pointer-events:none}
-.ai-global-rail .rail-semantic-marker{max-width:92px;overflow:hidden;text-overflow:ellipsis}
 `;
   document.head.append(style);
 
@@ -29,39 +28,12 @@ if (rail) {
     return thumb;
   }
 
-  function syncSemanticMarkers() {
-    const total = count();
-    if (rail.hidden || !api()?.active?.() || total < 2) return;
-    const ticks = [...rail.querySelectorAll(':scope > .rail-tick[data-index]')];
-    const wanted = ticks.map(tick => ({
-      index:Math.max(0, Math.min(total - 1, Number(tick.dataset.index) || 0)),
-      label:String(tick.title || tick.querySelector('span')?.textContent || '').trim()
-    })).filter(item => item.label);
-    const key = wanted.map(item => `${item.index}:${item.label}`).join('|');
-    let semantic = rail.querySelector(':scope > .rail-semantic');
-    if (semantic?.dataset.key === key) return;
-    semantic?.remove();
-    if (!wanted.length) return;
-    semantic = document.createElement('div');
-    semantic.className = 'rail-semantic';
-    semantic.dataset.key = key;
-    semantic.innerHTML = wanted.map(item => `<span class="rail-semantic-marker" data-index="${item.index}" style="top:${(item.index / (total - 1) * 100).toFixed(3)}%">${item.label.replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))}</span>`).join('');
-    rail.append(semantic);
-  }
-
   function setThumb(index) {
     const total = count();
     const thumb = ensureThumb();
     if (!thumb || total < 2) return;
     const safe = Math.max(0, Math.min(total - 1, Number(index) || 0));
     thumb.style.top = `${safe / (total - 1) * 100}%`;
-    let active = null;
-    let best = Infinity;
-    for (const marker of rail.querySelectorAll('.rail-semantic-marker[data-index]')) {
-      const delta = Math.abs(Number(marker.dataset.index) - safe);
-      if (delta < best) { best = delta; active = marker; }
-    }
-    for (const marker of rail.querySelectorAll('.rail-semantic-marker')) marker.classList.toggle('active', marker === active);
   }
 
   function visibleIndex() {
@@ -123,7 +95,6 @@ if (rail) {
     frame = requestAnimationFrame(() => {
       frame = 0;
       if (!api()?.active?.()) return;
-      syncSemanticMarkers();
       setThumb(visibleIndex());
     });
   };
@@ -131,7 +102,6 @@ if (rail) {
   new MutationObserver(() => {
     if (!api()?.active?.() || rail.hidden) return;
     ensureThumb();
-    syncSemanticMarkers();
     scheduleSync();
   }).observe(rail, { childList:true, attributes:true, attributeFilter:['hidden'] });
 
