@@ -7,26 +7,30 @@ const fileCount = document.querySelector('#fileCount');
 const dateRail = document.querySelector('#dateRail');
 
 const MODE_KEY = 'mochimono-ai-global-sort-mode';
-const CACHE_LIMIT = 3;
-const WORKER_REVISION = '20260911-3';
+const CACHE_LIMIT = 4;
+const WORKER_REVISION = '20260911-8';
+const WORKER_START_TIMEOUT = 4000;
 const MODES = {
-  flow:{ label:'Flow', description:'DINO visual continuum', index:'Visual' },
-  families:{ label:'Families', description:'DINO visual families', index:'Visual' },
-  color:{ label:'Color', description:'Color spectrum + DINO similarity', index:'Visual' },
-  structure:{ label:'Structure', description:'Composition + DINO similarity', index:'Visual' },
-  meaning:{ label:'Meaning', description:'SigLIP semantic continuum', index:'Semantic' },
-  topics:{ label:'Topics', description:'SigLIP semantic families', index:'Semantic' },
-  hybrid:{ label:'Hybrid', description:'DINO appearance + SigLIP meaning', index:'Visual + Semantic' },
-  moments:{ label:'Moments', description:'Chronology + DINO visual flow', index:'Visual' }
+  flow:{ label:'Flow', description:'DINO visual continuum' },
+  families:{ label:'Families', description:'DINO visual families' },
+  color:{ label:'Color', description:'Color spectrum + DINO similarity' },
+  structure:{ label:'Structure', description:'Composition + DINO similarity' },
+  meaning:{ label:'Meaning', description:'SigLIP semantic continuum' },
+  topics:{ label:'Topics', description:'Named semantic topics + DINO appearance' },
+  hybrid:{ label:'Hybrid', description:'DINO appearance + SigLIP meaning' },
+  moments:{ label:'Moments', description:'Chronology + AI similarity' }
 };
 
 let mode = MODES[localStorage.getItem(MODE_KEY)] ? localStorage.getItem(MODE_KEY) : 'flow';
 let wanted = false;
 let active = false;
-let indexing = false;
+let busy = false;
 let generation = 0;
 let rerunTimer = 0;
 let worker = null;
+let workerScript = '';
+let pendingReject = null;
+let pendingWorker = null;
 let sourceModel = null;
 let aiModel = null;
 let ordered = [];
@@ -35,7 +39,6 @@ let originalFilteredHashes = null;
 let wrappedGrid = null;
 let originalSetModel = null;
 let installedKey = '';
-let runningKey = '';
 let resetScrollNext = false;
 let railEntries = [];
 const cache = new Map();
@@ -44,7 +47,7 @@ const pauseReasons = new Set();
 const option = document.createElement('option');
 option.value = 'ai-global';
 option.textContent = 'AI sort';
-option.title = 'Arrange the whole media library using persistent AI embeddings';
+option.title = 'Arrange media with saved AI embeddings';
 if (sort && !sort.querySelector('option[value="ai-global"]')) {
   const visual = sort.querySelector('option[value="visual"]');
   visual ? visual.after(option) : sort.append(option);
@@ -72,6 +75,8 @@ rail.hidden = true;
 rail.setAttribute('aria-label', 'Browse AI order');
 dateRail?.after(rail);
 
+const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
+
 function syncModeButtons() {
   for (const button of bar.querySelectorAll('[data-ai-global-mode]')) button.classList.toggle('active', button.dataset.aiGlobalMode === mode);
 }
@@ -90,7 +95,7 @@ function modelMedia() {
   })).filter(file => /^[a-f0-9]{64}$/.test(file.hash));
 }
 
-function hashText(value, seed) {
+function hashText(value, seed = 2166136261) {
   let hash = seed >>> 0;
   for (let index = 0; index < value.length; index++) { hash ^= value.charCodeAt(index); hash = Math.imul(hash, 16777619) >>> 0; }
   hash ^= hash >>> 16;
@@ -98,21 +103,21 @@ function hashText(value, seed) {
 }
 
 function mediaIdentity(media) {
-  const tokens = media.map(file => `${file.hash}:${file.type}:${file.width}x${file.height}`).sort();
-  let left = 2166136261, right = 2246822507;
-  for (const token of tokens) { left = hashText(token, left); right = hashText(token, right ^ 0x9e3779b9); }
-  return `${media.length}:${left.toString(36)}:${right.toString(36)}`;
+  let sum = 0, xor = 0, mix = 0;
+  for (const file of media) {
+    const value = hashText(`${file.hash}:${file.type}:${file.width}x${file.height}`);
+    sum = (sum + value) >>> 0;
+    xor ^= value;
+    mix = (mix + Math.imul(value ^ 0x9e3779b9, 2654435761)) >>> 0;
+  }
+  return `${media.length}:${sum.toString(36)}:${(xor >>> 0).toString(36)}:${mix.toString(36)}`;
 }
 
-function runKeyFor(media) { return `${mode}:${mediaIdentity(media)}`; }
+function runKeyFor(media, selectedMode) { return `${selectedMode}:${mediaIdentity(media)}`; }
 
 function cacheResult(key, result) {
   cache.delete(key);
-  cache.set(key, {
-    ...result,
-    order:[...(result.order || [])],
-    rail:Array.isArray(result.rail) ? result.rail.map(entry => ({ ...entry })) : []
-  });
+  cache.set(key, { ...result, order:[...(result.order || [])], rail:Array.isArray(result.rail) ? result.rail.map(entry => ({ ...entry })) : [] });
   while (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
 }
 
@@ -121,27 +126,80 @@ function cachedResult(key, media) {
   if (!value) return null;
   const allowed = new Set(media.map(file => file.hash));
   if (value.order.length !== media.length || value.order.some(hash => !allowed.has(hash))) { cache.delete(key); return null; }
-  cache.delete(key); cache.set(key, value);
+  cache.delete(key);
+  cache.set(key, value);
   return { ...value, order:[...value.order], rail:value.rail.map(entry => ({ ...entry })) };
 }
 
-function runWorker(media) {
+function scriptFor(selectedMode) {
+  return selectedMode === 'topics' ? './ai-global-sort-topics-worker.js' : './ai-global-sort-worker-v2.js';
+}
+
+function abortError() {
+  const error = new Error('Canceled');
+  error.name = 'AbortError';
+  return error;
+}
+
+function cancelPending(destroy = true) {
+  const reject = pendingReject;
+  pendingReject = null;
+  pendingWorker = null;
+  if (destroy && worker) {
+    try { worker.terminate(); } catch {}
+    worker = null;
+    workerScript = '';
+  }
+  reject?.(abortError());
+}
+
+function ensureWorker(selectedMode) {
+  const script = scriptFor(selectedMode);
+  if (worker && workerScript === script) return worker;
+  if (worker) {
+    try { worker.terminate(); } catch {}
+    worker = null;
+  }
+  workerScript = script;
+  worker = new Worker(new URL(`${script}?v=${WORKER_REVISION}`, import.meta.url), { type:'module' });
+  return worker;
+}
+
+function runWorker(media, selectedMode, attempt = 0) {
   return new Promise((resolve, reject) => {
-    const target = new Worker(new URL(`./ai-global-sort-worker.js?v=${WORKER_REVISION}`, import.meta.url), { type:'module' });
-    worker = target;
+    const target = ensureWorker(selectedMode);
+    pendingReject = reject;
+    pendingWorker = target;
     let settled = false;
+    let heard = false;
+    const startupTimer = setTimeout(() => {
+      if (settled || heard || pendingWorker !== target) return;
+      settled = true;
+      if (pendingWorker === target) { pendingReject = null; pendingWorker = null; }
+      try { target.terminate(); } catch {}
+      if (worker === target) { worker = null; workerScript = ''; }
+      if (attempt < 1) runWorker(media, selectedMode, attempt + 1).then(resolve, reject);
+      else reject(new Error('AI sort worker did not start. Reload Mochimono and try again.'));
+    }, WORKER_START_TIMEOUT);
+
     const finish = (callback, value) => {
       if (settled) return;
       settled = true;
-      if (worker === target) worker = null;
-      try { target.terminate(); } catch {}
+      clearTimeout(startupTimer);
+      if (pendingWorker === target) { pendingReject = null; pendingWorker = null; }
       callback(value);
     };
-    target.onerror = event => finish(reject, new Error(event.message || 'AI global sorting worker failed'));
+
+    target.onerror = event => {
+      if (worker === target) { try { target.terminate(); } catch {} worker = null; workerScript = ''; }
+      finish(reject, new Error(event.message || 'AI global sorting worker failed'));
+    };
+    target.onmessageerror = () => finish(reject, new Error('AI global sorting worker returned unreadable data'));
     target.onmessage = event => {
+      heard = true;
       const data = event.data || {};
       if (data.type === 'progress') {
-        updateProgress(Number(data.done) || 0, Number(data.total) || media.length, data.detail || 'Arranging AI order…');
+        updateProgress(Number(data.done) || 0, Number(data.total) || media.length, data.detail || `Arranging ${MODES[selectedMode].label}…`);
         return;
       }
       if (data.type === 'error') {
@@ -151,14 +209,15 @@ function runWorker(media) {
       }
       if (data.type === 'result') finish(resolve, data.result || {});
     };
-    target.postMessage({ action:'sort', payload:{ mode, media } });
+    target.postMessage({ action:'sort', payload:{ mode:selectedMode, media } });
   });
 }
 
-function abortWorker() {
-  if (!worker) return;
-  try { worker.terminate(); } catch {}
+function destroyWorker() {
+  cancelPending(true);
+  if (worker) { try { worker.terminate(); } catch {} }
   worker = null;
+  workerScript = '';
 }
 
 function tuple(file) { return [file.hash, file.filename || file.hash, file.type || 'image', file.width || 0, file.height || 0, file.dateMs || 0, file.size || 0]; }
@@ -175,9 +234,13 @@ function restoreFilteredHashes() {
   originalFilteredHashes = null;
 }
 
+function isSourceSnapshot(snapshot) {
+  const value = String(snapshot?.sort || '');
+  return snapshot && Array.isArray(snapshot.items) && !value.startsWith('ai-global-result') && !value.startsWith('visual-flow') && !value.startsWith('similarity');
+}
+
 function captureSourceModel(snapshot) {
-  const modelSort = String(snapshot?.sort || '');
-  if (!snapshot || !Array.isArray(snapshot.items) || modelSort.startsWith('ai-global-result') || modelSort.startsWith('visual-flow') || modelSort.startsWith('similarity')) return;
+  if (!isSourceSnapshot(snapshot)) return;
   sourceModel = snapshot;
   if (wanted && !pauseReasons.size && !document.documentElement.classList.contains('similarity-active')) scheduleActivate(active ? 70 : 20, false);
 }
@@ -190,7 +253,7 @@ function wrapStableGrid() {
   originalSetModel = grid.setModel.bind(grid);
   grid.setModel = snapshot => {
     if (document.documentElement.classList.contains('similarity-active')) return originalSetModel(snapshot);
-    if (wanted && !String(snapshot?.sort || '').startsWith('ai-global-result')) {
+    if (wanted && isSourceSnapshot(snapshot)) {
       captureSourceModel(snapshot);
       if (aiModel) { window.mochimonoGridModel = aiModel; return true; }
     }
@@ -213,10 +276,10 @@ function buildRail() {
     return { index, label:`${Math.round(index / Math.max(1, ordered.length - 1) * 100)}%` };
   });
   rail.hidden = false;
-  rail.innerHTML = `<div class="rail-track"></div>${source.map((entry, i) => `<button data-index="${entry.index}" class="rail-tick major" style="top:${(entry.index / Math.max(1, ordered.length - 1) * 100).toFixed(3)}%" title="${entry.label}"><span>${i % 2 === 0 || source.length < 12 ? entry.label : ''}</span></button>`).join('')}`;
+  rail.innerHTML = `<div class="rail-track"></div>${source.map((entry, i) => `<button data-index="${entry.index}" class="rail-tick major" style="top:${(entry.index / Math.max(1, ordered.length - 1) * 100).toFixed(3)}%" title="${escapeHtml(entry.label)}"><span>${i % 2 === 0 || source.length < 12 ? escapeHtml(entry.label) : ''}</span></button>`).join('')}`;
 }
 
-function install(result, media, resetScroll, key) {
+function install(result, media, resetScroll, key, selectedMode) {
   const byHash = new Map(media.map(file => [file.hash, file]));
   const orderedMedia = (result.order || []).map(hash => byHash.get(hash)).filter(Boolean);
   if (orderedMedia.length !== media.length) throw new Error(`AI order returned ${orderedMedia.length.toLocaleString()} / ${media.length.toLocaleString()} media`);
@@ -224,14 +287,13 @@ function install(result, media, resetScroll, key) {
   ordered = orderedMedia.map(file => file.hash);
   railEntries = Array.isArray(result.rail) ? result.rail.map(entry => ({ ...entry })) : [];
   active = true;
-  indexing = false;
+  busy = false;
   installedKey = key;
-  runningKey = '';
   document.documentElement.classList.add('ai-global-sort-active');
   document.documentElement.classList.remove('ai-global-sort-indexing');
   patchFilteredHashes();
 
-  aiModel = { version:`ai-global-result:${mode}:${generation}:${ordered.length}`, sort:`ai-global-result:${mode}:${generation}`, items:orderedMedia.map(tuple) };
+  aiModel = { version:`ai-global-result:${selectedMode}:${generation}:${ordered.length}`, sort:`ai-global-result:${selectedMode}:${generation}`, items:orderedMedia.map(tuple) };
   window.mochimonoGridModel = aiModel;
   originalSetModel?.(aiModel);
   bar.hidden = false;
@@ -240,25 +302,22 @@ function install(result, media, resetScroll, key) {
   const unavailable = Number(result.unavailable) || 0;
   const families = Number(result.families) || 0;
   const familyText = families ? ` · ${families.toLocaleString()} groups` : '';
-  updateProgress(media.length, media.length, `${MODES[mode].description} · ${(Number(result.indexed) || 0).toLocaleString()} indexed${familyText}${unavailable ? ` · ${unavailable.toLocaleString()} appended without required embedding` : ''}`);
+  updateProgress(media.length, media.length, `${MODES[selectedMode].description} · ${(Number(result.indexed) || 0).toLocaleString()} indexed${familyText}${unavailable ? ` · ${unavailable.toLocaleString()} appended without required embedding` : ''}`);
   if (fileCount) {
     fileCount.hidden = false;
     fileCount.textContent = `${ordered.length.toLocaleString()} media`;
-    fileCount.title = `AI order: ${MODES[mode].description}`;
+    fileCount.title = `AI order: ${MODES[selectedMode].description}`;
   }
   if (resetScroll) requestAnimationFrame(() => scrollTo({ top:0, left:0, behavior:'auto' }));
 }
 
 function pause(reason = 'external') {
-  reason = String(reason || 'external');
-  if (pauseReasons.has(reason)) return;
-  pauseReasons.add(reason);
+  pauseReasons.add(String(reason || 'external'));
   clearTimeout(rerunTimer);
-  if (indexing) {
+  if (busy) {
     generation++;
-    abortWorker();
-    indexing = false;
-    runningKey = '';
+    cancelPending(true);
+    busy = false;
     document.documentElement.classList.remove('ai-global-sort-indexing');
   }
 }
@@ -271,15 +330,14 @@ function resume(reason = 'external') {
 function deactivate() {
   generation++;
   clearTimeout(rerunTimer);
-  abortWorker();
+  destroyWorker();
   active = false;
-  indexing = false;
+  busy = false;
   aiModel = null;
   ordered = [];
   orderedFiles.clear();
   railEntries = [];
   installedKey = '';
-  runningKey = '';
   restoreFilteredHashes();
   document.documentElement.classList.remove('ai-global-sort-active','ai-global-sort-indexing');
   bar.hidden = true;
@@ -295,48 +353,48 @@ async function activate() {
     scheduleActivate(20, resetScrollNext);
     return;
   }
+
   if (!sourceModel) {
     const current = window.mochimonoGridModel;
-    if (current && !String(current.sort || '').startsWith('ai-global-result') && !String(current.sort || '').startsWith('visual-flow') && !String(current.sort || '').startsWith('similarity')) sourceModel = current;
+    if (isSourceSnapshot(current)) sourceModel = current;
   }
   const media = modelMedia();
+  const selectedMode = mode;
   const resetScroll = resetScrollNext || !active;
   resetScrollNext = false;
   if (!media.length) {
-    indexing = false;
+    busy = false;
     document.documentElement.classList.remove('ai-global-sort-indexing');
     bar.hidden = false;
     updateProgress(0, 1, 'No images or videos in this view.');
     return;
   }
-  const key = runKeyFor(media);
+
+  const key = runKeyFor(media, selectedMode);
   if (active && installedKey === key) return;
-  if (indexing && runningKey === key) return;
   const cached = cachedResult(key, media);
   if (cached) {
     generation++;
-    abortWorker();
-    install(cached, media, resetScroll, key);
+    if (busy) cancelPending(true);
+    install(cached, media, resetScroll, key, selectedMode);
     return;
   }
 
+  if (busy) cancelPending(true);
   const mine = ++generation;
-  abortWorker();
-  runningKey = key;
-  indexing = true;
+  busy = true;
   bar.hidden = false;
   syncModeButtons();
   document.documentElement.classList.add('ai-global-sort-indexing');
-  updateProgress(0, media.length, `Opening ${MODES[mode].label} · requires ${MODES[mode].index} index…`);
+  updateProgress(0, media.length, `Starting ${MODES[selectedMode].label} AI order…`);
   try {
-    const result = await runWorker(media);
-    if (mine !== generation || !wanted || pauseReasons.size || document.documentElement.classList.contains('similarity-active')) return;
+    const result = await runWorker(media, selectedMode);
+    if (mine !== generation || selectedMode !== mode || !wanted || pauseReasons.size || document.documentElement.classList.contains('similarity-active')) return;
     cacheResult(key, result);
-    install(result, media, resetScroll, key);
+    install(result, media, resetScroll, key, selectedMode);
   } catch (error) {
     if (mine !== generation || error.name === 'AbortError') return;
-    indexing = false;
-    runningKey = '';
+    busy = false;
     document.documentElement.classList.remove('ai-global-sort-indexing');
     updateProgress(0, 1, error.message || 'Could not build AI order');
   }
@@ -365,7 +423,7 @@ sort?.addEventListener('change', () => {
   if (sort.value === 'ai-global') {
     wanted = true;
     const current = window.mochimonoGridModel;
-    if (current && !String(current.sort || '').startsWith('ai-global-result') && !String(current.sort || '').startsWith('visual-flow') && !String(current.sort || '').startsWith('similarity')) sourceModel = current;
+    if (isSourceSnapshot(current)) sourceModel = current;
     scheduleActivate(30, true);
   } else {
     wanted = false;
@@ -375,10 +433,17 @@ sort?.addEventListener('change', () => {
 
 bar.addEventListener('click', event => {
   const button = event.target.closest('[data-ai-global-mode]');
-  if (!button || !MODES[button.dataset.aiGlobalMode] || button.dataset.aiGlobalMode === mode) return;
-  mode = button.dataset.aiGlobalMode;
+  const nextMode = button?.dataset.aiGlobalMode;
+  if (!MODES[nextMode] || nextMode === mode) return;
+  mode = nextMode;
   localStorage.setItem(MODE_KEY, mode);
   syncModeButtons();
+  if (busy) {
+    generation++;
+    cancelPending(true);
+    busy = false;
+  }
+  installedKey = '';
   scheduleActivate(0, true);
 });
 
@@ -424,7 +489,7 @@ document.addEventListener('keydown', event => {
 }, true);
 
 files?.addEventListener('click', event => {
-  if (!active || indexing || document.documentElement.classList.contains('selection-active') || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  if (!active || busy || document.documentElement.classList.contains('selection-active') || event.ctrlKey || event.metaKey || event.shiftKey) return;
   const card = event.target.closest('.file-card[data-hash]');
   if (!card || !orderedFiles.has(card.dataset.hash)) return;
   event.preventDefault();
@@ -434,19 +499,20 @@ files?.addEventListener('click', event => {
 
 window.addEventListener('mochimono:visual-similarity-start', () => pause('find-similar'));
 window.addEventListener('mochimono:visual-similarity-end', () => resume('find-similar'));
-window.addEventListener('mochimono:ai-work-start', () => { if (indexing) pause('ai-work'); });
+window.addEventListener('mochimono:ai-work-start', () => { if (busy) pause('ai-work'); });
 window.addEventListener('mochimono:ai-work-end', () => { cache.clear(); resume('ai-work'); });
 
 window.mochimonoAIGlobalSort = {
   active:() => active,
+  busy:() => busy,
   mode:() => mode,
   modes:() => Object.keys(MODES),
   orderedHashes:() => active ? [...ordered] : null,
-  refresh:() => { cache.clear(); scheduleActivate(0, false); },
+  refresh:() => { cache.clear(); installedKey = ''; scheduleActivate(0, false); },
   pause,
   resume,
   paused:() => [...pauseReasons],
-  cache:() => ({ entries:cache.size, runningKey, installedKey })
+  cache:() => ({ entries:cache.size, installedKey, worker:workerScript || null })
 };
 
 wrapStableGrid();
