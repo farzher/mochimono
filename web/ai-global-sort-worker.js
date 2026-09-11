@@ -1,1 +1,1 @@
-await import('./ai-global-sort-worker-core.js?v=20260911-2');
+await import('./ai-global-sort-worker-v2.js?v=20260911-4');
