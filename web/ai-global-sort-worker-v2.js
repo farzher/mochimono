@@ -79,8 +79,9 @@ async function sort(payload) {
   }
   if (canceled) return familyResult;
 
+  let healedResult = familyResult;
   try {
-    const healed = await runWorker(
+    healedResult = await runWorker(
       './ai-global-color-gap-heal-worker.js',
       { action:'heal', payload:{ media:payload.media, result:familyResult } },
       result => result
@@ -89,14 +90,36 @@ async function sort(payload) {
       type:'progress',
       done:Array.isArray(payload?.media) ? payload.media.length : 1,
       total:Array.isArray(payload?.media) ? payload.media.length : 1,
-      detail:`Color final pass · ${(Number(healed.gapHealedRuns)||0).toLocaleString()} strict runs · ${(Number(healed.gapHealedMoved)||0).toLocaleString()} positions changed`,
+      detail:`Color gap pass · ${(Number(healedResult.gapHealedRuns)||0).toLocaleString()} strict runs · ${(Number(healedResult.gapHealedMoved)||0).toLocaleString()} positions changed`,
       stage:'gap-heal'
     });
-    return healed;
   } catch (error) {
     if (canceled || error?.name === 'AbortError') throw error;
     self.postMessage({ type:'progress', done:1, total:1, detail:`Color gap healing skipped · ${error.message || error}`, stage:'gap-heal' });
-    return familyResult;
+  }
+  if (canceled) return healedResult;
+
+  // Color is the primary invariant of this mode. Earlier family/AI passes may
+  // improve local similarity, but the final result must never regress back to
+  // red media deep inside Blue (or any other cross-palette jump).
+  try {
+    const guarded = await runWorker(
+      './ai-global-color-palette-guard-worker.js',
+      { action:'guard', payload:{ media:payload.media, result:healedResult } },
+      result => result
+    );
+    self.postMessage({
+      type:'progress',
+      done:Array.isArray(payload?.media) ? payload.media.length : 1,
+      total:Array.isArray(payload?.media) ? payload.media.length : 1,
+      detail:`Color palette final · ${(Number(guarded.paletteGuardRuns)||0).toLocaleString()} local runs · ${(Number(guarded.paletteGuardMoved)||0).toLocaleString()} positions stabilized`,
+      stage:'palette-guard'
+    });
+    return guarded;
+  } catch (error) {
+    if (canceled || error?.name === 'AbortError') throw error;
+    self.postMessage({ type:'progress', done:1, total:1, detail:`Color palette guard skipped · ${error.message || error}`, stage:'palette-guard' });
+    return healedResult;
   }
 }
 
