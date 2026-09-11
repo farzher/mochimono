@@ -1,3 +1,24 @@
+const AI_WORKER_RUN = `${Math.trunc(performance.timeOrigin)}-${Math.random().toString(36).slice(2,8)}`;
+const NativeWorker = window.Worker;
+
+if (!window.__mochimonoAIWorkerRun && typeof NativeWorker === 'function') {
+  const BustingWorker = new Proxy(NativeWorker, {
+    construct(Target, args, NewTarget) {
+      const [source, options] = args;
+      try {
+        const url = new URL(source, location.href);
+        if (url.pathname.endsWith('/ai-global-sort-worker-v2.js') || url.pathname.endsWith('/ai-global-sort-topics-worker.js')) {
+          url.searchParams.set('run', AI_WORKER_RUN);
+          return Reflect.construct(Target, [url, options], NewTarget);
+        }
+      } catch {}
+      return Reflect.construct(Target, args, NewTarget);
+    }
+  });
+  Object.defineProperty(window, 'Worker', { value:BustingWorker, writable:true, configurable:true });
+  window.__mochimonoAIWorkerRun = AI_WORKER_RUN;
+}
+
 const rail = document.querySelector('.ai-global-rail');
 
 if (rail) {
