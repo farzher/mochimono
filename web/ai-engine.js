@@ -1,11 +1,16 @@
 const WORKER_URL = new URL('./ai-worker.js', import.meta.url);
+const INDEX_WORKER_URL = new URL('./ai-index-worker.js', import.meta.url);
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
 const HEAVY_ACTIONS = new Set(['index','similar','search','groups','describe','mask']);
 let worker = null;
+let indexWorker = null;
 let sequence = 0;
 let heavyJobs = 0;
 const pending = new Map();
+const indexPending = new Map();
+const runtimeState = new Map();
+let lastRuntimeModel = '';
 
 function extension(name) {
   return String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
@@ -48,13 +53,20 @@ function endHeavy(action, id) {
   window.dispatchEvent(new CustomEvent('mochimono:ai-work-end', { detail:{ action, id, source:'ai-engine' } }));
 }
 
-function settleJob(id) {
-  const job = pending.get(String(id || ''));
+function settleJob(map, id) {
+  const job = map.get(String(id || ''));
   if (!job) return null;
-  pending.delete(String(id));
+  map.delete(String(id));
   job.signal?.removeEventListener('abort', job.abort);
   if (job.heavy) endHeavy(job.action, id);
   return job;
+}
+
+function rejectAll(map, error) {
+  for (const id of [...map.keys()]) {
+    const job = settleJob(map, id);
+    job?.reject(error);
+  }
 }
 
 function ensureWorker() {
@@ -68,50 +80,94 @@ function ensureWorker() {
       job.onProgress?.(data);
       return;
     }
-    settleJob(data.id);
+    settleJob(pending, data.id);
     if (data.type === 'error') {
       const error = new Error(data.error || 'AI operation failed');
       if (data.aborted) error.name = 'AbortError';
       job.reject(error);
-    } else {
-      job.resolve(data.result);
-    }
+    } else job.resolve(data.result);
   };
   worker.onerror = event => {
     const error = new Error(event.message || 'AI worker failed');
-    for (const id of [...pending.keys()]) {
-      const job = settleJob(id);
-      job?.reject(error);
-    }
+    rejectAll(pending, error);
     worker?.terminate();
     worker = null;
   };
   return worker;
 }
 
-function request(action, payload = {}, options = {}) {
+function ensureIndexWorker() {
+  if (indexWorker) return indexWorker;
+  indexWorker = new Worker(INDEX_WORKER_URL, { type:'module' });
+  indexWorker.onmessage = event => {
+    const data = event.data || {};
+    const job = indexPending.get(String(data.id || ''));
+    if (!job) return;
+    if (data.type === 'progress') {
+      if (['webgpu','wasm'].includes(data.metrics?.backend)) {
+        const model = job.model || (job.action === 'search' || job.action === 'groups' ? 'siglip2' : '');
+        if (model) { runtimeState.set(model, { ...data.metrics }); lastRuntimeModel = model; }
+      }
+      job.onProgress?.(data);
+      return;
+    }
+    settleJob(indexPending, data.id);
+    if (data.type === 'error') {
+      const error = new Error(data.error || 'AI indexing operation failed');
+      if (data.aborted) error.name = 'AbortError';
+      job.reject(error);
+    } else {
+      if (['webgpu','wasm'].includes(data.result?.runtime?.backend) && job.model) { runtimeState.set(job.model, { ...data.result.runtime }); lastRuntimeModel = job.model; }
+      job.resolve(data.result);
+    }
+  };
+  indexWorker.onerror = event => {
+    const error = new Error(event.message || 'AI index worker failed');
+    rejectAll(indexPending, error);
+    indexWorker?.terminate();
+    indexWorker = null;
+  };
+  return indexWorker;
+}
+
+function releaseIndexWorker() {
+  if (indexPending.size) return false;
+  indexWorker?.terminate();
+  indexWorker = null;
+  return true;
+}
+
+function requestOn(target, map, action, payload = {}, options = {}, meta = {}) {
   const id = `ai-${Date.now().toString(36)}-${(++sequence).toString(36)}`;
-  const target = ensureWorker();
   return new Promise((resolve, reject) => {
     const signal = options.signal || null;
     const heavy = HEAVY_ACTIONS.has(action);
     const abort = () => {
       try { target.postMessage({ id:`cancel-${id}`, action:'cancel', cancelId:id }); } catch {}
-      const job = settleJob(id);
+      const job = settleJob(map, id);
       if (!job) return;
       reject(signal?.reason || new DOMException('Aborted', 'AbortError'));
     };
     if (signal?.aborted) return reject(signal.reason || new DOMException('Aborted', 'AbortError'));
     signal?.addEventListener('abort', abort, { once:true });
-    pending.set(id, { resolve, reject, onProgress:options.onProgress, signal, abort, heavy, action });
+    map.set(id, { resolve, reject, onProgress:options.onProgress, signal, abort, heavy, action, ...meta });
     if (heavy) beginHeavy(action, id);
-    try {
-      target.postMessage({ id, action, payload });
-    } catch (error) {
-      settleJob(id);
+    try { target.postMessage({ id, action, payload }); }
+    catch (error) {
+      settleJob(map, id);
       reject(error);
     }
   });
+}
+
+function request(action, payload = {}, options = {}) {
+  if ((action === 'describe' || action === 'mask') && !indexPending.size) releaseIndexWorker();
+  return requestOn(ensureWorker(), pending, action, payload, options);
+}
+
+function requestIndex(action, payload = {}, options = {}) {
+  const model = payload.model === 'dinov3' ? 'dinov3' : (payload.model === 'siglip2' || action === 'search' || action === 'groups' ? 'siglip2' : '');
+  return requestOn(ensureIndexWorker(), indexPending, action, payload, options, { model });
 }
 
 async function catalogMedia() {
@@ -164,12 +220,31 @@ async function currentViewMedia() {
 
 async function withMedia(action, payload = {}, options = {}) {
   const media = options.scope === 'view' ? await currentViewMedia() : await catalogMedia();
-  return request(action, { ...payload, media }, options);
+  return requestIndex(action, { ...payload, media }, options);
+}
+
+async function status(options = {}) {
+  const state = await requestIndex('status', {}, options);
+  const lastRuntime = lastRuntimeModel ? runtimeState.get(lastRuntimeModel) : null;
+  return {
+    ...state,
+    webgpuAvailable:Boolean(state.webgpu),
+    webgpu:lastRuntime?.backend ? lastRuntime.backend === 'webgpu' : Boolean(state.webgpu),
+    lastRuntimeModel,
+    runtime:Object.fromEntries(runtimeState)
+  };
+}
+
+async function clear(options = {}) {
+  const state = await requestIndex('clear', {}, options);
+  runtimeState.clear();
+  lastRuntimeModel = '';
+  return { ...state, webgpuAvailable:Boolean(state.webgpu), runtime:{} };
 }
 
 const api = {
-  status:(options = {}) => request('status', {}, options),
-  clear:(options = {}) => request('clear', {}, options),
+  status,
+  clear,
   catalogMedia,
   currentViewMedia,
   index:(model = 'siglip2', options = {}) => withMedia('index', { model }, options),
@@ -184,13 +259,15 @@ const api = {
   masks:(hash, options = {}) =>
     request('mask', { hash:String(hash || '') }, options),
   busy:() => heavyJobs > 0,
+  releaseEmbeddingModels:releaseIndexWorker,
   stop:() => {
     worker?.terminate();
     worker = null;
-    for (const id of [...pending.keys()]) {
-      const job = settleJob(id);
-      job?.reject(new DOMException('AI worker stopped', 'AbortError'));
-    }
+    indexWorker?.terminate();
+    indexWorker = null;
+    const error = new DOMException('AI worker stopped', 'AbortError');
+    rejectAll(pending, error);
+    rejectAll(indexPending, error);
   }
 };
 
