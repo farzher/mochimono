@@ -1,4 +1,4 @@
-import { consolidateColorFamilies } from './ai-global-sort-family-postprocess.js?v=20260911-1';
+import { consolidateColorFamilies } from './ai-global-sort-family-postprocess.js?v=20260911-2';
 let currentMode='';
 let currentMedia=[];
 const nativePost=self.postMessage.bind(self);
