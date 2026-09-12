@@ -71,7 +71,7 @@ async function loadColors(media){
   finally{db?.close?.()}
 }
 
-function neutral(color){return!color||color.c<.022||color.f<.10}
+function neutral(color){return!color||color.c<.028||color.f<.13}
 
 function hueSeam(colors){
   const bins=48,hist=new Float64Array(bins);
@@ -145,20 +145,20 @@ function placeColorField(media,colors,colorIndexes,seam,x,y){
   return{cols,rows};
 }
 
-function placeNeutrals(media,colors,indexes,startX,height,x,y){
-  if(!indexes.length)return{cols:0,rows:height};
-  const rows=Math.max(1,height||Math.ceil(Math.sqrt(indexes.length)));
-  const cols=Math.max(1,Math.ceil(indexes.length/rows));
+function placeNeutrals(media,colors,indexes,startX,x,y){
+  if(!indexes.length)return{cols:0,rows:0};
+  const cols=Math.max(4,Math.ceil(Math.sqrt(indexes.length)));
+  const rows=Math.max(1,Math.ceil(indexes.length/cols));
   const ordered=indexes.slice().sort((a,b)=>{
     const ca=colors[a],cb=colors[b];
     const la=ca?.l??.5,lb=cb?.l??.5;
     const availableA=ca?0:1,availableB=cb?0:1;
-    return la-lb||availableA-availableB||hashNoise(String(media[a].hash))-hashNoise(String(media[b].hash));
+    return lb-la||availableA-availableB||hashNoise(String(media[a].hash))-hashNoise(String(media[b].hash));
   });
   for(let position=0;position<ordered.length;position++){
     const index=ordered[position];
-    const row=position%rows;
-    const col=Math.floor(position/rows);
+    const row=Math.floor(position/cols);
+    const col=position%cols;
     x[index]=startX+col;
     y[index]=row;
   }
@@ -180,7 +180,7 @@ async function build(media){
 
   const field=placeColorField(usable,colors,colorful,seam,x,y);
   const neutralStart=field.cols?field.cols+NEUTRAL_GAP:0;
-  const neutralField=placeNeutrals(usable,colors,neutrals,neutralStart,Math.max(1,field.rows),x,y);
+  const neutralField=placeNeutrals(usable,colors,neutrals,neutralStart,x,y);
   const worldH=Math.max(1,field.rows,neutralField.rows);
   const worldW=Math.max(1,field.cols+(neutrals.length?NEUTRAL_GAP+neutralField.cols:0));
   return{
