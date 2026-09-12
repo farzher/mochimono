@@ -53,7 +53,7 @@ async function rankFamilies(result){
   for(let index=0;index<groups.length;index++)if(find(index)===index&&members[index].length){const indexes=members[index].slice().sort((a,b)=>groups[a].index-groups[b].index),total=indexes.reduce((sum,value)=>sum+groups[value].size,0),largest=indexes.reduce((max,value)=>Math.max(max,groups[value].size),0);families.push({indexes,total,largest,first:indexes[0]})}
   families.sort((a,b)=>b.total-a.total||b.largest-a.largest||a.first-b.first);
   const newOrder=[],groupInfo=[],groupByHash=[];let cursor=0,id=0;
-  for(const family of families)for(const groupIndex of family.indexes){const group=groups[groupIndex];newOrder.push(...group.items);groupInfo.push({...group.entry,id,start:cursor,size:group.size,familySize:family.total,familyGroups:family.indexes.length});for(const item of group.items)groupByHash.push([String(item.hash),id]);cursor+=group.size;id++}
+  for(const family of families)for(const groupIndex of family.indexes){const group=groups[groupIndex];newOrder.push(...group.items);groupInfo.push({...group.entry,id,start:cursor,groupSize:group.size,size:family.total,familySize:family.total,familyGroups:family.indexes.length});for(const item of group.items)groupByHash.push([String(item.hash),id]);cursor+=group.size;id++}
   return{...result,order:newOrder,groupInfo,groupByHash};
 }
 
