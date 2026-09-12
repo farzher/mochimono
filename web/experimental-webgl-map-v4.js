@@ -1,3 +1,4 @@
+import { ensureBrowserThumbnail } from './browser-thumbnail-fallback.js';
 import { ExperimentalWebGLMapRenderer as BaseRenderer } from './experimental-webgl-map-v3.js';
 
 const DETAIL_SCREEN_PX=48;
@@ -5,6 +6,7 @@ const MICRO_ONLY_SCREEN_PX=16;
 const LIVE_SETTLE_MS=72;
 const MID_PREFETCH_PX=240;
 const DETAIL_PREFETCH_PX=360;
+const isHeicItem=item=>/\.(?:heic|heif)$/i.test(String(item?.filename||''));
 
 export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   constructor(canvas,options={}){
@@ -34,6 +36,14 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
       this.lastLiveSettle=performance.now();
       this.settle();
     },Math.max(0,LIVE_SETTLE_MS-elapsed));
+  }
+
+  async load(job){
+    const item=this.media[job.index];
+    if(item?.type==='image'&&isHeicItem(item)){
+      await ensureBrowserThumbnail({hash:item.hash,filename:item.filename,mime:'image/heic',kind:'image',urgent:true}).catch(()=>{});
+    }
+    return super.load(job);
   }
 
   prefetchOverscan(screenPx){
