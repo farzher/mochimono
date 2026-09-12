@@ -10,6 +10,9 @@ const LOAD_CONCURRENCY=20;
 const MOVING_DETAIL_CONCURRENCY=4;
 const SETTLED_DETAIL_CONCURRENCY=8;
 const ORIGINAL_CONCURRENCY=1;
+const LIVE_VISIBLE_LIMIT=320;
+const SETTLED_VISIBLE_LIMIT=4096;
+const PREFETCH_EXTRA=256;
 
 export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   constructor(canvas,options={}){
@@ -52,13 +55,9 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   }
 
   clearMovingWork(){
-    // Drop only work that has not started yet. Keep the current desired set alive
-    // until the next live settle so in-flight thumbnails can actually finish while
-    // the camera is moving instead of being invalidated by every wheel event.
     this.resetPendingThumbnailLoads();
     if(this.originalQueue?.length)this.originalQueue.length=0;
     if(this.originalQueued?.size)this.originalQueued.clear();
-    if(this.originalDesired?.size)this.originalDesired.clear();
   }
 
   setCamera(panX,panY,zoom){
@@ -68,24 +67,18 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
     this.panY=nextY;
     this.zoom=nextZoom;
     this.lastCameraAt=performance.now();
-    this.clearMovingWork();
+    this.requestDraw();
     this.scheduleLiveSettle();
     this.scheduleQuietSettle();
-    this.requestDraw();
   }
 
   scheduleLiveSettle(){
-    const now=performance.now(),elapsed=now-this.lastLiveSettle;
-    if(elapsed>=LIVE_SETTLE_MS){
-      this.lastLiveSettle=now;
-      this.settleNow();
-      return;
-    }
     if(this.liveSettleTimer)return;
+    const elapsed=performance.now()-this.lastLiveSettle;
     this.liveSettleTimer=setTimeout(()=>{
       this.liveSettleTimer=0;
       this.lastLiveSettle=performance.now();
-      this.settleNow();
+      this.settleLive();
     },Math.max(0,LIVE_SETTLE_MS-elapsed));
   }
 
@@ -101,53 +94,57 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
     },Math.max(0,next-elapsed));
   }
 
-  nearestIndexes(indexes,limit,worldCenterX,worldCenterY){
-    const ranked=indexes.map(index=>{
-      const offset=index*4,dx=this.geometry[offset]-worldCenterX,dy=this.geometry[offset+1]-worldCenterY;
-      return[index,dx*dx+dy*dy];
-    }).sort((a,b)=>a[1]-b[1]);
-    return(limit<ranked.length?ranked.slice(0,limit):ranked).map(entry=>entry[0]);
+  visibleTarget(screenPx){
+    const area=Math.max(1,this.canvas.clientWidth*this.canvas.clientHeight);
+    const estimated=Math.ceil(area/Math.max(1,screenPx*screenPx)*1.35);
+    return Math.max(LIVE_VISIBLE_LIMIT,Math.min(SETTLED_VISIBLE_LIMIT,estimated));
   }
 
-  settleNow(){
-    if(!this.result||this.lost)return;
-    const screenPx=this.screenItemSize();
-    if(screenPx<MICRO_ONLY_SCREEN_PX){
-      this.detailWanted.clear();
-      super.settle();
-      return;
+  priorityVisibleIndexes(limit,overscanCells=0){
+    if(!this.result||!this.spatial||limit<=0)return[];
+    const zoom=Math.max(.0001,this.zoom),cell=Math.max(1,this.cell);
+    const margin=Math.max(0,Number(overscanCells)||0)+(this.maxGeometryHalfCells||0);
+    const left=(-this.panX)/zoom/cell-margin;
+    const top=(-this.panY)/zoom/cell-margin;
+    const right=(this.canvas.clientWidth-this.panX)/zoom/cell+margin;
+    const bottom=(this.canvas.clientHeight-this.panY)/zoom/cell+margin;
+    const bucket=Math.max(1,this.spatial.bucket||8);
+    const minBx=Math.floor(left/bucket),maxBx=Math.floor(right/bucket);
+    const minBy=Math.floor(top/bucket),maxBy=Math.floor(bottom/bucket);
+    const centerCellX=((this.canvas.clientWidth*.5-this.panX)/zoom)/cell-.5;
+    const centerCellY=((this.canvas.clientHeight*.5-this.panY)/zoom)/cell-.5;
+    const centerBx=Math.max(minBx,Math.min(maxBx,Math.floor(centerCellX/bucket)));
+    const centerBy=Math.max(minBy,Math.min(maxBy,Math.floor(centerCellY/bucket)));
+    const worldCenterX=(this.canvas.clientWidth*.5-this.panX)/zoom;
+    const worldCenterY=(this.canvas.clientHeight*.5-this.panY)/zoom;
+    const ranked=[];
+    const maxRing=Math.max(centerBx-minBx,maxBx-centerBx,centerBy-minBy,maxBy-centerBy);
+    const visit=(bx,by)=>{
+      if(bx<minBx||bx>maxBx||by<minBy||by>maxBy)return;
+      for(const index of this.spatial.get(`${bx}:${by}`)||[]){
+        const x=Number(this.result.x[index]),y=Number(this.result.y[index]);
+        if(x<left||x>right||y<top||y>bottom)continue;
+        const offset=index*4,dx=this.geometry[offset]-worldCenterX,dy=this.geometry[offset+1]-worldCenterY;
+        ranked.push([index,dx*dx+dy*dy]);
+      }
+    };
+    for(let ring=0;ring<=maxRing;ring++){
+      if(ring===0)visit(centerBx,centerBy);
+      else{
+        const x0=centerBx-ring,x1=centerBx+ring,y0=centerBy-ring,y1=centerBy+ring;
+        for(let bx=x0;bx<=x1;bx++){visit(bx,y0);visit(bx,y1)}
+        for(let by=y0+1;by<y1;by++){visit(x0,by);visit(x1,by)}
+      }
+      if(ranked.length>=limit)break;
     }
+    ranked.sort((a,b)=>a[1]-b[1]);
+    if(ranked.length>limit)ranked.length=limit;
+    return ranked.map(entry=>entry[0]);
+  }
 
-    this.resetPendingThumbnailLoads();
-    const elapsed=performance.now()-this.lastCameraAt;
-    const allowDetail=screenPx>=DETAIL_SCREEN_PX;
-    const allowPrefetch=elapsed>=PREFETCH_QUIET_MS;
-    const allowOriginal=elapsed>=ORIGINAL_QUIET_MS;
-    const visible=this.visibleIndexes(0);
-    const nearby=allowPrefetch?this.visibleIndexes(this.prefetchOverscan(screenPx)):visible;
-    this.visibleCount=visible.length;
-    this.visibleSet=new Set(nearby);
-    this.desired.clear();
-    this.detailWanted.clear();
-
-    if(!visible.length){
-      this.originalDesired.clear();
-      this.originalQueue.length=0;
-      this.originalQueued.clear();
-      this.requestDraw();
-      return;
-    }
-
-    const worldCenterX=(this.canvas.clientWidth*.5-this.panX)/this.zoom;
-    const worldCenterY=(this.canvas.clientHeight*.5-this.panY)/this.zoom;
+  queueVisible(indexes,allowDetail){
     const small=this.tiers.small,detail=this.tiers.detail;
-    const rankedVisible=this.nearestIndexes(visible,Math.min(small.capacity(),10000),worldCenterX,worldCenterY);
-    const visibleSet=new Set(rankedVisible);
-
-    // First queue every missing cheap thumbnail. Existing small thumbnails may
-    // upgrade to detail even during continuous motion, so a slow zoom never has
-    // to stop before the visible images sharpen.
-    for(const index of rankedVisible){
+    for(const index of indexes){
       if(detail.get(index)){
         this.desired.set(index,detail.name);
         continue;
@@ -162,31 +159,75 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
         this.desired.set(index,detail.name);
       }else this.desired.set(index,small.name);
     }
+    if(!allowDetail)return;
+    for(const index of indexes){
+      if(!this.detailWanted.has(index)||detail.get(index))continue;
+      this.enqueue(index,detail);
+    }
+  }
 
-    // Detail comes after the small pass so missing visible thumbnails always
-    // have queue priority. Only a few detail decodes run at once while moving.
-    if(allowDetail){
-      for(const index of rankedVisible){
-        if(!this.detailWanted.has(index)||detail.get(index))continue;
-        this.enqueue(index,detail);
-      }
+  settleLive(){
+    if(!this.result||this.lost)return;
+    const screenPx=this.screenItemSize();
+    if(screenPx<MICRO_ONLY_SCREEN_PX){this.requestDraw();return}
+    this.resetPendingThumbnailLoads();
+    this.desired.clear();
+    this.detailWanted.clear();
+    const visible=this.priorityVisibleIndexes(LIVE_VISIBLE_LIMIT,0);
+    this.visibleCount=visible.length;
+    this.visibleSet=new Set(visible);
+    if(!visible.length){this.requestDraw();return}
+    this.queueVisible(visible,screenPx>=DETAIL_SCREEN_PX);
+    this.pump();
+    this.requestDraw();
+  }
+
+  settleNow(){
+    if(!this.result||this.lost)return;
+    const screenPx=this.screenItemSize();
+    if(screenPx<MICRO_ONLY_SCREEN_PX){
+      this.detailWanted.clear();
+      super.settle();
+      return;
     }
 
-    // Speculative work still waits for a pause and stays on the cheap tier.
-    if(allowPrefetch&&nearby.length>visibleSet.size){
-      const remaining=Math.max(0,Math.min(small.capacity(),10000)-rankedVisible.length);
-      const around=this.nearestIndexes(nearby.filter(index=>!visibleSet.has(index)),remaining,worldCenterX,worldCenterY);
-      for(const index of around){
-        if(small.get(index)||detail.get(index))continue;
+    this.resetPendingThumbnailLoads();
+    const elapsed=performance.now()-this.lastCameraAt;
+    const allowPrefetch=elapsed>=PREFETCH_QUIET_MS;
+    const allowOriginal=elapsed>=ORIGINAL_QUIET_MS;
+    const visibleLimit=this.visibleTarget(screenPx);
+    const visible=this.priorityVisibleIndexes(visibleLimit,0);
+    const nearby=allowPrefetch
+      ?this.priorityVisibleIndexes(Math.min(SETTLED_VISIBLE_LIMIT,visibleLimit+PREFETCH_EXTRA),this.prefetchOverscan(screenPx))
+      :visible;
+    this.visibleCount=visible.length;
+    this.visibleSet=new Set(nearby);
+    this.desired.clear();
+    this.detailWanted.clear();
+
+    if(!visible.length){
+      this.originalDesired.clear();
+      this.originalQueue.length=0;
+      this.originalQueued.clear();
+      this.requestDraw();
+      return;
+    }
+
+    this.queueVisible(visible,screenPx>=DETAIL_SCREEN_PX);
+    if(allowPrefetch&&nearby.length>visible.length){
+      const visibleSet=new Set(visible),small=this.tiers.small,detail=this.tiers.detail;
+      for(const index of nearby){
+        if(visibleSet.has(index)||small.get(index)||detail.get(index))continue;
         this.desired.set(index,small.name);
         this.enqueue(index,small);
       }
     }
 
     this.pump();
-    if(allowOriginal)this.settleOriginals(rankedVisible,worldCenterX,worldCenterY);
+    const worldCenterX=(this.canvas.clientWidth*.5-this.panX)/this.zoom;
+    const worldCenterY=(this.canvas.clientHeight*.5-this.panY)/this.zoom;
+    if(allowOriginal)this.settleOriginals(visible,worldCenterX,worldCenterY);
     else{
-      this.originalDesired.clear();
       this.originalQueue.length=0;
       this.originalQueued.clear();
     }
@@ -196,7 +237,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   settle(){
     if(!this.result||this.lost)return;
     const elapsed=performance.now()-this.lastCameraAt;
-    if(elapsed<LIVE_SETTLE_MS)this.scheduleLiveSettle();
+    if(elapsed<PREFETCH_QUIET_MS)this.settleLive();
     else this.settleNow();
     this.scheduleQuietSettle();
   }
@@ -228,16 +269,15 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
       for(const[name,tier]of Object.entries(this.tiers||{})){
         if(!includeMicro&&name==='micro')continue;
         const entry=tier?.entries?.get(index);
-        if(!entry)continue;
-        tier.entries.delete(index);
-        entry.page?.release?.(entry);
+        if(entry){tier.entries.delete(index);entry.page?.release?.(entry)}
+        this.failedUntil.delete(`${name}:${index}`);
       }
-      for(const key of [...this.failedUntil.keys()])if(key.endsWith(`:${index}`))this.failedUntil.delete(key);
       const original=this.originalEntries?.get(index);
       if(original){this.gl.deleteTexture(original.texture);this.originalEntries.delete(index)}
     }
     this.pendingRefresh.clear();
-    this.settleNow();
+    if(performance.now()-this.lastCameraAt<PREFETCH_QUIET_MS)this.settleLive();
+    else this.settleNow();
     this.requestDraw();
   }
 
@@ -291,11 +331,14 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
       interactionDeferredLoading:false,
       livePanLoading:true,
       liveSettleMs:LIVE_SETTLE_MS,
+      liveVisibleLimit:LIVE_VISIBLE_LIMIT,
+      settledVisibleLimit:SETTLED_VISIBLE_LIMIT,
       prefetchQuietMs:PREFETCH_QUIET_MS,
       originalQuietMs:ORIGINAL_QUIET_MS,
       pendingRefresh:this.pendingRefresh.size,
       viewportFirstLoading:true,
-      continuousDetailLoading:true
+      continuousDetailLoading:true,
+      boundedLiveSelection:true
     };
   }
 }
