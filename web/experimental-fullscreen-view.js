@@ -6,9 +6,7 @@ html.experimental-view-active .app-brand,
 html.experimental-view-active .top-actions,
 html.experimental-view-active .commandbar,
 html.experimental-view-active #folderbar,
-html.experimental-view-active #gridFolderStrip{
-  display:none!important
-}
+html.experimental-view-active #gridFolderStrip{display:none!important}
 html.experimental-view-active .experimental-view-surface{
   position:fixed!important;
   inset:0!important;
@@ -35,3 +33,23 @@ html.experimental-view-active .experimental-view-bar{
 }
 `;
 document.head.append(style);
+
+const chromeSelectors=['.topbar','.app-brand','.top-actions','.commandbar','#folderbar','#gridFolderStrip'];
+const savedDisplay=new Map();
+
+function syncNormalChrome(){
+  const active=document.documentElement.classList.contains('experimental-view-active');
+  for(const selector of chromeSelectors)for(const node of document.querySelectorAll(selector)){
+    if(active){
+      if(!savedDisplay.has(node))savedDisplay.set(node,[node.style.getPropertyValue('display'),node.style.getPropertyPriority('display')]);
+      node.style.setProperty('display','none','important');
+    }else if(savedDisplay.has(node)){
+      const[value,priority]=savedDisplay.get(node);
+      if(value)node.style.setProperty('display',value,priority);else node.style.removeProperty('display');
+      savedDisplay.delete(node);
+    }
+  }
+}
+
+new MutationObserver(syncNormalChrome).observe(document.documentElement,{attributes:true,attributeFilter:['class']});
+syncNormalChrome();
