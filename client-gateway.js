@@ -10,6 +10,7 @@ import { json, pathKey, readJson, settings } from './lib/agent-context.js';
 import { backupThumbnailCandidates } from './lib/backup-thumb-candidates.js';
 import { handleClientProviderApi } from './lib/client-providers.js';
 import { handleCompressionWorkApi } from './lib/compression-work.js';
+import { handleCloudImageOptimizeApi } from './lib/image-optimize-cloud.js';
 import { handleImageOptimizeApi } from './lib/image-optimize.js';
 import { handleVideoOptimizeApi } from './lib/video-optimize.js';
 import { acquireLiveLibraryWatchers } from './lib/live-library-watch.js';
@@ -414,6 +415,7 @@ export async function handleClientGateway(req, res, url) {
   }
   if (url.pathname.startsWith('/api/')) {
     if (await handleCompressionWorkApi(req, res, url)) return true;
+    if (await handleCloudImageOptimizeApi(req, res, url)) return true;
     if (await handleImageOptimizeApi(req, res, url)) return true;
     if (await handleVideoOptimizeApi(req, res, url)) return true;
     if (await handleClientProviderApi(req, res, url)) return true;
