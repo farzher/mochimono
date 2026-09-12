@@ -22,21 +22,22 @@ self.onmessage=async event=>{
   canceled=false;
   const hashes=Array.isArray(data.hashes)?data.hashes:[],byHash=new Map(hashes.map((hash,index)=>[String(hash),index]));
   const pixels=new Uint8Array(hashes.length*PIXELS),available=new Uint8Array(hashes.length);
-  let found=0,scanned=0,db;
+  let found=0,db;
   try{
     db=await openDb();
-    const request=db.transaction(STORE,'readonly').objectStore(STORE).openCursor();
-    await new Promise((resolve,reject)=>{
+    const store=db.transaction(STORE,'readonly').objectStore(STORE);
+    const rows=await new Promise((resolve,reject)=>{
+      const request=store.getAll();
+      request.onsuccess=()=>resolve(request.result||[]);
       request.onerror=()=>reject(request.error);
-      request.onsuccess=()=>{
-        if(canceled)return resolve();
-        const cursor=request.result;if(!cursor)return resolve();
-        const row=cursor.value||{},index=byHash.get(String(row.hash||''));
-        if(index!=null&&validTemplate(row)){reconstruct(row.experimentalTemplate,pixels,index*PIXELS);available[index]=1;found++}
-        scanned++;if(scanned%10000===0)self.postMessage({type:'progress',found,scanned,total:hashes.length});
-        cursor.continue();
-      };
     });
+    if(canceled)return;
+    for(let scanned=0;scanned<rows.length;scanned++){
+      if(canceled)return;
+      const row=rows[scanned]||{},index=byHash.get(String(row.hash||''));
+      if(index!=null&&validTemplate(row)){reconstruct(row.experimentalTemplate,pixels,index*PIXELS);available[index]=1;found++}
+      if(scanned&&scanned%10000===0)self.postMessage({type:'progress',found,scanned,total:hashes.length});
+    }
     if(canceled)return;
     self.postMessage({type:'result',pixels,available,found,edge:EDGE},[pixels.buffer,available.buffer]);
   }catch(error){if(!canceled)self.postMessage({type:'error',error:String(error?.message||error)})}
