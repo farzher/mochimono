@@ -15,7 +15,9 @@ const BROWSER_THUMB_DIR = join(homedir(), '.mochimono', 'provider-thumbs');
 const BROWSER_THUMB_VERSION = 3;
 const MAX_BROWSER_THUMB_BYTES = 8 * 1024 * 1024;
 const MAX_BROWSER_HEIC_BYTES = 128 * 1024 * 1024;
+const MAX_BROWSER_HEIC_VIEW_BYTES = 32 * 1024 * 1024;
 const BROWSER_HEIC_EDGE = 768;
+const BROWSER_HEIC_VIEW_EDGE = 4096;
 const sessions = new Map();
 
 function cleanRelative(value) {
@@ -240,10 +242,15 @@ async function saveBrowserThumbnail(req, res, hash) {
   }
 }
 
-async function saveBrowserHeicThumbnail(req, res, hash) {
+async function saveBrowserHeicThumbnail(req, res, hash, url) {
   if (!/^[a-f0-9]{64}$/.test(hash)) return json(res, 400, { error:'Invalid SHA-256 hash' });
   await mkdir(TMP_DIR, { recursive:true });
   const source = join(TMP_DIR, `browser-heic-${process.pid}-${Date.now()}-${randomUUID()}`);
+  const view = url.searchParams.get('view') === '1';
+  const requestedEdge = Number(url.searchParams.get('edge'));
+  const edge = view
+    ? Math.max(1024, Math.min(BROWSER_HEIC_VIEW_EDGE, Number.isFinite(requestedEdge) && requestedEdge > 0 ? Math.round(requestedEdge) : BROWSER_HEIC_VIEW_EDGE))
+    : BROWSER_HEIC_EDGE;
   let size = 0;
   const limit = new Transform({
     transform(chunk, encoding, callback) {
@@ -256,12 +263,25 @@ async function saveBrowserHeicThumbnail(req, res, hash) {
   try {
     await pipeline(req, limit, createWriteStream(source, { flags:'wx' }));
     if (!size) throw Object.assign(new Error('Empty HEIC image'), { status:400 });
-    const result = await decodeHeic(source, { edge:BROWSER_HEIC_EDGE, quality:82, effort:2 });
+    const result = await decodeHeic(source, { edge, quality:view ? 90 : 82, effort:2 });
     if (!result.data?.length) throw new Error('Could not decode HEIC preview');
-    if (result.data.length > MAX_BROWSER_THUMB_BYTES) throw Object.assign(new Error('HEIC thumbnail is too large'), { status:413 });
+    const maxOutput = view ? MAX_BROWSER_HEIC_VIEW_BYTES : MAX_BROWSER_THUMB_BYTES;
+    if (result.data.length > maxOutput) throw Object.assign(new Error('HEIC preview is too large'), { status:413 });
 
     const width = Math.max(1, Math.round(Number(result.info?.width) || 1));
     const height = Math.max(1, Math.round(Number(result.info?.height) || 1));
+    if (view) {
+      res.writeHead(200, {
+        'content-type':'image/webp',
+        'content-length':result.data.length,
+        'cache-control':'private, max-age=31536000, immutable',
+        'x-mochimono-width':width,
+        'x-mochimono-height':height
+      });
+      res.end(result.data);
+      return;
+    }
+
     const bucket = join(BROWSER_THUMB_DIR, hash.slice(0, 2));
     const destination = browserThumbnailPath(hash);
     const info = join(bucket, `${hash}.json`);
@@ -310,7 +330,7 @@ export async function handleClientImport(req, res, url) {
   }
   const browserHeicThumb = /^\/api\/client\/browser-heic-thumb\/([a-f0-9]{64})$/.exec(url.pathname);
   if (browserHeicThumb && req.method === 'PUT') {
-    await saveBrowserHeicThumbnail(req, res, browserHeicThumb[1]);
+    await saveBrowserHeicThumbnail(req, res, browserHeicThumb[1], url);
     return true;
   }
   const browserThumb = /^\/api\/client\/browser-thumb\/([a-f0-9]{64})$/.exec(url.pathname);
