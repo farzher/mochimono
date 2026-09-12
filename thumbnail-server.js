@@ -1,20 +1,23 @@
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { DATA_DIR, db, json, now, readJson } from './lib/server-context.js';
-import { validHash } from './lib/store.js';
+import { objectPath, validHash } from './lib/store.js';
+import { decodeHeic } from './lib/heic.js';
 
 const THUMB_VERSION = 3;
 const MAX_THUMB_BYTES = 5 * 1024 * 1024;
 const PRIORITY_WINDOW_MS = 20_000;
+const HEIC_EDGE = 768;
 const LOD_EDGES = new Set([64, 192]);
 const uploadLocks = new Map();
 const lodLocks = new Map();
 let sharpPromise = null;
 const thumbPath = hash => join(DATA_DIR, 'thumbs', hash.slice(0, 2), `${hash}.webp`);
 const isDeclarationName = name => /\.d\.(?:mts|cts|ts)$/i.test(String(name || ''));
+const isHeicName = name => /\.(?:heic|heif)$/i.test(String(name || ''));
 
 const staleRequestCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 db.prepare('DELETE FROM thumbnail_requests WHERE requested_at < ?').run(staleRequestCutoff);
@@ -36,6 +39,68 @@ function integerHeader(req, name) {
 function durationHeader(req) {
   const value = Number(req.headers['x-mochimono-duration']);
   return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function heicSource(hash) {
+  const object = db.prepare("SELECT mime FROM objects WHERE hash = ? AND state = 'active'").get(hash);
+  if (!object) return null;
+  const source = db.prepare(`
+    SELECT filename
+    FROM sources
+    WHERE object_hash = ? AND (lower(filename) LIKE '%.heic' OR lower(filename) LIKE '%.heif')
+    ORDER BY id
+    LIMIT 1
+  `).get(hash);
+  const mime = String(object.mime || '').toLowerCase();
+  if (!source && mime !== 'image/heic' && mime !== 'image/heif') return null;
+  const sourceMime = /\.heif$/i.test(String(source?.filename || '')) || mime === 'image/heif' ? 'image/heif' : 'image/heic';
+  return { sourceMime, currentMime:mime };
+}
+
+async function generateHeicThumbnail(hash) {
+  const source = heicSource(hash);
+  if (!source) return null;
+  const previous = uploadLocks.get(hash) || Promise.resolve();
+  const operation = previous.catch(() => {}).then(async () => {
+    let existing = db.prepare('SELECT * FROM thumbnails WHERE object_hash = ? AND version = ?').get(hash, THUMB_VERSION);
+    if (existing) {
+      try { await stat(thumbPath(hash)); return existing; }
+      catch { db.prepare('DELETE FROM thumbnails WHERE object_hash = ?').run(hash); }
+    }
+
+    const result = await decodeHeic(objectPath(DATA_DIR, hash), { edge:HEIC_EDGE, quality:78, effort:2 });
+    if (!result.data?.length) throw new Error('HEIC preview is empty');
+    if (result.data.length > MAX_THUMB_BYTES) throw new Error('HEIC preview is too large');
+
+    const destination = thumbPath(hash);
+    await mkdir(dirname(destination), { recursive:true });
+    const temp = `${destination}.heic-${process.pid}-${Date.now()}`;
+    try {
+      await writeFile(temp, result.data, { flag:'wx' });
+      await rm(destination, { force:true });
+      await rename(temp, destination);
+    } catch (error) {
+      await rm(temp, { force:true }).catch(() => {});
+      throw error;
+    }
+
+    const width = Math.max(0, Number(result.info?.width) || 0);
+    const height = Math.max(0, Number(result.info?.height) || 0);
+    db.prepare(`
+      INSERT INTO thumbnails(object_hash, version, mime, size, width, height, duration, created_at)
+      VALUES(?, ?, 'image/webp', ?, ?, ?, NULL, ?)
+      ON CONFLICT(object_hash) DO UPDATE SET
+        version = excluded.version, mime = excluded.mime, size = excluded.size,
+        width = excluded.width, height = excluded.height, duration = NULL,
+        created_at = excluded.created_at
+    `).run(hash, THUMB_VERSION, result.data.length, width, height, now());
+    db.prepare('DELETE FROM thumbnail_requests WHERE object_hash = ?').run(hash);
+    if (!source.currentMime.startsWith('image/')) db.prepare('UPDATE objects SET mime = ? WHERE hash = ?').run(source.sourceMime, hash);
+    return db.prepare('SELECT * FROM thumbnails WHERE object_hash = ? AND version = ?').get(hash, THUMB_VERSION);
+  });
+  uploadLocks.set(hash, operation);
+  try { return await operation; }
+  finally { if (uploadLocks.get(hash) === operation) uploadLocks.delete(hash); }
 }
 
 async function sharpLibrary() {
@@ -107,14 +172,18 @@ async function writeThumbnail(req, destination) {
 }
 
 async function serveThumbnail(req, res, hash, url) {
-  const row = db.prepare('SELECT * FROM thumbnails WHERE object_hash = ? AND version = ?').get(hash, THUMB_VERSION);
+  let row = db.prepare('SELECT * FROM thumbnails WHERE object_hash = ? AND version = ?').get(hash, THUMB_VERSION);
+  if (!row) row = await generateHeicThumbnail(hash).catch(() => null);
   if (!row) return json(res, 404, { error: 'Thumbnail not found' });
   const path = thumbPath(hash);
   let info;
   try { info = await stat(path); }
   catch {
     db.prepare('DELETE FROM thumbnails WHERE object_hash = ?').run(hash);
-    return json(res, 404, { error: 'Thumbnail not found' });
+    row = await generateHeicThumbnail(hash).catch(() => null);
+    if (!row) return json(res, 404, { error: 'Thumbnail not found' });
+    try { info = await stat(path); }
+    catch { return json(res, 404, { error: 'Thumbnail not found' }); }
   }
 
   const edge = lodEdge(url);
