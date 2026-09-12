@@ -38,15 +38,15 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   }
 
   setScene(scene){
-    const nextMedia=Array.isArray(scene?.media)?scene.media:[],sameMedia=sameMediaOrder(this.media,nextMedia);
+    const nextMedia=Array.isArray(scene?.media)?scene.media:[],sameMedia=sameMediaOrder(this.media,nextMedia),hadOverview=Boolean(this.tiers?.micro?.entries?.size);
     if(!sameMedia)this.stopOverview();
     super.setScene(scene);
     this.configureTiers();
-    if(!sameMedia){
+    if(!sameMedia||(!hadOverview&&!this.overviewWorker)){
       this.overviewFound=0;
       this.overviewReady=false;
       this.startOverview();
-    }else if(!this.overviewReady&&!this.overviewWorker)this.startOverview();
+    }
   }
 
   destroy(){this.stopOverview();super.destroy()}
