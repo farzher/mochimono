@@ -1,7 +1,6 @@
 const root=document.documentElement;
 const ACTIVE='experimental-view-active';
 const RERUN_QUIET_MS=1500;
-const AI_QUIET_MS=1200;
 const CACHE_FLUSH_DELAY_MS=1000;
 let lastInteractionAt=0;
 let rerunTimer=0;
@@ -9,10 +8,15 @@ let rerunPending=false;
 let rawRerun=null;
 let cachePatched=false;
 let aiPatched=false;
+let rawAiIndex=null;
 let wasActive=false;
 let cacheFlushTimer=0;
 let pendingCacheSave=null;
 let pendingDimensions=new Map();
+let quietTimer=0;
+let quietWaiters=[];
+let flushingAi=false;
+const deferredAi=new Map();
 
 const active=()=>root.classList.contains(ACTIVE);
 const now=()=>performance.now();
@@ -22,14 +26,31 @@ addEventListener('pointerdown',markInteraction,{capture:true,passive:true});
 addEventListener('pointermove',markInteraction,{capture:true,passive:true});
 
 function quietFor(ms=RERUN_QUIET_MS){return !active()||now()-lastInteractionAt>=ms}
+function scheduleQuietWaiters(){
+  clearTimeout(quietTimer);
+  quietTimer=0;
+  if(!quietWaiters.length)return;
+  if(!active())return flushQuietWaiters();
+  const elapsed=now()-lastInteractionAt;
+  let wait=Infinity;
+  for(const item of quietWaiters)wait=Math.min(wait,Math.max(20,item.ms-elapsed));
+  quietTimer=setTimeout(flushQuietWaiters,Number.isFinite(wait)?wait:20);
+}
+function flushQuietWaiters(){
+  quietTimer=0;
+  if(!quietWaiters.length)return;
+  const ready=[],pending=[];
+  for(const item of quietWaiters)(quietFor(item.ms)?ready:pending).push(item);
+  quietWaiters=pending;
+  for(const item of ready)item.resolve();
+  if(quietWaiters.length)scheduleQuietWaiters();
+}
 function waitForQuiet(ms){
+  ms=Math.max(0,Number(ms)||0);
   if(quietFor(ms))return Promise.resolve();
   return new Promise(resolve=>{
-    const check=()=>{
-      if(quietFor(ms)){resolve();return}
-      setTimeout(check,Math.max(40,ms-(now()-lastInteractionAt)));
-    };
-    check();
+    quietWaiters.push({ms,resolve});
+    scheduleQuietWaiters();
   });
 }
 function scheduleRerun(){
@@ -51,19 +72,61 @@ function patchExperimentalApi(){
   rawRerun=api.rerun?.bind(api)||null;
   if(rawRerun)api.rerun=()=>{rerunPending=true;scheduleRerun()};
   api.recentInteraction=(ms=RERUN_QUIET_MS)=>active()&&now()-lastInteractionAt<Math.max(0,Number(ms)||0);
-  api.waitForQuiet=(ms=RERUN_QUIET_MS)=>waitForQuiet(Math.max(0,Number(ms)||0));
+  api.waitForQuiet=(ms=RERUN_QUIET_MS)=>waitForQuiet(ms);
   api.__performanceGuard=true;
   return true;
 }
 
+function aiKey(args){
+  let options='';
+  try{options=JSON.stringify(args[1]??null)}catch{options=String(args[1]??'')}
+  return`${String(args[0]??'')}\u0000${options}`;
+}
+function deferAi(args){
+  const key=aiKey(args);
+  return new Promise((resolve,reject)=>{
+    let entry=deferredAi.get(key);
+    if(!entry){entry={args,waiters:[]};deferredAi.set(key,entry)}
+    else entry.args=args;
+    entry.waiters.push({resolve,reject});
+  });
+}
+async function flushDeferredAi(){
+  if(active()||flushingAi||!rawAiIndex||!deferredAi.size)return;
+  flushingAi=true;
+  try{
+    const entries=[...deferredAi.entries()];
+    deferredAi.clear();
+    for(let index=0;index<entries.length;index++){
+      const[key,entry]=entries[index];
+      if(active()){
+        const existing=deferredAi.get(key);
+        if(existing)existing.waiters.push(...entry.waiters);
+        else deferredAi.set(key,entry);
+        for(let rest=index+1;rest<entries.length;rest++){
+          const[nextKey,next]=entries[rest],queued=deferredAi.get(nextKey);
+          if(queued)queued.waiters.push(...next.waiters);
+          else deferredAi.set(nextKey,next);
+        }
+        break;
+      }
+      try{
+        const result=await rawAiIndex(...entry.args);
+        for(const waiter of entry.waiters)waiter.resolve(result);
+      }catch(error){
+        for(const waiter of entry.waiters)waiter.reject(error);
+      }
+    }
+  }finally{
+    flushingAi=false;
+    if(!active()&&deferredAi.size)setTimeout(flushDeferredAi,0);
+  }
+}
 function patchAi(){
   const ai=window.mochimonoAI;
   if(!ai?.index||aiPatched)return false;
-  const rawIndex=ai.index.bind(ai);
-  ai.index=async(...args)=>{
-    if(active())await waitForQuiet(AI_QUIET_MS);
-    return rawIndex(...args);
-  };
+  rawAiIndex=ai.index.bind(ai);
+  ai.index=(...args)=>active()?deferAi(args):rawAiIndex(...args);
   aiPatched=true;
   return true;
 }
@@ -130,6 +193,8 @@ function syncState(){
   }else if(!isActive&&wasActive){
     if(rerunPending)scheduleRerun();
     scheduleCacheFlush();
+    scheduleQuietWaiters();
+    setTimeout(flushDeferredAi,0);
   }
   wasActive=isActive;
 }
