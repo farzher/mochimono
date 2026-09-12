@@ -2,19 +2,23 @@ import { ExperimentalWebGLMapRenderer as BaseRenderer } from './experimental-web
 
 const LOAD_CONCURRENCY=4;
 const ORIGINAL_CONCURRENCY=1;
+const SETTLE_QUIET_MS=140;
 const REFRESH_QUIET_MS=180;
 
 export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   constructor(canvas,options={}){
     super(canvas,options);
     this.lastCameraAt=0;
+    this.settleTimer=0;
     this.refreshTimer=0;
     this.pendingRefresh=new Map();
     this.hashIndex=new Map();
   }
 
   destroy(){
+    clearTimeout(this.settleTimer);
     clearTimeout(this.refreshTimer);
+    this.settleTimer=0;
     this.refreshTimer=0;
     this.pendingRefresh.clear();
     this.hashIndex.clear();
@@ -44,6 +48,20 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
     this.lastCameraAt=performance.now();
     this.invalidateMovingLoads();
     this.requestDraw();
+  }
+
+  settle(){
+    if(!this.result||this.lost)return;
+    clearTimeout(this.settleTimer);
+    const elapsed=performance.now()-this.lastCameraAt;
+    if(elapsed<SETTLE_QUIET_MS){
+      this.settleTimer=setTimeout(()=>{
+        this.settleTimer=0;
+        super.settle();
+      },SETTLE_QUIET_MS-elapsed);
+      return;
+    }
+    super.settle();
   }
 
   refreshThumbnail(hash,includeMicro=false){
@@ -109,6 +127,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
       originalConcurrency:ORIGINAL_CONCURRENCY,
       interactionDeferredLoading:true,
       livePanLoading:false,
+      settleQuietMs:SETTLE_QUIET_MS,
       refreshQuietMs:REFRESH_QUIET_MS,
       pendingRefresh:this.pendingRefresh.size
     };
