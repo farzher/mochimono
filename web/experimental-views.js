@@ -1,7 +1,7 @@
 import { ExperimentalWebGLMapRenderer } from './experimental-webgl-map.js';
 
 const files=document.querySelector('#files'),sort=document.querySelector('#sort'),mediaSize=document.querySelector('#mediaSize');
-const MODE_KEY='mochimono-experimental-view-mode',WORKER_REV='20260912-9',THUMB_VERSION=3,MAX_MAP_ZOOM=48;
+const MODE_KEY='mochimono-experimental-view-mode',WORKER_REV='20260912-9',THUMB_VERSION=3,MAX_MAP_ZOOM=128;
 const MODES={
   mosaic:{label:'Mosaic',description:'True 2D neighbor optimization with visual families locked together'},
   'color-map':{label:'Color Map',description:'Adaptive hue × lightness with multimodal families kept local'},
