@@ -122,7 +122,7 @@ class AtlasPage {
     const x = column * this.cell + 1;
     const y = row * this.cell + 1;
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
     const uv = [
@@ -498,11 +498,12 @@ export class ExperimentalWebGLMapRenderer {
       if (!response.ok) throw new Error(`Thumbnail ${response.status}`);
       const blob = await response.blob();
       if (job.sceneToken !== this.sceneToken || this.desired.get(job.index) !== job.tier.name) return;
-      const sourceWidth = Math.max(1, Number(item.width) || 1);
-      const sourceHeight = Math.max(1, Number(item.height) || 1);
-      const scale = Math.min(1, job.tier.edge / Math.max(sourceWidth, sourceHeight));
-      const width = Math.max(1, Math.round(sourceWidth * scale));
-      const height = Math.max(1, Math.round(sourceHeight * scale));
+      const sourceWidth = Number(item.width) || 0;
+      const sourceHeight = Number(item.height) || 0;
+      const knownSize = sourceWidth > 0 && sourceHeight > 0;
+      const scale = knownSize ? Math.min(1, job.tier.edge / Math.max(sourceWidth, sourceHeight)) : 1;
+      const width = knownSize ? Math.max(1, Math.round(sourceWidth * scale)) : job.tier.edge;
+      const height = knownSize ? Math.max(1, Math.round(sourceHeight * scale)) : job.tier.edge;
       const bitmap = await createImageBitmap(blob, { resizeWidth:width, resizeHeight:height, resizeQuality:'medium' });
       try {
         if (job.sceneToken !== this.sceneToken || this.desired.get(job.index) !== job.tier.name) return;
