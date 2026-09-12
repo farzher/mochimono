@@ -21,11 +21,11 @@ async function intrinsicBitmap(blob,targetEdge){
   const source=await createImageBitmap(blob,{imageOrientation:'from-image'});
   const longest=Math.max(source.width,source.height);
   const edge=Math.max(1,Math.min(longest,Math.round(Number(targetEdge)||longest)));
-  if(longest<=edge)return{bitmap:source,edge:longest,width:source.width,height:source.height};
+  if(longest<=edge)return{bitmap:source,sourceEdge:longest,width:source.width,height:source.height};
   const scale=edge/longest,width=Math.max(1,Math.round(source.width*scale)),height=Math.max(1,Math.round(source.height*scale));
   try{
     const bitmap=await createImageBitmap(source,{resizeWidth:width,resizeHeight:height,resizeQuality:'high'});
-    return{bitmap,edge:Math.max(bitmap.width,bitmap.height),width:bitmap.width,height:bitmap.height};
+    return{bitmap,sourceEdge:longest,width:bitmap.width,height:bitmap.height};
   }finally{source.close?.()}
 }
 
@@ -72,7 +72,8 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
           index:job.index,
           texture,
           lastUsed:performance.now(),
-          edge:decoded.edge,
+          edge:targetEdge,
+          sourceEdge:decoded.sourceEdge,
           intrinsicWidth:decoded.width,
           intrinsicHeight:decoded.height
         });
