@@ -12,6 +12,12 @@ const HUE_ABSOLUTE_WEIGHT=.28;
 const LIGHT_ABSOLUTE_WEIGHT=.82;
 const AI_COLOR_VERSION='ai-sort-color-v1';
 const FAMILY_WORKER_REV='20260912-color-family-2';
+const PACK_GAP=.008;
+const PACK_SECTION_GAP=.08;
+const PACK_MIN_RATIO=.5;
+const PACK_MAX_RATIO=2;
+const PACK_MAX_ROW_HEIGHT=1.08;
+const PACK_MIN_ROW_HEIGHT=.32;
 
 const post=(type,payload={})=>self.postMessage({type,...payload});
 const abort=()=>{if(canceled)throw new DOMException('Aborted','AbortError')};
@@ -189,16 +195,71 @@ function placeNeutrals(media,colors,indexes,startX,families,x,y){
   return{cols,rows,familyGroups:multi.length,reservedFamilies};
 }
 
+function mediaRatio(item){
+  const width=Math.max(1,Number(item?.width)||1),height=Math.max(1,Number(item?.height)||1);
+  return width/height;
+}
+function layoutRatio(item){return Math.max(PACK_MIN_RATIO,Math.min(PACK_MAX_RATIO,mediaRatio(item)))}
+function fitAspect(item,boxW,boxH){
+  const ratio=mediaRatio(item),boxRatio=boxW/Math.max(.0001,boxH);
+  return ratio>=boxRatio?[boxW,boxW/ratio]:[boxH*ratio,boxH];
+}
+function logicalRows(indexes,logicalX,logicalY){
+  const grouped=new Map();
+  for(const index of indexes){const key=Math.round(Number(logicalY[index])||0);let row=grouped.get(key);if(!row)grouped.set(key,row=[]);row.push(index)}
+  return[...grouped.entries()].sort((a,b)=>a[0]-b[0]).map(([,row])=>row.sort((a,b)=>Number(logicalX[a])-Number(logicalX[b])||a-b));
+}
+function packSection(media,indexes,logicalX,logicalY,aspect,originX,outX,outY,renderW,renderH){
+  if(!indexes.length)return{width:0,height:0,rows:0};
+  const totalRatio=indexes.reduce((sum,index)=>sum+layoutRatio(media[index]),0);
+  const targetWidth=Math.max(4,Math.sqrt(Math.max(1,totalRatio)*Math.max(.7,Number(aspect)||1)));
+  let rows=logicalRows(indexes,logicalX,logicalY);
+  if(rows.length>1){
+    const merged=[];let pending=[];let pendingRatio=0;
+    const flush=()=>{if(!pending.length)return;pending.sort((a,b)=>Number(logicalX[a])-Number(logicalX[b])||a-b);merged.push(pending);pending=[];pendingRatio=0};
+    for(let rowIndex=0;rowIndex<rows.length;rowIndex++){
+      const row=rows[rowIndex],rowRatio=row.reduce((sum,index)=>sum+layoutRatio(media[index]),0);
+      if(rowRatio>=targetWidth*.46){flush();merged.push(row);continue}
+      pending.push(...row);pendingRatio+=rowRatio;
+      if(pendingRatio>=targetWidth*.70||rowIndex===rows.length-1)flush();
+    }
+    rows=merged;
+  }
+  let top=.04,maxRight=originX;
+  for(const row of rows){
+    abort();
+    const sum=row.reduce((total,index)=>total+layoutRatio(media[index]),0),gaps=PACK_GAP*Math.max(0,row.length-1),usable=Math.max(.1,targetWidth-gaps);
+    const height=Math.max(PACK_MIN_ROW_HEIGHT,Math.min(PACK_MAX_ROW_HEIGHT,usable/Math.max(.001,sum)));
+    const rowWidth=sum*height+gaps;
+    let left=originX+Math.max(0,(targetWidth-rowWidth)/2);
+    for(const index of row){
+      const boxW=layoutRatio(media[index])*height,boxH=height,[width,actualHeight]=fitAspect(media[index],boxW,boxH);
+      const centerX=left+boxW/2,centerY=top+boxH/2;
+      outX[index]=centerX-.5;outY[index]=centerY-.5;renderW[index]=width;renderH[index]=actualHeight;
+      left+=boxW+PACK_GAP;
+    }
+    maxRight=Math.max(maxRight,left-PACK_GAP);
+    top+=height+PACK_GAP;
+  }
+  return{width:Math.max(targetWidth,maxRight-originX),height:Math.max(0,top-PACK_GAP),rows:rows.length};
+}
+
 async function build(media){
   const usable=Array.isArray(media)?media.filter(item=>HASH_RE.test(String(item?.hash||''))):[];
-  if(!usable.length)return{kind:'map',x:new Float32Array(),y:new Float32Array(),worldW:1,worldH:1,labels:[],detail:'Color Map · no media'};
+  if(!usable.length)return{kind:'map',x:new Float32Array(),y:new Float32Array(),renderW:new Float32Array(),renderH:new Float32Array(),worldW:1,worldH:1,labels:[],detail:'Color Map · no media'};
   const[colorResult,families]=await Promise.all([loadColors(usable),loadFamilies(usable).catch(()=>null)]),colors=colorResult;
   abort();
   const colorful=[],neutrals=[];for(let index=0;index<usable.length;index++)(neutral(colors[index])?neutrals:colorful).push(index);
-  const seam=hueSeam(colors),x=new Float32Array(usable.length),y=new Float32Array(usable.length);x.fill(-1);y.fill(-1);
+  const seam=hueSeam(colors),logicalX=new Float32Array(usable.length),logicalY=new Float32Array(usable.length);logicalX.fill(-1);logicalY.fill(-1);
   post('progress',{done:0,total:usable.length,detail:'Building balanced hue × lightness field with AI families…',stage:'layout'});
-  const field=placeColorField(usable,colors,colorful,seam,families,x,y),neutralStart=field.cols?field.cols+NEUTRAL_GAP:0,neutralField=placeNeutrals(usable,colors,neutrals,neutralStart,families,x,y),worldH=Math.max(1,field.rows,neutralField.rows),worldW=Math.max(1,field.cols+(neutrals.length?NEUTRAL_GAP+neutralField.cols:0)),reservedFamilies=field.reservedFamilies+neutralField.reservedFamilies;
-  return{kind:'map',x,y,worldW,worldH,labels:[],preserveRows:false,detail:`Color Map · adaptive hue × lightness · ${field.familyGroups.toLocaleString()} colorful AI families · ${reservedFamilies.toLocaleString()} compact family zones · ${neutrals.length.toLocaleString()} neutral / low-color`};
+  const field=placeColorField(usable,colors,colorful,seam,families,logicalX,logicalY),neutralStart=field.cols?field.cols+NEUTRAL_GAP:0,neutralField=placeNeutrals(usable,colors,neutrals,neutralStart,families,logicalX,logicalY),reservedFamilies=field.reservedFamilies+neutralField.reservedFamilies;
+  post('progress',{done:usable.length,total:usable.length,detail:'Justifying images into dense rows…',stage:'packing'});
+  const x=new Float32Array(usable.length),y=new Float32Array(usable.length),renderW=new Float32Array(usable.length),renderH=new Float32Array(usable.length);x.fill(-1);y.fill(-1);
+  const colorPack=packSection(usable,colorful,logicalX,logicalY,COLOR_ASPECT,.04,x,y,renderW,renderH);
+  const neutralOrigin=.04+colorPack.width+(neutrals.length?PACK_SECTION_GAP:0);
+  const neutralPack=packSection(usable,neutrals,logicalX,logicalY,1,neutralOrigin,x,y,renderW,renderH);
+  const worldW=Math.max(1,.08+colorPack.width+(neutrals.length?PACK_SECTION_GAP+neutralPack.width:0)),worldH=Math.max(1,.08,Math.max(colorPack.height,neutralPack.height)+.08);
+  return{kind:'map',x,y,renderW,renderH,worldW,worldH,labels:[],preserveRows:true,detail:`Color Map · adaptive hue × lightness · DOM-style justified dense packing · ${field.familyGroups.toLocaleString()} colorful AI families · ${reservedFamilies.toLocaleString()} compact family zones · ${neutrals.length.toLocaleString()} neutral / low-color`};
 }
 
 self.onmessage=async event=>{
