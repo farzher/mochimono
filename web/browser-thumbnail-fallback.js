@@ -1,7 +1,9 @@
 const EDGE = 768;
 const VERSION = 3;
+const HEIC_CACHE_REV = 2;
 const queue = new Map();
 const inflight = new Map();
+const repairedHeic = new Set();
 let timer = 0;
 let busy = false;
 
@@ -12,12 +14,13 @@ const MIME = new Map([
 
 const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
 const sourceMime = record => MIME.get(extension(record.filename)) || 'application/octet-stream';
-const isHeic = record => ['heic','heif'].includes(extension(record?.filename)) || ['image/heic','image/heif'].includes(String(record?.mime || '').toLowerCase());
+export const isHeicRecord = record => ['heic','heif'].includes(extension(record?.filename)) || ['image/heic','image/heif'].includes(String(record?.mime || '').toLowerCase());
+export const heicThumbUrl = hash => `/api/thumbs/${encodeURIComponent(hash)}?v=${VERSION}&heic=${HEIC_CACHE_REV}`;
 const visibleCard = hash => {
   const card = document.querySelector(`#files [data-hash="${CSS.escape(hash)}"]`);
   if (!card) return null;
   const rect = card.getBoundingClientRect();
-  return rect.bottom >= -200 && rect.top <= innerHeight + 200 ? card : null;
+  return rect.bottom >= -300 && rect.top <= innerHeight + 300 ? card : null;
 };
 
 function waitFor(target, event, timeout = 8000) {
@@ -102,9 +105,16 @@ async function videoResult(hash) {
   }
 }
 
+async function heicSource(record) {
+  const local = await window.mochimonoBrowserFolders?.fileForHash?.(record.hash).catch?.(() => null);
+  if (local) return local;
+  const response = await fetch(`/api/objects/${encodeURIComponent(record.hash)}`, { cache:'force-cache' });
+  if (!response.ok) throw new Error('HEIC source is unavailable');
+  return response.blob();
+}
+
 async function heicResult(record) {
-  const file = await window.mochimonoBrowserFolders?.fileForHash?.(record.hash);
-  if (!file) throw new Error('Local HEIC source is unavailable');
+  const file = await heicSource(record);
   const response = await fetch(`/api/client/browser-heic-thumb/${record.hash}`, {
     method:'PUT',
     headers:{ 'content-type':file.type || sourceMime(record) || 'image/heic' },
@@ -112,13 +122,13 @@ async function heicResult(record) {
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || 'Could not decode HEIC preview');
-  return { width:Number(result.width) || 0, height:Number(result.height) || 0, duration:null, saved:true };
+  return { width:Number(result.width) || 0, height:Number(result.height) || 0, duration:null, saved:true, heic:true };
 }
 
 async function generate(record) {
+  if (isHeicRecord(record)) return heicResult(record);
   const existing = await fetch(`/api/thumbs/${record.hash}?v=${VERSION}`, { method: 'HEAD' }).catch(() => null);
   if (existing?.ok) return null;
-  if (isHeic(record)) return heicResult(record);
   const result = record.kind === 'video' ? await videoResult(record.hash) : await imageResult(record.hash);
   const response = await fetch(`/api/thumbs/${record.hash}`, {
     method: 'PUT',
@@ -139,9 +149,13 @@ async function generate(record) {
 export function ensureBrowserThumbnail(record) {
   if (!record?.hash || !record.kind) return Promise.resolve(null);
   const hash = String(record.hash);
+  if (isHeicRecord(record) && repairedHeic.has(hash)) return Promise.resolve(null);
   let pending = inflight.get(hash);
   if (!pending) {
-    pending = generate(record).finally(() => {
+    pending = generate(record).then(result => {
+      if (isHeicRecord(record)) repairedHeic.add(hash);
+      return result;
+    }).finally(() => {
       if (inflight.get(hash) === pending) inflight.delete(hash);
     });
     inflight.set(hash, pending);
@@ -168,7 +182,7 @@ function pump() {
   if (!record) return;
   busy = true;
   const run = () => ensureBrowserThumbnail(record).then(result => {
-    window.dispatchEvent(new CustomEvent('mochimono:browser-thumbnail-ready', { detail: { hash: record.hash, ...(result || {}) } }));
+    if (result) window.dispatchEvent(new CustomEvent('mochimono:browser-thumbnail-ready', { detail: { hash: record.hash, ...result } }));
   }).catch(() => {}).finally(() => {
     busy = false;
     schedule(250);
@@ -179,7 +193,7 @@ function pump() {
 
 export function queueBrowserThumbnail(record) {
   if (!record?.hash || !record.kind) return;
-  const queued = isHeic(record) ? { ...record, urgent:true } : record;
+  const queued = isHeicRecord(record) ? { ...record, urgent:true } : record;
   queue.set(record.hash, queued);
   schedule(queued.urgent ? 0 : 4000);
 }
