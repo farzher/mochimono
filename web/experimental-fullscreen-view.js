@@ -2,11 +2,12 @@ const style=document.createElement('style');
 style.textContent=`
 html.experimental-view-active,html.experimental-view-active body{overflow:hidden!important}
 html.experimental-view-active .topbar,
+html.experimental-view-active .app-brand,
+html.experimental-view-active .top-actions,
 html.experimental-view-active .commandbar,
 html.experimental-view-active #folderbar,
 html.experimental-view-active #gridFolderStrip{
-  visibility:hidden!important;
-  pointer-events:none!important
+  display:none!important
 }
 html.experimental-view-active .experimental-view-surface{
   position:fixed!important;
