@@ -1,12 +1,17 @@
+const root=document.documentElement;
 const style=document.createElement('style');
 style.textContent=`
 html.experimental-view-active,html.experimental-view-active body{overflow:hidden!important}
-html.experimental-view-active .shell{visibility:hidden!important}
+html.experimental-view-active .shell{visibility:visible!important}
+html.experimental-view-active .shell>#app{visibility:hidden!important}
 html.experimental-view-active .experimental-view-surface{
   position:fixed!important;
-  inset:0!important;
+  top:var(--experimental-surface-top,140px)!important;
+  right:0!important;
+  bottom:0!important;
+  left:0!important;
   width:100vw!important;
-  height:100dvh!important;
+  height:auto!important;
   min-height:0!important;
   margin:0!important;
   border:0!important;
@@ -16,7 +21,7 @@ html.experimental-view-active .experimental-view-surface{
 }
 html.experimental-view-active .experimental-view-bar{
   position:fixed!important;
-  top:10px!important;
+  top:var(--experimental-bar-top,90px)!important;
   left:50%!important;
   width:min(1320px,calc(100vw - 36px))!important;
   max-width:none!important;
@@ -31,19 +36,43 @@ html.experimental-view-active .experimental-view-bar{
 `;
 document.head.append(style);
 
+let bar=null,surface=null,topbar=null;
+function syncGeometry(){
+  if(!root.classList.contains('experimental-view-active')||!bar||!topbar)return;
+  const topRect=topbar.getBoundingClientRect();
+  const topStyle=getComputedStyle(topbar);
+  const barTop=Math.ceil(topRect.bottom+(parseFloat(topStyle.marginBottom)||0));
+  root.style.setProperty('--experimental-bar-top',`${barTop}px`);
+  requestAnimationFrame(()=>{
+    if(!root.classList.contains('experimental-view-active')||!bar)return;
+    root.style.setProperty('--experimental-surface-top',`${Math.ceil(barTop+bar.getBoundingClientRect().height+6)}px`);
+  });
+}
 function detachExperimentalChrome(){
-  const bar=document.querySelector('.experimental-view-bar');
-  const surface=document.querySelector('.experimental-view-surface');
-  if(!bar||!surface)return false;
+  bar=document.querySelector('.experimental-view-bar');
+  surface=document.querySelector('.experimental-view-surface');
+  topbar=document.querySelector('.topbar');
+  if(!bar||!surface||!topbar)return false;
   if(bar.parentElement!==document.body)document.body.append(bar);
   if(surface.parentElement!==document.body)document.body.append(surface);
+  syncGeometry();
   return true;
 }
 
-if(!detachExperimentalChrome()){
-  const observer=new MutationObserver(()=>{
-    if(detachExperimentalChrome())observer.disconnect();
-  });
-  observer.observe(document.body,{childList:true,subtree:true});
+const mountObserver=new MutationObserver(()=>{
+  if(detachExperimentalChrome())mountObserver.disconnect();
+});
+if(!detachExperimentalChrome())mountObserver.observe(document.body,{childList:true,subtree:true});
+
+new MutationObserver(syncGeometry).observe(root,{attributes:true,attributeFilter:['class']});
+window.addEventListener('resize',syncGeometry,{passive:true});
+if(globalThis.ResizeObserver){
+  const resizeObserver=new ResizeObserver(syncGeometry);
+  const watch=()=>{
+    if(!detachExperimentalChrome())return requestAnimationFrame(watch);
+    resizeObserver.observe(topbar);
+    resizeObserver.observe(bar);
+  };
+  watch();
 }
 queueMicrotask(detachExperimentalChrome);
