@@ -113,19 +113,23 @@ function runVisualReindex(){
   worker.postMessage({media,mode:'color'});
 }
 
-function scheduleAiReindex(){
-  aiReindexNeeded=true;
-  clearTimeout(aiReindexTimer);
-  aiReindexTimer=setTimeout(async()=>{
-    aiReindexTimer=0;
-    if(!aiReindexNeeded||!window.mochimonoAI?.index)return;
-    aiReindexNeeded=false;
+function runAiReindexSoon(){
+  aiReindexTimer=0;
+  if(!aiReindexNeeded||!window.mochimonoAI?.index)return;
+  aiReindexNeeded=false;
+  Promise.resolve().then(async()=>{
     try{
       await window.mochimonoAI.index('dinov3',{scope:'view'});
       await window.mochimonoAI.index('siglip2',{scope:'view'});
       window.mochimonoExperimentalViews?.rerun?.();
     }catch{}
-  },1200);
+  });
+}
+
+function scheduleAiReindex(){
+  aiReindexNeeded=true;
+  clearTimeout(aiReindexTimer);
+  aiReindexTimer=setTimeout(runAiReindexSoon,1200);
 }
 
 async function repair(item){
@@ -200,6 +204,13 @@ if(files){
   addEventListener('mochimono:grid-model',()=>scheduleScan(20));
   scheduleScan(200);
 }
+
+addEventListener('mochimono:heic-needs-repair',event=>{
+  const detail=event.detail||{};
+  const item=record(detail.hash,detail.filename,detail.width,detail.height);
+  if(validHash(item.hash)&&HEIC_RE.test(item.filename))repair(item).catch(()=>{});
+});
+addEventListener('mochimono:ai-ready',()=>{if(aiReindexNeeded)scheduleAiReindex()});
 
 if(viewer&&viewerMedia&&viewerName&&viewerOpen){
   const sync=()=>queueMicrotask(()=>repairViewer().catch(()=>{}));
