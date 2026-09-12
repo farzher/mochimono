@@ -11,7 +11,7 @@ const NEUTRAL_GAP=2;
 const HUE_ABSOLUTE_WEIGHT=.28;
 const LIGHT_ABSOLUTE_WEIGHT=.82;
 const AI_COLOR_VERSION='ai-sort-color-v1';
-const FAMILY_WORKER_REV='20260912-color-family-1';
+const FAMILY_WORKER_REV='20260912-color-family-2';
 
 const post=(type,payload={})=>self.postMessage({type,...payload});
 const abort=()=>{if(canceled)throw new DOMException('Aborted','AbortError')};
@@ -84,18 +84,29 @@ function axisTargets(colors,indexes,seam){
   return{tx,ty};
 }
 
-function nearestFree(used,cols,rows,targetX,targetY){
-  const cx=Math.max(0,Math.min(cols-1,Math.round(targetX))),cy=Math.max(0,Math.min(rows-1,Math.round(targetY))),direct=cy*cols+cx;
-  if(!used[direct])return[cx,cy];
+function nearestFree(used,cols,rows,targetX,targetY,blocked=null){
+  const available=(x,y)=>{const slot=y*cols+x;return!used[slot]&&!(blocked?.[slot])};
+  const cx=Math.max(0,Math.min(cols-1,Math.round(targetX))),cy=Math.max(0,Math.min(rows-1,Math.round(targetY)));
+  if(available(cx,cy))return[cx,cy];
   const maxRadius=Math.max(cols,rows);let bestX=cx,bestY=cy,bestScore=Infinity;
   for(let radius=1;radius<=maxRadius;radius++){
     let found=false;const left=Math.max(0,cx-radius),right=Math.min(cols-1,cx+radius),top=Math.max(0,cy-radius),bottom=Math.min(rows-1,cy+radius);
-    const consider=(x,y)=>{const slot=y*cols+x;if(used[slot])return;const dx=x-targetX,dy=y-targetY,score=dx*dx+dy*dy*1.2;if(score<bestScore){bestScore=score;bestX=x;bestY=y;found=true}};
+    const consider=(x,y)=>{if(!available(x,y))return;const dx=x-targetX,dy=y-targetY,score=dx*dx+dy*dy*1.2;if(score<bestScore){bestScore=score;bestX=x;bestY=y;found=true}};
     for(let x=left;x<=right;x++){consider(x,top);if(bottom!==top)consider(x,bottom)}
     for(let y=top+1;y<bottom;y++){consider(left,y);if(right!==left)consider(right,y)}
     if(found)return[bestX,bestY];
   }
-  return[cx,cy];
+  return blocked?nearestFree(used,cols,rows,targetX,targetY,null):[cx,cy];
+}
+
+function reserveCompactFamily(reserved,used,cols,rows,bounds,count){
+  if(count<3||bounds.maxX<bounds.minX||bounds.maxY<bounds.minY)return false;
+  const width=bounds.maxX-bounds.minX+1,height=bounds.maxY-bounds.minY+1,area=width*height;
+  if(area>Math.ceil(count*1.55))return false;
+  for(let py=bounds.minY;py<=bounds.maxY;py++)for(let px=bounds.minX;px<=bounds.maxX;px++){
+    const slot=py*cols+px;if(!used[slot])reserved[slot]=1;
+  }
+  return true;
 }
 
 async function loadFamilies(media){
@@ -139,41 +150,43 @@ function familyStrength(members,tx,ty){
 }
 
 function placeColorField(media,colors,indexes,seam,families,x,y){
-  if(!indexes.length)return{cols:0,rows:0,familyGroups:0};
-  const slots=Math.max(indexes.length,Math.ceil(indexes.length/COLOR_OCCUPANCY)),cols=Math.max(16,Math.ceil(Math.sqrt(slots*COLOR_ASPECT))),rows=Math.max(1,Math.ceil(slots/cols)),used=new Uint8Array(cols*rows);
+  if(!indexes.length)return{cols:0,rows:0,familyGroups:0,reservedFamilies:0};
+  const slots=Math.max(indexes.length,Math.ceil(indexes.length/COLOR_OCCUPANCY)),cols=Math.max(16,Math.ceil(Math.sqrt(slots*COLOR_ASPECT))),rows=Math.max(1,Math.ceil(slots/cols)),used=new Uint8Array(cols*rows),reserved=new Uint8Array(cols*rows);
   const{tx,ty}=axisTargets(colors,indexes,seam),{multi,singles}=familyInfo(indexes,families?.familyIds,families?.order,media);
-  let placed=0;
-  const put=(index,nx,ny)=>{const[px,py]=nearestFree(used,cols,rows,nx*Math.max(0,cols-1),ny*Math.max(0,rows-1));used[py*cols+px]=1;x[index]=px;y[index]=py;if(++placed%5000===0)post('progress',{done:placed,total:media.length,detail:`Placing color field · ${placed.toLocaleString()}…`,stage:'layout'})};
+  let placed=0,reservedFamilies=0;
+  const put=(index,nx,ny)=>{const[px,py]=nearestFree(used,cols,rows,nx*Math.max(0,cols-1),ny*Math.max(0,rows-1),reserved);used[py*cols+px]=1;x[index]=px;y[index]=py;if(++placed%5000===0)post('progress',{done:placed,total:media.length,detail:`Placing color field · ${placed.toLocaleString()}…`,stage:'layout'});return[px,py]};
   for(const members of multi){
-    abort();const family=familyStrength(members,tx,ty);
+    abort();const family=familyStrength(members,tx,ty),bounds={minX:cols,minY:rows,maxX:-1,maxY:-1};
     for(let position=0;position<members.length;position++){
       const index=members[position],ring=position?Math.sqrt(position)*.0035:0,angle=position*2.399963229728653;
       const nx=family.mx+(tx[index]-family.mx)*(1-family.xStrength)+Math.cos(angle)*ring;
       const ny=family.my+(ty[index]-family.my)*(1-family.yStrength)+Math.sin(angle)*ring*.7;
-      put(index,clamp(nx),clamp(ny));
+      const[px,py]=put(index,clamp(nx),clamp(ny));bounds.minX=Math.min(bounds.minX,px);bounds.maxX=Math.max(bounds.maxX,px);bounds.minY=Math.min(bounds.minY,py);bounds.maxY=Math.max(bounds.maxY,py);
     }
+    if(reserveCompactFamily(reserved,used,cols,rows,bounds,members.length))reservedFamilies++;
   }
   singles.sort((a,b)=>{const ca=colors[a],cb=colors[b],va=ca.c*5+ca.f,vb=cb.c*5+cb.f;return vb-va||Math.abs(ca.l-.5)-Math.abs(cb.l-.5)||String(media[a].hash).localeCompare(String(media[b].hash))});
   for(const index of singles){abort();put(index,tx[index],ty[index])}
-  return{cols,rows,familyGroups:multi.length};
+  return{cols,rows,familyGroups:multi.length,reservedFamilies};
 }
 
 function placeNeutrals(media,colors,indexes,startX,families,x,y){
-  if(!indexes.length)return{cols:0,rows:0,familyGroups:0};
-  const slots=Math.max(indexes.length,Math.ceil(indexes.length/NEUTRAL_OCCUPANCY)),cols=Math.max(4,Math.ceil(Math.sqrt(slots))),rows=Math.max(1,Math.ceil(slots/cols)),used=new Uint8Array(cols*rows),lightRank=rankMap(indexes,index=>colors[index]?.l??.5),{multi,singles}=familyInfo(indexes,families?.familyIds,families?.order,media);
-  const targetY=index=>LIGHT_ABSOLUTE_WEIGHT*(1-(colors[index]?.l??.5))+(1-LIGHT_ABSOLUTE_WEIGHT)*(1-lightRank[index]);
+  if(!indexes.length)return{cols:0,rows:0,familyGroups:0,reservedFamilies:0};
+  const slots=Math.max(indexes.length,Math.ceil(indexes.length/NEUTRAL_OCCUPANCY)),cols=Math.max(4,Math.ceil(Math.sqrt(slots))),rows=Math.max(1,Math.ceil(slots/cols)),used=new Uint8Array(cols*rows),reserved=new Uint8Array(cols*rows),lightRank=rankMap(indexes,index=>colors[index]?.l??.5),{multi,singles}=familyInfo(indexes,families?.familyIds,families?.order,media);
+  const targetY=index=>LIGHT_ABSOLUTE_WEIGHT*(1-(colors[index]?.l??.5))+(1-LIGHT_ABSOLUTE_WEIGHT)*(1-lightRank[index]);let reservedFamilies=0;
   const placeGroup=(members,seed)=>{
     let meanY=0;for(const index of members)meanY+=targetY(index);meanY/=members.length;
-    const baseX=.08+.84*hashNoise(String(seed));
+    const baseX=.08+.84*hashNoise(String(seed)),bounds={minX:cols,minY:rows,maxX:-1,maxY:-1};
     for(let position=0;position<members.length;position++){
       const index=members[position],angle=position*2.399963229728653,ring=Math.sqrt(position)*.008;
-      const nx=clamp(baseX+Math.cos(angle)*ring),ny=clamp(meanY*.55+targetY(index)*.45+Math.sin(angle)*ring*.6),[px,py]=nearestFree(used,cols,rows,nx*Math.max(0,cols-1),ny*Math.max(0,rows-1));
-      used[py*cols+px]=1;x[index]=startX+px;y[index]=py;
+      const nx=clamp(baseX+Math.cos(angle)*ring),ny=clamp(meanY*.55+targetY(index)*.45+Math.sin(angle)*ring*.6),[px,py]=nearestFree(used,cols,rows,nx*Math.max(0,cols-1),ny*Math.max(0,rows-1),reserved);
+      used[py*cols+px]=1;x[index]=startX+px;y[index]=py;bounds.minX=Math.min(bounds.minX,px);bounds.maxX=Math.max(bounds.maxX,px);bounds.minY=Math.min(bounds.minY,py);bounds.maxY=Math.max(bounds.maxY,py);
     }
+    if(reserveCompactFamily(reserved,used,cols,rows,bounds,members.length))reservedFamilies++;
   };
   for(const members of multi){abort();placeGroup(members,media[members[0]]?.hash||members[0])}
-  for(const index of singles){abort();const nx=hashNoise(String(media[index]?.hash||index)),ny=targetY(index),[px,py]=nearestFree(used,cols,rows,nx*Math.max(0,cols-1),ny*Math.max(0,rows-1));used[py*cols+px]=1;x[index]=startX+px;y[index]=py}
-  return{cols,rows,familyGroups:multi.length};
+  for(const index of singles){abort();const nx=hashNoise(String(media[index]?.hash||index)),ny=targetY(index),[px,py]=nearestFree(used,cols,rows,nx*Math.max(0,cols-1),ny*Math.max(0,rows-1),reserved);used[py*cols+px]=1;x[index]=startX+px;y[index]=py}
+  return{cols,rows,familyGroups:multi.length,reservedFamilies};
 }
 
 async function build(media){
@@ -184,8 +197,8 @@ async function build(media){
   const colorful=[],neutrals=[];for(let index=0;index<usable.length;index++)(neutral(colors[index])?neutrals:colorful).push(index);
   const seam=hueSeam(colors),x=new Float32Array(usable.length),y=new Float32Array(usable.length);x.fill(-1);y.fill(-1);
   post('progress',{done:0,total:usable.length,detail:'Building balanced hue × lightness field with AI families…',stage:'layout'});
-  const field=placeColorField(usable,colors,colorful,seam,families,x,y),neutralStart=field.cols?field.cols+NEUTRAL_GAP:0,neutralField=placeNeutrals(usable,colors,neutrals,neutralStart,families,x,y),worldH=Math.max(1,field.rows,neutralField.rows),worldW=Math.max(1,field.cols+(neutrals.length?NEUTRAL_GAP+neutralField.cols:0));
-  return{kind:'map',x,y,worldW,worldH,labels:[],preserveRows:false,detail:`Color Map · adaptive hue × lightness · ${field.familyGroups.toLocaleString()} colorful AI families · ${neutrals.length.toLocaleString()} neutral / low-color`};
+  const field=placeColorField(usable,colors,colorful,seam,families,x,y),neutralStart=field.cols?field.cols+NEUTRAL_GAP:0,neutralField=placeNeutrals(usable,colors,neutrals,neutralStart,families,x,y),worldH=Math.max(1,field.rows,neutralField.rows),worldW=Math.max(1,field.cols+(neutrals.length?NEUTRAL_GAP+neutralField.cols:0)),reservedFamilies=field.reservedFamilies+neutralField.reservedFamilies;
+  return{kind:'map',x,y,worldW,worldH,labels:[],preserveRows:false,detail:`Color Map · adaptive hue × lightness · ${field.familyGroups.toLocaleString()} colorful AI families · ${reservedFamilies.toLocaleString()} compact family zones · ${neutrals.length.toLocaleString()} neutral / low-color`};
 }
 
 self.onmessage=async event=>{
