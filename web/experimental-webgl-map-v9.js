@@ -1,14 +1,14 @@
 import { ExperimentalWebGLMapRenderer as BaseRenderer } from './experimental-webgl-map-v8.js';
 
 const LIVE_SETTLE_MS=45;
-const DETAIL_QUIET_MS=90;
 const PREFETCH_QUIET_MS=150;
 const ORIGINAL_QUIET_MS=190;
 const REFRESH_BATCH_MS=45;
 const DETAIL_SCREEN_PX=48;
 const MICRO_ONLY_SCREEN_PX=16;
-const LIVE_LOAD_CONCURRENCY=16;
-const SETTLED_LOAD_CONCURRENCY=8;
+const LOAD_CONCURRENCY=20;
+const MOVING_DETAIL_CONCURRENCY=4;
+const SETTLED_DETAIL_CONCURRENCY=8;
 const ORIGINAL_CONCURRENCY=1;
 
 export class ExperimentalWebGLMapRenderer extends BaseRenderer{
@@ -22,6 +22,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
     this.pendingRefresh=new Map();
     this.hashIndex=new Map();
     this.detailWanted=new Set();
+    this.activeDetailLoads=0;
   }
 
   destroy(){
@@ -51,9 +52,10 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   }
 
   clearMovingWork(){
+    // Drop only work that has not started yet. Keep the current desired set alive
+    // until the next live settle so in-flight thumbnails can actually finish while
+    // the camera is moving instead of being invalidated by every wheel event.
     this.resetPendingThumbnailLoads();
-    this.desired.clear();
-    this.detailWanted.clear();
     if(this.originalQueue?.length)this.originalQueue.length=0;
     if(this.originalQueued?.size)this.originalQueued.clear();
     if(this.originalDesired?.size)this.originalDesired.clear();
@@ -90,7 +92,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   scheduleQuietSettle(){
     clearTimeout(this.quietSettleTimer);
     const elapsed=performance.now()-this.lastCameraAt;
-    const next=[DETAIL_QUIET_MS,PREFETCH_QUIET_MS,ORIGINAL_QUIET_MS].find(value=>value>elapsed+.5);
+    const next=[PREFETCH_QUIET_MS,ORIGINAL_QUIET_MS].find(value=>value>elapsed+.5);
     if(next==null)return;
     this.quietSettleTimer=setTimeout(()=>{
       this.quietSettleTimer=0;
@@ -100,14 +102,11 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   }
 
   nearestIndexes(indexes,limit,worldCenterX,worldCenterY){
-    if(indexes.length<=limit)return indexes.map(index=>{
+    const ranked=indexes.map(index=>{
       const offset=index*4,dx=this.geometry[offset]-worldCenterX,dy=this.geometry[offset+1]-worldCenterY;
       return[index,dx*dx+dy*dy];
-    }).sort((a,b)=>a[1]-b[1]).map(entry=>entry[0]);
-    return indexes.map(index=>{
-      const offset=index*4,dx=this.geometry[offset]-worldCenterX,dy=this.geometry[offset+1]-worldCenterY;
-      return[index,dx*dx+dy*dy];
-    }).sort((a,b)=>a[1]-b[1]).slice(0,limit).map(entry=>entry[0]);
+    }).sort((a,b)=>a[1]-b[1]);
+    return(limit<ranked.length?ranked.slice(0,limit):ranked).map(entry=>entry[0]);
   }
 
   settleNow(){
@@ -121,7 +120,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
 
     this.resetPendingThumbnailLoads();
     const elapsed=performance.now()-this.lastCameraAt;
-    const allowDetail=elapsed>=DETAIL_QUIET_MS&&screenPx>=DETAIL_SCREEN_PX;
+    const allowDetail=screenPx>=DETAIL_SCREEN_PX;
     const allowPrefetch=elapsed>=PREFETCH_QUIET_MS;
     const allowOriginal=elapsed>=ORIGINAL_QUIET_MS;
     const visible=this.visibleIndexes(0);
@@ -145,10 +144,11 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
     const rankedVisible=this.nearestIndexes(visible,Math.min(small.capacity(),10000),worldCenterX,worldCenterY);
     const visibleSet=new Set(rankedVisible);
 
-    // First get every image currently on-screen out of the blurry micro tier.
-    // Only after a 64 px thumbnail exists do we spend work on the 512 px detail tier.
+    // First queue every missing cheap thumbnail. Existing small thumbnails may
+    // upgrade to detail even during continuous motion, so a slow zoom never has
+    // to stop before the visible images sharpen.
     for(const index of rankedVisible){
-      if(allowDetail&&detail.get(index)){
+      if(detail.get(index)){
         this.desired.set(index,detail.name);
         continue;
       }
@@ -160,16 +160,19 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
       if(allowDetail){
         this.detailWanted.add(index);
         this.desired.set(index,detail.name);
-        if(!detail.get(index))this.enqueue(index,detail);
       }else this.desired.set(index,small.name);
     }
 
+    // Detail comes after the small pass so missing visible thumbnails always
+    // have queue priority. Only a few detail decodes run at once while moving.
     if(allowDetail){
-      for(const index of rankedVisible)if(!detail.get(index))this.detailWanted.add(index);
+      for(const index of rankedVisible){
+        if(!this.detailWanted.has(index)||detail.get(index))continue;
+        this.enqueue(index,detail);
+      }
     }
 
-    // Prefetch only after the camera has paused, and only at the cheap small tier.
-    // This keeps speculative work from competing with what the user is looking at.
+    // Speculative work still waits for a pause and stays on the cheap tier.
     if(allowPrefetch&&nearby.length>visibleSet.size){
       const remaining=Math.max(0,Math.min(small.capacity(),10000)-rankedVisible.length);
       const around=this.nearestIndexes(nearby.filter(index=>!visibleSet.has(index)),remaining,worldCenterX,worldCenterY);
@@ -200,9 +203,11 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
 
   async load(job){
     await super.load(job);
-    if(job.tier.name!=='small'||!this.detailWanted.has(job.index))return;
+    if(job.tier.name!=='small')return;
     if(job.sceneToken!==this.sceneToken||this.desired.get(job.index)!==job.tier.name)return;
-    if(!this.tiers.small.get(job.index)||this.tiers.detail.get(job.index))return;
+    if(!this.visibleSet.has(job.index)||!this.tiers.small.get(job.index)||this.tiers.detail.get(job.index))return;
+    if(this.screenItemSize()<DETAIL_SCREEN_PX)return;
+    this.detailWanted.add(job.index);
     this.desired.set(job.index,this.tiers.detail.name);
     this.enqueue(job.index,this.tiers.detail);
     this.pump();
@@ -236,15 +241,32 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
     this.requestDraw();
   }
 
-  pump(){
-    const moving=performance.now()-this.lastCameraAt<DETAIL_QUIET_MS;
-    const limit=moving?LIVE_LOAD_CONCURRENCY:SETTLED_LOAD_CONCURRENCY;
-    while(this.activeLoads<limit&&this.queue.length){
-      const job=this.queue.shift();
+  nextLoadJob(detailLimit){
+    for(let index=0;index<this.queue.length;index++){
+      const job=this.queue[index];
+      if(job.tier.name==='detail'&&this.activeDetailLoads>=detailLimit)continue;
+      this.queue.splice(index,1);
       this.queued.delete(job.key);
+      return job;
+    }
+    return null;
+  }
+
+  pump(){
+    const moving=performance.now()-this.lastCameraAt<PREFETCH_QUIET_MS;
+    const detailLimit=moving?MOVING_DETAIL_CONCURRENCY:SETTLED_DETAIL_CONCURRENCY;
+    while(this.activeLoads<LOAD_CONCURRENCY&&this.queue.length){
+      const job=this.nextLoadJob(detailLimit);
+      if(!job)break;
       if(job.sceneToken!==this.sceneToken||this.desired.get(job.index)!==job.tier.name||job.tier.entries.has(job.index))continue;
+      const detail=job.tier.name==='detail';
       this.activeLoads++;
-      this.load(job).finally(()=>{this.activeLoads--;this.pump()});
+      if(detail)this.activeDetailLoads++;
+      this.load(job).finally(()=>{
+        this.activeLoads--;
+        if(detail)this.activeDetailLoads--;
+        this.pump();
+      });
     }
   }
 
@@ -262,16 +284,18 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   stats(){
     return{
       ...super.stats(),
-      concurrency:performance.now()-this.lastCameraAt<DETAIL_QUIET_MS?LIVE_LOAD_CONCURRENCY:SETTLED_LOAD_CONCURRENCY,
+      concurrency:LOAD_CONCURRENCY,
+      detailConcurrency:performance.now()-this.lastCameraAt<PREFETCH_QUIET_MS?MOVING_DETAIL_CONCURRENCY:SETTLED_DETAIL_CONCURRENCY,
+      activeDetailLoads:this.activeDetailLoads,
       originalConcurrency:ORIGINAL_CONCURRENCY,
       interactionDeferredLoading:false,
       livePanLoading:true,
       liveSettleMs:LIVE_SETTLE_MS,
-      detailQuietMs:DETAIL_QUIET_MS,
       prefetchQuietMs:PREFETCH_QUIET_MS,
       originalQuietMs:ORIGINAL_QUIET_MS,
       pendingRefresh:this.pendingRefresh.size,
-      viewportFirstLoading:true
+      viewportFirstLoading:true,
+      continuousDetailLoading:true
     };
   }
 }
