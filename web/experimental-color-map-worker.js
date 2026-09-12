@@ -48,26 +48,26 @@ async function loadColors(media){
   try{
     db=await openDb();
     if(!db.objectStoreNames.contains(VIS_STORE))return colors;
-    const request=db.transaction(VIS_STORE,'readonly').objectStore(VIS_STORE).openCursor();
-    let found=0;
     post('progress',{done:0,total:media.length,detail:'Reading perceptual color…',stage:'visual'});
-    await new Promise((resolve,reject)=>{
+    const store=db.transaction(VIS_STORE,'readonly').objectStore(VIS_STORE);
+    const rows=await new Promise((resolve,reject)=>{
+      const request=store.getAll();
+      request.onsuccess=()=>resolve(request.result||[]);
       request.onerror=()=>reject(request.error);
-      request.onsuccess=()=>{
-        abort();
-        const cursor=request.result;
-        if(!cursor)return resolve();
-        const row=cursor.value||{},index=byHash.get(String(row.hash||''));
-        if(index!=null){
-          const color=rowColor(row);
-          if(color){colors[index]=color;found++}
-        }
-        if(found&&found%5000===0)post('progress',{done:found,total:media.length,detail:`Reading perceptual color · ${found.toLocaleString()} matched…`,stage:'visual'});
-        cursor.continue();
-      };
     });
+    abort();
+    let found=0;
+    for(let scanned=0;scanned<rows.length;scanned++){
+      if((scanned&2047)===0)abort();
+      const row=rows[scanned]||{},index=byHash.get(String(row.hash||''));
+      if(index!=null){
+        const color=rowColor(row);
+        if(color){colors[index]=color;found++}
+      }
+      if(scanned&&scanned%10000===0)post('progress',{done:found,total:media.length,detail:`Reading perceptual color · ${found.toLocaleString()} matched…`,stage:'visual'});
+    }
     return colors;
-  }catch{return colors}
+  }catch(error){if(error?.name==='AbortError')throw error;return colors}
   finally{db?.close?.()}
 }
 
