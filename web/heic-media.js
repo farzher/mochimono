@@ -103,6 +103,10 @@ function scheduleVisualReindex(item){
 
 function runVisualReindex(){
   reindexTimer=0;
+  if(window.mochimonoExperimentalViews?.active?.()){
+    reindexTimer=setTimeout(runVisualReindex,2000);
+    return;
+  }
   const media=[...reindexQueue.values()];
   reindexQueue.clear();
   if(!media.length)return;
