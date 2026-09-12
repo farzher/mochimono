@@ -8,17 +8,17 @@ const dateRail = document.querySelector('#dateRail');
 
 const MODE_KEY = 'mochimono-ai-global-sort-mode';
 const CACHE_LIMIT = 4;
-const WORKER_REVISION = '20260911-8';
+const WORKER_REVISION = Date.now().toString(36);
 const WORKER_START_TIMEOUT = 4000;
 const MODES = {
-  flow:{ label:'Flow', description:'DINO visual continuum' },
-  families:{ label:'Families', description:'DINO visual families' },
-  color:{ label:'Color', description:'Color spectrum + DINO similarity' },
-  structure:{ label:'Structure', description:'Composition + DINO similarity' },
-  meaning:{ label:'Meaning', description:'SigLIP semantic continuum' },
-  topics:{ label:'Topics', description:'Named semantic topics + DINO appearance' },
-  hybrid:{ label:'Hybrid', description:'DINO appearance + SigLIP meaning' },
-  moments:{ label:'Moments', description:'Chronology + AI similarity' }
+  flow:{ label:'Flow', description:'DINO neighborhoods + visual flow' },
+  families:{ label:'Families', description:'Strong DINO visual neighborhoods' },
+  color:{ label:'Color', description:'Color spectrum + locked DINO neighborhoods' },
+  structure:{ label:'Structure', description:'Real composition + locked DINO neighborhoods' },
+  meaning:{ label:'Meaning', description:'SigLIP semantic neighborhoods' },
+  topics:{ label:'Topics', description:'Named semantic topics + locked DINO neighborhoods' },
+  hybrid:{ label:'Hybrid', description:'DINO neighborhoods + SigLIP meaning' },
+  moments:{ label:'Moments', description:'Chronology + locked DINO neighborhoods' }
 };
 
 let mode = MODES[localStorage.getItem(MODE_KEY)] ? localStorage.getItem(MODE_KEY) : 'flow';
@@ -131,9 +131,7 @@ function cachedResult(key, media) {
   return { ...value, order:[...value.order], rail:value.rail.map(entry => ({ ...entry })) };
 }
 
-function scriptFor(selectedMode) {
-  return selectedMode === 'topics' ? './ai-global-sort-topics-worker.js' : './ai-global-sort-worker-v2.js';
-}
+function scriptFor() { return './ai-global-sort-worker-v2.js'; }
 
 function abortError() {
   const error = new Error('Canceled');
@@ -161,7 +159,7 @@ function ensureWorker(selectedMode) {
     worker = null;
   }
   workerScript = script;
-  worker = new Worker(new URL(`${script}?v=${WORKER_REVISION}`, import.meta.url), { type:'module' });
+  worker = new Worker(new URL(`${script}?run=${WORKER_REVISION}`, import.meta.url), { type:'module' });
   return worker;
 }
 
@@ -301,7 +299,7 @@ function install(result, media, resetScroll, key, selectedMode) {
   buildRail();
   const unavailable = Number(result.unavailable) || 0;
   const families = Number(result.families) || 0;
-  const familyText = families ? ` · ${families.toLocaleString()} groups` : '';
+  const familyText = families ? ` · ${families.toLocaleString()} neighborhoods` : '';
   updateProgress(media.length, media.length, `${MODES[selectedMode].description} · ${(Number(result.indexed) || 0).toLocaleString()} indexed${familyText}${unavailable ? ` · ${unavailable.toLocaleString()} appended without required embedding` : ''}`);
   if (fileCount) {
     fileCount.hidden = false;
