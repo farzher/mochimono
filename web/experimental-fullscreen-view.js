@@ -28,10 +28,52 @@ html.experimental-view-active .experimental-view-bar{
   visibility:visible!important;
   z-index:50
 }
+.experimental-view-status.experimental-status-loading{
+  flex:0 0 20px!important;
+  width:20px;
+  height:20px;
+  display:grid;
+  place-items:center;
+  overflow:visible;
+  font-size:0!important
+}
+.experimental-view-status.experimental-status-loading::before{
+  content:"";
+  width:11px;
+  height:11px;
+  border:2px solid rgba(216,207,203,.22);
+  border-top-color:#d8cfcb;
+  border-radius:50%;
+  animation:experimental-status-spin .7s linear infinite
+}
+@keyframes experimental-status-spin{to{transform:rotate(360deg)}}
 `;
 document.head.append(style);
 
 let bar=null,surface=null,commandbar=null;
+let status=null,loader=null,loadingObserver=null;
+const BUSY_STATUS=/building|opening|reading|loading|indexing|preparing|computing|placing|sorting|embedding|matching|analyzing|optimizing|families/i;
+function syncLoadingIndicator(){
+  if(!status||!loader)return;
+  const text=String(status.textContent||'').trim();
+  const busy=!loader.hidden&&BUSY_STATUS.test(text);
+  status.classList.toggle('experimental-status-loading',busy);
+  status.title=busy?text:'';
+  if(busy)status.setAttribute('aria-label',text||'Loading');
+  else status.removeAttribute('aria-label');
+}
+function bindLoadingIndicator(){
+  const nextStatus=bar?.querySelector('.experimental-view-status');
+  const nextLoader=surface?.querySelector('.experimental-view-loading');
+  if(!nextStatus||!nextLoader)return;
+  if(nextStatus===status&&nextLoader===loader){syncLoadingIndicator();return}
+  loadingObserver?.disconnect();
+  status=nextStatus;loader=nextLoader;
+  loadingObserver=new MutationObserver(syncLoadingIndicator);
+  loadingObserver.observe(status,{childList:true,characterData:true,subtree:true});
+  loadingObserver.observe(loader,{attributes:true,attributeFilter:['hidden'],childList:true,characterData:true,subtree:true});
+  syncLoadingIndicator();
+}
 function syncGeometry(){
   if(!root.classList.contains('experimental-view-active')||!bar||!commandbar)return;
   const rect=commandbar.getBoundingClientRect();
@@ -44,8 +86,10 @@ function detachExperimentalChrome(){
   surface=document.querySelector('.experimental-view-surface');
   commandbar=document.querySelector('.commandbar');
   if(!bar||!surface||!commandbar)return false;
+  bar.querySelector('.experimental-view-fit')?.remove();
   if(bar.parentElement!==document.body)document.body.append(bar);
   if(surface.parentElement!==document.body)document.body.append(surface);
+  bindLoadingIndicator();
   syncGeometry();
   return true;
 }
@@ -55,7 +99,7 @@ const mountObserver=new MutationObserver(()=>{
 });
 if(!detachExperimentalChrome())mountObserver.observe(document.body,{childList:true,subtree:true});
 
-new MutationObserver(syncGeometry).observe(root,{attributes:true,attributeFilter:['class']});
+new MutationObserver(()=>{syncGeometry();syncLoadingIndicator()}).observe(root,{attributes:true,attributeFilter:['class']});
 window.addEventListener('resize',syncGeometry,{passive:true});
 if(globalThis.ResizeObserver){
   const resizeObserver=new ResizeObserver(syncGeometry);
