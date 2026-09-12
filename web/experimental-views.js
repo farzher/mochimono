@@ -1,58 +1,31 @@
 import { ExperimentalWebGLMapRenderer } from './experimental-webgl-map.js';
 
-// Disposable experimental media views. Removing this import removes the suite.
-const files = document.querySelector('#files');
-const sort = document.querySelector('#sort');
-const mediaSize = document.querySelector('#mediaSize');
-const dateRail = document.querySelector('#dateRail');
-
-const MODE_KEY = 'mochimono-experimental-view-mode';
-const WORKER_REV = '20260912-1';
-const THUMB_VERSION = 3;
-const MODES = {
-  mosaic:{ label:'Mosaic', description:'True 2D neighbor optimization with visual families locked together' },
-  'color-map':{ label:'Color Map', description:'Hue × lightness map with visual families co-located' },
-  'family-quilt':{ label:'Family Quilt', description:'Verified perceptual families as contiguous visual blocks' },
-  atlas:{ label:'AI Atlas', description:'2D DINO + SigLIP neighborhood map' },
-  'semantic-rooms':{ label:'Semantic Rooms', description:'Named SigLIP concepts as spatial rooms' },
-  'time-appearance':{ label:'Time × Appearance', description:'Chronology horizontally, visual character vertically' }
+const files=document.querySelector('#files');
+const sort=document.querySelector('#sort');
+const mediaSize=document.querySelector('#mediaSize');
+const dateRail=document.querySelector('#dateRail');
+const MODE_KEY='mochimono-experimental-view-mode';
+const WORKER_REV='20260912-4';
+const THUMB_VERSION=3;
+const MAX_MAP_ZOOM=32;
+const MODES={
+  mosaic:{label:'Mosaic',description:'True 2D neighbor optimization with visual families locked together'},
+  'color-map':{label:'Color Map',description:'Hue × lightness map with visual families co-located'},
+  'family-quilt':{label:'Family Quilt',description:'Verified perceptual families as contiguous visual blocks'},
+  atlas:{label:'AI Atlas',description:'2D DINO + SigLIP neighborhood map'},
+  'semantic-rooms':{label:'Semantic Rooms',description:'Named SigLIP concepts as spatial rooms'},
+  'time-appearance':{label:'Time × Appearance',description:'Chronology horizontally, visual character vertically'}
 };
 
-let mode = MODES[localStorage.getItem(MODE_KEY)] ? localStorage.getItem(MODE_KEY) : 'mosaic';
-let wanted = false;
-let sourceModel = null;
-let wrappedGrid = null;
-let baseSetModel = null;
-let worker = null;
-let generation = 0;
-let runTimer = 0;
-let result = null;
-let media = [];
-let tupleByHash = new Map();
-let cell = 96;
-let gridColumns = 8;
-let mapZoom = 1;
-let mapPanX = 0;
-let mapPanY = 0;
-let drag = null;
-let renderFrame = 0;
-let mapSettleTimer = 0;
-let indexPosition = new Map();
-let mapRenderer = null;
-const mounted = new Map();
-const cache = new Map();
+let mode=MODES[localStorage.getItem(MODE_KEY)]?localStorage.getItem(MODE_KEY):'mosaic';
+let wanted=false,sourceModel=null,wrappedGrid=null,baseSetModel=null,worker=null,generation=0,runTimer=0,result=null,media=[],cell=96,gridColumns=8;
+let mapZoom=1,mapPanX=0,mapPanY=0,drag=null,renderFrame=0,mapSettleTimer=0,mapRenderer=null,indexPosition=new Map();
+const mounted=new Map(),cache=new Map();
 
-const option = document.createElement('option');
-option.value = 'experimental';
-option.textContent = 'Experimental';
-option.title = 'Experimental media layouts';
-if (sort && !sort.querySelector('option[value="experimental"]')) {
-  const ai = sort.querySelector('option[value="ai-global"]');
-  ai ? ai.after(option) : sort.append(option);
-}
+const option=document.createElement('option');option.value='experimental';option.textContent='Experimental';option.title='Experimental media layouts';
+if(sort&&!sort.querySelector('option[value="experimental"]')){const ai=sort.querySelector('option[value="ai-global"]');ai?ai.after(option):sort.append(option)}
 
-const style = document.createElement('style');
-style.textContent = `
+const style=document.createElement('style');style.textContent=`
 .experimental-view-bar{margin:10px 0 6px;padding:8px 10px;display:flex;align-items:center;gap:8px;border:1px solid rgba(255,255,255,.07);border-radius:12px;background:#171518;color:#d8cfcb;position:relative;z-index:20}
 .experimental-view-bar[hidden],.experimental-view-surface[hidden]{display:none!important}.experimental-view-bar strong{font-size:11px;white-space:nowrap}.experimental-view-modes{display:flex;gap:3px;flex-wrap:wrap}.experimental-view-modes button{height:25px;padding:0 8px;border:0;border-radius:7px;background:transparent;color:#8e8582;font-size:10px;font-weight:650}.experimental-view-modes button:hover{background:#252126;color:#ddd5d1}.experimental-view-modes button.active{background:#eee8e4;color:#171416}.experimental-view-status{min-width:0;flex:1;color:#8e8582;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.experimental-view-fit,.experimental-view-close{height:28px;border:0;border-radius:8px;background:transparent;color:#a09794}.experimental-view-fit:hover,.experimental-view-close:hover{background:#29252a;color:#fff}.experimental-view-close{width:30px;font-size:18px}
 .experimental-view-surface{position:relative;height:max(460px,calc(100vh - 190px));min-height:460px;border:1px solid rgba(255,255,255,.06);border-radius:12px;overflow:hidden;background:#0e0d0f;contain:layout paint style}
@@ -61,101 +34,69 @@ style.textContent = `
 .experimental-view-plane{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform;contain:layout paint style;z-index:2}.experimental-view-viewport:not(.grid-mode) .experimental-view-plane{pointer-events:none}.experimental-view-rooms,.experimental-view-cards{position:absolute;inset:0}.experimental-view-room{position:absolute;border:1px solid rgba(255,255,255,.11);border-radius:8px;background:rgba(255,255,255,.018);pointer-events:none;box-sizing:border-box}.experimental-view-room>span{position:sticky;left:6px;top:5px;display:inline-block;margin:5px;padding:3px 6px;border-radius:6px;background:rgba(14,13,15,.78);backdrop-filter:blur(5px);font-size:10px;font-weight:700;color:#ddd4d0}.experimental-view-marker{position:absolute;z-index:4;padding:2px 5px;border-radius:5px;background:rgba(14,13,15,.75);font-size:9px;font-weight:700;color:#d4cbc7;pointer-events:none;white-space:nowrap}
 .experimental-card{position:absolute;padding:0;border:0;border-radius:3px;overflow:hidden;background:#171518;box-shadow:0 0 0 1px rgba(255,255,255,.035);cursor:pointer;contain:strict}.experimental-card:hover{z-index:8;box-shadow:0 0 0 2px rgba(255,255,255,.55)}.experimental-card img{display:block;width:100%;height:100%;object-fit:cover;background:#151316;pointer-events:none}
 .experimental-view-loading{position:absolute;inset:0;display:grid;place-items:center;color:#8e8582;font-size:12px;pointer-events:none;z-index:8}.experimental-view-loading[hidden]{display:none}
-html.experimental-view-active #dateRail,html.experimental-view-active .ai-global-rail{display:none!important}
-`;
-document.head.append(style);
+html.experimental-view-active #dateRail,html.experimental-view-active .ai-global-rail{display:none!important}`;document.head.append(style);
 
-const bar = document.createElement('div');
-bar.className = 'experimental-view-bar';
-bar.hidden = true;
-bar.innerHTML = `<strong>Experiments</strong><div class="experimental-view-modes">${Object.entries(MODES).map(([key,value]) => `<button type="button" data-experimental-mode="${key}" title="${value.description}">${value.label}</button>`).join('')}</div><span class="experimental-view-status"></span><button class="experimental-view-fit" type="button">Fit</button><button class="experimental-view-close" type="button" title="Return to newest">×</button>`;
-files?.before(bar);
+const bar=document.createElement('div');bar.className='experimental-view-bar';bar.hidden=true;bar.innerHTML=`<strong>Experiments</strong><div class="experimental-view-modes">${Object.entries(MODES).map(([key,value])=>`<button type="button" data-experimental-mode="${key}" title="${value.description}">${value.label}</button>`).join('')}</div><span class="experimental-view-status"></span><button class="experimental-view-fit" type="button">Fit</button><button class="experimental-view-close" type="button" title="Return to newest">×</button>`;files?.before(bar);
+const surface=document.createElement('section');surface.className='experimental-view-surface';surface.hidden=true;surface.innerHTML='<div class="experimental-view-viewport" tabindex="0"><canvas class="experimental-view-canvas" hidden></canvas><div class="experimental-view-plane"><div class="experimental-view-rooms"></div><div class="experimental-view-cards"></div></div><div class="experimental-view-loading" hidden></div></div>';bar.after(surface);
+const viewport=surface.querySelector('.experimental-view-viewport'),mapCanvas=surface.querySelector('.experimental-view-canvas'),plane=surface.querySelector('.experimental-view-plane'),roomsLayer=surface.querySelector('.experimental-view-rooms'),cardsLayer=surface.querySelector('.experimental-view-cards'),loading=surface.querySelector('.experimental-view-loading'),status=bar.querySelector('.experimental-view-status'),fitButton=bar.querySelector('.experimental-view-fit');
 
-const surface = document.createElement('section');
-surface.className = 'experimental-view-surface';
-surface.hidden = true;
-surface.innerHTML = '<div class="experimental-view-viewport" tabindex="0"><canvas class="experimental-view-canvas" hidden></canvas><div class="experimental-view-plane"><div class="experimental-view-rooms"></div><div class="experimental-view-cards"></div></div><div class="experimental-view-loading" hidden></div></div>';
-bar.after(surface);
-
-const viewport = surface.querySelector('.experimental-view-viewport');
-const mapCanvas = surface.querySelector('.experimental-view-canvas');
-const plane = surface.querySelector('.experimental-view-plane');
-const roomsLayer = surface.querySelector('.experimental-view-rooms');
-const cardsLayer = surface.querySelector('.experimental-view-cards');
-const loading = surface.querySelector('.experimental-view-loading');
-const status = bar.querySelector('.experimental-view-status');
-const fitButton = bar.querySelector('.experimental-view-fit');
-
-const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
-function syncButtons(){bar.querySelectorAll('[data-experimental-mode]').forEach(button => button.classList.toggle('active', button.dataset.experimentalMode === mode))}
-function setStatus(text){status.textContent = String(text || '')}
-function setLoading(text=''){loading.hidden = !text;loading.textContent = text}
-function hashText(value, seed=2166136261){let hash=seed>>>0;for(let i=0;i<value.length;i++){hash^=value.charCodeAt(i);hash=Math.imul(hash,16777619)>>>0}return(hash^(hash>>>16))>>>0}
+const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+function syncButtons(){bar.querySelectorAll('[data-experimental-mode]').forEach(button=>button.classList.toggle('active',button.dataset.experimentalMode===mode))}
+function setStatus(text){status.textContent=String(text||'')}
+function setLoading(text=''){loading.hidden=!text;loading.textContent=text}
+function hashText(value,seed=2166136261){let hash=seed>>>0;for(let i=0;i<value.length;i++){hash^=value.charCodeAt(i);hash=Math.imul(hash,16777619)>>>0}return(hash^(hash>>>16))>>>0}
 function mediaIdentity(items){let sum=0,xor=0;for(const item of items){const value=hashText(`${item.hash}:${item.width}x${item.height}:${item.dateMs}`);sum=(sum+value)>>>0;xor^=value}return`${items.length}:${sum.toString(36)}:${(xor>>>0).toString(36)}`}
-function sourceItems(){return Array.isArray(sourceModel?.items) ? sourceModel.items : []}
-function modelMedia(){return sourceItems().filter(item => item?.[2] === 'image' || item?.[2] === 'video').map(item => ({hash:String(item[0]||''),filename:String(item[1]||''),type:String(item[2]||'image'),width:Number(item[3])||0,height:Number(item[4])||0,dateMs:Number(item[5])||0,size:Number(item[6])||0})).filter(item => /^[a-f0-9]{64}$/.test(item.hash))}
+function sourceItems(){return Array.isArray(sourceModel?.items)?sourceModel.items:[]}
+function modelMedia(){return sourceItems().filter(item=>item?.[2]==='image'||item?.[2]==='video').map(item=>({hash:String(item[0]||''),filename:String(item[1]||''),type:String(item[2]||'image'),width:Number(item[3])||0,height:Number(item[4])||0,dateMs:Number(item[5])||0,size:Number(item[6])||0})).filter(item=>/^[a-f0-9]{64}$/.test(item.hash))}
 function isSourceSnapshot(snapshot){const value=String(snapshot?.sort||'');return snapshot&&Array.isArray(snapshot.items)&&!value.startsWith('experimental-result')&&!value.startsWith('ai-global-result')&&!value.startsWith('visual-flow')&&!value.startsWith('similarity')}
 function captureSource(snapshot){if(!isSourceSnapshot(snapshot))return;sourceModel=snapshot;if(wanted)scheduleRun(30)}
 function wrapGrid(){const grid=window.mochimonoStableGrid;if(!grid){requestAnimationFrame(wrapGrid);return}if(wrappedGrid===grid)return;wrappedGrid=grid;baseSetModel=grid.setModel.bind(grid);grid.setModel=snapshot=>{if(wanted&&isSourceSnapshot(snapshot)){if(String(snapshot.sort||'')!=='experimental'){deactivate();return baseSetModel(snapshot)}captureSource(snapshot);return true}return baseSetModel(snapshot)};if(wanted&&isSourceSnapshot(window.mochimonoGridModel))captureSource(window.mochimonoGridModel)}
 
-function removeCard(index, element=mounted.get(index)){if(!element)return;const img=element.querySelector('img');if(img)img.removeAttribute('src');element.remove();mounted.delete(index)}
-function clearMounted(){for(const [index,element] of mounted) removeCard(index,element);mounted.clear()}
+function removeCard(index,element=mounted.get(index)){if(!element)return;element.querySelector('img')?.removeAttribute('src');element.remove();mounted.delete(index)}
+function clearMounted(){for(const[index,element]of mounted)removeCard(index,element);mounted.clear()}
 function destroyMapRenderer(){if(!mapRenderer)return;mapRenderer.destroy();mapRenderer=null;mapCanvas.hidden=true}
 function cancelRun(){generation++;clearTimeout(runTimer);runTimer=0;clearTimeout(mapSettleTimer);mapSettleTimer=0;if(worker){try{worker.postMessage({action:'cancel'})}catch{}try{worker.terminate()}catch{}worker=null}}
 function deactivate(){wanted=false;cancelRun();document.documentElement.classList.remove('experimental-view-active');bar.hidden=true;surface.hidden=true;files.hidden=false;viewport.classList.remove('dragging','over-media');viewport.title='';drag=null;clearMounted();destroyMapRenderer();result=null;roomsLayer.replaceChildren();setLoading('');if(renderFrame)cancelAnimationFrame(renderFrame);renderFrame=0}
 function activate(){wanted=true;document.documentElement.classList.add('experimental-view-active');bar.hidden=false;surface.hidden=false;files.hidden=true;syncButtons();captureSource(window.mochimonoGridModel);scheduleRun(20)}
-
 function currentCell(){return Math.max(64,Math.min(132,Number(mediaSize?.value)||96))}
 function columnsForMosaic(){return Math.max(2,Math.floor(Math.max(320,viewport.clientWidth-8)/currentCell()))}
-function cacheKey(){const extra=mode==='mosaic'?`:${columnsForMosaic()}`:'';return`${mode}:${mediaIdentity(media)}${extra}`}
+function cacheKey(){const extra=mode==='mosaic'?`:${columnsForMosaic()}`:'';return`${mode}:${mediaIdentity(media)}${extra}:dense2`}
 function remember(key,value){cache.delete(key);cache.set(key,value);while(cache.size>5)cache.delete(cache.keys().next().value)}
 
-function workerForMode(selectedMode){return new Worker(new URL(selectedMode==='semantic-rooms'?`./ai-global-sort-topics-worker.js?v=${WORKER_REV}`:`./experimental-layout-worker.js?v=${WORKER_REV}`,import.meta.url),{type:'module'})}
+function workerForMode(selectedMode){const file=selectedMode==='semantic-rooms'?`./ai-global-sort-topics-worker.js?v=${WORKER_REV}`:`./experimental-layout-worker-dense.js?v=${WORKER_REV}`;return new Worker(new URL(file,import.meta.url),{type:'module'})}
 function runWorker(selectedMode,items,columns){return new Promise((resolve,reject)=>{const target=workerForMode(selectedMode);worker=target;const myGeneration=generation;target.onerror=event=>reject(new Error(event.message||'Experimental layout worker failed'));target.onmessageerror=()=>reject(new Error('Experimental layout worker returned unreadable data'));target.onmessage=event=>{if(myGeneration!==generation)return;const data=event.data||{};if(data.type==='progress'){setStatus(data.detail||`Building ${MODES[selectedMode].label}…`);return}if(data.type==='error'){const error=new Error(data.error||'Could not build experimental view');if(data.aborted)error.name='AbortError';reject(error);return}if(data.type==='result')resolve(data.result||{})};target.postMessage({action:selectedMode==='semantic-rooms'?'sort':'build',payload:{mode:selectedMode,media:items,columns}})})}
 
-function packSemanticRooms(topicResult,items){const byHash=new Map(items.map((item,index)=>[item.hash,index])),order=(topicResult.order||[]).map(hash=>byHash.get(hash)).filter(Number.isInteger),rails=(topicResult.rail||[]).slice().sort((a,b)=>a.index-b.index),groups=[],classifiedEnd=Math.max(0,Math.min(order.length,Number(topicResult.indexed)||order.length));for(let r=0;r<rails.length;r++){const start=Math.max(0,Number(rails[r].index)||0),end=r+1<rails.length?Math.max(start,Math.min(classifiedEnd,Number(rails[r+1].index)||0)):classifiedEnd;groups.push({label:String(rails[r].label||`Room ${r+1}`),members:order.slice(start,end)})}const other=order.slice(classifiedEnd);if(other.length)groups.push({label:'Other',members:other});const worldW=Math.max(18,Math.ceil(Math.sqrt(items.length*1.55))),x=new Float32Array(items.length),y=new Float32Array(items.length),labels=[];x.fill(-1);y.fill(-1);let px=0,py=0,rowH=0;for(const group of groups){if(!group.members.length)continue;const w=Math.min(worldW,Math.max(3,Math.ceil(Math.sqrt(group.members.length*1.45)))),h=Math.max(1,Math.ceil(group.members.length/w));if(px&&px+w>worldW){px=0;py+=rowH+2;rowH=0}for(let k=0;k<group.members.length;k++){x[group.members[k]]=px+(k%w);y[group.members[k]]=py+Math.floor(k/w)}labels.push({x:px,y:py,w,h,label:group.label});px+=w+2;rowH=Math.max(rowH,h)}return{kind:'map',x,y,worldW,worldH:Math.max(1,py+rowH+1),labels,detail:`Semantic Rooms · ${groups.filter(group=>group.members.length).length} named regions`}}
+function packSemanticRooms(topicResult,items){const byHash=new Map(items.map((item,index)=>[item.hash,index])),order=(topicResult.order||[]).map(hash=>byHash.get(hash)).filter(Number.isInteger),rails=(topicResult.rail||[]).slice().sort((a,b)=>a.index-b.index),groups=[],classifiedEnd=Math.max(0,Math.min(order.length,Number(topicResult.indexed)||order.length));for(let r=0;r<rails.length;r++){const start=Math.max(0,Number(rails[r].index)||0),end=r+1<rails.length?Math.max(start,Math.min(classifiedEnd,Number(rails[r+1].index)||0)):classifiedEnd;groups.push({label:String(rails[r].label||`Room ${r+1}`),members:order.slice(start,end)})}const other=order.slice(classifiedEnd);if(other.length)groups.push({label:'Other',members:other});const worldW=Math.max(18,Math.ceil(Math.sqrt(items.length*1.35))),x=new Float32Array(items.length),y=new Float32Array(items.length),labels=[];x.fill(-1);y.fill(-1);let px=0,py=0,rowH=0;const gap=.28;for(const group of groups){if(!group.members.length)continue;const w=Math.min(worldW,Math.max(3,Math.ceil(Math.sqrt(group.members.length*1.25)))),h=Math.max(1,Math.ceil(group.members.length/w));if(px&&px+w>worldW){px=0;py+=rowH+gap;rowH=0}for(let k=0;k<group.members.length;k++){x[group.members[k]]=px+(k%w);y[group.members[k]]=py+Math.floor(k/w)}labels.push({x:px,y:py,w,h,label:group.label});px+=w+gap;rowH=Math.max(rowH,h)}return{kind:'map',x,y,worldW,worldH:Math.max(1,py+rowH),labels,detail:`Semantic Rooms · ${groups.filter(group=>group.members.length).length} named regions · dense packing`}}
 
-async function run(){if(!wanted||!sourceModel)return;cancelRun();const myGeneration=++generation;media=modelMedia();tupleByHash=new Map(sourceItems().map(item=>[String(item?.[0]||''),item]));if(!media.length){setStatus('No image or video media in this view');setLoading('No media');return}cell=currentCell();gridColumns=columnsForMosaic();const key=cacheKey(),cached=cache.get(key);if(cached){result=cached;installResult();return}setLoading(`Building ${MODES[mode].label}…`);setStatus(`Building ${MODES[mode].label}…`);try{let built=await runWorker(mode,media,gridColumns);if(myGeneration!==generation||!wanted)return;if(mode==='semantic-rooms')built=packSemanticRooms(built,media);result=built;remember(key,built);installResult()}catch(error){if(error?.name==='AbortError'||myGeneration!==generation)return;console.error(error);setStatus(error.message||String(error));setLoading(error.message||String(error))}finally{if(worker){try{worker.terminate()}catch{}worker=null}}}
+async function run(){if(!wanted||!sourceModel)return;cancelRun();const myGeneration=++generation;media=modelMedia();if(!media.length){setStatus('No image or video media in this view');setLoading('No media');return}cell=currentCell();gridColumns=columnsForMosaic();const key=cacheKey(),cached=cache.get(key);if(cached){result=cached;installResult();return}setLoading(`Building ${MODES[mode].label}…`);setStatus(`Building ${MODES[mode].label}…`);try{let built=await runWorker(mode,media,gridColumns);if(myGeneration!==generation||!wanted)return;if(mode==='semantic-rooms')built=packSemanticRooms(built,media);result=built;remember(key,built);installResult()}catch(error){if(error?.name==='AbortError'||myGeneration!==generation)return;console.error(error);setStatus(error.message||String(error));setLoading(error.message||String(error))}finally{if(worker){try{worker.terminate()}catch{}worker=null}}}
 function scheduleRun(delay=80){clearTimeout(runTimer);runTimer=setTimeout(run,delay)}
 
 function makeCard(index,left,top,size){const item=media[index];if(!item)return null;const button=document.createElement('button');button.className='experimental-card';button.type='button';button.dataset.index=String(index);button.dataset.hash=item.hash;button.title=item.filename||item.hash;button.style.left=`${left}px`;button.style.top=`${top}px`;button.style.width=`${size}px`;button.style.height=`${size}px`;button.innerHTML=`<img alt="" draggable="false" loading="lazy" decoding="async" fetchpriority="low" src="/api/thumbs/${encodeURIComponent(item.hash)}?v=${THUMB_VERSION}">`;button.addEventListener('click',event=>{event.stopPropagation();window.mochimonoOpenViewer?.(item.hash,item)});cardsLayer.append(button);mounted.set(index,button);return button}
 function reconcileGrid(wantedIndexes,positionFor,size){const wantedSet=new Set(wantedIndexes);for(const[index,element]of mounted)if(!wantedSet.has(index))removeCard(index,element);for(const index of wantedIndexes){if(mounted.has(index))continue;const point=positionFor(index);if(point)makeCard(index,point[0],point[1],size)}}
 function scheduleRender(){if(!renderFrame)renderFrame=requestAnimationFrame(()=>{renderFrame=0;renderGrid()})}
-function renderGrid(){const order=result?.order;if(!order?.length)return;const rowHeight=cell,startRow=Math.max(0,Math.floor(viewport.scrollTop/rowHeight)-2),endRow=Math.ceil((viewport.scrollTop+viewport.clientHeight)/rowHeight)+2,start=Math.min(order.length,startRow*gridColumns),end=Math.min(order.length,endRow*gridColumns),indexes=[];for(let p=start;p<end;p++)indexes.push(Number(order[p]));reconcileGrid(indexes,index=>{const pos=indexPosition.get(index);if(pos==null)return null;return[(pos%gridColumns)*cell,Math.floor(pos/gridColumns)*cell]},Math.max(28,cell-4))}
+function renderGrid(){const order=result?.order;if(!order?.length)return;const rowHeight=cell,startRow=Math.max(0,Math.floor(viewport.scrollTop/rowHeight)-2),endRow=Math.ceil((viewport.scrollTop+viewport.clientHeight)/rowHeight)+2,start=Math.min(order.length,startRow*gridColumns),end=Math.min(order.length,endRow*gridColumns),indexes=[];for(let p=start;p<end;p++)indexes.push(Number(order[p]));reconcileGrid(indexes,index=>{const pos=indexPosition.get(index);return pos==null?null:[(pos%gridColumns)*cell,Math.floor(pos/gridColumns)*cell]},Math.max(28,cell-4))}
 
 function ensureMapRenderer(){if(mapRenderer)return true;try{mapRenderer=new ExperimentalWebGLMapRenderer(mapCanvas,{thumbVersion:THUMB_VERSION,onError:error=>console.debug('Experimental WebGL thumbnail:',error)});return true}catch(error){console.error(error);setStatus(error.message||String(error));setLoading(error.message||String(error));return false}}
 function applyMapTransform(){plane.style.transform=`translate(${mapPanX}px,${mapPanY}px) scale(${mapZoom})`;mapRenderer?.setCamera(mapPanX,mapPanY,mapZoom)}
 function settleMap(){mapRenderer?.setCamera(mapPanX,mapPanY,mapZoom);mapRenderer?.settle()}
-function scheduleMapSettle(delay=85){clearTimeout(mapSettleTimer);mapSettleTimer=setTimeout(()=>{mapSettleTimer=0;settleMap()},delay)}
+function scheduleMapSettle(delay=70){clearTimeout(mapSettleTimer);mapSettleTimer=setTimeout(()=>{mapSettleTimer=0;settleMap()},delay)}
 function fitMap(){if(!result||result.kind!=='map'||!mapRenderer)return;const worldW=Math.max(1,Number(result.worldW))*cell,worldH=Math.max(1,Number(result.worldH))*cell,vw=Math.max(1,viewport.clientWidth),vh=Math.max(1,viewport.clientHeight);mapZoom=Math.max(.025,Math.min(1.25,Math.min(vw/worldW,vh/worldH)*.94));mapPanX=(vw-worldW*mapZoom)/2;mapPanY=(vh-worldH*mapZoom)/2;applyMapTransform();settleMap()}
-
-function renderLabels(){roomsLayer.replaceChildren();const labels=Array.isArray(result?.labels)?result.labels:[],roomMode=mode==='family-quilt'||mode==='semantic-rooms';const limited=labels.length>600?labels.filter((_,i)=>i%Math.ceil(labels.length/600)===0):labels;for(const entry of limited){const node=document.createElement('div');if(roomMode){node.className='experimental-view-room';node.style.left=`${Number(entry.x)*cell}px`;node.style.top=`${Number(entry.y)*cell}px`;node.style.width=`${Math.max(1,Number(entry.w))*cell}px`;node.style.height=`${Math.max(1,Number(entry.h))*cell}px`;node.innerHTML=`<span>${escapeHtml(entry.label)}</span>`}else{node.className='experimental-view-marker';node.style.left=`${Number(entry.x)*cell+4}px`;node.style.top=`${Number(entry.y)*cell+4}px`;node.textContent=entry.label}roomsLayer.append(node)}}
+function renderLabels(){roomsLayer.replaceChildren();const labels=Array.isArray(result?.labels)?result.labels:[],roomMode=mode==='family-quilt'||mode==='semantic-rooms',limited=labels.length>600?labels.filter((_,i)=>i%Math.ceil(labels.length/600)===0):labels;for(const entry of limited){const node=document.createElement('div');if(roomMode){node.className='experimental-view-room';node.style.left=`${Number(entry.x)*cell}px`;node.style.top=`${Number(entry.y)*cell}px`;node.style.width=`${Math.max(.1,Number(entry.w))*cell}px`;node.style.height=`${Math.max(.1,Number(entry.h))*cell}px`;node.innerHTML=`<span>${escapeHtml(entry.label)}</span>`}else{node.className='experimental-view-marker';node.style.left=`${Number(entry.x)*cell+4}px`;node.style.top=`${Number(entry.y)*cell+4}px`;node.textContent=entry.label}roomsLayer.append(node)}}
 
 function installResult(){clearMounted();indexPosition=new Map();setLoading('');cell=currentCell();syncButtons();if(result.kind==='grid'){destroyMapRenderer();fitButton.hidden=true;mapCanvas.hidden=true;cardsLayer.hidden=false;viewport.classList.add('grid-mode');viewport.classList.remove('over-media');viewport.title='';viewport.scrollTop=0;plane.style.transform='none';const order=result.order||[];for(let p=0;p<order.length;p++)indexPosition.set(Number(order[p]),p);const rows=Math.ceil(order.length/gridColumns);plane.style.width=`${gridColumns*cell}px`;plane.style.height=`${Math.max(1,rows)*cell}px`;roomsLayer.replaceChildren();setStatus(result.detail||MODES[mode].description);renderGrid()}else{fitButton.hidden=false;cardsLayer.hidden=true;viewport.classList.remove('grid-mode');viewport.scrollTop=0;plane.style.width=`${Math.max(1,Number(result.worldW))*cell}px`;plane.style.height=`${Math.max(1,Number(result.worldH))*cell}px`;renderLabels();if(!ensureMapRenderer())return;mapCanvas.hidden=false;mapRenderer.resize();mapRenderer.setScene({media,result,cell});setStatus(`${result.detail||MODES[mode].description} · WebGL2`);fitMap()}surface.hidden=false}
-
 function localPoint(event){const rect=viewport.getBoundingClientRect();return[event.clientX-rect.left,event.clientY-rect.top]}
 function updateHover(event){if(result?.kind!=='map'||!mapRenderer||drag)return;const[x,y]=localPoint(event),index=mapRenderer.hitTest(x,y);mapRenderer.setHover(index);viewport.classList.toggle('over-media',index>=0);viewport.title=index>=0?(media[index]?.filename||''):''}
 
 bar.addEventListener('click',event=>{const button=event.target.closest('[data-experimental-mode]');if(button){const next=button.dataset.experimentalMode;if(!MODES[next]||next===mode)return;mode=next;localStorage.setItem(MODE_KEY,mode);syncButtons();scheduleRun(10);return}if(event.target.closest('.experimental-view-fit'))fitMap();if(event.target.closest('.experimental-view-close')){deactivate();window.mochimonoLibrary?.setSort?.('date-desc')}});
 sort?.addEventListener('change',()=>{const next=sort.value==='experimental';if(next&&!wanted)activate();else if(!next&&wanted)deactivate()});
 viewport.addEventListener('scroll',()=>{if(result?.kind==='grid')scheduleRender()},{passive:true});
-viewport.addEventListener('wheel',event=>{if(result?.kind!=='map'||!mapRenderer)return;event.preventDefault();const[cx,cy]=localPoint(event),worldX=(cx-mapPanX)/mapZoom,worldY=(cy-mapPanY)/mapZoom,next=Math.max(.025,Math.min(5,mapZoom*Math.exp(-event.deltaY*.0015)));mapPanX=cx-worldX*next;mapPanY=cy-worldY*next;mapZoom=next;applyMapTransform();scheduleMapSettle()},{passive:false});
+viewport.addEventListener('wheel',event=>{if(result?.kind!=='map'||!mapRenderer)return;event.preventDefault();const[cx,cy]=localPoint(event),worldX=(cx-mapPanX)/mapZoom,worldY=(cy-mapPanY)/mapZoom,next=Math.max(.025,Math.min(MAX_MAP_ZOOM,mapZoom*Math.exp(-event.deltaY*.0015)));mapPanX=cx-worldX*next;mapPanY=cy-worldY*next;mapZoom=next;applyMapTransform();scheduleMapSettle()},{passive:false});
 viewport.addEventListener('pointerdown',event=>{if(result?.kind!=='map'||event.button!==0)return;drag={id:event.pointerId,x:event.clientX,y:event.clientY,panX:mapPanX,panY:mapPanY,moved:false};viewport.classList.remove('over-media');event.preventDefault()});
 viewport.addEventListener('pointermove',event=>{if(!drag||drag.id!==event.pointerId){updateHover(event);return}const dx=event.clientX-drag.x,dy=event.clientY-drag.y;if(!drag.moved&&Math.hypot(dx,dy)<4)return;if(!drag.moved){drag.moved=true;viewport.classList.add('dragging');mapRenderer?.setHover(-1);try{viewport.setPointerCapture(event.pointerId)}catch{}}mapPanX=drag.panX+dx;mapPanY=drag.panY+dy;applyMapTransform();event.preventDefault()});
 viewport.addEventListener('pointerup',event=>{if(!drag||drag.id!==event.pointerId)return;const moved=drag.moved;drag=null;viewport.classList.remove('dragging');if(!moved&&mapRenderer){const[x,y]=localPoint(event),index=mapRenderer.hitTest(x,y);if(index>=0){const item=media[index];window.mochimonoOpenViewer?.(item.hash,item)}}scheduleMapSettle(0);updateHover(event)});
 viewport.addEventListener('pointercancel',()=>{drag=null;viewport.classList.remove('dragging');scheduleMapSettle(0)});
 viewport.addEventListener('pointerleave',()=>{if(drag)return;mapRenderer?.setHover(-1);viewport.classList.remove('over-media');viewport.title=''})
-
 new ResizeObserver(()=>{if(!wanted||!result)return;if(mode==='mosaic'&&columnsForMosaic()!==gridColumns)scheduleRun(220);else if(result.kind==='map'){mapRenderer?.resize();fitMap()}else scheduleRender()}).observe(viewport);
 window.addEventListener('mochimono:media-size',()=>{if(!wanted)return;cell=currentCell();mode==='mosaic'?scheduleRun(120):installResult()});
-
-window.mochimonoExperimentalViews={
-  active:()=>wanted,
-  mode:()=>mode,
-  rerun:()=>scheduleRun(0),
-  state:()=>({active:wanted,mode,count:media.length,kind:result?.kind||'',mounted:mounted.size,zoom:mapZoom,renderer:mapRenderer?.stats?.()||null})
-};
-
-wrapGrid();
-syncButtons();
-if(sort?.value==='experimental')activate();
+window.mochimonoExperimentalViews={active:()=>wanted,mode:()=>mode,rerun:()=>scheduleRun(0),state:()=>({active:wanted,mode,count:media.length,kind:result?.kind||'',mounted:mounted.size,zoom:mapZoom,maxZoom:MAX_MAP_ZOOM,renderer:mapRenderer?.stats?.()||null})};
+wrapGrid();syncButtons();if(sort?.value==='experimental')activate();
