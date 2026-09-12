@@ -1,16 +1,18 @@
 const EDGE = 768;
 const VERSION = 3;
 const queue = new Map();
+const inflight = new Map();
 let timer = 0;
 let busy = false;
 
 const MIME = new Map([
-  ['jpg','image/jpeg'],['jpeg','image/jpeg'],['png','image/png'],['gif','image/gif'],['webp','image/webp'],['heic','image/heic'],['heif','image/heic'],['avif','image/avif'],['bmp','image/bmp'],['tif','image/tiff'],['tiff','image/tiff'],
+  ['jpg','image/jpeg'],['jpeg','image/jpeg'],['png','image/png'],['gif','image/gif'],['webp','image/webp'],['heic','image/heic'],['heif','image/heif'],['avif','image/avif'],['bmp','image/bmp'],['tif','image/tiff'],['tiff','image/tiff'],
   ['mp4','video/mp4'],['m4v','video/mp4'],['mov','video/quicktime'],['mkv','video/x-matroska'],['webm','video/webm'],['avi','video/x-msvideo'],['mpg','video/mpeg'],['mpeg','video/mpeg'],['m2v','video/mpeg'],['mts','video/mp2t'],['m2ts','video/mp2t'],['3gp','video/3gpp']
 ]);
 
 const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
 const sourceMime = record => MIME.get(extension(record.filename)) || 'application/octet-stream';
+const isHeic = record => ['heic','heif'].includes(extension(record?.filename)) || ['image/heic','image/heif'].includes(String(record?.mime || '').toLowerCase());
 const visibleCard = hash => {
   const card = document.querySelector(`#files [data-hash="${CSS.escape(hash)}"]`);
   if (!card) return null;
@@ -100,9 +102,23 @@ async function videoResult(hash) {
   }
 }
 
+async function heicResult(record) {
+  const file = await window.mochimonoBrowserFolders?.fileForHash?.(record.hash);
+  if (!file) throw new Error('Local HEIC source is unavailable');
+  const response = await fetch(`/api/client/browser-heic-thumb/${record.hash}`, {
+    method:'PUT',
+    headers:{ 'content-type':file.type || sourceMime(record) || 'image/heic' },
+    body:file
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || 'Could not decode HEIC preview');
+  return { width:Number(result.width) || 0, height:Number(result.height) || 0, duration:null, saved:true };
+}
+
 async function generate(record) {
   const existing = await fetch(`/api/thumbs/${record.hash}?v=${VERSION}`, { method: 'HEAD' }).catch(() => null);
   if (existing?.ok) return null;
+  if (isHeic(record)) return heicResult(record);
   const result = record.kind === 'video' ? await videoResult(record.hash) : await imageResult(record.hash);
   const response = await fetch(`/api/thumbs/${record.hash}`, {
     method: 'PUT',
@@ -120,6 +136,19 @@ async function generate(record) {
   return result;
 }
 
+export function ensureBrowserThumbnail(record) {
+  if (!record?.hash || !record.kind) return Promise.resolve(null);
+  const hash = String(record.hash);
+  let pending = inflight.get(hash);
+  if (!pending) {
+    pending = generate(record).finally(() => {
+      if (inflight.get(hash) === pending) inflight.delete(hash);
+    });
+    inflight.set(hash, pending);
+  }
+  return pending;
+}
+
 function schedule(delay = 4000) {
   if (timer || busy || !queue.size) return;
   timer = setTimeout(pump, delay);
@@ -131,14 +160,14 @@ function pump() {
   let record = null;
   for (const [hash, candidate] of queue) {
     queue.delete(hash);
-    if (visibleCard(hash)) {
+    if (candidate.urgent || visibleCard(hash)) {
       record = candidate;
       break;
     }
   }
   if (!record) return;
   busy = true;
-  const run = () => generate(record).then(result => {
+  const run = () => ensureBrowserThumbnail(record).then(result => {
     window.dispatchEvent(new CustomEvent('mochimono:browser-thumbnail-ready', { detail: { hash: record.hash, ...(result || {}) } }));
   }).catch(() => {}).finally(() => {
     busy = false;
@@ -151,7 +180,7 @@ function pump() {
 export function queueBrowserThumbnail(record) {
   if (!record?.hash || !record.kind) return;
   queue.set(record.hash, record);
-  schedule();
+  schedule(record.urgent ? 0 : 4000);
 }
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(100); });
