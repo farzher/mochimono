@@ -28,39 +28,40 @@ html.experimental-view-active .experimental-view-bar{
   visibility:visible!important;
   z-index:50
 }
-.experimental-view-status.experimental-status-loading{
-  flex:0 0 20px!important;
-  width:20px;
-  height:20px;
-  display:grid;
-  place-items:center;
-  overflow:visible;
-  font-size:0!important
+.experimental-view-status.experimental-status-loading{opacity:0!important}
+.experimental-view-loading:not([hidden]){
+  font-size:0!important;
+  color:transparent!important
 }
-.experimental-view-status.experimental-status-loading::before{
+.experimental-view-loading:not([hidden])::before{
   content:"";
-  width:11px;
-  height:11px;
-  border:2px solid rgba(216,207,203,.22);
-  border-top-color:#d8cfcb;
+  width:26px;
+  height:26px;
+  box-sizing:border-box;
+  border:3px solid rgba(216,207,203,.16);
+  border-top-color:#e6ddd8;
+  border-right-color:rgba(230,221,216,.55);
   border-radius:50%;
-  animation:experimental-status-spin .7s linear infinite
+  animation:experimental-loading-spin .65s linear infinite
 }
-@keyframes experimental-status-spin{to{transform:rotate(360deg)}}
+@keyframes experimental-loading-spin{to{transform:rotate(360deg)}}
 `;
 document.head.append(style);
 
 let bar=null,surface=null,commandbar=null;
 let status=null,loader=null,loadingObserver=null;
-const BUSY_STATUS=/building|opening|reading|loading|indexing|preparing|computing|placing|sorting|embedding|matching|analyzing|optimizing|families/i;
 function syncLoadingIndicator(){
   if(!status||!loader)return;
-  const text=String(status.textContent||'').trim();
-  const busy=!loader.hidden&&BUSY_STATUS.test(text);
+  const busy=!loader.hidden;
+  const text=String(loader.textContent||status.textContent||'').trim();
   status.classList.toggle('experimental-status-loading',busy);
-  status.title=busy?text:'';
-  if(busy)status.setAttribute('aria-label',text||'Loading');
-  else status.removeAttribute('aria-label');
+  if(busy){
+    loader.title=text;
+    loader.setAttribute('aria-label',text||'Loading');
+  }else{
+    loader.removeAttribute('title');
+    loader.removeAttribute('aria-label');
+  }
 }
 function bindLoadingIndicator(){
   const nextStatus=bar?.querySelector('.experimental-view-status');
