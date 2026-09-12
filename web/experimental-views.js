@@ -1,7 +1,7 @@
 import { ExperimentalWebGLMapRenderer } from './experimental-webgl-map.js';
 
 const files=document.querySelector('#files'),sort=document.querySelector('#sort'),mediaSize=document.querySelector('#mediaSize');
-const MODE_KEY='mochimono-experimental-view-mode',WORKER_REV='20260912-6',THUMB_VERSION=3,MAX_MAP_ZOOM=48;
+const MODE_KEY='mochimono-experimental-view-mode',WORKER_REV='20260912-7',THUMB_VERSION=3,MAX_MAP_ZOOM=48;
 const MODES={
   mosaic:{label:'Mosaic',description:'True 2D neighbor optimization with visual families locked together'},
   'color-map':{label:'Color Map',description:'Hue × lightness map with visual families co-located'},
@@ -25,8 +25,10 @@ const bar=document.createElement('div');bar.className='experimental-view-bar';ba
 const surface=document.createElement('section');surface.className='experimental-view-surface';surface.hidden=true;surface.innerHTML='<div class="experimental-view-viewport" tabindex="0"><canvas class="experimental-view-canvas" hidden></canvas><div class="experimental-view-plane"><div class="experimental-view-rooms"></div><div class="experimental-view-cards"></div></div><div class="experimental-view-loading" hidden></div></div>';bar.after(surface);
 const viewport=surface.querySelector('.experimental-view-viewport'),mapCanvas=surface.querySelector('.experimental-view-canvas'),plane=surface.querySelector('.experimental-view-plane'),roomsLayer=surface.querySelector('.experimental-view-rooms'),cardsLayer=surface.querySelector('.experimental-view-cards'),loading=surface.querySelector('.experimental-view-loading'),status=bar.querySelector('.experimental-view-status'),fitButton=bar.querySelector('.experimental-view-fit');
 
-const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[char]));
 const ratio=item=>Math.max(1,Number(item?.width)||1)/Math.max(1,Number(item?.height)||1);
+const layoutRatio=item=>Math.max(.5,Math.min(2,ratio(item)));
+function fitAspect(item,boxW,boxH){const r=ratio(item),br=boxW/Math.max(.0001,boxH);return r>=br?[boxW,boxW/r]:[boxH*r,boxH]}
 function syncButtons(){bar.querySelectorAll('[data-experimental-mode]').forEach(button=>button.classList.toggle('active',button.dataset.experimentalMode===mode))}
 function setStatus(text){status.textContent=String(text||'')}
 function setLoading(text=''){loading.hidden=!text;loading.textContent=text}
@@ -45,17 +47,17 @@ function deactivate(){wanted=false;cancelRun();document.documentElement.classLis
 function activate(){wanted=true;document.documentElement.classList.add('experimental-view-active');bar.hidden=false;surface.hidden=false;files.hidden=true;syncButtons();captureSource(window.mochimonoGridModel);scheduleRun(20)}
 function currentCell(){return Math.max(64,Math.min(132,Number(mediaSize?.value)||96))}
 function columnsForMosaic(){return Math.max(2,Math.floor(Math.max(320,viewport.clientWidth-8)/currentCell()))}
-function cacheKey(){return`${mode}:${mediaIdentity(media)}${mode==='mosaic'?`:${columnsForMosaic()}`:''}:tight3`}
+function cacheKey(){return`${mode}:${mediaIdentity(media)}${mode==='mosaic'?`:${columnsForMosaic()}`:''}:tight4`}
 function remember(key,value){cache.delete(key);cache.set(key,value);while(cache.size>5)cache.delete(cache.keys().next().value)}
 function workerForMode(selectedMode){const file=selectedMode==='semantic-rooms'?`./ai-global-sort-topics-worker.js?v=${WORKER_REV}`:`./experimental-layout-worker-dense.js?v=${WORKER_REV}`;return new Worker(new URL(file,import.meta.url),{type:'module'})}
 function runWorker(selectedMode,items,columns){return new Promise((resolve,reject)=>{const target=workerForMode(selectedMode);worker=target;const myGeneration=generation;target.onerror=event=>reject(new Error(event.message||'Experimental layout worker failed'));target.onmessageerror=()=>reject(new Error('Experimental layout worker returned unreadable data'));target.onmessage=event=>{if(myGeneration!==generation)return;const data=event.data||{};if(data.type==='progress'){setStatus(data.detail||`Building ${MODES[selectedMode].label}…`);return}if(data.type==='error'){const error=new Error(data.error||'Could not build experimental view');if(data.aborted)error.name='AbortError';reject(error);return}if(data.type==='result')resolve(data.result||{})};target.postMessage({action:selectedMode==='semantic-rooms'?'sort':'build',payload:{mode:selectedMode,media:items,columns}})})}
 
 function tightRoom(members,items){
-  const total=members.reduce((s,i)=>s+ratio(items[i]),0),target=Math.max(3,Math.sqrt(Math.max(1,total))),gap=.018,rows=[];let row=[],sum=0;
+  const total=members.reduce((s,i)=>s+layoutRatio(items[i]),0),target=Math.max(3,Math.sqrt(Math.max(1,total))),gap=.018,rows=[];let row=[],sum=0;
   const finish=()=>{if(row.length){rows.push(row);row=[];sum=0}};
-  for(const index of members){const r=ratio(items[index]);if(row.length&&sum>=target*.75&&Math.abs(target-(sum+r))>Math.abs(target-sum))finish();row.push(index);sum+=r;if(sum>=target*1.08)finish()}finish();
+  for(const index of members){const r=layoutRatio(items[index]);if(row.length&&sum>=target*.75&&Math.abs(target-(sum+r))>Math.abs(target-sum))finish();row.push(index);sum+=r;if(sum>=target*1.08)finish()}finish();
   const placed=[];let top=.12,maxRight=0;
-  for(let ri=0;ri<rows.length;ri++){const current=rows[ri],rs=current.reduce((s,i)=>s+ratio(items[i]),0),usable=Math.max(.1,target-gap*Math.max(0,current.length-1));let h=usable/Math.max(.001,rs);if(ri===rows.length-1&&h>1.25)h=1.25;let left=.12;for(const index of current){const w=ratio(items[index])*h;placed.push({index,x:left+w/2,y:top+h/2,w,h});left+=w+gap}maxRight=Math.max(maxRight,left-gap);top+=h+gap}
+  for(const current of rows){const rs=current.reduce((s,i)=>s+layoutRatio(items[i]),0),usable=Math.max(.1,target-gap*Math.max(0,current.length-1)),h=Math.min(1.08,usable/Math.max(.001,rs));let left=.12;for(const index of current){const boxW=layoutRatio(items[index])*h,[w,actualH]=fitAspect(items[index],boxW,h);placed.push({index,x:left+boxW/2,y:top+h/2,w,h:actualH});left+=boxW+gap}maxRight=Math.max(maxRight,left-gap);top+=h+gap}
   return{placed,w:Math.max(.3,maxRight+.12),h:Math.max(.3,top-gap+.12)};
 }
 function packSemanticRooms(topicResult,items){
