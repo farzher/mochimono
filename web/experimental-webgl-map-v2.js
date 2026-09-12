@@ -21,12 +21,17 @@ function bitmapSize(item,edge){
   const width=Math.max(1,Number(item?.width)||1),height=Math.max(1,Number(item?.height)||1),scale=Math.min(1,edge/Math.max(width,height));
   return[Math.max(1,Math.round(width*scale)),Math.max(1,Math.round(height*scale))];
 }
+function sameMediaOrder(current,next){
+  if(!Array.isArray(current)||!Array.isArray(next)||current.length!==next.length)return false;
+  for(let index=0;index<next.length;index++)if(String(current[index]?.hash||'')!==String(next[index]?.hash||''))return false;
+  return true;
+}
 
 export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   constructor(canvas,options={}){
     super(canvas,options);
     this.originalEntries=new Map();this.originalQueue=[];this.originalQueued=new Set();this.originalDesired=new Set();this.originalLoads=0;this.originalToken=1;
-    this.originalBuffer=this.gl.createBuffer();this.cameraSettleTimer=0;this.maxGeometryHalfCells=0;
+    this.originalBuffer=this.gl.createBuffer();this.cameraSettleTimer=0;this.maxGeometryHalfCells=0;this.sceneMediaChanged=true;
     this.configureTiers();
     this.canvas.addEventListener('webglcontextrestored',()=>{this.configureTiers();this.originalEntries=new Map();this.originalQueue=[];this.originalQueued=new Set();this.originalDesired=new Set();this.originalLoads=0;this.originalToken++;this.originalBuffer=this.gl.createBuffer();this.settle()});
   }
@@ -51,7 +56,15 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   }
 
   setScene(scene){
-    this.configureTiers();super.setScene(scene);this.configureTiers();this.baseSide=this.cell*.96;this.maxGeometryHalfCells=0;
+    const nextMedia=Array.isArray(scene?.media)?scene.media:[],preserveTextures=sameMediaOrder(this.media,nextMedia);
+    this.sceneMediaChanged=!preserveTextures;
+    this.configureTiers();
+    if(preserveTextures){
+      const resetTextures=this.resetTextures;
+      this.resetTextures=()=>{};
+      try{super.setScene(scene)}finally{this.resetTextures=resetTextures}
+    }else super.setScene(scene);
+    this.configureTiers();this.baseSide=this.cell*.96;this.maxGeometryHalfCells=0;
     const renderW=this.result?.renderW,renderH=this.result?.renderH,instances=new Float32Array(this.media.length*8);let count=0;
     for(let index=0;index<this.media.length;index++){
       if(!this.valid[index])continue;
@@ -112,9 +125,11 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
     }catch(error){if(!String(error?.message||'').includes('404'))this.onError?.(error)}
   }
 
+  drawUnderlay(){}
+
   draw(){
     if(!this.gl||this.lost)return;const gl=this.gl;gl.viewport(0,0,this.canvas.width,this.canvas.height);gl.clearColor(.055,.051,.059,1);gl.clear(gl.COLOR_BUFFER_BIT);gl.useProgram(this.program);gl.uniform2f(this.uViewport,Math.max(1,this.canvas.clientWidth),Math.max(1,this.canvas.clientHeight));gl.uniform2f(this.uPan,this.panX,this.panY);gl.uniform1f(this.uZoom,this.zoom);
-    this.drawInstances(this.placeholderBuffer,this.placeholderCount||0,this.placeholderTexture,0);const screenPx=this.screenItemSize();
+    this.drawInstances(this.placeholderBuffer,this.placeholderCount||0,this.placeholderTexture,0);this.drawUnderlay();const screenPx=this.screenItemSize();
     if(screenPx>=SMALL_SCREEN_PX){for(const page of this.tiers.small.pages){page.rebuildBuffer();this.drawInstances(page.buffer,page.count,page.texture,1)}if(screenPx>=DETAIL_SCREEN_PX)for(const page of this.tiers.detail.pages){page.rebuildBuffer();this.drawInstances(page.buffer,page.count,page.texture,1)}}
     if(screenPx>=ORIGINAL_SCREEN_PX&&this.originalDesired.size){for(const index of this.originalDesired){const entry=this.originalEntries.get(index);if(!entry||!this.valid[index])continue;const o=index*4,values=new Float32Array([this.geometry[o],this.geometry[o+1],this.geometry[o+2],this.geometry[o+3],0,0,1,1]);gl.bindBuffer(gl.ARRAY_BUFFER,this.originalBuffer);gl.bufferData(gl.ARRAY_BUFFER,values,gl.DYNAMIC_DRAW);this.drawInstances(this.originalBuffer,1,entry.texture,1);entry.lastUsed=performance.now()}}
     if(this.hoverIndex>=0&&this.valid[this.hoverIndex]){const o=this.hoverIndex*4,values=new Float32Array([this.geometry[o],this.geometry[o+1],this.geometry[o+2],this.geometry[o+3],0,0,1,1]);gl.bindBuffer(gl.ARRAY_BUFFER,this.hoverBuffer);gl.bufferData(gl.ARRAY_BUFFER,values,gl.DYNAMIC_DRAW);this.drawInstances(this.hoverBuffer,1,this.placeholderTexture,2)}
