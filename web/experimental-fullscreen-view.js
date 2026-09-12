@@ -92,6 +92,33 @@ function detachExperimentalChrome(){
   syncGeometry();
   return true;
 }
+function forwardExperimentalWheel(event){
+  if(!root.classList.contains('experimental-view-active'))return;
+  const viewport=surface?.querySelector('.experimental-view-viewport')||document.querySelector('.experimental-view-viewport');
+  if(!viewport||viewport.contains(event.target))return;
+  if(viewport.classList.contains('grid-mode')){
+    viewport.scrollLeft+=event.deltaX;
+    viewport.scrollTop+=event.deltaY;
+    event.preventDefault();
+    return;
+  }
+  const forwarded=new WheelEvent('wheel',{
+    bubbles:false,
+    cancelable:true,
+    clientX:event.clientX,
+    clientY:event.clientY,
+    deltaX:event.deltaX,
+    deltaY:event.deltaY,
+    deltaZ:event.deltaZ,
+    deltaMode:event.deltaMode,
+    ctrlKey:event.ctrlKey,
+    shiftKey:event.shiftKey,
+    altKey:event.altKey,
+    metaKey:event.metaKey
+  });
+  viewport.dispatchEvent(forwarded);
+  if(forwarded.defaultPrevented)event.preventDefault();
+}
 
 const mountObserver=new MutationObserver(()=>{
   if(detachExperimentalChrome())mountObserver.disconnect();
@@ -100,6 +127,7 @@ if(!detachExperimentalChrome())mountObserver.observe(document.body,{childList:tr
 
 new MutationObserver(()=>{syncGeometry();syncLoadingIndicator()}).observe(root,{attributes:true,attributeFilter:['class']});
 window.addEventListener('resize',syncGeometry,{passive:true});
+window.addEventListener('wheel',forwardExperimentalWheel,{capture:true,passive:false});
 if(globalThis.ResizeObserver){
   const resizeObserver=new ResizeObserver(syncGeometry);
   const watch=()=>{
