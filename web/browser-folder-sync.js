@@ -90,6 +90,12 @@ function mediaFile(file, path) {
   return index >= 0 && MEDIA_EXTENSIONS.has(name.slice(index + 1).toLowerCase());
 }
 
+function heicFile(file, path = '') {
+  const type = mimeFor(file, path).toLowerCase();
+  if (type === 'image/heic' || type === 'image/heif') return true;
+  return /\.(?:heic|heif)$/i.test(String(path || file?.name || ''));
+}
+
 function normalizeSource(source) {
   if (!source) return source;
   return {
@@ -249,6 +255,47 @@ async function canvasBlob(canvas) {
   return blob;
 }
 
+async function imageGeometry(file) {
+  let image;
+  let objectUrl = '';
+  try {
+    if ('createImageBitmap' in window) image = await createImageBitmap(file, { imageOrientation:'from-image' });
+    else {
+      image = new Image();
+      objectUrl = URL.createObjectURL(file);
+      image.src = objectUrl;
+      if (!image.complete) await waitFor(image, 'load');
+    }
+    return {
+      width:Math.max(0, Math.round(Number(image.width || image.naturalWidth) || 0)),
+      height:Math.max(0, Math.round(Number(image.height || image.naturalHeight) || 0))
+    };
+  } finally {
+    image?.close?.();
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function videoGeometry(file) {
+  const video = document.createElement('video');
+  const objectUrl = URL.createObjectURL(file);
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'metadata';
+  video.src = objectUrl;
+  try {
+    if (video.readyState < 1) await waitFor(video, 'loadedmetadata');
+    return {
+      width:Math.max(0, Math.round(Number(video.videoWidth) || 0)),
+      height:Math.max(0, Math.round(Number(video.videoHeight) || 0))
+    };
+  } finally {
+    video.removeAttribute('src');
+    video.load();
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 async function imageThumbnail(file) {
   let image;
   let objectUrl = '';
@@ -260,14 +307,14 @@ async function imageThumbnail(file) {
       image.src = objectUrl;
       if (!image.complete) await waitFor(image, 'load');
     }
-    const sourceWidth = image.width || image.naturalWidth;
-    const sourceHeight = image.height || image.naturalHeight;
-    const scale = Math.min(1, THUMB_EDGE / Math.max(sourceWidth, sourceHeight));
-    const width = Math.max(1, Math.round(sourceWidth * scale));
-    const height = Math.max(1, Math.round(sourceHeight * scale));
-    const canvas = canvasFor(width, height);
-    canvas.getContext('2d', { alpha:false }).drawImage(image, 0, 0, width, height);
-    return { blob:await canvasBlob(canvas), width, height };
+    const width = Math.max(1, Math.round(Number(image.width || image.naturalWidth) || 1));
+    const height = Math.max(1, Math.round(Number(image.height || image.naturalHeight) || 1));
+    const scale = Math.min(1, THUMB_EDGE / Math.max(width, height));
+    const thumbWidth = Math.max(1, Math.round(width * scale));
+    const thumbHeight = Math.max(1, Math.round(height * scale));
+    const canvas = canvasFor(thumbWidth, thumbHeight);
+    canvas.getContext('2d', { alpha:false }).drawImage(image, 0, 0, thumbWidth, thumbHeight);
+    return { blob:await canvasBlob(canvas), width, height, thumbWidth, thumbHeight };
   } finally {
     image?.close?.();
     if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -284,17 +331,19 @@ async function videoThumbnail(file) {
   try {
     if (video.readyState < 1) await waitFor(video, 'loadedmetadata');
     if (!video.videoWidth || !video.videoHeight) throw new Error('Video has no frame size');
+    const width = Math.max(1, Math.round(Number(video.videoWidth) || 1));
+    const height = Math.max(1, Math.round(Number(video.videoHeight) || 1));
     if (Number.isFinite(video.duration) && video.duration > .15) {
       video.currentTime = Math.min(.5, Math.max(.05, video.duration * .1));
       await waitFor(video, 'seeked');
     }
     if (video.readyState < 2) await waitFor(video, 'loadeddata');
-    const scale = Math.min(1, THUMB_EDGE / Math.max(video.videoWidth, video.videoHeight));
-    const width = Math.max(1, Math.round(video.videoWidth * scale));
-    const height = Math.max(1, Math.round(video.videoHeight * scale));
-    const canvas = canvasFor(width, height);
-    canvas.getContext('2d', { alpha:false }).drawImage(video, 0, 0, width, height);
-    return { blob:await canvasBlob(canvas), width, height };
+    const scale = Math.min(1, THUMB_EDGE / Math.max(width, height));
+    const thumbWidth = Math.max(1, Math.round(width * scale));
+    const thumbHeight = Math.max(1, Math.round(height * scale));
+    const canvas = canvasFor(thumbWidth, thumbHeight);
+    canvas.getContext('2d', { alpha:false }).drawImage(video, 0, 0, thumbWidth, thumbHeight);
+    return { blob:await canvasBlob(canvas), width, height, thumbWidth, thumbHeight };
   } finally {
     video.removeAttribute('src');
     video.load();
@@ -302,28 +351,72 @@ async function videoThumbnail(file) {
   }
 }
 
+async function heicThumbnail(hash, file, path) {
+  const response = await fetch(`/api/client/browser-heic-thumb/${hash}`, {
+    method:'PUT',
+    headers:{ 'content-type':file.type || mimeFor(file, path) || 'image/heic' },
+    body:file
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Could not decode HEIC thumbnail');
+  return {
+    width:Math.max(0, Math.round(Number(data.sourceWidth) || 0)),
+    height:Math.max(0, Math.round(Number(data.sourceHeight) || 0)),
+    thumbWidth:Math.max(0, Math.round(Number(data.width) || 0)),
+    thumbHeight:Math.max(0, Math.round(Number(data.height) || 0))
+  };
+}
+
 async function ensureThumbnail(hash, file, path, previous = null) {
   if (!hash || !mediaFile(file, path)) return previous || {};
   const existing = await fetch(`/api/thumbs/${hash}?v=${THUMB_VERSION}`, { method:'HEAD' }).catch(() => null);
-  if (existing?.ok) return previous || {};
+  if (existing?.ok && previous) return previous;
   try {
     const mime = mimeFor(file, path);
-    const result = mime.startsWith('video/') ? await videoThumbnail(file) : await imageThumbnail(file);
-    const response = await fetch(`/api/client/browser-thumb/${hash}`, {
-      method:'PUT',
-      headers:{
-        'content-type':'image/webp',
-        'x-mochimono-width':String(result.width),
-        'x-mochimono-height':String(result.height)
-      },
-      body:result.blob
-    });
-    if (!response.ok) throw new Error('Could not save browser thumbnail');
-    dispatchEvent(new CustomEvent('mochimono:browser-thumbnail-ready', { detail:{ hash, width:result.width, height:result.height } }));
-    return { width:result.width, height:result.height };
+    let result;
+    if (heicFile(file, path)) {
+      result = await heicThumbnail(hash, file, path);
+    } else if (existing?.ok) {
+      result = mime.startsWith('video/') ? await videoGeometry(file) : await imageGeometry(file);
+    } else {
+      const generated = mime.startsWith('video/') ? await videoThumbnail(file) : await imageThumbnail(file);
+      const response = await fetch(`/api/client/browser-thumb/${hash}`, {
+        method:'PUT',
+        headers:{
+          'content-type':'image/webp',
+          'x-mochimono-width':String(generated.thumbWidth),
+          'x-mochimono-height':String(generated.thumbHeight)
+        },
+        body:generated.blob
+      });
+      if (!response.ok) throw new Error('Could not save browser thumbnail');
+      result = generated;
+    }
+    const dimensions = {
+      width:Math.max(0, Math.round(Number(result?.width) || 0)),
+      height:Math.max(0, Math.round(Number(result?.height) || 0)),
+      thumbWidth:Math.max(0, Math.round(Number(result?.thumbWidth) || 0)),
+      thumbHeight:Math.max(0, Math.round(Number(result?.thumbHeight) || 0))
+    };
+    if (dimensions.width && dimensions.height) {
+      dispatchEvent(new CustomEvent('mochimono:browser-thumbnail-ready', { detail:{ hash, ...dimensions } }));
+    }
+    return dimensions;
   } catch {
     return previous || {};
   }
+}
+
+async function publishGeometry(hash, dimensions, cloud) {
+  if (!cloud) return;
+  const width = Math.max(0, Math.round(Number(dimensions?.width) || 0));
+  const height = Math.max(0, Math.round(Number(dimensions?.height) || 0));
+  if (!width || !height) return;
+  await request(`/api/media-metadata/${hash}`, {
+    method:'POST',
+    headers:{ 'content-type':'application/json' },
+    body:JSON.stringify({ width, height })
+  }).catch(() => {});
 }
 
 function libraryFile(row, source) {
@@ -424,15 +517,19 @@ async function syncSource(id, { userGesture = false } = {}) {
           headers:{ 'x-mochimono-file-mime':file.type || 'application/octet-stream' },
           body:file
         });
-        const dimensions = await ensureThumbnail(data.hash, file, path, old);
+        const prior = old?.hash === data.hash ? old : null;
+        const dimensions = await ensureThumbnail(data.hash, file, path, prior);
+        await publishGeometry(data.hash, dimensions, source.cloud === true && data.ignored !== true);
         next.push({
           path,
           size:file.size,
           lastModified:file.lastModified,
           hash:data.hash,
           mime:data.mime || mimeFor(file, path),
-          width:Number(dimensions.width || old?.width) || 0,
-          height:Number(dimensions.height || old?.height) || 0,
+          width:Number(dimensions.width) || 0,
+          height:Number(dimensions.height) || 0,
+          thumbWidth:Number(dimensions.thumbWidth) || 0,
+          thumbHeight:Number(dimensions.thumbHeight) || 0,
           cloudSynced:source.cloud === true && data.ignored !== true
         });
         transferred++;
