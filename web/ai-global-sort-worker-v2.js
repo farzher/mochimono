@@ -3,6 +3,10 @@ const BASE_WORKER = './ai-global-sort-worker-v6.js';
 const FAMILY_WORKER = './ai-global-multimodal-worker.js';
 const MULTIMODAL_MODES = new Set(['flow','color','structure','hybrid','topics','moments']);
 const SECTION_MODES = new Set(['color','structure','topics']);
+const COLOR_LABELS = ['Red','Orange','Yellow','Green','Cyan','Blue','Purple','Magenta'];
+const VIS_DB = 'mochimono-visual-similarity';
+const VIS_VERSION = 1;
+const VIS_STORE = 'fingerprints';
 const children = new Map();
 const pending = new Set();
 let canceled = false;
@@ -235,6 +239,178 @@ function consolidateFamilies(base, familyResult, media, mode) {
   };
 }
 
+function clamp(value, min = 0, max = 1) {
+  return Math.max(min, Math.min(max, Number(value) || 0));
+}
+
+function colorMetaFromRow(row) {
+  const cached = row?.aiSortColor;
+  if (cached && row?.aiSortColorVersion === 'ai-sort-color-v1') {
+    return { ok:1, h:clamp(cached.h), l:clamp(cached.l), c:Math.max(0, Number(cached.c) || 0), f:clamp(cached.f) };
+  }
+  const flow = row?.aiColorFlow;
+  if (flow && Array.isArray(flow.v) && flow.v.length === 56) {
+    return { ok:1, h:clamp(flow.h), l:clamp(flow.l), c:Math.max(0, Number(flow.c) || 0), f:clamp(flow.f) };
+  }
+  const color = row?.visualColor;
+  const feature = row?.visualFeature;
+  if (color && feature) {
+    return {
+      ok:1,
+      h:clamp(color.dominantHue),
+      l:clamp((Number(feature.meanLuma) || 0) / 255),
+      c:Math.max(0, Number(color.meanChroma) || 0),
+      f:clamp(color.colorFraction)
+    };
+  }
+  return null;
+}
+
+async function loadColorMeta(media) {
+  const wanted = new Set(media.map(file => String(file?.hash || '')));
+  const meta = new Map();
+  const db = await new Promise((resolve, reject) => {
+    const request = indexedDB.open(VIS_DB, VIS_VERSION);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  try {
+    if (!db.objectStoreNames.contains(VIS_STORE)) return meta;
+    const tx = db.transaction(VIS_STORE, 'readonly');
+    const request = tx.objectStore(VIS_STORE).openCursor();
+    await new Promise((resolve, reject) => {
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return resolve();
+        const row = cursor.value || {};
+        const hash = String(row.hash || '');
+        if (wanted.has(hash)) {
+          const value = colorMetaFromRow(row);
+          if (value) meta.set(hash, value);
+        }
+        cursor.continue();
+      };
+    });
+  } finally {
+    db.close();
+  }
+  return meta;
+}
+
+function shiftedHue(hue) {
+  const value = (Number(hue) || 0) + 15 / 360;
+  return value >= 1 ? value - 1 : value;
+}
+
+function averageUnitColor(members, meta) {
+  let x = 0, y = 0, l = 0, count = 0;
+  for (const hash of members) {
+    const value = meta.get(hash);
+    if (!value?.ok) continue;
+    const angle = value.h * Math.PI * 2;
+    const weight = .08 + Math.min(1, value.c * 7) * value.f;
+    x += Math.cos(angle) * weight;
+    y += Math.sin(angle) * weight;
+    l += value.l;
+    count++;
+  }
+  if (!count) return null;
+  let h = Math.atan2(y, x) / (Math.PI * 2);
+  if (h < 0) h++;
+  return { h, l:l / count };
+}
+
+async function applyColorSerpentine(result, familyResult, media) {
+  const oldOrder = Array.from(result?.order || [], String);
+  const ids = familyResult?.familyIds;
+  if (!oldOrder.length || !ids?.length || ids.length !== media.length) return result;
+
+  const meta = await loadColorMeta(media);
+  if (!meta.size) return result;
+
+  const sections = railSections(result);
+  const mediaIndex = new Map(media.map((file, index) => [String(file?.hash || ''), index]));
+  const positions = new Map(oldOrder.map((hash, index) => [hash, index]));
+  const familySizes = new Map();
+  for (let index = 0; index < ids.length; index++) {
+    const id = Number(ids[index]);
+    if (id >= 0) familySizes.set(id, (familySizes.get(id) || 0) + 1);
+  }
+
+  const sectionOrder = [];
+  const sectionMembers = new Map();
+  for (const hash of oldOrder) {
+    const key = sections.keys.get(hash) || 'unsectioned';
+    if (!sectionMembers.has(key)) {
+      sectionMembers.set(key, []);
+      sectionOrder.push(key);
+    }
+    sectionMembers.get(key).push(hash);
+  }
+
+  const output = [];
+  const rail = [];
+  for (const sectionKey of sectionOrder) {
+    const hashes = sectionMembers.get(sectionKey);
+    const label = sections.labels.get(hashes[0]) || sectionKey.split(':').slice(1).join(':');
+    rail.push({ index:output.length, label });
+    const zone = COLOR_LABELS.indexOf(label);
+    if (zone < 0) {
+      output.push(...hashes);
+      continue;
+    }
+
+    const groups = new Map();
+    for (const hash of hashes) {
+      const index = mediaIndex.get(hash);
+      const family = index == null ? -1 : Number(ids[index]);
+      const familyKey = family >= 0 && (familySizes.get(family) || 0) > 1 ? `f:${family}` : `s:${hash}`;
+      let members = groups.get(familyKey);
+      if (!members) groups.set(familyKey, members = []);
+      members.push(hash);
+    }
+
+    const cells = Array.from({ length:3 }, () => Array.from({ length:5 }, () => []));
+    const missing = [];
+    for (const members of groups.values()) {
+      members.sort((a,b) => positions.get(a) - positions.get(b));
+      const color = averageUnitColor(members, meta);
+      const anchor = members.reduce((sum, hash) => sum + positions.get(hash), 0) / members.length;
+      if (!color) {
+        missing.push({ members, anchor });
+        continue;
+      }
+      const local = ((shiftedHue(color.h) * 8 - zone) + 8) % 8;
+      const hueBin = Math.max(0, Math.min(2, Math.floor(local * 3)));
+      const lightBin = Math.max(0, Math.min(4, Math.floor(color.l * 5)));
+      cells[hueBin][lightBin].push({ members, anchor });
+    }
+
+    for (let hueBin = 0; hueBin < 3; hueBin++) {
+      const brightToDark = ((zone + hueBin) & 1) === 0;
+      const lightBins = brightToDark ? [4,3,2,1,0] : [0,1,2,3,4];
+      for (const lightBin of lightBins) {
+        const list = cells[hueBin][lightBin].sort((a,b) => a.anchor - b.anchor);
+        for (const unit of list) output.push(...unit.members);
+      }
+    }
+    missing.sort((a,b) => a.anchor - b.anchor);
+    for (const unit of missing) output.push(...unit.members);
+  }
+
+  if (output.length !== oldOrder.length || new Set(output).size !== oldOrder.length) return result;
+  let moved = 0;
+  for (let index = 0; index < output.length; index++) if (output[index] !== oldOrder[index]) moved++;
+  return {
+    ...result,
+    order:output,
+    rail,
+    colorSerpentineMoved:moved,
+    algorithm:`${result.algorithm || 'ai-sort'}+color-serpentine-v1`
+  };
+}
+
 async function sort(data) {
   const mode = String(data.payload?.mode || 'flow');
   if (mode === 'families') {
@@ -258,7 +434,17 @@ async function sort(data) {
     detail:`Locking multimodal families into ${mode}…`,
     stage:'multimodal-lock'
   });
-  const result = consolidateFamilies(base, familyResult, Array.isArray(data.payload?.media) ? data.payload.media : [], mode);
+  let result = consolidateFamilies(base, familyResult, Array.isArray(data.payload?.media) ? data.payload.media : [], mode);
+  if (mode === 'color') {
+    self.postMessage({
+      type:'progress',
+      done:Array.isArray(data.payload?.media) ? data.payload.media.length : 1,
+      total:Array.isArray(data.payload?.media) ? data.payload.media.length : 1,
+      detail:'Smoothing brightness across color transitions…',
+      stage:'color-flow'
+    });
+    result = await applyColorSerpentine(result, familyResult, Array.isArray(data.payload?.media) ? data.payload.media : []);
+  }
   self.postMessage({
     type:'progress',
     done:Array.isArray(data.payload?.media) ? data.payload.media.length : 1,
