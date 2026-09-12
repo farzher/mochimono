@@ -1,7 +1,7 @@
 const root=document.documentElement;
 const ACTIVE='experimental-view-active';
-const RERUN_QUIET_MS=700;
-const AI_QUIET_MS=900;
+const RERUN_QUIET_MS=1500;
+const AI_QUIET_MS=1200;
 let lastInteractionAt=0;
 let rerunTimer=0;
 let rerunPending=false;
@@ -9,7 +9,7 @@ let rawRerun=null;
 let cachePatched=false;
 let aiPatched=false;
 let wasActive=false;
-let pendingCacheSaves=[];
+let pendingCacheSave=null;
 let pendingDimensions=new Map();
 
 const active=()=>root.classList.contains(ACTIVE);
@@ -75,11 +75,14 @@ async function flushDeferredCache(){
     pendingDimensions.clear();
     for(const args of entries)cache.__performanceRawRemember(...args);
   }
-  const saves=pendingCacheSaves;
-  pendingCacheSaves=[];
-  for(const item of saves){
-    try{item.resolve(await cache.__performanceRawSave(...item.args))}
-    catch(error){item.reject(error)}
+  const pending=pendingCacheSave;
+  pendingCacheSave=null;
+  if(!pending)return;
+  try{
+    const result=await cache.__performanceRawSave(...pending.args);
+    for(const waiter of pending.waiters)waiter.resolve(result);
+  }catch(error){
+    for(const waiter of pending.waiters)waiter.reject(error);
   }
 }
 
@@ -92,7 +95,11 @@ function patchCatalogCache(){
   cache.__performanceRawRemember=rawRemember;
   cache.save=(...args)=>{
     if(!active())return rawSave(...args);
-    return new Promise((resolve,reject)=>pendingCacheSaves.push({args,resolve,reject}));
+    return new Promise((resolve,reject)=>{
+      if(!pendingCacheSave)pendingCacheSave={args,waiters:[]};
+      else pendingCacheSave.args=args;
+      pendingCacheSave.waiters.push({resolve,reject});
+    });
   };
   cache.rememberDimensions=(...args)=>{
     if(!active())return rawRemember(...args);
