@@ -1,7 +1,7 @@
 import { ExperimentalWebGLMapRenderer as BaseRenderer } from './experimental-webgl-map-v1.js';
 
 const LOAD_CONCURRENCY=20;
-const SMALL_EDGE=32;
+const SMALL_EDGE=64;
 const SMALL_PAGES=8;
 const SMALL_SCREEN_PX=2.5;
 const DETAIL_SCREEN_PX=48;
@@ -26,7 +26,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   constructor(canvas,options={}){
     super(canvas,options);
     this.originalEntries=new Map();this.originalQueue=[];this.originalQueued=new Set();this.originalDesired=new Set();this.originalLoads=0;this.originalToken=1;
-    this.originalBuffer=this.gl.createBuffer();this.cameraSettleTimer=0;
+    this.originalBuffer=this.gl.createBuffer();this.cameraSettleTimer=0;this.maxGeometryHalfCells=0;
     this.configureTiers();
     this.canvas.addEventListener('webglcontextrestored',()=>{this.configureTiers();this.originalEntries=new Map();this.originalQueue=[];this.originalQueued=new Set();this.originalDesired=new Set();this.originalLoads=0;this.originalToken++;this.originalBuffer=this.gl.createBuffer();this.settle()});
   }
@@ -51,19 +51,21 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   }
 
   setScene(scene){
-    this.configureTiers();super.setScene(scene);this.configureTiers();this.baseSide=this.cell*.96;
+    this.configureTiers();super.setScene(scene);this.configureTiers();this.baseSide=this.cell*.96;this.maxGeometryHalfCells=0;
     const renderW=this.result?.renderW,renderH=this.result?.renderH,instances=new Float32Array(this.media.length*8);let count=0;
     for(let index=0;index<this.media.length;index++){
       if(!this.valid[index])continue;
       const offset=index*4,packedW=Number(renderW?.[index]),packedH=Number(renderH?.[index]);
       const[width,height]=packedW>0&&packedH>0?[packedW*this.cell,packedH*this.cell]:aspectSize(this.media[index],this.baseSide);
-      this.geometry[offset+2]=width;this.geometry[offset+3]=height;
+      this.geometry[offset+2]=width;this.geometry[offset+3]=height;this.maxGeometryHalfCells=Math.max(this.maxGeometryHalfCells,width/this.cell*.5,height/this.cell*.5);
       const at=count*8;instances[at]=this.geometry[offset];instances[at+1]=this.geometry[offset+1];instances[at+2]=width;instances[at+3]=height;instances[at+4]=0;instances[at+5]=0;instances[at+6]=1;instances[at+7]=1;count++;
     }
     this.placeholderCount=count;this.gl.bindBuffer(this.gl.ARRAY_BUFFER,this.placeholderBuffer);this.gl.bufferData(this.gl.ARRAY_BUFFER,instances.subarray(0,count*8),this.gl.STATIC_DRAW);
     for(const tier of Object.values(this.tiers))for(const page of tier.pages)page.dirty=true;
     this.requestDraw();
   }
+
+  visibleIndexes(overscanCells=2){return super.visibleIndexes(overscanCells+(this.maxGeometryHalfCells||0))}
 
   settle(){
     if(!this.result||this.lost)return;
