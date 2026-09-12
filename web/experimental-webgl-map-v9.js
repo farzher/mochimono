@@ -2,8 +2,30 @@ import { ExperimentalWebGLMapRenderer as BaseRenderer } from './experimental-web
 
 const LOAD_CONCURRENCY=4;
 const ORIGINAL_CONCURRENCY=1;
+const REFRESH_QUIET_MS=180;
 
 export class ExperimentalWebGLMapRenderer extends BaseRenderer{
+  constructor(canvas,options={}){
+    super(canvas,options);
+    this.lastCameraAt=0;
+    this.refreshTimer=0;
+    this.pendingRefresh=new Map();
+    this.hashIndex=new Map();
+  }
+
+  destroy(){
+    clearTimeout(this.refreshTimer);
+    this.refreshTimer=0;
+    this.pendingRefresh.clear();
+    this.hashIndex.clear();
+    super.destroy();
+  }
+
+  setScene(scene){
+    super.setScene(scene);
+    this.hashIndex=new Map(this.media.map((item,index)=>[String(item?.hash||''),index]));
+  }
+
   invalidateMovingLoads(){
     if(this.queue.length)this.queue.length=0;
     if(this.queued.size)this.queued.clear();
@@ -19,7 +41,43 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
     this.panX=nextX;
     this.panY=nextY;
     this.zoom=nextZoom;
+    this.lastCameraAt=performance.now();
     this.invalidateMovingLoads();
+    this.requestDraw();
+  }
+
+  refreshThumbnail(hash,includeMicro=false){
+    const index=this.hashIndex.get(String(hash||''));
+    if(!Number.isInteger(index))return;
+    this.pendingRefresh.set(index,Boolean(includeMicro)||Boolean(this.pendingRefresh.get(index)));
+    this.scheduleThumbnailRefresh();
+  }
+
+  scheduleThumbnailRefresh(){
+    clearTimeout(this.refreshTimer);
+    const elapsed=performance.now()-this.lastCameraAt;
+    const delay=Math.max(0,REFRESH_QUIET_MS-elapsed);
+    this.refreshTimer=setTimeout(()=>this.flushThumbnailRefresh(),delay);
+  }
+
+  flushThumbnailRefresh(){
+    this.refreshTimer=0;
+    if(!this.pendingRefresh.size)return;
+    if(performance.now()-this.lastCameraAt<REFRESH_QUIET_MS){this.scheduleThumbnailRefresh();return}
+    for(const[index,includeMicro]of this.pendingRefresh){
+      for(const[name,tier]of Object.entries(this.tiers||{})){
+        if(!includeMicro&&name==='micro')continue;
+        const entry=tier?.entries?.get(index);
+        if(!entry)continue;
+        tier.entries.delete(index);
+        entry.page?.release?.(entry);
+      }
+      for(const key of [...this.failedUntil.keys()])if(key.endsWith(`:${index}`))this.failedUntil.delete(key);
+      const original=this.originalEntries?.get(index);
+      if(original){this.gl.deleteTexture(original.texture);this.originalEntries.delete(index)}
+    }
+    this.pendingRefresh.clear();
+    this.settle();
     this.requestDraw();
   }
 
@@ -50,7 +108,9 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
       concurrency:LOAD_CONCURRENCY,
       originalConcurrency:ORIGINAL_CONCURRENCY,
       interactionDeferredLoading:true,
-      livePanLoading:false
+      livePanLoading:false,
+      refreshQuietMs:REFRESH_QUIET_MS,
+      pendingRefresh:this.pendingRefresh.size
     };
   }
 }
