@@ -179,8 +179,9 @@ function pump() {
 
 export function queueBrowserThumbnail(record) {
   if (!record?.hash || !record.kind) return;
-  queue.set(record.hash, record);
-  schedule(record.urgent ? 0 : 4000);
+  const queued = isHeic(record) ? { ...record, urgent:true } : record;
+  queue.set(record.hash, queued);
+  schedule(queued.urgent ? 0 : 4000);
 }
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(100); });
