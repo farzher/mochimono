@@ -107,7 +107,7 @@ function runVisualReindex(){
   reindexQueue.clear();
   if(!media.length)return;
   const worker=new Worker(new URL('./visual-order-worker.js',import.meta.url),{type:'module'});
-  const finish=()=>{try{worker.terminate()}catch{};window.mochimonoExperimentalViews?.rerun?.()};
+  const finish=()=>{try{worker.terminate()}catch{}};
   worker.onerror=finish;
   worker.onmessage=event=>{if(event.data?.type==='result'||event.data?.type==='error')finish()};
   worker.postMessage({media,mode:'color'});
@@ -121,7 +121,6 @@ function runAiReindexSoon(){
     try{
       await window.mochimonoAI.index('dinov3',{scope:'view'});
       await window.mochimonoAI.index('siglip2',{scope:'view'});
-      window.mochimonoExperimentalViews?.rerun?.();
     }catch{}
   });
 }
