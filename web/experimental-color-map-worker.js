@@ -8,7 +8,7 @@ const COLOR_ASPECT=1.68;
 const COLOR_OCCUPANCY=.90;
 const NEUTRAL_OCCUPANCY=.92;
 const NEUTRAL_GAP=2;
-const HUE_ABSOLUTE_WEIGHT=.34;
+const HUE_ABSOLUTE_WEIGHT=.28;
 const LIGHT_ABSOLUTE_WEIGHT=.82;
 const AI_COLOR_VERSION='ai-sort-color-v1';
 const FAMILY_WORKER_REV='20260912-color-family-1';
@@ -66,7 +66,7 @@ function hueSeam(colors){
 }
 
 function rankMap(indexes,valueFor){
-  const sorted=indexes.slice().sort((a,b)=>valueFor(a)-valueFor(b)||a-b),out=new Float32Array(Math.max(1,...indexes.map(i=>i+1)));
+  const sorted=indexes.slice().sort((a,b)=>valueFor(a)-valueFor(b)||a-b),length=indexes.reduce((max,index)=>Math.max(max,index+1),1),out=new Float32Array(length);
   const denominator=Math.max(1,sorted.length-1);
   for(let rank=0;rank<sorted.length;rank++)out[sorted[rank]]=rank/denominator;
   return out;
@@ -133,8 +133,8 @@ function familyInfo(indexes,familyIds,order,media){
 function familyStrength(members,tx,ty){
   let mx=0,my=0;for(const index of members){mx+=tx[index];my+=ty[index]}mx/=members.length;my/=members.length;
   let spreadX=0,spreadY=0;for(const index of members){spreadX+=Math.abs(tx[index]-mx);spreadY+=Math.abs(ty[index]-my)}spreadX/=members.length;spreadY/=members.length;
-  const xStrength=spreadX<.055?.86:spreadX<.11?.72:spreadX<.18?.50:spreadX<.28?.28:.10;
-  const yStrength=spreadY<.08?.54:spreadY<.18?.38:.20;
+  const xStrength=spreadX<.055?.88:spreadX<.11?.74:spreadX<.18?.52:spreadX<.28?.30:.10;
+  const yStrength=spreadY<.08?.72:spreadY<.18?.52:spreadY<.28?.30:.16;
   return{mx,my,xStrength,yStrength};
 }
 
