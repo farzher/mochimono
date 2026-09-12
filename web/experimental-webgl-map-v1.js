@@ -38,8 +38,10 @@ void main(){
   }
   if(uMode == 2){
     float edge = min(min(vLocal.x, 1.0-vLocal.x), min(vLocal.y, 1.0-vLocal.y));
-    if(edge > 0.045) discard;
-    outColor = vec4(1.0, 1.0, 1.0, 0.92);
+    float pixel = max(fwidth(vLocal.x), fwidth(vLocal.y));
+    float thickness = min(0.018, max(0.004, pixel * 1.15));
+    if(edge > thickness) discard;
+    outColor = vec4(1.0, 1.0, 1.0, 0.80);
     return;
   }
   outColor = texture(uTexture, vUv);
