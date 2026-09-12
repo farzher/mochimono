@@ -2,6 +2,7 @@ const root=document.documentElement;
 const ACTIVE='experimental-view-active';
 const RERUN_QUIET_MS=1500;
 const AI_QUIET_MS=1200;
+const CACHE_FLUSH_DELAY_MS=1000;
 let lastInteractionAt=0;
 let rerunTimer=0;
 let rerunPending=false;
@@ -9,6 +10,7 @@ let rawRerun=null;
 let cachePatched=false;
 let aiPatched=false;
 let wasActive=false;
+let cacheFlushTimer=0;
 let pendingCacheSave=null;
 let pendingDimensions=new Map();
 
@@ -67,6 +69,7 @@ function patchAi(){
 }
 
 async function flushDeferredCache(){
+  cacheFlushTimer=0;
   if(active())return;
   const cache=window.mochimonoCatalogCache;
   if(!cache?.__performanceRawSave)return;
@@ -84,6 +87,10 @@ async function flushDeferredCache(){
   }catch(error){
     for(const waiter of pending.waiters)waiter.reject(error);
   }
+}
+function scheduleCacheFlush(){
+  clearTimeout(cacheFlushTimer);
+  cacheFlushTimer=setTimeout(()=>flushDeferredCache(),CACHE_FLUSH_DELAY_MS);
 }
 
 function patchCatalogCache(){
@@ -116,15 +123,18 @@ function syncState(){
   patchAi();
   const isActive=active();
   if(isActive&&!wasActive){
+    clearTimeout(cacheFlushTimer);
+    cacheFlushTimer=0;
     lastInteractionAt=now();
     window.mochimonoStableGrid?.release?.();
   }else if(!isActive&&wasActive){
     if(rerunPending)scheduleRerun();
-    flushDeferredCache();
+    scheduleCacheFlush();
   }
   wasActive=isActive;
 }
 
 new MutationObserver(syncState).observe(root,{attributes:true,attributeFilter:['class']});
 queueMicrotask(syncState);
+setTimeout(syncState,0);
 addEventListener('mochimono:ai-ready',()=>{patchExperimentalApi();patchAi()},{passive:true});
