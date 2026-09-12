@@ -8,13 +8,14 @@ const MID_PREFETCH_PX=240;
 const DETAIL_PREFETCH_PX=360;
 const HEIC_FAR_LIMIT=6000;
 const heicRecord=item=>item?.type==='image'&&isHeicRecord({filename:item.filename,mime:item.mime})
-  ?{hash:item.hash,filename:item.filename,mime:item.mime||'image/heic',kind:'image',urgent:true}:null;
+  ?{hash:item.hash,filename:item.filename,mime:item.mime||'image/heic',kind:'image',urgent:true,width:Number(item.width)||0,height:Number(item.height)||0}:null;
 
 export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   constructor(canvas,options={}){
     super(canvas,{...options,thumbVersion:Math.max(4,Number(options.thumbVersion)||0)});
     this.liveSettleTimer=0;
     this.lastLiveSettle=0;
+    this.heicRepairRequested=new Set();
     this.onHeicRepaired=event=>this.refreshHeic(String(event.detail?.hash||''));
     window.addEventListener('mochimono:heic-repaired',this.onHeicRepaired);
   }
@@ -23,6 +24,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
     clearTimeout(this.liveSettleTimer);
     this.liveSettleTimer=0;
     window.removeEventListener('mochimono:heic-repaired',this.onHeicRepaired);
+    this.heicRepairRequested.clear();
     super.destroy();
   }
 
@@ -59,7 +61,13 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
 
   async load(job){
     const item=this.media[job.index],record=heicRecord(item);
-    if(record)await ensureBrowserThumbnail(record).catch(()=>{});
+    if(record){
+      await ensureBrowserThumbnail(record).catch(()=>{});
+      if(!this.heicRepairRequested.has(record.hash)){
+        this.heicRepairRequested.add(record.hash);
+        window.dispatchEvent(new CustomEvent('mochimono:heic-needs-repair',{detail:record}));
+      }
+    }
     return super.load(job);
   }
 
