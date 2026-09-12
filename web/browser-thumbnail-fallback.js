@@ -73,6 +73,10 @@ async function mediaSource(record) {
   return { blob:await response.blob(), local:false };
 }
 
+export async function browserMediaBlob(record) {
+  return (await mediaSource(record)).blob;
+}
+
 async function imageResult(record) {
   const source = await mediaSource(record);
   const image = await decodeImage(source.blob);
