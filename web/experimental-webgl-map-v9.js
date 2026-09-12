@@ -124,8 +124,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
       for(const index of this.spatial.get(`${bx}:${by}`)||[]){
         const x=Number(this.result.x[index]),y=Number(this.result.y[index]);
         if(x<left||x>right||y<top||y>bottom)continue;
-        const offset=index*4,dx=this.geometry[offset]-worldCenterX,dy=this.geometry[offset+1]-worldCenterY;
-        ranked.push([index,dx*dx+dy*dy]);
+        ranked.push(index);
       }
     };
     for(let ring=0;ring<=maxRing;ring++){
@@ -137,9 +136,14 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
       }
       if(ranked.length>=limit)break;
     }
-    ranked.sort((a,b)=>a[1]-b[1]);
+    ranked.sort((a,b)=>{
+      let offset=a*4,dx=this.geometry[offset]-worldCenterX,dy=this.geometry[offset+1]-worldCenterY;
+      const leftDistance=dx*dx+dy*dy;
+      offset=b*4;dx=this.geometry[offset]-worldCenterX;dy=this.geometry[offset+1]-worldCenterY;
+      return leftDistance-(dx*dx+dy*dy);
+    });
     if(ranked.length>limit)ranked.length=limit;
-    return ranked.map(entry=>entry[0]);
+    return ranked;
   }
 
   queueVisible(indexes,allowDetail){
