@@ -270,13 +270,17 @@ async function saveBrowserHeicThumbnail(req, res, hash, url) {
 
     const width = Math.max(1, Math.round(Number(result.info?.width) || 1));
     const height = Math.max(1, Math.round(Number(result.info?.height) || 1));
+    const sourceWidth = Math.max(0, Math.round(Number(result.info?.sourceWidth) || 0));
+    const sourceHeight = Math.max(0, Math.round(Number(result.info?.sourceHeight) || 0));
     if (view) {
       res.writeHead(200, {
         'content-type':'image/webp',
         'content-length':result.data.length,
         'cache-control':'private, max-age=31536000, immutable',
         'x-mochimono-width':width,
-        'x-mochimono-height':height
+        'x-mochimono-height':height,
+        'x-mochimono-source-width':sourceWidth,
+        'x-mochimono-source-height':sourceHeight
       });
       res.end(result.data);
       return;
@@ -291,7 +295,7 @@ async function saveBrowserHeicThumbnail(req, res, hash, url) {
     await rm(destination, { force:true });
     await rename(temp, destination);
     await writeFile(info, `${JSON.stringify({ version:BROWSER_THUMB_VERSION, width, height })}\n`);
-    json(res, 201, { ok:true, hash, size:result.data.length, width, height });
+    json(res, 201, { ok:true, hash, size:result.data.length, width, height, sourceWidth, sourceHeight });
   } catch (error) {
     if (!res.headersSent) json(res, error.status || 500, { error:error.message || 'Could not decode HEIC thumbnail' });
   } finally {
