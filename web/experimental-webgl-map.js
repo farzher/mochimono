@@ -1,1 +1,1 @@
-export { ExperimentalWebGLMapRenderer } from './experimental-webgl-map-v3.js';
+export { ExperimentalWebGLMapRenderer } from './experimental-webgl-map-v4.js';
