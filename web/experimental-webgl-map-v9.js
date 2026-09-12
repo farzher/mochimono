@@ -2,8 +2,10 @@ import { ExperimentalWebGLMapRenderer as BaseRenderer } from './experimental-web
 
 const LOAD_CONCURRENCY=4;
 const ORIGINAL_CONCURRENCY=1;
-const SETTLE_QUIET_MS=140;
-const REFRESH_QUIET_MS=180;
+const SETTLE_QUIET_MS=240;
+const REFRESH_QUIET_MS=260;
+const DETAIL_SCREEN_PX=48;
+const MICRO_ONLY_SCREEN_PX=16;
 
 export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   constructor(canvas,options={}){
@@ -26,6 +28,11 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   }
 
   setScene(scene){
+    clearTimeout(this.settleTimer);
+    clearTimeout(this.refreshTimer);
+    this.settleTimer=0;
+    this.refreshTimer=0;
+    this.pendingRefresh.clear();
     super.setScene(scene);
     this.hashIndex=new Map(this.media.map((item,index)=>[String(item?.hash||''),index]));
   }
@@ -50,6 +57,57 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
     this.requestDraw();
   }
 
+  nearestIndexes(indexes,limit,worldCenterX,worldCenterY){
+    if(indexes.length<=limit)return indexes;
+    return indexes.map(index=>{
+      const offset=index*4,dx=this.geometry[offset]-worldCenterX,dy=this.geometry[offset+1]-worldCenterY;
+      return[index,dx*dx+dy*dy];
+    }).sort((a,b)=>a[1]-b[1]).slice(0,limit).map(entry=>entry[0]);
+  }
+
+  settleNow(){
+    if(!this.result||this.lost)return;
+    const screenPx=this.screenItemSize();
+    if(screenPx<MICRO_ONLY_SCREEN_PX){super.settle();return}
+
+    this.resetPendingThumbnailLoads();
+    const nearby=this.visibleIndexes(this.prefetchOverscan(screenPx));
+    this.visibleCount=nearby.length;
+    this.visibleSet=new Set(nearby);
+    this.desired.clear();
+    if(!nearby.length){
+      this.originalDesired.clear();
+      this.requestDraw();
+      return;
+    }
+
+    const worldCenterX=(this.canvas.clientWidth*.5-this.panX)/this.zoom;
+    const worldCenterY=(this.canvas.clientHeight*.5-this.panY)/this.zoom;
+    const small=this.tiers.small;
+    const smallLimit=Math.min(small.capacity(),10000);
+    const smallWanted=this.nearestIndexes(nearby,smallLimit,worldCenterX,worldCenterY);
+
+    if(screenPx>=DETAIL_SCREEN_PX){
+      const detail=this.tiers.detail;
+      const detailWanted=this.nearestIndexes(nearby,Math.min(detail.capacity(),nearby.length),worldCenterX,worldCenterY);
+      const detailSet=new Set(detailWanted);
+      for(const index of smallWanted){
+        const tier=detailSet.has(index)?detail:small;
+        this.desired.set(index,tier.name);
+        if(!tier.get(index))this.enqueue(index,tier);
+      }
+    }else{
+      for(const index of smallWanted){
+        this.desired.set(index,small.name);
+        if(!small.get(index))this.enqueue(index,small);
+      }
+    }
+
+    this.pump();
+    this.settleOriginals(nearby,worldCenterX,worldCenterY);
+    this.requestDraw();
+  }
+
   settle(){
     if(!this.result||this.lost)return;
     clearTimeout(this.settleTimer);
@@ -57,11 +115,11 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
     if(elapsed<SETTLE_QUIET_MS){
       this.settleTimer=setTimeout(()=>{
         this.settleTimer=0;
-        super.settle();
+        this.settleNow();
       },SETTLE_QUIET_MS-elapsed);
       return;
     }
-    super.settle();
+    this.settleNow();
   }
 
   refreshThumbnail(hash,includeMicro=false){
