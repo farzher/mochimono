@@ -28,7 +28,6 @@ html.experimental-view-active .experimental-view-bar{
   visibility:visible!important;
   z-index:50
 }
-.experimental-view-status.experimental-status-loading{opacity:0!important}
 .experimental-view-loading:not([hidden]){
   font-size:0!important;
   color:transparent!important
@@ -54,7 +53,6 @@ function syncLoadingIndicator(){
   if(!status||!loader)return;
   const busy=!loader.hidden;
   const text=String(loader.textContent||status.textContent||'').trim();
-  status.classList.toggle('experimental-status-loading',busy);
   if(busy){
     loader.title=text;
     loader.setAttribute('aria-label',text||'Loading');
