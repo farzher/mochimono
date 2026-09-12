@@ -1,4 +1,4 @@
-import { ensureBrowserThumbnail, isHeicRecord } from './browser-thumbnail-fallback.js';
+import { ensureBrowserThumbnail, heicViewBlob, isHeicRecord } from './browser-thumbnail-fallback.js';
 import { ExperimentalWebGLMapRenderer as BaseRenderer } from './experimental-webgl-map-v3.js';
 
 const DETAIL_SCREEN_PX=48;
@@ -69,6 +69,32 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
       }
     }
     return super.load(job);
+  }
+
+  async loadOriginal(job){
+    const item=this.media[job.index],record=heicRecord(item);
+    if(!record)return super.loadOriginal(job);
+    try{
+      const decoded=await heicViewBlob(record,job.edge);
+      if(job.token!==this.originalToken||!this.originalDesired.has(job.index))return;
+      const bitmap=await createImageBitmap(decoded.blob);
+      try{
+        if(job.token!==this.originalToken||!this.originalDesired.has(job.index))return;
+        const gl=this.gl,texture=gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D,texture);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,bitmap);
+        const previous=this.originalEntries.get(job.index);
+        if(previous)gl.deleteTexture(previous.texture);
+        this.originalEntries.set(job.index,{index:job.index,texture,lastUsed:performance.now(),edge:Number(decoded.edge)||Number(job.edge)||4096});
+        this.evictOriginals();
+        this.requestDraw();
+      }finally{bitmap.close?.()}
+    }catch(error){this.onError?.(error)}
   }
 
   prefetchOverscan(screenPx){
@@ -157,6 +183,6 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   }
 
   stats(){
-    return{...super.stats(),livePanLoading:true,liveSettleMs:LIVE_SETTLE_MS,midPrefetchPx:MID_PREFETCH_PX,detailPrefetchPx:DETAIL_PREFETCH_PX,heicFarOverlay:true};
+    return{...super.stats(),livePanLoading:true,liveSettleMs:LIVE_SETTLE_MS,midPrefetchPx:MID_PREFETCH_PX,detailPrefetchPx:DETAIL_PREFETCH_PX,heicFarOverlay:true,heicOriginals:true};
   }
 }
