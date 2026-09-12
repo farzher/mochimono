@@ -1,12 +1,18 @@
 const EDGE = 768;
 const VERSION = 3;
 const HEIC_CACHE_REV = 2;
+const BROWSER_DB = 'mochimono-browser-folders';
+const BROWSER_DB_VERSION = 1;
+const BROWSER_SOURCES = 'sources';
+const BROWSER_FILES = 'files';
 const queue = new Map();
 const inflight = new Map();
 const viewInflight = new Map();
 const repairedHeic = new Set();
 let timer = 0;
 let busy = false;
+let browserIndex = null;
+let browserIndexPromise = null;
 
 const MIME = new Map([
   ['jpg','image/jpeg'],['jpeg','image/jpeg'],['png','image/png'],['gif','image/gif'],['webp','image/webp'],['heic','image/heic'],['heif','image/heif'],['avif','image/avif'],['bmp','image/bmp'],['tif','image/tiff'],['tiff','image/tiff'],
@@ -23,6 +29,114 @@ const visibleCard = hash => {
   const rect = card.getBoundingClientRect();
   return rect.bottom >= -300 && rect.top <= innerHeight + 300 ? card : null;
 };
+
+function openBrowserDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(BROWSER_DB, BROWSER_DB_VERSION);
+    request.onupgradeneeded = () => {
+      try { request.transaction.abort(); } catch {}
+      reject(new Error('Browser folder database is not ready'));
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('Browser folder database is unavailable'));
+  });
+}
+
+function requestAll(store) {
+  return new Promise((resolve, reject) => {
+    const request = store.getAll();
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function browserParts(value) {
+  return String(value || '').replaceAll('\\', '/').split('/').filter(part => part && part !== '.' && part !== '..');
+}
+
+async function browserPermission(handle) {
+  if (!handle) return 'denied';
+  if (!handle.queryPermission) return 'granted';
+  return handle.queryPermission({ mode:'read' }).catch(() => 'prompt');
+}
+
+async function browserFileAt(root, relative) {
+  const parts = browserParts(relative);
+  let handle = root;
+  for (let index = 0; index < parts.length; index++) {
+    handle = index === parts.length - 1
+      ? await handle.getFileHandle(parts[index])
+      : await handle.getDirectoryHandle(parts[index]);
+  }
+  return handle?.getFile?.();
+}
+
+async function buildBrowserIndex() {
+  const db = await openBrowserDb();
+  try {
+    if (!db.objectStoreNames.contains(BROWSER_SOURCES) || !db.objectStoreNames.contains(BROWSER_FILES)) {
+      throw new Error('Browser folder database is not ready');
+    }
+    const tx = db.transaction([BROWSER_SOURCES, BROWSER_FILES], 'readonly');
+    const [sources, rows] = await Promise.all([
+      requestAll(tx.objectStore(BROWSER_SOURCES)),
+      requestAll(tx.objectStore(BROWSER_FILES))
+    ]);
+    const sourceById = new Map(sources.map(source => [String(source.id), source]));
+    const byHash = new Map();
+    for (const row of rows) {
+      const hash = String(row?.hash || '');
+      if (!/^[a-f0-9]{64}$/.test(hash)) continue;
+      const key = String(row.key || '');
+      const split = key.indexOf('\u0000');
+      if (split < 1) continue;
+      const source = sourceById.get(key.slice(0, split));
+      if (!source?.handle) continue;
+      let list = byHash.get(hash);
+      if (!list) byHash.set(hash, list = []);
+      list.push({ source, path:row.path });
+    }
+    for (const list of byHash.values()) list.sort((a, b) => Number(a.source.cloud === true) - Number(b.source.cloud === true));
+    return byHash;
+  } finally { db.close(); }
+}
+
+function browserIndexForSession() {
+  if (browserIndex) return Promise.resolve(browserIndex);
+  if (browserIndexPromise) return browserIndexPromise;
+  browserIndexPromise = buildBrowserIndex().then(value => {
+    browserIndex = value;
+    return value;
+  }).finally(() => { browserIndexPromise = null; });
+  return browserIndexPromise;
+}
+
+async function fastBrowserFileForHash(hash) {
+  const index = await browserIndexForSession();
+  for (const entry of index.get(String(hash)) || []) {
+    if (await browserPermission(entry.source.handle) !== 'granted') continue;
+    try { return await browserFileAt(entry.source.handle, entry.path); } catch {}
+  }
+  return null;
+}
+
+async function localBrowserFile(hash) {
+  try { return await fastBrowserFileForHash(hash); }
+  catch {
+    return window.mochimonoBrowserFolders?.fileForHash?.(hash).catch?.(() => null) || null;
+  }
+}
+
+function invalidateBrowserIndex() {
+  browserIndex = null;
+  browserIndexPromise = null;
+}
+
+function warmBrowserIndex() {
+  const run = () => browserIndexForSession().catch(() => {});
+  if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout:2500 });
+  else setTimeout(run, 500);
+}
 
 function waitFor(target, event, timeout = 8000) {
   return new Promise((resolve, reject) => {
@@ -66,7 +180,7 @@ async function decodeImage(blob) {
 }
 
 async function mediaSource(record) {
-  const local = await window.mochimonoBrowserFolders?.fileForHash?.(record.hash).catch?.(() => null);
+  const local = await localBrowserFile(record.hash);
   if (local) return { blob:local, local:true };
   const response = await fetch(`/api/objects/${encodeURIComponent(record.hash)}`, { cache:'force-cache' });
   if (!response.ok) throw new Error('Media source is unavailable');
@@ -121,7 +235,7 @@ async function videoResult(record) {
 }
 
 async function heicSource(record) {
-  const local = await window.mochimonoBrowserFolders?.fileForHash?.(record.hash).catch?.(() => null);
+  const local = await localBrowserFile(record.hash);
   if (local) return local;
   const response = await fetch(`/api/objects/${encodeURIComponent(record.hash)}`, { cache:'force-cache' });
   if (!response.ok) throw new Error('HEIC source is unavailable');
@@ -245,3 +359,5 @@ export function queueBrowserThumbnail(record) {
 }
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(100); });
+window.addEventListener('mochimono:browser-folders-changed', invalidateBrowserIndex, { passive:true });
+warmBrowserIndex();
