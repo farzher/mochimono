@@ -9,7 +9,10 @@ import { validHash } from './lib/store.js';
 const THUMB_VERSION = 3;
 const MAX_THUMB_BYTES = 5 * 1024 * 1024;
 const PRIORITY_WINDOW_MS = 20_000;
+const LOD_EDGES = new Set([64, 192]);
 const uploadLocks = new Map();
+const lodLocks = new Map();
+let sharpPromise = null;
 const thumbPath = hash => join(DATA_DIR, 'thumbs', hash.slice(0, 2), `${hash}.webp`);
 const isDeclarationName = name => /\.d\.(?:mts|cts|ts)$/i.test(String(name || ''));
 
@@ -35,6 +38,51 @@ function durationHeader(req) {
   return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+async function sharpLibrary() {
+  if (!sharpPromise) sharpPromise = import('sharp').then(module => {
+    const sharp = module.default || module;
+    sharp.concurrency(1);
+    sharp.cache({ memory:32, files:0, items:64 });
+    return sharp;
+  });
+  return sharpPromise;
+}
+
+function lodEdge(url) {
+  const value = Number(url?.searchParams?.get('edge'));
+  return LOD_EDGES.has(value) ? value : 0;
+}
+
+function scaledDimensions(width, height, edge) {
+  width = Math.max(0, Number(width) || 0);
+  height = Math.max(0, Number(height) || 0);
+  if (!width || !height || !edge) return { width, height };
+  const scale = Math.min(1, edge / Math.max(width, height));
+  return {
+    width:Math.max(1, Math.round(width * scale)),
+    height:Math.max(1, Math.round(height * scale))
+  };
+}
+
+async function lodThumbnail(path, hash, edge) {
+  const key = `${hash}:${edge}`;
+  let pending = lodLocks.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const sharp = await sharpLibrary();
+      return sharp(path)
+        .resize({ width:edge, height:edge, fit:'inside', withoutEnlargement:true })
+        .webp({ quality:72, effort:1, smartSubsample:true })
+        .toBuffer({ resolveWithObject:true });
+    })();
+    lodLocks.set(key, pending);
+    pending.finally(() => {
+      if (lodLocks.get(key) === pending) lodLocks.delete(key);
+    }).catch(() => {});
+  }
+  return pending;
+}
+
 async function writeThumbnail(req, destination) {
   const declared = Number(req.headers['content-length'] || 0);
   if (declared > MAX_THUMB_BYTES) throw Object.assign(new Error('Thumbnail too large'), { status: 413 });
@@ -58,7 +106,7 @@ async function writeThumbnail(req, destination) {
   }
 }
 
-async function serveThumbnail(req, res, hash) {
+async function serveThumbnail(req, res, hash, url) {
   const row = db.prepare('SELECT * FROM thumbnails WHERE object_hash = ? AND version = ?').get(hash, THUMB_VERSION);
   if (!row) return json(res, 404, { error: 'Thumbnail not found' });
   const path = thumbPath(hash);
@@ -68,20 +116,51 @@ async function serveThumbnail(req, res, hash) {
     db.prepare('DELETE FROM thumbnails WHERE object_hash = ?').run(hash);
     return json(res, 404, { error: 'Thumbnail not found' });
   }
-  const etag = `"${hash}-thumb-${THUMB_VERSION}"`;
+
+  const edge = lodEdge(url);
+  const dimensions = scaledDimensions(row.width, row.height, edge);
+  const needsResize = Boolean(edge && (!row.width || !row.height || Math.max(row.width, row.height) > edge));
+  const etag = `"${hash}-thumb-${THUMB_VERSION}${edge ? `-e${edge}` : ''}"`;
   const cacheControl = 'private, max-age=31536000, immutable';
   if (req.headers['if-none-match'] === etag) {
     res.writeHead(304, { etag, 'cache-control': cacheControl });
     return res.end();
   }
+
+  if (req.method === 'HEAD' && needsResize) {
+    res.writeHead(200, {
+      'content-type':'image/webp',
+      'cache-control':cacheControl,
+      etag,
+      'x-mochimono-width':dimensions.width,
+      'x-mochimono-height':dimensions.height,
+      ...(row.duration == null ? {} : { 'x-mochimono-duration':row.duration })
+    });
+    return res.end();
+  }
+
+  if (needsResize) {
+    const resized = await lodThumbnail(path, hash, edge);
+    res.writeHead(200, {
+      'content-type':'image/webp',
+      'content-length':resized.data.length,
+      'cache-control':cacheControl,
+      etag,
+      'x-mochimono-width':resized.info.width || dimensions.width,
+      'x-mochimono-height':resized.info.height || dimensions.height,
+      ...(row.duration == null ? {} : { 'x-mochimono-duration':row.duration })
+    });
+    return res.end(resized.data);
+  }
+
   res.writeHead(200, {
-    'content-type': row.mime,
-    'content-length': info.size,
-    'cache-control': cacheControl,
+    'content-type':row.mime,
+    'content-length':info.size,
+    'cache-control':cacheControl,
     etag,
-    'x-mochimono-width': row.width,
-    'x-mochimono-height': row.height,
-    ...(row.duration == null ? {} : { 'x-mochimono-duration': row.duration })
+    'x-mochimono-width':row.width,
+    'x-mochimono-height':row.height,
+    ...(row.duration == null ? {} : { 'x-mochimono-duration':row.duration })
   });
   if (req.method === 'HEAD') return res.end();
   createReadStream(path).pipe(res);
@@ -272,7 +351,7 @@ export async function handleThumbnails(req, res, url) {
     json(res, 404, { error: 'Not found' });
     return true;
   }
-  if (req.method === 'GET' || req.method === 'HEAD') await serveThumbnail(req, res, match[1]);
+  if (req.method === 'GET' || req.method === 'HEAD') await serveThumbnail(req, res, match[1], url);
   else if (req.method === 'PUT') await uploadThumbnail(req, res, match[1]);
   else json(res, 405, { error: 'Method not allowed' });
   return true;
