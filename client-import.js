@@ -6,6 +6,7 @@ import { basename, dirname, join, parse, resolve } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { CONFIG_DIR, api, json, readJson, settings } from './lib/agent-context.js';
+import { decodeHeic } from './lib/heic.js';
 import { localFolderTree } from './lib/local-folder-tree.js';
 import { mimeFor } from './lib/mime.js';
 
@@ -13,6 +14,8 @@ const TMP_DIR = join(CONFIG_DIR, 'tmp');
 const BROWSER_THUMB_DIR = join(homedir(), '.mochimono', 'provider-thumbs');
 const BROWSER_THUMB_VERSION = 3;
 const MAX_BROWSER_THUMB_BYTES = 8 * 1024 * 1024;
+const MAX_BROWSER_HEIC_BYTES = 128 * 1024 * 1024;
+const BROWSER_HEIC_EDGE = 768;
 const sessions = new Map();
 
 function cleanRelative(value) {
@@ -237,6 +240,45 @@ async function saveBrowserThumbnail(req, res, hash) {
   }
 }
 
+async function saveBrowserHeicThumbnail(req, res, hash) {
+  if (!/^[a-f0-9]{64}$/.test(hash)) return json(res, 400, { error:'Invalid SHA-256 hash' });
+  await mkdir(TMP_DIR, { recursive:true });
+  const source = join(TMP_DIR, `browser-heic-${process.pid}-${Date.now()}-${randomUUID()}`);
+  let size = 0;
+  const limit = new Transform({
+    transform(chunk, encoding, callback) {
+      size += chunk.length;
+      if (size > MAX_BROWSER_HEIC_BYTES) return callback(Object.assign(new Error('HEIC image is too large'), { status:413 }));
+      callback(null, chunk);
+    }
+  });
+
+  try {
+    await pipeline(req, limit, createWriteStream(source, { flags:'wx' }));
+    if (!size) throw Object.assign(new Error('Empty HEIC image'), { status:400 });
+    const result = await decodeHeic(source, { edge:BROWSER_HEIC_EDGE, quality:82, effort:2 });
+    if (!result.data?.length) throw new Error('Could not decode HEIC preview');
+    if (result.data.length > MAX_BROWSER_THUMB_BYTES) throw Object.assign(new Error('HEIC thumbnail is too large'), { status:413 });
+
+    const width = Math.max(1, Math.round(Number(result.info?.width) || 1));
+    const height = Math.max(1, Math.round(Number(result.info?.height) || 1));
+    const bucket = join(BROWSER_THUMB_DIR, hash.slice(0, 2));
+    const destination = browserThumbnailPath(hash);
+    const info = join(bucket, `${hash}.json`);
+    const temp = join(bucket, `${hash}.${process.pid}.${Date.now()}.tmp.webp`);
+    await mkdir(bucket, { recursive:true });
+    await writeFile(temp, result.data, { flag:'wx' });
+    await rm(destination, { force:true });
+    await rename(temp, destination);
+    await writeFile(info, `${JSON.stringify({ version:BROWSER_THUMB_VERSION, width, height })}\n`);
+    json(res, 201, { ok:true, hash, size:result.data.length, width, height });
+  } catch (error) {
+    if (!res.headersSent) json(res, error.status || 500, { error:error.message || 'Could not decode HEIC thumbnail' });
+  } finally {
+    await rm(source, { force:true }).catch(() => {});
+  }
+}
+
 export async function handleClientImport(req, res, url) {
   if (url.pathname.startsWith('/api/video-optimize/cloud-')) {
     const { handleCloudVideoOptimizeApi } = await import('./lib/video-optimize-cloud.js');
@@ -264,6 +306,11 @@ export async function handleClientImport(req, res, url) {
   }
   if (req.method === 'POST' && url.pathname === '/api/client/import/finish') {
     await finishImport(req, res, url);
+    return true;
+  }
+  const browserHeicThumb = /^\/api\/client\/browser-heic-thumb\/([a-f0-9]{64})$/.exec(url.pathname);
+  if (browserHeicThumb && req.method === 'PUT') {
+    await saveBrowserHeicThumbnail(req, res, browserHeicThumb[1]);
     return true;
   }
   const browserThumb = /^\/api\/client\/browser-thumb\/([a-f0-9]{64})$/.exec(url.pathname);
