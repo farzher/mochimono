@@ -5,7 +5,7 @@ const MICRO_EDGE=8;
 const MICRO_PAGES=4;
 const MICRO_ONLY_SCREEN_PX=16;
 const ORIGINAL_SCREEN_PX=220;
-const OVERVIEW_WORKER_REV='20260912-1';
+const OVERVIEW_WORKER_REV='20260912-2';
 
 function sameMediaOrder(current,next){
   if(!Array.isArray(current)||!Array.isArray(next)||current.length!==next.length)return false;
