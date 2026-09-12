@@ -4,6 +4,7 @@ import './random-sort.js';
 import './viewer-grid-return.js';
 import './browser-folder-client-loader.js';
 import './browser-provenance.js';
+import './heic-media.js';
 import './visual-similarity.js';
 import './ai-lab.js';
 import './ai-lab-controls.js';
