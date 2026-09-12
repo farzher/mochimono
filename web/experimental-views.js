@@ -29,6 +29,7 @@ const bar=document.createElement('div');bar.className='experimental-view-bar';ba
 const surface=document.createElement('section');surface.className='experimental-view-surface';surface.hidden=true;surface.innerHTML='<div class="experimental-view-viewport" tabindex="0"><canvas class="experimental-view-canvas" hidden></canvas><div class="experimental-view-plane"><div class="experimental-view-rooms"></div><div class="experimental-view-cards"></div></div><div class="experimental-view-loading" hidden></div></div>';bar.after(surface);
 const viewport=surface.querySelector('.experimental-view-viewport'),mapCanvas=surface.querySelector('.experimental-view-canvas'),plane=surface.querySelector('.experimental-view-plane'),roomsLayer=surface.querySelector('.experimental-view-rooms'),cardsLayer=surface.querySelector('.experimental-view-cards'),loading=surface.querySelector('.experimental-view-loading'),status=bar.querySelector('.experimental-view-status'),fitButton=bar.querySelector('.experimental-view-fit');
 
+const clamp=(value,low=0,high=1)=>Math.max(low,Math.min(high,value));
 const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[char]));
 const ratio=item=>Math.max(1,Number(item?.width)||1)/Math.max(1,Number(item?.height)||1);
 const layoutRatio=item=>Math.max(.5,Math.min(2,ratio(item)));
@@ -95,7 +96,7 @@ function restoreMapCamera(camera){
   const worldW=Math.max(1,Number(result.worldW))*cell,worldH=Math.max(1,Number(result.worldH))*cell;
   const vw=Math.max(1,viewport.clientWidth),vh=Math.max(1,viewport.clientHeight);
   mapZoom=Math.max(.025,Math.min(MAX_MAP_ZOOM,Number(camera.zoom)||1));
-  const centerX=clamp(Number(camera.nx)||.5,0,1)*worldW,centerY=clamp(Number(camera.ny)||.5,0,1)*worldH;
+  const centerX=clamp(Number(camera.nx)||.5)*worldW,centerY=clamp(Number(camera.ny)||.5)*worldH;
   mapPanX=vw*.5-centerX*mapZoom;mapPanY=vh*.5-centerY*mapZoom;
   viewportWidth=vw;viewportHeight=vh;applyMapTransform();settleMap();
 }
