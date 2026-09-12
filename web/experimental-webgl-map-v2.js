@@ -1,3 +1,4 @@
+import { ensureBrowserThumbnail } from './browser-thumbnail-fallback.js';
 import { ExperimentalWebGLMapRenderer as BaseRenderer } from './experimental-webgl-map-v1.js';
 
 const LOAD_CONCURRENCY=20;
@@ -25,6 +26,10 @@ function sameMediaOrder(current,next){
   if(!Array.isArray(current)||!Array.isArray(next)||current.length!==next.length)return false;
   for(let index=0;index<next.length;index++)if(String(current[index]?.hash||'')!==String(next[index]?.hash||''))return false;
   return true;
+}
+function fallbackRecord(item){
+  if(!item?.hash||!item?.type)return null;
+  return{hash:item.hash,filename:item.filename||'',mime:item.mime||'',kind:item.type==='video'?'video':'image',urgent:true,width:Number(item.width)||0,height:Number(item.height)||0};
 }
 
 export class ExperimentalWebGLMapRenderer extends BaseRenderer{
@@ -98,13 +103,21 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   async load(job){
     const item=this.media[job.index];if(!item)return;
     try{
-      const suffix=job.tier.name==='detail'?'':`&edge=${job.tier.edge}`;
-      let response=await fetch(`/api/thumbs/${encodeURIComponent(item.hash)}?v=${this.thumbVersion}${suffix}`,{cache:'force-cache'});
-      if(response.status===404&&window.mochimonoThumbnails?.ensureHashes){const ensured=await window.mochimonoThumbnails.ensureHashes([item.hash],{background:false});if(!ensured?.ready?.includes(item.hash))return;if(job.sceneToken!==this.sceneToken||this.desired.get(job.index)!==job.tier.name)return;response=await fetch(`/api/thumbs/${encodeURIComponent(item.hash)}?v=${this.thumbVersion}${suffix}`,{cache:'force-cache'})}
+      const suffix=job.tier.name==='detail'?'':`&edge=${job.tier.edge}`,url=`/api/thumbs/${encodeURIComponent(item.hash)}?v=${this.thumbVersion}${suffix}`;
+      let response=await fetch(url,{cache:'force-cache'});
+      if(response.status===404){
+        const record=fallbackRecord(item),fallback=record?await ensureBrowserThumbnail(record).catch(()=>null):null;
+        if(fallback){
+          window.dispatchEvent(new CustomEvent('mochimono:browser-thumbnail-ready',{detail:{hash:item.hash,...fallback}}));
+          if(job.sceneToken!==this.sceneToken||this.desired.get(job.index)!==job.tier.name)return;
+          response=await fetch(url,{cache:'reload'});
+        }
+      }
+      if(response.status===404&&window.mochimonoThumbnails?.ensureHashes){const ensured=await window.mochimonoThumbnails.ensureHashes([item.hash],{background:false});if(!ensured?.ready?.includes(item.hash))return;if(job.sceneToken!==this.sceneToken||this.desired.get(job.index)!==job.tier.name)return;response=await fetch(url,{cache:'reload'})}
       if(!response.ok)throw new Error(`Thumbnail ${response.status}`);const blob=await response.blob();if(job.sceneToken!==this.sceneToken||this.desired.get(job.index)!==job.tier.name)return;
       const[width,height]=bitmapSize(item,job.tier.edge),bitmap=await createImageBitmap(blob,{resizeWidth:width,resizeHeight:height,resizeQuality:'high'});
       try{if(job.sceneToken!==this.sceneToken||this.desired.get(job.index)!==job.tier.name)return;job.tier.upload(job.index,bitmap,this.visibleSet)}finally{bitmap.close?.()}
-      this.requestDraw();
+      this.failedUntil.delete(job.key);this.requestDraw();
     }catch(error){this.failedUntil.set(job.key,Date.now()+5000);if(!String(error?.message||'').includes('404'))this.onError?.(error)}
   }
 
