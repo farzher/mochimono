@@ -185,6 +185,10 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer {
     }
   }
 
+  originalTargetEdge() {
+    return Math.min(ORIGINAL_MAX_EDGE,Math.max(ORIGINAL_MIN_EDGE,Math.ceil(this.screenItemSize()*(this.pixelRatio||1)*1.25)));
+  }
+
   settleOriginals(visible, worldCenterX, worldCenterY) {
     if (this.screenItemSize() < ORIGINAL_SCREEN_PX) {
       this.originalDesired.clear();
@@ -197,12 +201,13 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer {
       return [index,dx*dx+dy*dy];
     }).sort((a,b)=>a[1]-b[1]).slice(0,ORIGINAL_MAX).map(entry=>entry[0]);
     this.originalDesired = new Set(candidates);
+    const edge=this.originalTargetEdge();
     for (const index of candidates) {
       const entry=this.originalEntries.get(index);
-      if(entry){entry.lastUsed=performance.now();continue}
+      if(entry&&entry.edge>=edge*.85){entry.lastUsed=performance.now();continue}
       if(this.originalQueued.has(index))continue;
       this.originalQueued.add(index);
-      this.originalQueue.push({index,token:this.originalToken});
+      this.originalQueue.push({index,token:this.originalToken,edge});
     }
     this.evictOriginals();
     this.pumpOriginals();
@@ -225,7 +230,8 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer {
     while(this.originalLoads<ORIGINAL_CONCURRENCY&&this.originalQueue.length){
       const job=this.originalQueue.shift();
       this.originalQueued.delete(job.index);
-      if(job.token!==this.originalToken||!this.originalDesired.has(job.index)||this.originalEntries.has(job.index))continue;
+      const entry=this.originalEntries.get(job.index);
+      if(job.token!==this.originalToken||!this.originalDesired.has(job.index)||(entry&&entry.edge>=job.edge*.85))continue;
       this.originalLoads++;
       this.loadOriginal(job).finally(()=>{this.originalLoads--;this.pumpOriginals()});
     }
@@ -239,7 +245,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer {
       if(!response.ok)throw new Error(`Original ${response.status}`);
       const blob=await response.blob();
       if(job.token!==this.originalToken||!this.originalDesired.has(job.index))return;
-      const edge=Math.min(ORIGINAL_MAX_EDGE,Math.max(ORIGINAL_MIN_EDGE,Math.ceil(this.screenItemSize()*(this.pixelRatio||1)*1.25)));
+      const edge=Math.min(ORIGINAL_MAX_EDGE,Math.max(ORIGINAL_MIN_EDGE,Number(job.edge)||this.originalTargetEdge()));
       const [width,height]=bitmapSize(item,edge);
       const bitmap=await createImageBitmap(blob,{resizeWidth:width,resizeHeight:height,resizeQuality:'high'});
       try{
@@ -252,6 +258,8 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer {
         gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
         gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,bitmap);
+        const previous=this.originalEntries.get(job.index);
+        if(previous)this.gl.deleteTexture(previous.texture);
         this.originalEntries.set(job.index,{index:job.index,texture,lastUsed:performance.now(),edge});
         this.evictOriginals();
         this.requestDraw();
