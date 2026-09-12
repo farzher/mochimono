@@ -91,7 +91,7 @@ function run(payload){
     const finish=(fn,value)=>{if(done)return;done=true;if(child===worker)child=null;worker.terminate();fn(value)};
     worker.onerror=e=>finish(reject,new Error(e.message||'Experimental layout failed'));
     worker.onmessageerror=()=>finish(reject,new Error('Experimental layout returned unreadable data'));
-    worker.onmessage=e=>{const data=e.data||{};if(data.type==='progress'){post('progress',data);return}if(data.type==='error')return finish(reject,new Error(data.error||'Experimental layout failed'));if(data.type==='result')finish(resolve(densify(data.result||{},payload.media||[])))};
+    worker.onmessage=e=>{const data=e.data||{};if(data.type==='progress'){post('progress',data);return}if(data.type==='error')return finish(reject,new Error(data.error||'Experimental layout failed'));if(data.type==='result')finish(resolve,densify(data.result||{},payload.media||[]))};
     worker.postMessage({action:'build',payload});
   });
 }
