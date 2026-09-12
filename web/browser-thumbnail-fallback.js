@@ -3,6 +3,7 @@ const VERSION = 3;
 const HEIC_CACHE_REV = 2;
 const queue = new Map();
 const inflight = new Map();
+const viewInflight = new Map();
 const repairedHeic = new Set();
 let timer = 0;
 let busy = false;
@@ -123,6 +124,35 @@ async function heicResult(record) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || 'Could not decode HEIC preview');
   return { width:Number(result.width) || 0, height:Number(result.height) || 0, duration:null, saved:true, heic:true };
+}
+
+export function heicViewBlob(record, edge = 4096) {
+  if (!record?.hash || !isHeicRecord(record)) return Promise.reject(new Error('Not a HEIC image'));
+  edge = Math.max(1024, Math.min(4096, Math.round(Number(edge) || 4096)));
+  const key = `${record.hash}:${edge}`;
+  let pending = viewInflight.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const file = await heicSource(record);
+      const response = await fetch(`/api/client/browser-heic-thumb/${record.hash}?view=1&edge=${edge}`, {
+        method:'PUT',
+        headers:{ 'content-type':file.type || sourceMime(record) || 'image/heic' },
+        body:file
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Could not decode HEIC image');
+      }
+      return {
+        blob:await response.blob(),
+        width:Number(response.headers.get('x-mochimono-width')) || 0,
+        height:Number(response.headers.get('x-mochimono-height')) || 0,
+        edge
+      };
+    })().finally(() => { if (viewInflight.get(key) === pending) viewInflight.delete(key); });
+    viewInflight.set(key, pending);
+  }
+  return pending;
 }
 
 async function generate(record) {
