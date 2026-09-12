@@ -16,28 +16,34 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
     this.liveSettleTimer=0;
     this.lastLiveSettle=0;
     this.heicRepairRequested=new Set();
-    this.onHeicRepaired=event=>this.refreshHeic(String(event.detail?.hash||''));
+    this.onHeicRepaired=event=>this.refreshThumbnail(String(event.detail?.hash||''),true);
+    this.onBrowserThumbnailReady=event=>this.refreshThumbnail(String(event.detail?.hash||''),false);
     window.addEventListener('mochimono:heic-repaired',this.onHeicRepaired);
+    window.addEventListener('mochimono:browser-thumbnail-ready',this.onBrowserThumbnailReady);
   }
 
   destroy(){
     clearTimeout(this.liveSettleTimer);
     this.liveSettleTimer=0;
     window.removeEventListener('mochimono:heic-repaired',this.onHeicRepaired);
+    window.removeEventListener('mochimono:browser-thumbnail-ready',this.onBrowserThumbnailReady);
     this.heicRepairRequested.clear();
     super.destroy();
   }
 
-  refreshHeic(hash){
+  refreshThumbnail(hash,includeMicro=false){
     const index=this.media.findIndex(item=>item?.hash===hash);
     if(index<0)return;
-    for(const tier of Object.values(this.tiers||{})){
+    for(const[name,tier]of Object.entries(this.tiers||{})){
+      if(!includeMicro&&name==='micro')continue;
       const entry=tier?.entries?.get(index);
       if(!entry)continue;
       tier.entries.delete(index);
       entry.page?.release?.(entry);
     }
     for(const key of [...this.failedUntil.keys()])if(key.endsWith(`:${index}`))this.failedUntil.delete(key);
+    const original=this.originalEntries?.get(index);
+    if(original){this.gl.deleteTexture(original.texture);this.originalEntries.delete(index)}
     this.settle();
     this.requestDraw();
   }
