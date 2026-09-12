@@ -1,6 +1,13 @@
 import { ExperimentalWebGLMapRenderer as BaseRenderer } from './experimental-webgl-map-v1.js';
 
 const LOAD_CONCURRENCY = 12;
+const FULL_THUMB_EDGE = 512;
+const FULL_THUMB_PAGES = 20;
+const ORIGINAL_SCREEN_PX = 320;
+const ORIGINAL_MAX = 12;
+const ORIGINAL_CONCURRENCY = 2;
+const ORIGINAL_MIN_EDGE = 1024;
+const ORIGINAL_MAX_EDGE = 4096;
 
 function aspectSize(item, maxSide) {
   const width = Math.max(1, Number(item?.width) || 1);
@@ -9,18 +16,70 @@ function aspectSize(item, maxSide) {
   return ratio >= 1 ? [maxSide, maxSide / ratio] : [maxSide * ratio, maxSide];
 }
 
+function bitmapSize(item, edge) {
+  const width = Math.max(1, Number(item?.width) || 1);
+  const height = Math.max(1, Number(item?.height) || 1);
+  const scale = Math.min(1, edge / Math.max(width, height));
+  return [Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale))];
+}
+
 export class ExperimentalWebGLMapRenderer extends BaseRenderer {
   constructor(canvas, options = {}) {
     super(canvas, options);
-    // The first renderer topped out at 192 px, which became visibly soft when
-    // zooming in. Keep the same bounded atlas, but use a 384 px close tier.
-    this.tiers.detail.edge = 384;
+    this.originalEntries = new Map();
+    this.originalQueue = [];
+    this.originalQueued = new Set();
+    this.originalDesired = new Set();
+    this.originalLoads = 0;
+    this.originalToken = 1;
+    this.originalBuffer = this.gl.createBuffer();
+    this.configureDetailTier();
+    this.canvas.addEventListener('webglcontextrestored', () => {
+      this.configureDetailTier();
+      this.originalEntries = new Map();
+      this.originalQueue = [];
+      this.originalQueued = new Set();
+      this.originalDesired = new Set();
+      this.originalLoads = 0;
+      this.originalToken++;
+      this.originalBuffer = this.gl.createBuffer();
+      this.settle();
+    });
+  }
+
+  configureDetailTier() {
+    if (!this.tiers?.detail) return;
+    this.tiers.detail.edge = FULL_THUMB_EDGE;
+    this.tiers.detail.maxPages = FULL_THUMB_PAGES;
+  }
+
+  clearOriginals(deleteTextures = true) {
+    this.originalToken = (this.originalToken || 0) + 1;
+    this.originalQueue?.splice(0);
+    this.originalQueued?.clear();
+    this.originalDesired?.clear();
+    if (deleteTextures && this.gl && this.originalEntries) {
+      for (const entry of this.originalEntries.values()) this.gl.deleteTexture(entry.texture);
+    }
+    this.originalEntries?.clear();
+  }
+
+  resetTextures() {
+    if (this.originalEntries) this.clearOriginals();
+    super.resetTextures();
+    this.configureDetailTier();
+  }
+
+  destroy() {
+    this.clearOriginals();
+    if (this.gl && this.originalBuffer) this.gl.deleteBuffer(this.originalBuffer);
+    super.destroy();
   }
 
   setScene(scene) {
+    this.configureDetailTier();
     super.setScene(scene);
-    // Use more of each layout cell now that the quads preserve aspect ratio.
-    // This keeps a small gutter without returning to square cropping.
+    this.configureDetailTier();
     this.baseSide = this.cell * 0.96;
     const instances = new Float32Array(this.media.length * 8);
     let count = 0;
@@ -58,6 +117,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer {
     if (screenPx < 6 || !visible.length) {
       this.queue.length = 0;
       this.queued.clear();
+      this.originalDesired.clear();
       this.requestDraw();
       return;
     }
@@ -66,7 +126,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer {
     const maxWanted = Math.min(tier.capacity(), tier.name === 'small' ? 3200 : 96);
     const worldCenterX = (this.canvas.clientWidth * 0.5 - this.panX) / this.zoom;
     const worldCenterY = (this.canvas.clientHeight * 0.5 - this.panY) / this.zoom;
-    let wanted = visible.map(index => {
+    const wanted = visible.map(index => {
       const o = index * 4;
       const dx = this.geometry[o] - worldCenterX;
       const dy = this.geometry[o + 1] - worldCenterY;
@@ -78,6 +138,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer {
       if (!tier.get(index)) this.enqueue(index, tier);
     }
     this.pump();
+    this.settleOriginals(visible, worldCenterX, worldCenterY);
     this.requestDraw();
   }
 
@@ -98,24 +159,18 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer {
     const item = this.media[job.index];
     if (!item) return;
     try {
-      let response = await fetch(`/api/thumbs/${encodeURIComponent(item.hash)}?v=${this.thumbVersion}&edge=${job.tier.edge}`, { cache:'force-cache' });
+      const suffix = job.tier.name === 'detail' ? '' : `&edge=${job.tier.edge}`;
+      let response = await fetch(`/api/thumbs/${encodeURIComponent(item.hash)}?v=${this.thumbVersion}${suffix}`, { cache:'force-cache' });
       if (response.status === 404 && window.mochimonoThumbnails?.ensureHashes) {
-        // WebGL has no DOM card for thumbs.js to observe. Explicitly ask the
-        // normal thumbnail manager to generate missing visible thumbnails.
         const ensured = await window.mochimonoThumbnails.ensureHashes([item.hash], { background:false });
         if (!ensured?.ready?.includes(item.hash)) return;
         if (job.sceneToken !== this.sceneToken || this.desired.get(job.index) !== job.tier.name) return;
-        response = await fetch(`/api/thumbs/${encodeURIComponent(item.hash)}?v=${this.thumbVersion}&edge=${job.tier.edge}`, { cache:'force-cache' });
+        response = await fetch(`/api/thumbs/${encodeURIComponent(item.hash)}?v=${this.thumbVersion}${suffix}`, { cache:'force-cache' });
       }
       if (!response.ok) throw new Error(`Thumbnail ${response.status}`);
       const blob = await response.blob();
       if (job.sceneToken !== this.sceneToken || this.desired.get(job.index) !== job.tier.name) return;
-      const sourceWidth = Number(item.width) || 0;
-      const sourceHeight = Number(item.height) || 0;
-      const knownSize = sourceWidth > 0 && sourceHeight > 0;
-      const scale = knownSize ? Math.min(1, job.tier.edge / Math.max(sourceWidth, sourceHeight)) : 1;
-      const width = knownSize ? Math.max(1, Math.round(sourceWidth * scale)) : job.tier.edge;
-      const height = knownSize ? Math.max(1, Math.round(sourceHeight * scale)) : job.tier.edge;
+      const [width, height] = bitmapSize(item, job.tier.edge);
       const bitmap = await createImageBitmap(blob, { resizeWidth:width, resizeHeight:height, resizeQuality:'high' });
       try {
         if (job.sceneToken !== this.sceneToken || this.desired.get(job.index) !== job.tier.name) return;
@@ -130,8 +185,102 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer {
     }
   }
 
+  settleOriginals(visible, worldCenterX, worldCenterY) {
+    if (this.screenItemSize() < ORIGINAL_SCREEN_PX) {
+      this.originalDesired.clear();
+      this.originalQueue.length = 0;
+      this.originalQueued.clear();
+      return;
+    }
+    const candidates = visible.filter(index => this.media[index]?.type === 'image').map(index => {
+      const o=index*4,dx=this.geometry[o]-worldCenterX,dy=this.geometry[o+1]-worldCenterY;
+      return [index,dx*dx+dy*dy];
+    }).sort((a,b)=>a[1]-b[1]).slice(0,ORIGINAL_MAX).map(entry=>entry[0]);
+    this.originalDesired = new Set(candidates);
+    for (const index of candidates) {
+      const entry=this.originalEntries.get(index);
+      if(entry){entry.lastUsed=performance.now();continue}
+      if(this.originalQueued.has(index))continue;
+      this.originalQueued.add(index);
+      this.originalQueue.push({index,token:this.originalToken});
+    }
+    this.evictOriginals();
+    this.pumpOriginals();
+  }
+
+  evictOriginals() {
+    while (this.originalEntries.size > ORIGINAL_MAX) {
+      let victim=null;
+      for(const entry of this.originalEntries.values()){
+        if(this.originalDesired.has(entry.index))continue;
+        if(!victim||entry.lastUsed<victim.lastUsed)victim=entry;
+      }
+      if(!victim)break;
+      this.gl.deleteTexture(victim.texture);
+      this.originalEntries.delete(victim.index);
+    }
+  }
+
+  pumpOriginals() {
+    while(this.originalLoads<ORIGINAL_CONCURRENCY&&this.originalQueue.length){
+      const job=this.originalQueue.shift();
+      this.originalQueued.delete(job.index);
+      if(job.token!==this.originalToken||!this.originalDesired.has(job.index)||this.originalEntries.has(job.index))continue;
+      this.originalLoads++;
+      this.loadOriginal(job).finally(()=>{this.originalLoads--;this.pumpOriginals()});
+    }
+  }
+
+  async loadOriginal(job) {
+    const item=this.media[job.index];
+    if(!item||item.type!=='image')return;
+    try{
+      const response=await fetch(`/api/objects/${encodeURIComponent(item.hash)}`,{cache:'force-cache'});
+      if(!response.ok)throw new Error(`Original ${response.status}`);
+      const blob=await response.blob();
+      if(job.token!==this.originalToken||!this.originalDesired.has(job.index))return;
+      const edge=Math.min(ORIGINAL_MAX_EDGE,Math.max(ORIGINAL_MIN_EDGE,Math.ceil(this.screenItemSize()*(this.pixelRatio||1)*1.25)));
+      const [width,height]=bitmapSize(item,edge);
+      const bitmap=await createImageBitmap(blob,{resizeWidth:width,resizeHeight:height,resizeQuality:'high'});
+      try{
+        if(job.token!==this.originalToken||!this.originalDesired.has(job.index))return;
+        const gl=this.gl,texture=gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D,texture);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,bitmap);
+        this.originalEntries.set(job.index,{index:job.index,texture,lastUsed:performance.now(),edge});
+        this.evictOriginals();
+        this.requestDraw();
+      }finally{bitmap.close?.()}
+    }catch(error){if(!String(error?.message||'').includes('404'))this.onError?.(error)}
+  }
+
+  draw() {
+    super.draw();
+    if (!this.gl || this.lost || this.screenItemSize() < ORIGINAL_SCREEN_PX || !this.originalDesired.size) return;
+    const gl=this.gl;
+    gl.useProgram(this.program);
+    gl.uniform2f(this.uViewport,Math.max(1,this.canvas.clientWidth),Math.max(1,this.canvas.clientHeight));
+    gl.uniform2f(this.uPan,this.panX,this.panY);
+    gl.uniform1f(this.uZoom,this.zoom);
+    for(const index of this.originalDesired){
+      const entry=this.originalEntries.get(index);if(!entry||!this.valid[index])continue;
+      const o=index*4,values=new Float32Array([this.geometry[o],this.geometry[o+1],this.geometry[o+2],this.geometry[o+3],0,0,1,1]);
+      gl.bindBuffer(gl.ARRAY_BUFFER,this.originalBuffer);gl.bufferData(gl.ARRAY_BUFFER,values,gl.DYNAMIC_DRAW);
+      this.drawInstances(this.originalBuffer,1,entry.texture,1);entry.lastUsed=performance.now();
+    }
+    if(this.hoverIndex>=0&&this.valid[this.hoverIndex]){
+      const o=this.hoverIndex*4,values=new Float32Array([this.geometry[o],this.geometry[o+1],this.geometry[o+2],this.geometry[o+3],0,0,1,1]);
+      gl.bindBuffer(gl.ARRAY_BUFFER,this.hoverBuffer);gl.bufferData(gl.ARRAY_BUFFER,values,gl.DYNAMIC_DRAW);
+      this.drawInstances(this.hoverBuffer,1,this.placeholderTexture,2);
+    }
+  }
+
   stats() {
-    const base = super.stats();
-    return { ...base, detailEdge:this.tiers.detail.edge, concurrency:LOAD_CONCURRENCY };
+    return {...super.stats(),detailEdge:FULL_THUMB_EDGE,concurrency:LOAD_CONCURRENCY,originals:this.originalEntries.size,originalQueued:this.originalQueue.length,originalLoading:this.originalLoads,originalAt:ORIGINAL_SCREEN_PX};
   }
 }
