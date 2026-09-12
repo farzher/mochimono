@@ -19,8 +19,19 @@ function aspectSize(item,maxSide){
   return ratio>=1?[maxSide,maxSide/ratio]:[maxSide*ratio,maxSide];
 }
 function bitmapSize(item,edge){
-  const width=Math.max(1,Number(item?.width)||1),height=Math.max(1,Number(item?.height)||1),scale=Math.min(1,edge/Math.max(width,height));
+  const width=Number(item?.width),height=Number(item?.height);
+  if(!(width>0&&height>0))return null;
+  const scale=Math.min(1,edge/Math.max(width,height));
   return[Math.max(1,Math.round(width*scale)),Math.max(1,Math.round(height*scale))];
+}
+async function bitmapForBlob(blob,item,edge){
+  const known=bitmapSize(item,edge);
+  if(known)return createImageBitmap(blob,{resizeWidth:known[0],resizeHeight:known[1],resizeQuality:'high'});
+  const source=await createImageBitmap(blob);
+  const longest=Math.max(source.width,source.height);
+  if(longest<=edge)return source;
+  const scale=edge/longest,width=Math.max(1,Math.round(source.width*scale)),height=Math.max(1,Math.round(source.height*scale));
+  try{return await createImageBitmap(source,{resizeWidth:width,resizeHeight:height,resizeQuality:'high'})}finally{source.close?.()}
 }
 function sameMediaOrder(current,next){
   if(!Array.isArray(current)||!Array.isArray(next)||current.length!==next.length)return false;
@@ -115,7 +126,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
       }
       if(response.status===404&&window.mochimonoThumbnails?.ensureHashes){const ensured=await window.mochimonoThumbnails.ensureHashes([item.hash],{background:false});if(!ensured?.ready?.includes(item.hash))return;if(job.sceneToken!==this.sceneToken||this.desired.get(job.index)!==job.tier.name)return;response=await fetch(url,{cache:'reload'})}
       if(!response.ok)throw new Error(`Thumbnail ${response.status}`);const blob=await response.blob();if(job.sceneToken!==this.sceneToken||this.desired.get(job.index)!==job.tier.name)return;
-      const[width,height]=bitmapSize(item,job.tier.edge),bitmap=await createImageBitmap(blob,{resizeWidth:width,resizeHeight:height,resizeQuality:'high'});
+      const bitmap=await bitmapForBlob(blob,item,job.tier.edge);
       try{if(job.sceneToken!==this.sceneToken||this.desired.get(job.index)!==job.tier.name)return;job.tier.upload(job.index,bitmap,this.visibleSet)}finally{bitmap.close?.()}
       this.failedUntil.delete(job.key);this.requestDraw();
     }catch(error){this.failedUntil.set(job.key,Date.now()+5000);if(!String(error?.message||'').includes('404'))this.onError?.(error)}
@@ -133,7 +144,7 @@ export class ExperimentalWebGLMapRenderer extends BaseRenderer{
   pumpOriginals(){while(this.originalLoads<ORIGINAL_CONCURRENCY&&this.originalQueue.length){const job=this.originalQueue.shift();this.originalQueued.delete(job.index);const entry=this.originalEntries.get(job.index);if(job.token!==this.originalToken||!this.originalDesired.has(job.index)||(entry&&entry.edge>=job.edge*.85))continue;this.originalLoads++;this.loadOriginal(job).finally(()=>{this.originalLoads--;this.pumpOriginals()})}}
   async loadOriginal(job){
     const item=this.media[job.index];if(!item||item.type!=='image')return;
-    try{const response=await fetch(`/api/objects/${encodeURIComponent(item.hash)}`,{cache:'force-cache'});if(!response.ok)throw new Error(`Original ${response.status}`);const blob=await response.blob();if(job.token!==this.originalToken||!this.originalDesired.has(job.index))return;const edge=Math.min(ORIGINAL_MAX_EDGE,Math.max(ORIGINAL_MIN_EDGE,Number(job.edge)||this.originalTargetEdge())),[width,height]=bitmapSize(item,edge),bitmap=await createImageBitmap(blob,{resizeWidth:width,resizeHeight:height,resizeQuality:'high'});
+    try{const response=await fetch(`/api/objects/${encodeURIComponent(item.hash)}`,{cache:'force-cache'});if(!response.ok)throw new Error(`Original ${response.status}`);const blob=await response.blob();if(job.token!==this.originalToken||!this.originalDesired.has(job.index))return;const edge=Math.min(ORIGINAL_MAX_EDGE,Math.max(ORIGINAL_MIN_EDGE,Number(job.edge)||this.originalTargetEdge())),bitmap=await bitmapForBlob(blob,item,edge);
       try{if(job.token!==this.originalToken||!this.originalDesired.has(job.index))return;const gl=this.gl,texture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,texture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,bitmap);const previous=this.originalEntries.get(job.index);if(previous)this.gl.deleteTexture(previous.texture);this.originalEntries.set(job.index,{index:job.index,texture,lastUsed:performance.now(),edge});this.evictOriginals();this.requestDraw()}finally{bitmap.close?.()}
     }catch(error){if(!String(error?.message||'').includes('404'))this.onError?.(error)}
   }
