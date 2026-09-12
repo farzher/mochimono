@@ -1,11 +1,14 @@
 const root=document.documentElement;
 const ACTIVE='experimental-view-active';
 const RERUN_QUIET_MS=700;
+const AI_QUIET_MS=900;
 let lastInteractionAt=0;
 let rerunTimer=0;
 let rerunPending=false;
 let rawRerun=null;
 let cachePatched=false;
+let aiPatched=false;
+let wasActive=false;
 let pendingCacheSaves=[];
 let pendingDimensions=new Map();
 
@@ -17,6 +20,16 @@ addEventListener('pointerdown',markInteraction,{capture:true,passive:true});
 addEventListener('pointermove',markInteraction,{capture:true,passive:true});
 
 function quietFor(ms=RERUN_QUIET_MS){return !active()||now()-lastInteractionAt>=ms}
+function waitForQuiet(ms){
+  if(quietFor(ms))return Promise.resolve();
+  return new Promise(resolve=>{
+    const check=()=>{
+      if(quietFor(ms)){resolve();return}
+      setTimeout(check,Math.max(40,ms-(now()-lastInteractionAt)));
+    };
+    check();
+  });
+}
 function scheduleRerun(){
   if(!rerunPending||!rawRerun)return;
   clearTimeout(rerunTimer);
@@ -36,7 +49,20 @@ function patchExperimentalApi(){
   rawRerun=api.rerun?.bind(api)||null;
   if(rawRerun)api.rerun=()=>{rerunPending=true;scheduleRerun()};
   api.recentInteraction=(ms=RERUN_QUIET_MS)=>active()&&now()-lastInteractionAt<Math.max(0,Number(ms)||0);
+  api.waitForQuiet=(ms=RERUN_QUIET_MS)=>waitForQuiet(Math.max(0,Number(ms)||0));
   api.__performanceGuard=true;
+  return true;
+}
+
+function patchAi(){
+  const ai=window.mochimonoAI;
+  if(!ai?.index||aiPatched)return false;
+  const rawIndex=ai.index.bind(ai);
+  ai.index=async(...args)=>{
+    if(active())await waitForQuiet(AI_QUIET_MS);
+    return rawIndex(...args);
+  };
+  aiPatched=true;
   return true;
 }
 
@@ -80,15 +106,18 @@ function patchCatalogCache(){
 function syncState(){
   patchExperimentalApi();
   patchCatalogCache();
-  if(active()){
+  patchAi();
+  const isActive=active();
+  if(isActive&&!wasActive){
     lastInteractionAt=now();
     window.mochimonoStableGrid?.release?.();
-  }else{
+  }else if(!isActive&&wasActive){
     if(rerunPending)scheduleRerun();
     flushDeferredCache();
   }
+  wasActive=isActive;
 }
 
 new MutationObserver(syncState).observe(root,{attributes:true,attributeFilter:['class']});
 queueMicrotask(syncState);
-addEventListener('mochimono:ai-ready',()=>patchExperimentalApi(),{passive:true});
+addEventListener('mochimono:ai-ready',()=>{patchExperimentalApi();patchAi()},{passive:true});
