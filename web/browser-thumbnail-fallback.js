@@ -65,10 +65,17 @@ async function decodeImage(blob) {
   }
 }
 
-async function imageResult(hash) {
-  const response = await fetch(`/api/objects/${hash}`);
-  if (!response.ok) throw new Error('Image unavailable');
-  const image = await decodeImage(await response.blob());
+async function mediaSource(record) {
+  const local = await window.mochimonoBrowserFolders?.fileForHash?.(record.hash).catch?.(() => null);
+  if (local) return { blob:local, local:true };
+  const response = await fetch(`/api/objects/${encodeURIComponent(record.hash)}`, { cache:'force-cache' });
+  if (!response.ok) throw new Error('Media source is unavailable');
+  return { blob:await response.blob(), local:false };
+}
+
+async function imageResult(record) {
+  const source = await mediaSource(record);
+  const image = await decodeImage(source.blob);
   const sourceWidth = image.width || image.naturalWidth;
   const sourceHeight = image.height || image.naturalHeight;
   const scale = Math.min(1, EDGE / Math.max(sourceWidth, sourceHeight));
@@ -77,15 +84,17 @@ async function imageResult(hash) {
   const canvas = canvasFor(width, height);
   canvas.getContext('2d', { alpha: false }).drawImage(image, 0, 0, width, height);
   image.close?.();
-  return { blob: await canvasBlob(canvas), width, height, duration: null };
+  return { blob: await canvasBlob(canvas), width, height, duration: null, local:source.local };
 }
 
-async function videoResult(hash) {
+async function videoResult(record) {
+  const source = await mediaSource(record);
   const video = document.createElement('video');
+  const url = URL.createObjectURL(source.blob);
   video.muted = true;
   video.playsInline = true;
   video.preload = 'metadata';
-  video.src = `/api/objects/${hash}`;
+  video.src = url;
   try {
     if (video.readyState < 1) await waitFor(video, 'loadedmetadata');
     if (!video.videoWidth || !video.videoHeight) throw new Error('Video has no frame size');
@@ -99,10 +108,11 @@ async function videoResult(hash) {
     const height = Math.max(1, Math.round(video.videoHeight * scale));
     const canvas = canvasFor(width, height);
     canvas.getContext('2d', { alpha: false }).drawImage(video, 0, 0, width, height);
-    return { blob: await canvasBlob(canvas), width, height, duration: Number.isFinite(video.duration) ? video.duration : null };
+    return { blob: await canvasBlob(canvas), width, height, duration: Number.isFinite(video.duration) ? video.duration : null, local:source.local };
   } finally {
     video.removeAttribute('src');
     video.load();
+    URL.revokeObjectURL(url);
   }
 }
 
@@ -123,7 +133,7 @@ async function heicResult(record) {
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || 'Could not decode HEIC preview');
-  return { width:Number(result.width) || 0, height:Number(result.height) || 0, duration:null, saved:true, heic:true };
+  return { width:Number(result.width) || 0, height:Number(result.height) || 0, duration:null, saved:true, heic:true, local:true };
 }
 
 export function heicViewBlob(record, edge = 4096) {
@@ -159,19 +169,21 @@ async function generate(record) {
   if (isHeicRecord(record)) return heicResult(record);
   const existing = await fetch(`/api/thumbs/${record.hash}?v=${VERSION}`, { method: 'HEAD' }).catch(() => null);
   if (existing?.ok) return null;
-  const result = record.kind === 'video' ? await videoResult(record.hash) : await imageResult(record.hash);
-  const response = await fetch(`/api/thumbs/${record.hash}`, {
-    method: 'PUT',
-    headers: {
-      'content-type': 'image/webp',
-      'x-mochimono-thumb-version': String(VERSION),
-      'x-mochimono-width': String(result.width),
-      'x-mochimono-height': String(result.height),
-      ...(result.duration == null ? {} : { 'x-mochimono-duration': String(result.duration) }),
-      'x-mochimono-source-mime': sourceMime(record)
-    },
-    body: result.blob
-  });
+  const result = record.kind === 'video' ? await videoResult(record) : await imageResult(record);
+  const endpoint = result.local ? `/api/client/browser-thumb/${record.hash}` : `/api/thumbs/${record.hash}`;
+  const headers = result.local ? {
+    'content-type':'image/webp',
+    'x-mochimono-width':String(result.width),
+    'x-mochimono-height':String(result.height)
+  } : {
+    'content-type': 'image/webp',
+    'x-mochimono-thumb-version': String(VERSION),
+    'x-mochimono-width': String(result.width),
+    'x-mochimono-height': String(result.height),
+    ...(result.duration == null ? {} : { 'x-mochimono-duration': String(result.duration) }),
+    'x-mochimono-source-mime': sourceMime(record)
+  };
+  const response = await fetch(endpoint, { method:'PUT', headers, body:result.blob });
   if (!response.ok) throw new Error('Could not save preview');
   return result;
 }
