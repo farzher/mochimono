@@ -1,4 +1,4 @@
-import { ensureBrowserThumbnail, heicThumbUrl, isHeicRecord } from './browser-thumbnail-fallback.js';
+import { ensureBrowserThumbnail, heicThumbUrl, heicViewBlob, isHeicRecord } from './browser-thumbnail-fallback.js';
 
 const files=document.querySelector('#files');
 const viewer=document.querySelector('#viewer');
@@ -9,7 +9,7 @@ const repairing=new Map();
 const repaired=new Set();
 const failedUntil=new Map();
 const reindexQueue=new Map();
-let scanTimer=0,reindexTimer=0,aiReindexNeeded=false,aiReindexTimer=0;
+let scanTimer=0,reindexTimer=0,aiReindexNeeded=false,aiReindexTimer=0,viewerDecodedUrl='',viewerDecodedHash='',viewerDecodeToken=0;
 
 const HEIC_RE=/\.(?:heic|heif)$/i;
 const validHash=value=>/^[a-f0-9]{64}$/.test(String(value||''));
@@ -183,18 +183,37 @@ function viewerRecord(){
   return validHash(hash)?record(hash,filename):null;
 }
 
+function clearViewerDecoded(){
+  viewerDecodeToken++;
+  if(viewerDecodedUrl)URL.revokeObjectURL(viewerDecodedUrl);
+  viewerDecodedUrl='';
+  viewerDecodedHash='';
+}
+
 async function repairViewer(){
-  if(viewer?.hidden)return;
+  if(viewer?.hidden){clearViewerDecoded();return}
   const item=viewerRecord(),image=viewerMedia?.querySelector(':scope > img');
-  if(!item||!image)return;
-  const wanted=new URL(heicThumbUrl(item.hash),location.href).href;
-  if(image.currentSrc===wanted&&!image.hasAttribute('data-full-src'))return;
+  if(!item||!image){clearViewerDecoded();return}
+  if(viewerDecodedHash===item.hash&&viewerDecodedUrl&&image.src===viewerDecodedUrl)return;
+  const token=++viewerDecodeToken;
   await repair(item).catch(()=>{});
-  if(viewer?.hidden||viewerRecord()?.hash!==item.hash||!image.isConnected)return;
+  if(viewer?.hidden||viewerRecord()?.hash!==item.hash||!image.isConnected||token!==viewerDecodeToken)return;
+
   image.removeAttribute('data-full-src');
+  image.dataset.browserSourceHash=item.hash;
   image.dataset.heicDecoded='1';
   image.onerror=null;
   image.src=heicThumbUrl(item.hash);
+
+  const edge=Math.max(2048,Math.min(4096,Math.ceil(Math.max(innerWidth,innerHeight)*(devicePixelRatio||1)*1.5)));
+  try{
+    const decoded=await heicViewBlob(item,edge);
+    if(viewer?.hidden||viewerRecord()?.hash!==item.hash||!image.isConnected||token!==viewerDecodeToken)return;
+    if(viewerDecodedUrl)URL.revokeObjectURL(viewerDecodedUrl);
+    viewerDecodedUrl=URL.createObjectURL(decoded.blob);
+    viewerDecodedHash=item.hash;
+    image.src=viewerDecodedUrl;
+  }catch{}
 }
 
 if(files){
