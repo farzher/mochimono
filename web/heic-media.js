@@ -1,4 +1,5 @@
-import { ensureBrowserThumbnail, heicThumbUrl, heicViewBlob, isHeicRecord } from './browser-thumbnail-fallback.js';
+import { ensureBrowserThumbnail, heicThumbUrl, isHeicRecord } from './browser-thumbnail-fallback.js';
+import { heicViewBlob } from './heic-view.js';
 
 const files=document.querySelector('#files');
 const viewer=document.querySelector('#viewer');
@@ -8,8 +9,7 @@ const viewerOpen=document.querySelector('#viewer-open');
 const repairing=new Map();
 const repaired=new Set();
 const failedUntil=new Map();
-const reindexQueue=new Map();
-let scanTimer=0,reindexTimer=0,aiReindexNeeded=false,aiReindexTimer=0,viewerDecodedUrl='',viewerDecodedHash='',viewerDecodeToken=0;
+let scanTimer=0,viewerDecodedUrl='',viewerDecodedHash='',viewerLoadingHash='',viewerDecodeToken=0;
 
 const HEIC_RE=/\.(?:heic|heif)$/i;
 const validHash=value=>/^[a-f0-9]{64}$/.test(String(value||''));
@@ -44,25 +44,22 @@ async function invalidateVisual(hash){
   let db;
   try{
     db=await openDb('mochimono-visual-similarity',1);
-    if(!db.objectStoreNames.contains('fingerprints'))return false;
-    const tx=db.transaction('fingerprints','readwrite'),store=tx.objectStore('fingerprints');
-    const existing=await new Promise(resolve=>{const request=store.get(hash);request.onsuccess=()=>resolve(Boolean(request.result));request.onerror=()=>resolve(false)});
-    store.delete(hash);
+    if(!db.objectStoreNames.contains('fingerprints'))return;
+    const tx=db.transaction('fingerprints','readwrite');
+    tx.objectStore('fingerprints').delete(hash);
     await txDone(tx);
-    return existing;
-  }catch{return false}finally{db?.close?.()}
+  }catch{}finally{db?.close?.()}
 }
 
 async function deleteIndexedHash(store,hash){
-  if(!store.indexNames.contains('hash'))return 0;
-  return new Promise((resolve,reject)=>{
-    let count=0;
+  if(!store.indexNames.contains('hash'))return;
+  await new Promise((resolve,reject)=>{
     const request=store.index('hash').openCursor(IDBKeyRange.only(hash));
     request.onerror=()=>reject(request.error);
     request.onsuccess=()=>{
       const cursor=request.result;
-      if(!cursor)return resolve(count);
-      cursor.delete();count++;cursor.continue();
+      if(!cursor)return resolve();
+      cursor.delete();cursor.continue();
     };
   });
 }
@@ -72,19 +69,24 @@ async function invalidateAi(hash){
   try{
     db=await openDb('mochimono-ai',2);
     const names=['embeddings','metadata'].filter(name=>db.objectStoreNames.contains(name));
-    if(!names.length)return false;
+    if(!names.length)return;
     const tx=db.transaction(names,'readwrite');
-    const counts=await Promise.all(names.map(name=>deleteIndexedHash(tx.objectStore(name),hash)));
+    await Promise.all(names.map(name=>deleteIndexedHash(tx.objectStore(name),hash)));
     await txDone(tx);
-    return counts.some(Boolean);
-  }catch{return false}finally{db?.close?.()}
+  }catch{}finally{db?.close?.()}
+}
+
+function invalidateIndexesLater(hash){
+  const run=()=>Promise.all([invalidateVisual(hash),invalidateAi(hash)]).catch(()=>{});
+  if('requestIdleCallback'in window)requestIdleCallback(run,{timeout:5000});
+  else setTimeout(run,1000);
 }
 
 function refreshImages(hash){
-  const src=heicThumbUrl(hash);
+  const src=heicThumbUrl(hash),absolute=new URL(src,location.href).href;
   for(const card of document.querySelectorAll(`#files [data-hash="${CSS.escape(hash)}"]`)){
     const image=card.querySelector('img');
-    if(image&&image.src!==new URL(src,location.href).href)image.src=src;
+    if(image&&image.src!==absolute)image.src=src;
   }
 }
 
@@ -93,46 +95,6 @@ async function refreshLegacyThumbCache(hash){
   if(!response?.ok)return false;
   await response.blob().catch(()=>null);
   return true;
-}
-
-function scheduleVisualReindex(item){
-  reindexQueue.set(item.hash,{hash:item.hash,filename:item.filename,type:'image',width:Number(item.width)||0,height:Number(item.height)||0,dateMs:0,size:0});
-  clearTimeout(reindexTimer);
-  reindexTimer=setTimeout(runVisualReindex,450);
-}
-
-function runVisualReindex(){
-  reindexTimer=0;
-  if(window.mochimonoExperimentalViews?.active?.()){
-    reindexTimer=setTimeout(runVisualReindex,2000);
-    return;
-  }
-  const media=[...reindexQueue.values()];
-  reindexQueue.clear();
-  if(!media.length)return;
-  const worker=new Worker(new URL('./visual-order-worker.js',import.meta.url),{type:'module'});
-  const finish=()=>{try{worker.terminate()}catch{}};
-  worker.onerror=finish;
-  worker.onmessage=event=>{if(event.data?.type==='result'||event.data?.type==='error')finish()};
-  worker.postMessage({media,mode:'color'});
-}
-
-function runAiReindexSoon(){
-  aiReindexTimer=0;
-  if(!aiReindexNeeded||!window.mochimonoAI?.index)return;
-  aiReindexNeeded=false;
-  Promise.resolve().then(async()=>{
-    try{
-      await window.mochimonoAI.index('dinov3',{scope:'view'});
-      await window.mochimonoAI.index('siglip2',{scope:'view'});
-    }catch{}
-  });
-}
-
-function scheduleAiReindex(){
-  aiReindexNeeded=true;
-  clearTimeout(aiReindexTimer);
-  aiReindexTimer=setTimeout(runAiReindexSoon,1200);
 }
 
 async function repair(item){
@@ -148,9 +110,7 @@ async function repair(item){
       if(result?.height&&!item.height)item.height=result.height;
       await refreshLegacyThumbCache(item.hash);
       refreshImages(item.hash);
-      const[,hadAi]=await Promise.all([invalidateVisual(item.hash),invalidateAi(item.hash)]);
-      scheduleVisualReindex(item);
-      if(hadAi)scheduleAiReindex();
+      invalidateIndexesLater(item.hash);
       window.dispatchEvent(new CustomEvent('mochimono:browser-thumbnail-ready',{detail:{hash:item.hash,...(result||{})}}));
       window.dispatchEvent(new CustomEvent('mochimono:heic-repaired',{detail:{hash:item.hash,filename:item.filename,...(result||{})}}));
       return result;
@@ -188,6 +148,7 @@ function viewerRecord(){
 
 function clearViewerDecoded(){
   viewerDecodeToken++;
+  viewerLoadingHash='';
   if(viewerDecodedUrl)URL.revokeObjectURL(viewerDecodedUrl);
   viewerDecodedUrl='';
   viewerDecodedHash='';
@@ -198,15 +159,16 @@ async function repairViewer(){
   const item=viewerRecord(),image=viewerMedia?.querySelector(':scope > img');
   if(!item||!image){clearViewerDecoded();return}
   if(viewerDecodedHash===item.hash&&viewerDecodedUrl&&image.src===viewerDecodedUrl)return;
-  const token=++viewerDecodeToken;
-  await repair(item).catch(()=>{});
-  if(viewer?.hidden||viewerRecord()?.hash!==item.hash||!image.isConnected||token!==viewerDecodeToken)return;
+  if(viewerLoadingHash===item.hash)return;
 
+  const token=++viewerDecodeToken;
+  viewerLoadingHash=item.hash;
   image.removeAttribute('data-full-src');
   image.dataset.browserSourceHash=item.hash;
   image.dataset.heicDecoded='1';
   image.onerror=null;
-  image.src=heicThumbUrl(item.hash);
+  const thumb=heicThumbUrl(item.hash),absoluteThumb=new URL(thumb,location.href).href;
+  if(image.src!==absoluteThumb)image.src=thumb;
 
   const edge=Math.max(2048,Math.min(4096,Math.ceil(Math.max(innerWidth,innerHeight)*(devicePixelRatio||1)*1.5)));
   try{
@@ -216,7 +178,9 @@ async function repairViewer(){
     viewerDecodedUrl=URL.createObjectURL(decoded.blob);
     viewerDecodedHash=item.hash;
     image.src=viewerDecodedUrl;
-  }catch{}
+  }catch{}finally{
+    if(token===viewerDecodeToken&&viewerLoadingHash===item.hash)viewerLoadingHash='';
+  }
 }
 
 if(files){
@@ -232,7 +196,6 @@ addEventListener('mochimono:heic-needs-repair',event=>{
   const item=record(detail.hash,detail.filename,detail.width,detail.height);
   if(validHash(item.hash)&&HEIC_RE.test(item.filename))repair(item).catch(()=>{});
 });
-addEventListener('mochimono:ai-ready',()=>{if(aiReindexNeeded)scheduleAiReindex()});
 
 if(viewer&&viewerMedia&&viewerName&&viewerOpen){
   const sync=()=>queueMicrotask(()=>repairViewer().catch(()=>{}));
