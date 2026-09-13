@@ -97,13 +97,25 @@ async function refreshLegacyThumbCache(hash){
   return true;
 }
 
+async function hasThumbnail(hash){
+  const response=await fetch(heicThumbUrl(hash),{method:'HEAD',cache:'force-cache'}).catch(()=>null);
+  return Boolean(response?.ok);
+}
+
 async function repair(item){
   if(!item||!validHash(item.hash)||!isHeicRecord(item))return null;
   if(repaired.has(item.hash)){refreshImages(item.hash);return null}
   if((failedUntil.get(item.hash)||0)>Date.now())return null;
   let pending=repairing.get(item.hash);
   if(!pending){
-    pending=ensureBrowserThumbnail(item).then(async result=>{
+    pending=(async()=>{
+      if(await hasThumbnail(item.hash)){
+        repaired.add(item.hash);
+        failedUntil.delete(item.hash);
+        refreshImages(item.hash);
+        return null;
+      }
+      const result=await ensureBrowserThumbnail(item);
       repaired.add(item.hash);
       failedUntil.delete(item.hash);
       if(result?.width&&!item.width)item.width=result.width;
@@ -114,7 +126,7 @@ async function repair(item){
       window.dispatchEvent(new CustomEvent('mochimono:browser-thumbnail-ready',{detail:{hash:item.hash,...(result||{})}}));
       window.dispatchEvent(new CustomEvent('mochimono:heic-repaired',{detail:{hash:item.hash,filename:item.filename,...(result||{})}}));
       return result;
-    }).catch(error=>{
+    })().catch(error=>{
       failedUntil.set(item.hash,Date.now()+15000);
       throw error;
     }).finally(()=>{
