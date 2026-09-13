@@ -11,6 +11,7 @@ const controls = [
   document.querySelector('#collectionFilter'),
   document.querySelector('#locationFilter'),
   document.querySelector('#typeFilter'),
+  document.querySelector('#tagFilter'),
   document.querySelector('#sort')
 ].filter(Boolean);
 
