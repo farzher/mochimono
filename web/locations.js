@@ -4,19 +4,30 @@ const CLIENT = document.documentElement.classList.contains('client-library');
 const locationFilter = document.querySelector('#locationFilter');
 const search = document.querySelector('#search');
 const DUPLICATE_CACHE_MS = 30_000;
+const CLIENT_WHERE_FILTERS = new Set(['duplicates', 'ignored-leftovers']);
 let locationData = null;
 let loading = null;
 let duplicateHashes = null;
 let duplicateLoadedAt = 0;
 let duplicateLoading = null;
+let ignoredLeftoverHashes = null;
+let ignoredLeftoverLoading = null;
 
 const library = () => window.mochimonoLibrary;
 
-if (CLIENT && locationFilter && !locationFilter.querySelector('option[value="duplicates"]')) {
-  const option = document.createElement('option');
-  option.value = 'duplicates';
-  option.textContent = 'Duplicates';
-  locationFilter.append(option);
+if (CLIENT && locationFilter) {
+  if (!locationFilter.querySelector('option[value="duplicates"]')) {
+    const option = document.createElement('option');
+    option.value = 'duplicates';
+    option.textContent = 'Duplicates';
+    locationFilter.append(option);
+  }
+  if (!locationFilter.querySelector('option[value="ignored-leftovers"]')) {
+    const option = document.createElement('option');
+    option.value = 'ignored-leftovers';
+    option.textContent = 'Ignored leftovers';
+    locationFilter.append(option);
+  }
 }
 
 function locationText(location) {
@@ -75,6 +86,22 @@ async function loadDuplicateHashes(force = false) {
   return duplicateLoading;
 }
 
+async function loadIgnoredLeftoverHashes(force = false) {
+  if (!force && ignoredLeftoverHashes) return ignoredLeftoverHashes;
+  if (ignoredLeftoverLoading) return ignoredLeftoverLoading;
+  ignoredLeftoverLoading = fetch('/api/source-exclusions?leftovers=1', { cache:'no-store' })
+    .then(response => {
+      if (!response.ok) throw new Error(`Ignored leftovers scan failed (${response.status})`);
+      return response.json();
+    })
+    .then(data => {
+      ignoredLeftoverHashes = new Set((data?.hashes || []).map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)));
+      return ignoredLeftoverHashes;
+    })
+    .finally(() => { ignoredLeftoverLoading = null; });
+  return ignoredLeftoverLoading;
+}
+
 async function applyFilter() {
   if (!locationFilter) return;
   const mode = String(locationFilter.value || '');
@@ -85,6 +112,13 @@ async function applyFilter() {
 
   if (mode === 'duplicates') {
     const hashes = await loadDuplicateHashes().catch(() => null);
+    if (!hashes || String(locationFilter.value || '') !== mode) return;
+    library()?.setLocationFilter?.(mode, hashes);
+    return;
+  }
+
+  if (mode === 'ignored-leftovers') {
+    const hashes = await loadIgnoredLeftoverHashes(true).catch(() => null);
     if (!hashes || String(locationFilter.value || '') !== mode) return;
     library()?.setLocationFilter?.(mode, hashes);
     return;
@@ -106,13 +140,13 @@ async function applyFilter() {
 
 locationFilter?.addEventListener('change', () => applyFilter().catch(() => {}));
 
-function restoreDuplicateFromUrl() {
+function restoreClientWhereFromUrl() {
   if (!CLIENT || !locationFilter) return;
   const wanted = String(new URL(location.href).searchParams.get('where') || '');
-  if (wanted === 'duplicates') {
-    if (locationFilter.value !== 'duplicates') locationFilter.value = 'duplicates';
+  if (CLIENT_WHERE_FILTERS.has(wanted)) {
+    if (locationFilter.value !== wanted) locationFilter.value = wanted;
     applyFilter().catch(() => {});
-  } else if (locationFilter.value === 'duplicates') {
+  } else if (CLIENT_WHERE_FILTERS.has(locationFilter.value)) {
     locationFilter.value = '';
     applyFilter().catch(() => {});
   }
@@ -126,11 +160,12 @@ if (CLIENT) {
     if (String(search.value || '').trim()) loadLocations().catch(() => {});
   }, { passive:true });
 
-  window.addEventListener('popstate', () => queueMicrotask(restoreDuplicateFromUrl));
+  window.addEventListener('popstate', () => queueMicrotask(restoreClientWhereFromUrl));
   window.addEventListener('mochimono:catalog-updated', () => {
     duplicateHashes = null;
     duplicateLoadedAt = 0;
-    if (locationFilter?.value === 'duplicates') applyFilter().catch(() => {});
+    ignoredLeftoverHashes = null;
+    if (locationFilter?.value === 'duplicates' || locationFilter?.value === 'ignored-leftovers') applyFilter().catch(() => {});
   });
-  queueMicrotask(restoreDuplicateFromUrl);
+  queueMicrotask(restoreClientWhereFromUrl);
 }
