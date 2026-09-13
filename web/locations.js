@@ -95,6 +95,8 @@ async function loadIgnoredLeftoverHashes(force = false) {
       return response.json();
     })
     .then(data => {
+      const files = Array.isArray(data?.files) ? data.files : [];
+      if (files.length) library()?.upsertMany?.(files);
       ignoredLeftoverHashes = new Set((data?.hashes || []).map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)));
       return ignoredLeftoverHashes;
     })
