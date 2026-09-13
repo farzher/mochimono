@@ -15,7 +15,8 @@ function cleanDescription(value) {
 
 function tag(id) {
   return db.prepare(`
-    SELECT id, name, description, ai_enabled AS aiEnabled, builtin, created_at AS createdAt, updated_at AS updatedAt
+    SELECT id, name, description, ai_enabled AS aiEnabled, builtin,
+           created_at AS createdAt, updated_at AS updatedAt
     FROM tags WHERE id = ?
   `).get(Number(id));
 }
@@ -26,10 +27,7 @@ function cleanHashes(value) {
   }
   const hashes = [...new Set(value.map(String))];
   if (hashes.some(hash => !validHash(hash))) throw Object.assign(new Error('Invalid SHA-256 hash'), { status:400 });
-  if (!hashes.length) return [];
-  const marks = hashes.map(() => '?').join(',');
-  const active = new Set(db.prepare(`SELECT hash FROM objects WHERE state = 'active' AND hash IN (${marks})`).all(...hashes).map(row => row.hash));
-  return hashes.filter(hash => active.has(hash));
+  return hashes;
 }
 
 function listTags() {
@@ -60,8 +58,21 @@ function listTags() {
     aiEnabled:Boolean(row.aiEnabled), builtin:Boolean(row.builtin),
     count:Number(row.count) || 0, manualCount:Number(row.manualCount) || 0,
     aiCount:Number(row.aiCount) || 0, systemCount:Number(row.systemCount) || 0,
-    positiveExamples:Number(row.positiveExamples) || 0, negativeExamples:Number(row.negativeExamples) || 0,
+    positiveExamples:Number(row.positiveExamples) || 0,
+    negativeExamples:Number(row.negativeExamples) || 0,
     suppressed:Number(row.suppressed) || 0
+  }));
+}
+
+function fileTags(hash) {
+  return db.prepare(`
+    SELECT t.id, t.name, tm.source, tm.confidence, tm.added_at AS addedAt
+    FROM tag_members tm JOIN tags t ON t.id = tm.tag_id
+    WHERE tm.object_hash = ?
+    ORDER BY lower(t.name), t.name
+  `).all(hash).map(row => ({
+    ...row,
+    confidence:row.confidence == null ? null : Number(row.confidence)
   }));
 }
 
@@ -69,16 +80,18 @@ function tagState(id) {
   const current = tag(id);
   if (!current) return null;
   const members = db.prepare(`
-    SELECT tm.object_hash AS hash, tm.source, tm.confidence, tm.added_at AS addedAt
-    FROM tag_members tm JOIN objects o ON o.hash = tm.object_hash
-    WHERE tm.tag_id = ? AND o.state = 'active'
-    ORDER BY tm.source, tm.confidence DESC, tm.added_at DESC
-  `).all(current.id).map(row => ({ ...row, confidence:row.confidence == null ? null : Number(row.confidence) }));
+    SELECT object_hash AS hash, source, confidence, added_at AS addedAt
+    FROM tag_members
+    WHERE tag_id = ?
+    ORDER BY source, confidence DESC, added_at DESC
+  `).all(current.id).map(row => ({
+    ...row,
+    confidence:row.confidence == null ? null : Number(row.confidence)
+  }));
 
-  // A manual tag is inherently a positive training decision. Likewise, a
-  // suppression is a negative correction. Synthesize both into examples so
-  // existing tags immediately teach the model without requiring a second,
-  // redundant "Selected = yes/no" action.
+  // Manual membership is a positive teaching decision; suppression is a
+  // negative correction. Synthesize them with explicit examples so tagging a
+  // file once is enough to teach the AI.
   const exampleMap = new Map();
   for (const row of db.prepare(`
     SELECT object_hash AS hash, polarity, added_at AS addedAt
@@ -94,7 +107,9 @@ function tagState(id) {
     SELECT object_hash AS hash, created_at AS addedAt
     FROM tag_suppressions WHERE tag_id = ? ORDER BY created_at
   `).all(current.id);
-  for (const row of suppressedRows) exampleMap.set(row.hash, { hash:row.hash, polarity:-1, addedAt:row.addedAt });
+  for (const row of suppressedRows) {
+    exampleMap.set(row.hash, { hash:row.hash, polarity:-1, addedAt:row.addedAt });
+  }
 
   return {
     tag:{ ...current, aiEnabled:Boolean(current.aiEnabled), builtin:Boolean(current.builtin) },
@@ -129,7 +144,13 @@ function addMembers(id, hashes, source = 'manual', confidence = null) {
         unsuppress.run(current.id, hash);
         teachPositive.run(current.id, hash, timestamp);
       }
-      insert.run(current.id, hash, source, confidence == null ? null : Math.max(0, Math.min(1, Number(confidence) || 0)), timestamp);
+      insert.run(
+        current.id,
+        hash,
+        source,
+        confidence == null ? null : Math.max(0, Math.min(1, Number(confidence) || 0)),
+        timestamp
+      );
     }
     db.exec('COMMIT');
   } catch (error) {
@@ -148,8 +169,14 @@ function replaceAiMembers(id, matches, source = 'ai') {
   source = source === 'system' ? 'system' : 'ai';
   const hashes = cleanHashes(matches.map(item => item?.hash));
   const allowed = new Set(hashes);
-  const suppression = new Set(db.prepare('SELECT object_hash AS hash FROM tag_suppressions WHERE tag_id = ?').all(current.id).map(row => row.hash));
-  const confidence = new Map(matches.map(item => [String(item?.hash || ''), Math.max(0, Math.min(1, Number(item?.confidence) || 0))]));
+  const suppression = new Set(
+    db.prepare('SELECT object_hash AS hash FROM tag_suppressions WHERE tag_id = ?')
+      .all(current.id).map(row => row.hash)
+  );
+  const confidence = new Map(matches.map(item => [
+    String(item?.hash || ''),
+    Math.max(0, Math.min(1, Number(item?.confidence) || 0))
+  ]));
   const remove = db.prepare("DELETE FROM tag_members WHERE tag_id = ? AND source IN ('ai', 'system')");
   const insert = db.prepare(`
     INSERT INTO tag_members(tag_id, object_hash, source, confidence, added_at) VALUES(?, ?, ?, ?, ?)
@@ -212,8 +239,8 @@ function setExamples(id, positive, negative) {
   if (!current) throw Object.assign(new Error('Tag not found'), { status:404 });
   positive = cleanHashes(positive || []);
   negative = cleanHashes(negative || []);
-  const pos = new Set(positive);
-  negative = negative.filter(hash => !pos.has(hash));
+  const positives = new Set(positive);
+  negative = negative.filter(hash => !positives.has(hash));
   const clear = db.prepare('DELETE FROM tag_examples WHERE tag_id = ?');
   const insert = db.prepare('INSERT INTO tag_examples(tag_id, object_hash, polarity, added_at) VALUES(?, ?, ?, ?)');
   const manual = db.prepare(`
@@ -259,13 +286,20 @@ export async function handleTags(req, res, url) {
     const timestamp = now();
     try {
       const result = db.prepare(`
-        INSERT INTO tags(name, description, ai_enabled, builtin, created_at, updated_at) VALUES(?, ?, ?, 0, ?, ?)
+        INSERT INTO tags(name, description, ai_enabled, builtin, created_at, updated_at)
+        VALUES(?, ?, ?, 0, ?, ?)
       `).run(name, cleanDescription(body.description), body.aiEnabled ? 1 : 0, timestamp, timestamp);
       json(res, 201, { tag:tag(Number(result.lastInsertRowid)) });
     } catch (error) {
       if (/unique/i.test(String(error?.message || ''))) json(res, 409, { error:'A tag with that name already exists' });
       else throw error;
     }
+    return true;
+  }
+
+  const fileMatch = /^\/api\/tags\/file\/([a-f0-9]{64})$/.exec(url.pathname);
+  if (fileMatch && req.method === 'GET') {
+    json(res, 200, { tags:fileTags(fileMatch[1]) });
     return true;
   }
 
@@ -304,32 +338,37 @@ export async function handleTags(req, res, url) {
   const membersMatch = /^\/api\/tags\/(\d+)\/members$/.exec(url.pathname);
   if (membersMatch && req.method === 'POST') {
     const body = await readJson(req, 2 * 1024 * 1024);
-    const count = addMembers(membersMatch[1], body.hashes || [], String(body.source || 'manual'), body.confidence);
-    json(res, 200, { ok:true, count });
+    json(res, 200, {
+      ok:true,
+      count:addMembers(membersMatch[1], body.hashes || [], String(body.source || 'manual'), body.confidence)
+    });
     return true;
   }
 
   const aiMatch = /^\/api\/tags\/(\d+)\/ai-members$/.exec(url.pathname);
   if (aiMatch && req.method === 'POST') {
     const body = await readJson(req, 4 * 1024 * 1024);
-    const count = replaceAiMembers(aiMatch[1], body.matches || [], String(body.source || 'ai'));
-    json(res, 200, { ok:true, count });
+    json(res, 200, {
+      ok:true,
+      count:replaceAiMembers(aiMatch[1], body.matches || [], String(body.source || 'ai'))
+    });
     return true;
   }
 
   const removeMatch = /^\/api\/tags\/(\d+)\/remove$/.exec(url.pathname);
   if (removeMatch && req.method === 'POST') {
     const body = await readJson(req, 2 * 1024 * 1024);
-    const count = removeMembers(removeMatch[1], body.hashes || [], body.suppress === true);
-    json(res, 200, { ok:true, count });
+    json(res, 200, {
+      ok:true,
+      count:removeMembers(removeMatch[1], body.hashes || [], body.suppress === true)
+    });
     return true;
   }
 
   const examplesMatch = /^\/api\/tags\/(\d+)\/examples$/.exec(url.pathname);
   if (examplesMatch && req.method === 'POST') {
     const body = await readJson(req, 2 * 1024 * 1024);
-    const result = setExamples(examplesMatch[1], body.positive, body.negative);
-    json(res, 200, { ok:true, ...result });
+    json(res, 200, { ok:true, ...setExamples(examplesMatch[1], body.positive, body.negative) });
     return true;
   }
 
