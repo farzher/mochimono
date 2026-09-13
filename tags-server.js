@@ -40,8 +40,16 @@ function listTags() {
            COALESCE(SUM(tm.source = 'manual'), 0) AS manualCount,
            COALESCE(SUM(tm.source = 'ai'), 0) AS aiCount,
            COALESCE(SUM(tm.source = 'system'), 0) AS systemCount,
-           (SELECT COUNT(*) FROM tag_examples te WHERE te.tag_id = t.id AND te.polarity = 1) AS positiveExamples,
-           (SELECT COUNT(*) FROM tag_examples te WHERE te.tag_id = t.id AND te.polarity = -1) AS negativeExamples,
+           (SELECT COUNT(*) FROM (
+             SELECT object_hash FROM tag_members WHERE tag_id = t.id AND source = 'manual'
+             UNION
+             SELECT object_hash FROM tag_examples WHERE tag_id = t.id AND polarity = 1
+           )) AS positiveExamples,
+           (SELECT COUNT(*) FROM (
+             SELECT object_hash FROM tag_suppressions WHERE tag_id = t.id
+             UNION
+             SELECT object_hash FROM tag_examples WHERE tag_id = t.id AND polarity = -1
+           )) AS negativeExamples,
            (SELECT COUNT(*) FROM tag_suppressions ts WHERE ts.tag_id = t.id) AS suppressed
     FROM tags t
     LEFT JOIN tag_members tm ON tm.tag_id = t.id
@@ -66,9 +74,34 @@ function tagState(id) {
     WHERE tm.tag_id = ? AND o.state = 'active'
     ORDER BY tm.source, tm.confidence DESC, tm.added_at DESC
   `).all(current.id).map(row => ({ ...row, confidence:row.confidence == null ? null : Number(row.confidence) }));
-  const examples = db.prepare(`SELECT object_hash AS hash, polarity, added_at AS addedAt FROM tag_examples WHERE tag_id = ? ORDER BY added_at`).all(current.id);
-  const suppressed = db.prepare(`SELECT object_hash AS hash FROM tag_suppressions WHERE tag_id = ?`).all(current.id).map(row => row.hash);
-  return { tag:{ ...current, aiEnabled:Boolean(current.aiEnabled), builtin:Boolean(current.builtin) }, members, examples, suppressed };
+
+  // A manual tag is inherently a positive training decision. Likewise, a
+  // suppression is a negative correction. Synthesize both into examples so
+  // existing tags immediately teach the model without requiring a second,
+  // redundant "Selected = yes/no" action.
+  const exampleMap = new Map();
+  for (const row of db.prepare(`
+    SELECT object_hash AS hash, polarity, added_at AS addedAt
+    FROM tag_examples WHERE tag_id = ? ORDER BY added_at
+  `).all(current.id)) exampleMap.set(row.hash, row);
+  for (const member of members) {
+    if (member.source === 'manual' && !exampleMap.has(member.hash)) {
+      exampleMap.set(member.hash, { hash:member.hash, polarity:1, addedAt:member.addedAt });
+    }
+  }
+
+  const suppressedRows = db.prepare(`
+    SELECT object_hash AS hash, created_at AS addedAt
+    FROM tag_suppressions WHERE tag_id = ? ORDER BY created_at
+  `).all(current.id);
+  for (const row of suppressedRows) exampleMap.set(row.hash, { hash:row.hash, polarity:-1, addedAt:row.addedAt });
+
+  return {
+    tag:{ ...current, aiEnabled:Boolean(current.aiEnabled), builtin:Boolean(current.builtin) },
+    members,
+    examples:[...exampleMap.values()],
+    suppressed:suppressedRows.map(row => row.hash)
+  };
 }
 
 function addMembers(id, hashes, source = 'manual', confidence = null) {
@@ -84,11 +117,18 @@ function addMembers(id, hashes, source = 'manual', confidence = null) {
       added_at=CASE WHEN tag_members.source = 'manual' AND excluded.source != 'manual' THEN tag_members.added_at ELSE excluded.added_at END
   `);
   const unsuppress = db.prepare('DELETE FROM tag_suppressions WHERE tag_id = ? AND object_hash = ?');
+  const teachPositive = db.prepare(`
+    INSERT INTO tag_examples(tag_id, object_hash, polarity, added_at) VALUES(?, ?, 1, ?)
+    ON CONFLICT(tag_id, object_hash) DO UPDATE SET polarity=1, added_at=excluded.added_at
+  `);
   const timestamp = now();
   db.exec('BEGIN IMMEDIATE');
   try {
     for (const hash of hashes) {
-      if (source === 'manual') unsuppress.run(current.id, hash);
+      if (source === 'manual') {
+        unsuppress.run(current.id, hash);
+        teachPositive.run(current.id, hash, timestamp);
+      }
       insert.run(current.id, hash, source, confidence == null ? null : Math.max(0, Math.min(1, Number(confidence) || 0)), timestamp);
     }
     db.exec('COMMIT');
@@ -142,12 +182,22 @@ function removeMembers(id, hashes, suppress) {
   hashes = cleanHashes(hashes);
   const remove = db.prepare('DELETE FROM tag_members WHERE tag_id = ? AND object_hash = ?');
   const block = db.prepare('INSERT OR REPLACE INTO tag_suppressions(tag_id, object_hash, created_at) VALUES(?, ?, ?)');
+  const teachNegative = db.prepare(`
+    INSERT INTO tag_examples(tag_id, object_hash, polarity, added_at) VALUES(?, ?, -1, ?)
+    ON CONFLICT(tag_id, object_hash) DO UPDATE SET polarity=-1, added_at=excluded.added_at
+  `);
+  const forgetPositive = db.prepare('DELETE FROM tag_examples WHERE tag_id = ? AND object_hash = ? AND polarity = 1');
   const timestamp = now();
   db.exec('BEGIN IMMEDIATE');
   try {
     for (const hash of hashes) {
       remove.run(current.id, hash);
-      if (suppress) block.run(current.id, hash, timestamp);
+      if (suppress) {
+        block.run(current.id, hash, timestamp);
+        teachNegative.run(current.id, hash, timestamp);
+      } else {
+        forgetPositive.run(current.id, hash);
+      }
     }
     db.exec('COMMIT');
   } catch (error) {
