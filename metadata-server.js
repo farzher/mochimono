@@ -45,6 +45,25 @@ function catalogPage(url) {
   };
 }
 
+function importSources(url, importId) {
+  if (!db.prepare('SELECT 1 FROM imports WHERE id = ?').get(importId)) return null;
+  const after = Math.max(0, Number(url.searchParams.get('after') || 0) || 0);
+  const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') || 5000)));
+  const rows = db.prepare(`
+    SELECT s.id, s.object_hash AS hash, s.original_path AS path,
+           (SELECT COUNT(*) FROM sources sx WHERE sx.object_hash = s.object_hash) AS referencesCount
+    FROM sources s
+    JOIN objects o ON o.hash = s.object_hash
+    WHERE s.import_id = ? AND o.state = 'active' AND s.id > ?
+    ORDER BY s.id
+    LIMIT ?
+  `).all(importId, after, limit);
+  return {
+    sources: rows,
+    nextAfter: rows.length === limit ? Number(rows.at(-1).id) : null
+  };
+}
+
 function saneDate(value) {
   if (!value) return null;
   const date = new Date(value);
@@ -173,13 +192,15 @@ export async function handleMetadata(req, res, url) {
   if (await handleTags(req, res, url)) return true;
   if (await handleFolderTreeServer(req, res, url)) return true;
   const detailsMatch = /^\/api\/files\/([a-f0-9]{64})\/details$/.exec(url.pathname);
+  const importSourcesMatch = /^\/api\/imports\/(\d+)\/sources$/.exec(url.pathname);
   const isRoute = url.pathname === '/api/catalog' ||
     url.pathname === '/api/catalog/version' ||
     url.pathname === '/api/file-dates' ||
     url.pathname === '/api/import-roots' ||
     url.pathname.startsWith('/api/media-metadata') ||
     url.pathname.startsWith('/api/provenance/') ||
-    Boolean(detailsMatch);
+    Boolean(detailsMatch) ||
+    Boolean(importSourcesMatch);
   if (!isRoute) return false;
 
   if (req.method === 'GET' && url.pathname === '/api/catalog') {
@@ -188,6 +209,11 @@ export async function handleMetadata(req, res, url) {
   }
   if (req.method === 'GET' && url.pathname === '/api/catalog/version') {
     json(res, 200, { version: catalogVersion() });
+    return true;
+  }
+  if (importSourcesMatch && req.method === 'GET') {
+    const data = importSources(url, Number(importSourcesMatch[1]));
+    json(res, data ? 200 : 404, data || { error:'Import not found' });
     return true;
   }
   if (detailsMatch && req.method === 'GET') {
