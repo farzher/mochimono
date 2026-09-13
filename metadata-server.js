@@ -1,6 +1,7 @@
 import { db, json, now, readJson, catalogVersion } from './lib/server-context.js';
 import { validHash } from './lib/store.js';
 import { handleFolderTreeServer } from './folder-tree-server.js';
+import { handleTags } from './tags-server.js';
 
 function catalogPage(url) {
   const after = String(url.searchParams.get('after') || '');
@@ -16,6 +17,13 @@ function catalogPage(url) {
            GROUP_CONCAT(DISTINCT (SELECT MIN(i2.id) FROM imports i2 WHERE i2.source_name = i.source_name)) AS importIds,
            GROUP_CONCAT(DISTINCT s.import_id) AS exactImportIds,
            COALESCE(GROUP_CONCAT(DISTINCT s.filename || ' ' || s.original_path || ' ' || COALESCE(ir.root_path, '')), '') AS searchText,
+           COALESCE((
+             SELECT json_group_array(json_object(
+               'id', t.id, 'name', t.name, 'source', tm.source, 'confidence', tm.confidence
+             ))
+             FROM tag_members tm JOIN tags t ON t.id = tm.tag_id
+             WHERE tm.object_hash = o.hash
+           ), '[]') AS tagsJson,
            EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
            (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount,
            NOT EXISTS (SELECT 1 FROM object_integrity oi WHERE oi.hash = o.hash AND oi.status != 'healthy') AS serverStored,
@@ -140,11 +148,17 @@ function details(hash) {
     FROM replicas r JOIN drives d ON d.id = r.drive_id
     WHERE r.object_hash = ? ORDER BY d.name
   `).all(hash);
+  const tags = db.prepare(`
+    SELECT t.id, t.name, tm.source, tm.confidence, tm.added_at AS addedAt
+    FROM tag_members tm JOIN tags t ON t.id = tm.tag_id
+    WHERE tm.object_hash = ? ORDER BY lower(t.name), t.name
+  `).all(hash).map(row => ({ ...row, confidence:row.confidence == null ? null : Number(row.confidence) }));
   const date = dateRows([hash])[0] || { hash, fileDate: object.createdAt, dateSource: 'imported', capturedAt: null };
   return {
     object,
     sources,
     backups,
+    tags,
     date,
     serverStored: !['corrupt', 'missing'].includes(object.integrityStatus)
   };
@@ -156,6 +170,7 @@ function cleanDimension(value) {
 }
 
 export async function handleMetadata(req, res, url) {
+  if (await handleTags(req, res, url)) return true;
   if (await handleFolderTreeServer(req, res, url)) return true;
   const detailsMatch = /^\/api\/files\/([a-f0-9]{64})\/details$/.exec(url.pathname);
   const isRoute = url.pathname === '/api/catalog' ||
