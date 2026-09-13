@@ -50,8 +50,7 @@ function importSources(url, importId) {
   const after = Math.max(0, Number(url.searchParams.get('after') || 0) || 0);
   const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') || 5000)));
   const rows = db.prepare(`
-    SELECT s.id, s.object_hash AS hash, s.original_path AS path,
-           (SELECT COUNT(*) FROM sources sx WHERE sx.object_hash = s.object_hash) AS referencesCount
+    SELECT s.id, s.object_hash AS hash, s.original_path AS path
     FROM sources s
     JOIN objects o ON o.hash = s.object_hash
     WHERE s.import_id = ? AND o.state = 'active' AND s.id > ?
