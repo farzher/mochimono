@@ -50,7 +50,17 @@ function importSources(url, importId) {
   const after = Math.max(0, Number(url.searchParams.get('after') || 0) || 0);
   const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') || 5000)));
   const rows = db.prepare(`
-    SELECT s.id, s.object_hash AS hash, s.original_path AS path
+    SELECT s.id, s.object_hash AS hash, s.original_path AS path,
+           s.original_path AS originalPath, s.filename,
+           o.size, o.mime, o.created_at AS createdAt,
+           COALESCE(s.mtime, o.created_at) AS fileDate,
+           s.created_at AS addedAt,
+           EXISTS (SELECT 1 FROM reviewed_hashes rh WHERE rh.hash = o.hash) AS reviewed,
+           (SELECT COUNT(*) FROM replicas r WHERE r.object_hash = o.hash) AS backupCount,
+           NOT EXISTS (SELECT 1 FROM object_integrity oi WHERE oi.hash = o.hash AND oi.status != 'healthy') AS serverStored,
+           COALESCE((SELECT oi.status FROM object_integrity oi WHERE oi.hash = o.hash), 'unknown') AS integrityStatus,
+           COALESCE((SELECT mm.width FROM media_metadata mm WHERE mm.object_hash = o.hash), 0) AS width,
+           COALESCE((SELECT mm.height FROM media_metadata mm WHERE mm.object_hash = o.hash), 0) AS height
     FROM sources s
     JOIN objects o ON o.hash = s.object_hash
     WHERE s.import_id = ? AND o.state = 'active' AND s.id > ?
