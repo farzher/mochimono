@@ -5,7 +5,7 @@ const style = document.createElement('style');
 style.textContent = `
 .source-ignore-dialog{width:min(620px,calc(100vw - 28px));border:0;border-radius:14px;background:#171518;color:#eee8e4;padding:15px;box-shadow:0 28px 90px rgba(0,0,0,.62)}
 .source-ignore-dialog::backdrop{background:rgba(0,0,0,.58);backdrop-filter:blur(3px)}
-.source-ignore-copy{margin:5px 0 12px;color:#8f8783;font:11px/1.5 system-ui}.source-ignore-copy strong{color:#cfc6c2}
+.source-ignore-copy{margin:5px 0 12px;color:#8f8783;font:11px/1.5 system-ui}.source-ignore-copy strong{color:#cfc6c2}.source-ignore-copy code{color:#c9c0bc;font:10px ui-monospace,SFMono-Regular,Consolas,monospace}
 .source-ignore-list{display:grid;gap:5px;max-height:290px;overflow:auto}.source-ignore-empty{padding:20px 8px;text-align:center;color:#746d6b;font-size:11px}
 .source-ignore-item{min-width:0;display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:8px;background:#111012}.source-ignore-item code{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#d7cfcb;font:10.5px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace}.source-ignore-item button{width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:#8f8582;cursor:pointer}.source-ignore-item button:hover{background:#29252a;color:#fff}
 .source-ignore-add{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;margin-top:11px}.source-ignore-add input{min-width:0;height:34px;box-sizing:border-box;border:1px solid rgba(255,255,255,.09);border-radius:8px;background:#0f0e10;color:#eee8e4;padding:0 9px;font:11px/1 system-ui;outline:0}.source-ignore-add button{height:34px;padding:0 11px;border:0;border-radius:8px;background:#28242a;color:#d8cfcb;font:700 10px/1 system-ui;cursor:pointer}.source-ignore-add button.primary{background:#eee8e4;color:#171416}.source-ignore-add button:hover{filter:brightness(1.08)}
@@ -17,11 +17,11 @@ document.head.append(style);
 const dialog = document.createElement('dialog');
 dialog.className = 'source-ignore-dialog';
 dialog.innerHTML = `
-  <div class="dialog-head"><div><h3>Ignored paths</h3><div class="picker-path" data-ignore-root></div></div><button class="icon" data-ignore-close aria-label="Close">×</button></div>
-  <p class="source-ignore-copy">Ignored files and folders are <strong>skipped before scanning, hashing, or uploading</strong>. Existing Cloud copies are kept.</p>
+  <div class="dialog-head"><div><h3>Ignored paths & patterns</h3><div class="picker-path" data-ignore-root></div></div><button class="icon" data-ignore-close aria-label="Close">×</button></div>
+  <p class="source-ignore-copy">Ignored files and folders are <strong>skipped before scanning, hashing, or uploading</strong>. Patterns support <code>*</code>, <code>?</code>, and <code>**</code>, for example <code>**/node_modules</code> or <code>**/*.tmp</code>. Existing Cloud copies are kept.</p>
   <div class="source-ignore-list" data-ignore-list></div>
   <div class="source-ignore-add">
-    <input data-ignore-input placeholder="File or folder inside this source">
+    <input data-ignore-input placeholder="Path or pattern, e.g. **/node_modules">
     <button type="button" data-ignore-choose>Choose folder</button>
     <button type="button" class="primary" data-ignore-add>Ignore</button>
   </div>
@@ -94,7 +94,7 @@ function installButtons() {
     button.className = 'action-link';
     button.dataset.sourceIgnore = '1';
     button.textContent = 'Ignore…';
-    button.title = 'Ignore files or subfolders from this source';
+    button.title = 'Ignore files, subfolders, or patterns from this source';
     button.addEventListener('click', () => open(row.dataset.folderPath).catch(error => toast(error.message)));
     actions.prepend(button);
   }
