@@ -2,6 +2,7 @@ import { normalizeText } from './search-query.js';
 
 const CLIENT = document.documentElement.classList.contains('client-library');
 const locationFilter = document.querySelector('#locationFilter');
+const typeFilter = document.querySelector('#typeFilter');
 const search = document.querySelector('#search');
 const DUPLICATE_CACHE_MS = 30_000;
 const CLIENT_WHERE_FILTERS = new Set(['duplicates', 'ignored-leftovers']);
@@ -113,14 +114,27 @@ async function applyFilter() {
   }
 
   if (mode === 'duplicates') {
-    const hashes = await loadDuplicateHashes().catch(() => null);
+    const hashes = await loadDuplicateHashes().catch(error => {
+      console.warn(error);
+      return null;
+    });
     if (!hashes || String(locationFilter.value || '') !== mode) return;
     library()?.setLocationFilter?.(mode, hashes);
     return;
   }
 
   if (mode === 'ignored-leftovers') {
-    const hashes = await loadIgnoredLeftoverHashes(true).catch(() => null);
+    // This is a cleanup view, not a media-browsing view. Grid normally defaults
+    // to Media, which can make valid ignored documents look like there are no
+    // leftovers at all. Always show every file type here.
+    if (typeFilter?.value) {
+      typeFilter.value = '';
+      typeFilter.dispatchEvent(new Event('change', { bubbles:true }));
+    }
+    const hashes = await loadIgnoredLeftoverHashes(true).catch(error => {
+      console.warn(error);
+      return null;
+    });
     if (!hashes || String(locationFilter.value || '') !== mode) return;
     library()?.setLocationFilter?.(mode, hashes);
     return;
@@ -140,17 +154,17 @@ async function applyFilter() {
   library()?.setLocationFilter?.(mode, hashes);
 }
 
-locationFilter?.addEventListener('change', () => applyFilter().catch(() => {}));
+locationFilter?.addEventListener('change', () => applyFilter().catch(console.warn));
 
 function restoreClientWhereFromUrl() {
   if (!CLIENT || !locationFilter) return;
   const wanted = String(new URL(location.href).searchParams.get('where') || '');
   if (CLIENT_WHERE_FILTERS.has(wanted)) {
     if (locationFilter.value !== wanted) locationFilter.value = wanted;
-    applyFilter().catch(() => {});
+    applyFilter().catch(console.warn);
   } else if (CLIENT_WHERE_FILTERS.has(locationFilter.value)) {
     locationFilter.value = '';
-    applyFilter().catch(() => {});
+    applyFilter().catch(console.warn);
   }
 }
 
@@ -167,7 +181,7 @@ if (CLIENT) {
     duplicateHashes = null;
     duplicateLoadedAt = 0;
     ignoredLeftoverHashes = null;
-    if (locationFilter?.value === 'duplicates' || locationFilter?.value === 'ignored-leftovers') applyFilter().catch(() => {});
+    if (locationFilter?.value === 'duplicates' || locationFilter?.value === 'ignored-leftovers') applyFilter().catch(console.warn);
   });
   queueMicrotask(restoreClientWhereFromUrl);
 }
