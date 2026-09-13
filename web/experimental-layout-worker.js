@@ -1,47 +1,262 @@
-// Experimental layout v2: canonical visual families are computed once, then
-// enforced over every disposable experimental layout. The original layout
-// algorithms remain isolated in experimental-layout-worker-v1.js.
-const VIS_DB='mochimono-visual-similarity',VIS_VERSION=1,VIS_STORE='fingerprints';
-const AI_DB='mochimono-ai',AI_VERSION=2,EMBEDDINGS='embeddings',DINO_VERSION='dinov3-vitb16-v2',EMBED_SCHEMA=3;
-const THUMB_VERSION=3,TEMPLATE_VERSION='template12-v1',TEMPLATE_N=12,TEMPLATE_DIM=216,PROJ_DIM=32,BATCH=24;
-const HASH_RE=/^[a-f0-9]{64}$/,ROBUST_RE=/^[a-f0-9]{64}$/;
-let canceled=false,child=null;
-const post=(type,payload={})=>self.postMessage({type,...payload});
-const progress=(done,total,detail,stage='families')=>post('progress',{done,total,detail,stage});
-const abort=()=>{if(canceled)throw new DOMException('Aborted','AbortError')};
-post('progress',{done:0,total:1,detail:'Starting family-consistent experimental layout…',stage:'startup'});
+let canceled = false;
+const children = new Set();
+const HASH_RE = /^[a-f0-9]{64}$/;
+const FAMILY_WORKER = './ai-family-engine-worker.js';
+const FLOW_WORKER = './ai-global-sort-worker-v6.js';
+const BASE_LAYOUT_WORKER = './experimental-layout-worker-v1.js';
+const REV = 'shared-family-v1';
 
-function openDb(name,version){return new Promise((resolve,reject)=>{const q=indexedDB.open(name,version);q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)})}
-function normalize(data,offset=0,dim=data.length){let n=0;for(let i=0;i<dim;i++)n+=data[offset+i]*data[offset+i];n=Math.sqrt(n)||1;for(let i=0;i<dim;i++)data[offset+i]/=n;return data}
-function aspect(media,i){const w=Number(media[i]?.width)||0,h=Number(media[i]?.height)||0;return w>0&&h>0?w/h:1}
-function aspectDistance(media,a,b){return Math.abs(Math.log2(aspect(media,a)/aspect(media,b)))}
-class UF{constructor(n){this.p=Int32Array.from({length:n},(_,i)=>i);this.r=new Uint8Array(n)}find(x){let r=x;while(this.p[r]!==r)r=this.p[r];while(this.p[x]!==x){const n=this.p[x];this.p[x]=r;x=n}return r}join(a,b){a=this.find(a);b=this.find(b);if(a===b)return false;if(this.r[a]<this.r[b])[a,b]=[b,a];this.p[b]=a;if(this.r[a]===this.r[b])this.r[a]++;return true}}
+const post = (type, payload = {}) => self.postMessage({ type, ...payload });
+const abort = () => { if (canceled) throw new DOMException('Aborted', 'AbortError'); };
 
-async function loadVisualRows(){const db=await openDb(VIS_DB,VIS_VERSION);try{return await new Promise((resolve,reject)=>{const q=db.transaction(VIS_STORE,'readonly').objectStore(VIS_STORE).getAll();q.onsuccess=()=>resolve(q.result||[]);q.onerror=()=>reject(q.error)})}finally{db.close()}}
-async function saveVisualRows(rows){if(!rows.length)return;const db=await openDb(VIS_DB,VIS_VERSION);await new Promise((resolve,reject)=>{const tx=db.transaction(VIS_STORE,'readwrite'),store=tx.objectStore(VIS_STORE);for(const row of rows)store.put(row);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error||new Error('Could not cache visual template signatures'))}).finally(()=>db.close())}
+function callWorker(path, message, prefix = '') {
+  return new Promise((resolve, reject) => {
+    const url = new URL(path, import.meta.url);
+    url.searchParams.set('v', REV);
+    const worker = new Worker(url, { type:'module' });
+    children.add(worker);
+    let done = false;
+    const finish = (fn, value) => {
+      if (done) return;
+      done = true;
+      children.delete(worker);
+      try { worker.terminate(); } catch {}
+      fn(value);
+    };
+    worker.onerror = event => finish(reject, new Error(event.message || 'Experimental child worker failed'));
+    worker.onmessageerror = () => finish(reject, new Error('Experimental child worker returned unreadable data'));
+    worker.onmessage = event => {
+      const data = event.data || {};
+      if (data.type === 'progress') {
+        post('progress', { ...data, detail:prefix && data.detail ? `${prefix}${data.detail}` : data.detail });
+        return;
+      }
+      if (data.type === 'error') {
+        const error = new Error(data.error || 'Experimental child worker failed');
+        if (data.aborted) error.name = 'AbortError';
+        finish(reject, error);
+        return;
+      }
+      if (data.type === 'result') finish(resolve, data.result || {});
+    };
+    worker.postMessage(message);
+  });
+}
 
-async function templateFor(hash){const response=await fetch(`/api/thumbs/${hash}?v=${THUMB_VERSION}`,{cache:'force-cache'});if(!response.ok)return null;const bitmap=await createImageBitmap(await response.blob());try{const canvas=new OffscreenCanvas(TEMPLATE_N,TEMPLATE_N),ctx=canvas.getContext('2d',{willReadFrequently:true,alpha:false});ctx.drawImage(bitmap,0,0,TEMPLATE_N,TEMPLATE_N);const data=ctx.getImageData(0,0,TEMPLATE_N,TEMPLATE_N).data,out=new Uint8Array(TEMPLATE_DIM);let mean=0;for(let i=0,p=0;i<TEMPLATE_N*TEMPLATE_N;i++,p+=4){const r=data[p],g=data[p+1],b=data[p+2],l=Math.round(r*.299+g*.587+b*.114);out[i]=l;mean+=l}mean/=TEMPLATE_N*TEMPLATE_N;let c=144;for(let by=0;by<6;by++)for(let bx=0;bx<6;bx++){let rg=0,bg=0,n=0;for(let y=by*2;y<by*2+2;y++)for(let x=bx*2;x<bx*2+2;x++){const p=(y*TEMPLATE_N+x)*4,r=data[p],g=data[p+1],b=data[p+2];rg+=r-g;bg+=b-g;n++}out[c++]=Math.max(0,Math.min(255,Math.round(127+rg/n/2)));out[c++]=Math.max(0,Math.min(255,Math.round(127+bg/n/2)))}return{value:out,mean}}finally{bitmap.close?.()}}
+function groupsFromIds(ids, count) {
+  const grouped = new Map();
+  if (!ids?.length) return [];
+  for (let index = 0; index < Math.min(count, ids.length); index++) {
+    const id = Number(ids[index]);
+    if (id < 0) continue;
+    let group = grouped.get(id);
+    if (!group) grouped.set(id, group = []);
+    group.push(index);
+  }
+  return [...grouped.values()].filter(group => group.length > 1);
+}
 
-function validTemplate(row){return row?.experimentalTemplateVersion===TEMPLATE_VERSION&&row.experimentalTemplate?.length===TEMPLATE_DIM}
-async function ensureTemplates(media){const rows=await loadVisualRows(),byHash=new Map(rows.map(row=>[String(row.hash||''),row])),templates=new Array(media.length),means=new Float32Array(media.length),missing=[];for(let i=0;i<media.length;i++){const row=byHash.get(media[i].hash);if(validTemplate(row)){templates[i]=new Uint8Array(row.experimentalTemplate);let sum=0;for(let p=0;p<144;p++)sum+=templates[i][p];means[i]=sum/144}else missing.push(i)}let done=media.length-missing.length;progress(done,media.length,`Preparing template similarity · ${done.toLocaleString()} / ${media.length.toLocaleString()}`,'templates');for(let offset=0;offset<missing.length;offset+=BATCH){abort();const indexes=missing.slice(offset,offset+BATCH),computed=await Promise.all(indexes.map(async i=>{try{return[i,await templateFor(media[i].hash)]}catch{return[i,null]}})),writes=[];for(const[i,result]of computed){if(!result)continue;templates[i]=result.value;means[i]=result.mean;const previous=byHash.get(media[i].hash)||{};const row={...previous,hash:media[i].hash,experimentalTemplate:result.value,experimentalTemplateVersion:TEMPLATE_VERSION,updatedAt:Date.now()};byHash.set(media[i].hash,row);writes.push(row)}try{await saveVisualRows(writes)}catch{}done+=indexes.length;progress(Math.min(done,media.length),media.length,`Preparing template similarity · ${Math.min(done,media.length).toLocaleString()} / ${media.length.toLocaleString()}`,'templates')}return{templates,means,rows:byHash}}
+function basePositions(order, count) {
+  const positions = new Int32Array(count);
+  positions.fill(1e9);
+  for (let position = 0; position < order.length; position++) {
+    const index = Number(order[position]);
+    if (index >= 0 && index < count) positions[index] = position;
+  }
+  for (let index = 0; index < count; index++) if (positions[index] === 1e9) positions[index] = order.length + index;
+  return positions;
+}
 
-const projectMap=new Map();function projectionMap(length){if(projectMap.has(length))return projectMap.get(length);const a=new Uint8Array(length),b=new Uint8Array(length),s=new Int8Array(length*2);for(let i=0;i<length;i++){const h1=Math.imul(i+1,0x9e3779b1)>>>0,h2=Math.imul(i+17,0x85ebca6b)>>>0;a[i]=h1%PROJ_DIM;b[i]=h2%PROJ_DIM;s[i*2]=(h1&0x80000000)?-1:1;s[i*2+1]=(h2&0x40000000)?-1:1}const value={a,b,s};projectMap.set(length,value);return value}
-function projectVector(source,target,offset,center=0,scale=1){const map=projectionMap(source.length);for(let i=0;i<source.length;i++){const v=((Number(source[i])||0)-center)*scale;target[offset+map.a[i]]+=v*map.s[i*2];target[offset+map.b[i]]+=v*map.s[i*2+1]}normalize(target,offset,PROJ_DIM)}
-function templateProjection(templates,means){const out=new Float32Array(templates.length*PROJ_DIM),available=new Uint8Array(templates.length);for(let i=0;i<templates.length;i++){const t=templates[i];if(!t)continue;const temp=new Float32Array(TEMPLATE_DIM);for(let p=0;p<144;p++)temp[p]=(t[p]-means[i])/255;for(let p=144;p<TEMPLATE_DIM;p++)temp[p]=(t[p]-127)/128;projectVector(temp,out,i*PROJ_DIM);available[i]=1}return{data:out,available,dim:PROJ_DIM}}
-async function loadDino(media,byHash){const out={data:new Float32Array(media.length*PROJ_DIM),available:new Uint8Array(media.length),dim:PROJ_DIM,loaded:0},db=await openDb(AI_DB,AI_VERSION);try{const q=db.transaction(EMBEDDINGS,'readonly').objectStore(EMBEDDINGS).index('model').openCursor(IDBKeyRange.only(DINO_VERSION));await new Promise((resolve,reject)=>{q.onerror=()=>reject(q.error);q.onsuccess=()=>{abort();const c=q.result;if(!c)return resolve();const row=c.value||{},i=byHash.get(String(row.hash||''));if(i!=null&&Number(row.schema)===EMBED_SCHEMA&&row.vector?.length){projectVector(row.vector,out.data,i*PROJ_DIM);out.available[i]=1;out.loaded++}c.continue()}})}finally{db.close()}return out}
-function cosineDistance(space,a,b){if(!space?.available[a]||!space?.available[b])return 1;let dot=0,ao=a*space.dim,bo=b*space.dim;for(let d=0;d<space.dim;d++)dot+=space.data[ao+d]*space.data[bo+d];return Math.max(0,1-dot)}
-function templateDistance(state,a,b){const A=state.templates[a],B=state.templates[b];if(!A||!B)return 1;let luma=0,chroma=0;const meanA=state.means[a],meanB=state.means[b];for(let p=0;p<144;p++){const d=((A[p]-meanA)-(B[p]-meanB))/255;luma+=d*d}for(let p=144;p<TEMPLATE_DIM;p++){const d=(A[p]-B[p])/255;chroma+=d*d}luma=Math.sqrt(luma/144);chroma=Math.sqrt(chroma/(TEMPLATE_DIM-144));const mean=Math.abs(meanA-meanB)/255;return luma*.65+chroma*.25+mean*.10}
-const POP16=new Uint8Array(1<<16);for(let i=1;i<POP16.length;i++)POP16[i]=POP16[i>>1]+(i&1);function robustWords(row){const value=String(row?.robust||'').toLowerCase();if(!ROBUST_RE.test(value))return null;const words=new Uint16Array(16);for(let i=0;i<16;i++)words[i]=parseInt(value.slice(i*4,i*4+4),16);return words}function robustDistance(a,b){if(!a||!b)return 256;let n=0;for(let i=0;i<16;i++)n+=POP16[a[i]^b[i]];return n}
-function projectionWeights(seed){const w=new Int8Array(PROJ_DIM);let s=Math.imul(seed,0x9e3779b1)>>>0;for(let d=0;d<PROJ_DIM;d++){s^=s<<13;s^=s>>>17;s^=s<<5;w[d]=(s&1)?1:-1}return w}function scalar(space,index,w){let total=0,o=index*space.dim;for(let d=0;d<space.dim;d++)total+=space.data[o+d]*w[d];return total}
-function familyPair(media,state,dino,robust,a,b){if(aspectDistance(media,a,b)>.38)return false;const td=templateDistance(state,a,b),dd=cosineDistance(dino,a,b),rd=robustDistance(robust[a],robust[b]);if(td<=.028)return true;if(td<=.058)return true;if(td<=.075&&dd<=.08)return true;if(td<=.095&&dd<=.035)return true;if(rd<=36&&td<=.10)return true;if(rd<=72&&td<=.072)return true;return false}
-function addProjectionCandidates(space,indexes,seeds,radius,visit){for(const seed of seeds){abort();const w=projectionWeights(seed),order=indexes.slice().sort((a,b)=>scalar(space,a,w)-scalar(space,b,w));for(let p=0;p<order.length;p++)for(let q=p+1;q<Math.min(order.length,p+radius+1);q++)visit(order[p],order[q])}}
-function buildFamilies(media,state,dino){const n=media.length,uf=new UF(n),robust=media.map(item=>robustWords(state.rows.get(item.hash))),seen=new Set,tryPair=(a,b)=>{if(a===b)return;const lo=Math.min(a,b),hi=Math.max(a,b),key=`${lo}:${hi}`;if(seen.has(key))return;seen.add(key);if(familyPair(media,state,dino,robust,lo,hi))uf.join(lo,hi)};progress(0,n,'Finding canonical template families…','families');const tp=templateProjection(state.templates,state.means),templateIndexes=[];for(let i=0;i<n;i++)if(tp.available[i])templateIndexes.push(i);addProjectionCandidates(tp,templateIndexes,[3,11,29,61,97,137],14,tryPair);if(dino.loaded){const indexes=[];for(let i=0;i<n;i++)if(dino.available[i])indexes.push(i);addProjectionCandidates(dino,indexes,[5,17,41,73],12,tryPair)}const buckets=new Map;for(let i=0;i<n;i++){const words=robust[i];if(!words)continue;for(let block=0;block<16;block++){const key=`${block}:${words[block]}`;for(const other of buckets.get(key)||[])tryPair(i,other);let list=buckets.get(key);if(!list)buckets.set(key,list=[]);if(list.length<256)list.push(i)}}const map=new Map;for(let i=0;i<n;i++){const root=uf.find(i);if(!map.has(root))map.set(root,[]);map.get(root).push(i)}const groups=[...map.values()],multi=groups.filter(g=>g.length>1),locked=multi.reduce((s,g)=>s+g.length,0);progress(n,n,`Canonical template families · ${multi.length.toLocaleString()} groups · ${locked.toLocaleString()} media locked`,'families');return{groups,multi:multi.length,locked}}
+function consolidateGrid(result, familyResult, media) {
+  const original = Array.from(result?.order || [], Number);
+  if (original.length !== media.length) return result;
+  const groups = groupsFromIds(familyResult?.familyIds, media.length);
+  if (!groups.length) return { ...result, detail:`${result.detail || 'Experimental grid'} · shared families ready` };
+  const positions = basePositions(original, media.length);
+  const groupOf = new Int32Array(media.length); groupOf.fill(-1);
+  groups.forEach((group, id) => group.forEach(index => { groupOf[index] = id; }));
+  const seen = new Uint8Array(groups.length);
+  const output = [];
+  for (const item of original) {
+    const id = groupOf[item];
+    if (id < 0) { output.push(item); continue; }
+    if (seen[id]) continue;
+    seen[id] = 1;
+    output.push(...groups[id].slice().sort((a, b) => positions[a] - positions[b] || a - b));
+  }
+  return {
+    ...result,
+    order:Uint32Array.from(output),
+    detail:`${result.detail || 'Experimental grid'} · ${groups.length.toLocaleString()} shared families locked`
+  };
+}
 
-function runLegacy(payload){return new Promise((resolve,reject)=>{const w=new Worker(new URL('./experimental-layout-worker-v1.js',self.location.href),{type:'module'});child=w;let done=false;const finish=(fn,value)=>{if(done)return;done=true;if(child===w)child=null;w.terminate();fn(value)};w.onerror=e=>finish(reject,new Error(e.message||'Base experimental layout failed'));w.onmessageerror=()=>finish(reject,new Error('Base experimental layout returned unreadable data'));w.onmessage=e=>{const data=e.data||{};if(data.type==='progress'){post('progress',data);return}if(data.type==='error')return finish(reject,new Error(data.error||'Base experimental layout failed'));if(data.type==='result')finish(resolve,data.result||{})};w.postMessage({action:'build',payload})})}
-function basePositions(order,n){const pos=new Int32Array(n);pos.fill(-1);for(let p=0;p<order.length;p++)pos[Number(order[p])]=p;return pos}
-function consolidateGrid(result,families,n){const order=Array.from(result.order||[],Number);if(order.length!==n)return result;const pos=basePositions(order,n),groupOf=new Int32Array(n);groupOf.fill(-1);families.groups.forEach((group,id)=>group.forEach(i=>groupOf[i]=id));const emitted=new Uint8Array(families.groups.length),out=[];for(const item of order){const id=groupOf[item];if(id<0){out.push(item);continue}if(emitted[id])continue;emitted[id]=1;const members=families.groups[id].slice().sort((a,b)=>pos[a]-pos[b]);out.push(...members)}return{...result,order:Uint32Array.from(out),detail:`${result.detail||'Experimental grid'} · ${families.multi.toLocaleString()} canonical families locked`}}
-function rectangleFree(used,x,y,w,h,W,H){if(x<0||y<0||x+w>W||y+h>H)return false;for(let yy=y;yy<y+h;yy++)for(let xx=x;xx<x+w;xx++)if(used[yy*W+xx])return false;return true}function occupy(used,x,y,w,h,W){for(let yy=y;yy<y+h;yy++)for(let xx=x;xx<x+w;xx++)used[yy*W+xx]=1}
-function compactMap(result,families,n){if(!result?.x?.length||!result?.y?.length)return result;let W=Math.max(1,Math.ceil(Number(result.worldW)||1)),H=Math.max(1,Math.ceil(Number(result.worldH)||1));const metas=families.groups.map((group,id)=>{let x=0,y=0,count=0;for(const i of group){const px=Number(result.x[i]),py=Number(result.y[i]);if(Number.isFinite(px)&&Number.isFinite(py)&&px>=0&&py>=0){x+=px;y+=py;count++}}return{id,group,cx:count?x/count:W/2,cy:count?y/count:H/2}}).sort((a,b)=>b.group.length-a.group.length||a.cy-b.cy||a.cx-b.cx);const extra=Math.max(8,Math.ceil(Math.sqrt(n)*.08));W+=extra;H+=extra;let used=new Uint8Array(W*H),xout=new Float32Array(n),yout=new Float32Array(n);xout.fill(-1);yout.fill(-1);for(const meta of metas){abort();const size=meta.group.length,w=Math.max(1,Math.ceil(Math.sqrt(size*1.3))),h=Math.max(1,Math.ceil(size/w)),wantX=Math.round(meta.cx-w/2),wantY=Math.round(meta.cy-h/2);let found=null,maxR=Math.max(W,H);for(let r=0;r<=maxR&&!found;r++){const tests=r===0?[[wantX,wantY]]:[[wantX-r,wantY-r],[wantX,wantY-r],[wantX+r,wantY-r],[wantX+r,wantY],[wantX+r,wantY+r],[wantX,wantY+r],[wantX-r,wantY+r],[wantX-r,wantY]];for(const [x,y]of tests)if(rectangleFree(used,x,y,w,h,W,H)){found=[x,y];break}}if(!found){const oldH=H;H+=h+2;const next=new Uint8Array(W*H);next.set(used);used=next;found=[0,oldH+1]}const[x,y]=found;occupy(used,x,y,w,h,W);const members=meta.group.slice().sort((a,b)=>(Number(result.y[a])-Number(result.y[b]))||(Number(result.x[a])-Number(result.x[b]))||a-b);for(let k=0;k<members.length;k++){xout[members[k]]=x+(k%w);yout[members[k]]=y+Math.floor(k/w)}}return{...result,x:xout,y:yout,worldW:W,worldH:H,detail:`${result.detail||'Experimental map'} · ${families.multi.toLocaleString()} canonical families locked`}}
+function familyQuilt(media, familyResult) {
+  const groups = groupsFromIds(familyResult?.familyIds, media.length);
+  const byHash = new Map(media.map((item, index) => [String(item.hash), index]));
+  const positions = new Int32Array(media.length); positions.fill(1e9);
+  const familyOrder = Array.isArray(familyResult?.order) ? familyResult.order : [];
+  for (let position = 0; position < familyOrder.length; position++) {
+    const index = byHash.get(String(familyOrder[position]));
+    if (index != null) positions[index] = position;
+  }
+  for (let index = 0; index < media.length; index++) if (positions[index] === 1e9) positions[index] = familyOrder.length + index;
 
-async function build(payload){const media=Array.isArray(payload?.media)?payload.media.filter(item=>HASH_RE.test(String(item?.hash||''))):[];if(!media.length)return runLegacy(payload);const byHash=new Map(media.map((item,i)=>[String(item.hash),i]));const state=await ensureTemplates(media);abort();progress(0,media.length,'Reading visual AI for family verification…','families');const dino=await loadDino(media,byHash);abort();const families=buildFamilies(media,state,dino);abort();progress(0,media.length,`Building ${String(payload.mode||'experimental').replaceAll('-',' ')} with locked families…`,'layout');const base=await runLegacy({...payload,media});abort();return base.kind==='grid'?consolidateGrid(base,families,media.length):compactMap(base,families,media.length)}
-self.onmessage=async event=>{const data=event.data||{};if(data.action==='cancel'){canceled=true;if(child)try{child.terminate()}catch{}child=null;return}if(data.action!=='build')return;canceled=false;try{const result=await build(data.payload||{});abort();const transfer=[];for(const key of['order','x','y'])if(result[key]?.buffer)transfer.push(result[key].buffer);self.postMessage({type:'result',result},transfer)}catch(error){post('error',{error:error?.name==='AbortError'?'Canceled':String(error?.message||error),aborted:error?.name==='AbortError'})}finally{if(child)try{child.terminate()}catch{}child=null}};
+  for (const group of groups) group.sort((a, b) => positions[a] - positions[b] || a - b);
+  groups.sort((a, b) => positions[a[Math.floor(a.length / 2)]] - positions[b[Math.floor(b.length / 2)]] || b.length - a.length || a[0] - b[0]);
+  const grouped = new Uint8Array(media.length);
+  for (const group of groups) for (const index of group) grouped[index] = 1;
+  const singles = Array.from({ length:media.length }, (_, index) => index).filter(index => !grouped[index]).sort((a, b) => positions[a] - positions[b] || a - b);
+
+  const worldW = Math.max(18, Math.ceil(Math.sqrt(media.length * 1.55)));
+  const x = new Float32Array(media.length), y = new Float32Array(media.length), renderW = new Float32Array(media.length), renderH = new Float32Array(media.length), labels = [];
+  x.fill(-1); y.fill(-1); renderW.fill(1); renderH.fill(1);
+  let px = 0, py = 0, rowH = 0;
+  const place = (members, label = '') => {
+    const width = Math.min(worldW, Math.max(1, Math.ceil(Math.sqrt(members.length * 1.4))));
+    const height = Math.max(1, Math.ceil(members.length / width));
+    if (px && px + width > worldW) { px = 0; py += rowH + 1; rowH = 0; }
+    const ox = px, oy = py;
+    for (let position = 0; position < members.length; position++) {
+      x[members[position]] = ox + (position % width);
+      y[members[position]] = oy + Math.floor(position / width);
+    }
+    if (label) labels.push({ x:ox, y:oy, w:width, h:height, label });
+    px += width + 1;
+    rowH = Math.max(rowH, height);
+  };
+  for (const group of groups) place(group, group.length >= 3 ? `Family · ${group.length}` : '');
+  if (singles.length) {
+    if (px) { px = 0; py += rowH + 1; rowH = 0; }
+    const height = Math.ceil(singles.length / worldW);
+    for (let position = 0; position < singles.length; position++) {
+      x[singles[position]] = position % worldW;
+      y[singles[position]] = py + Math.floor(position / worldW);
+    }
+    labels.push({ x:0, y:py, w:worldW, h:height, label:'Singles' });
+    py += height;
+  }
+  return {
+    kind:'map', x, y, renderW, renderH, worldW, worldH:Math.max(1, py + rowH + 1), labels,
+    skipDensify:true,
+    detail:`Family Quilt · ${groups.length.toLocaleString()} shared families`
+  };
+}
+
+function rectangleFree(used, x, y, width, height, worldW, worldH) {
+  if (x < 0 || y < 0 || x + width > worldW || y + height > worldH) return false;
+  for (let yy = y; yy < y + height; yy++) for (let xx = x; xx < x + width; xx++) if (used[yy * worldW + xx]) return false;
+  return true;
+}
+function occupy(used, x, y, width, height, worldW) {
+  for (let yy = y; yy < y + height; yy++) for (let xx = x; xx < x + width; xx++) used[yy * worldW + xx] = 1;
+}
+
+function compactMap(result, familyResult, media) {
+  if (!result?.x?.length || !result?.y?.length) return result;
+  const groups = groupsFromIds(familyResult?.familyIds, media.length);
+  const grouped = new Uint8Array(media.length);
+  for (const group of groups) for (const index of group) grouped[index] = 1;
+  const units = [...groups, ...Array.from({ length:media.length }, (_, index) => index).filter(index => !grouped[index]).map(index => [index])];
+
+  let worldW = Math.max(1, Math.ceil(Number(result.worldW) || 1));
+  let worldH = Math.max(1, Math.ceil(Number(result.worldH) || 1));
+  const metas = units.map((group, id) => {
+    let x = 0, y = 0, count = 0;
+    for (const index of group) {
+      const px = Number(result.x[index]), py = Number(result.y[index]);
+      if (Number.isFinite(px) && Number.isFinite(py) && px >= 0 && py >= 0) { x += px; y += py; count++; }
+    }
+    return { id, group, cx:count ? x / count : worldW / 2, cy:count ? y / count : worldH / 2 };
+  }).sort((a, b) => b.group.length - a.group.length || a.cy - b.cy || a.cx - b.cx);
+
+  const extra = Math.max(8, Math.ceil(Math.sqrt(media.length) * .08));
+  worldW += extra; worldH += extra;
+  let used = new Uint8Array(worldW * worldH);
+  const xout = new Float32Array(media.length), yout = new Float32Array(media.length);
+  xout.fill(-1); yout.fill(-1);
+  for (const meta of metas) {
+    abort();
+    const size = meta.group.length;
+    const width = Math.max(1, Math.ceil(Math.sqrt(size * 1.3)));
+    const height = Math.max(1, Math.ceil(size / width));
+    const wantedX = Math.round(meta.cx - width / 2), wantedY = Math.round(meta.cy - height / 2);
+    let found = null;
+    for (let radius = 0; radius <= Math.max(worldW, worldH) && !found; radius++) {
+      const tests = radius === 0 ? [[wantedX, wantedY]] : [[wantedX-radius,wantedY-radius],[wantedX,wantedY-radius],[wantedX+radius,wantedY-radius],[wantedX+radius,wantedY],[wantedX+radius,wantedY+radius],[wantedX,wantedY+radius],[wantedX-radius,wantedY+radius],[wantedX-radius,wantedY]];
+      for (const [x, y] of tests) if (rectangleFree(used, x, y, width, height, worldW, worldH)) { found = [x, y]; break; }
+    }
+    if (!found) {
+      const oldHeight = worldH;
+      worldH += height + 2;
+      const next = new Uint8Array(worldW * worldH); next.set(used); used = next;
+      found = [0, oldHeight + 1];
+    }
+    const [x, y] = found;
+    occupy(used, x, y, width, height, worldW);
+    const members = meta.group.slice().sort((a, b) => Number(result.y[a]) - Number(result.y[b]) || Number(result.x[a]) - Number(result.x[b]) || a - b);
+    for (let position = 0; position < members.length; position++) {
+      xout[members[position]] = x + (position % width);
+      yout[members[position]] = y + Math.floor(position / width);
+    }
+  }
+  return {
+    ...result,
+    x:xout, y:yout, worldW, worldH, preserveRows:true,
+    detail:`${result.detail || 'Experimental map'} · ${groups.length.toLocaleString()} shared families locked`
+  };
+}
+
+async function mosaic(media, columns, familyResult) {
+  const flow = await callWorker(FLOW_WORKER, { action:'sort', payload:{ mode:'flow', media } }, 'Mosaic · ');
+  abort();
+  const byHash = new Map(media.map((item, index) => [String(item.hash), index]));
+  const order = (flow.order || []).map(hash => byHash.get(String(hash))).filter(Number.isInteger);
+  const seen = new Uint8Array(media.length);
+  for (const index of order) seen[index] = 1;
+  for (let index = 0; index < media.length; index++) if (!seen[index]) order.push(index);
+  return consolidateGrid({ kind:'grid', order:Uint32Array.from(order), detail:`2D Mosaic · ${Math.max(2, Number(columns) || 8)} columns` }, familyResult, media);
+}
+
+async function baseMap(payload, familyResult, media) {
+  const base = await callWorker(BASE_LAYOUT_WORKER, { action:'build', payload }, 'Layout · ');
+  abort();
+  return compactMap(base, familyResult, media);
+}
+
+async function build(payload) {
+  const mode = String(payload?.mode || 'mosaic');
+  const media = (Array.isArray(payload?.media) ? payload.media : []).filter(item => HASH_RE.test(String(item?.hash || '')));
+  if (!media.length) return { kind:'grid', order:new Uint32Array(), detail:'No media' };
+  const familyResult = await callWorker(FAMILY_WORKER, { action:'build', payload:{ media } }, 'Families · ');
+  abort();
+  post('progress', { done:media.length, total:media.length, detail:`Building ${mode.replaceAll('-', ' ')} with shared families…`, stage:'layout' });
+  if (mode === 'mosaic') return mosaic(media, payload.columns, familyResult);
+  if (mode === 'family-quilt') return familyQuilt(media, familyResult);
+  if (mode === 'atlas' || mode === 'time-appearance') return baseMap({ ...payload, media }, familyResult, media);
+  throw new Error(`Unknown experimental layout: ${mode}`);
+}
+
+self.onmessage = async event => {
+  const data = event.data || {};
+  if (data.action === 'cancel') {
+    canceled = true;
+    for (const worker of children) { try { worker.postMessage({ action:'cancel' }); } catch {} try { worker.terminate(); } catch {} }
+    children.clear();
+    return;
+  }
+  if (data.action !== 'build') return;
+  canceled = false;
+  try {
+    const result = await build(data.payload || {});
+    abort();
+    const transfer = [];
+    for (const key of ['order','x','y','renderW','renderH']) if (result[key]?.buffer) transfer.push(result[key].buffer);
+    self.postMessage({ type:'result', result }, transfer);
+  } catch (error) {
+    post('error', { error:error?.name === 'AbortError' ? 'Canceled' : String(error?.message || error), aborted:error?.name === 'AbortError' });
+  } finally {
+    for (const worker of children) { try { worker.terminate(); } catch {} }
+    children.clear();
+  }
+};
