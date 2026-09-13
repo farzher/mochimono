@@ -8,6 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { CONFIG_DIR, api, json, readJson, settings } from './lib/agent-context.js';
 import { decodeHeic } from './lib/heic.js';
 import { localFolderTree } from './lib/local-folder-tree.js';
+import { localCandidate } from './lib/local-locations.js';
 import { mimeFor } from './lib/mime.js';
 
 const TMP_DIR = join(CONFIG_DIR, 'tmp');
@@ -242,15 +243,59 @@ async function saveBrowserThumbnail(req, res, hash) {
   }
 }
 
+function heicEdge(url) {
+  const requested = Number(url.searchParams.get('edge'));
+  return Math.max(1024, Math.min(BROWSER_HEIC_VIEW_EDGE, Number.isFinite(requested) && requested > 0 ? Math.round(requested) : BROWSER_HEIC_VIEW_EDGE));
+}
+
+function sendHeicView(res, hash, edge, result, etag='') {
+  if (!result.data?.length) throw new Error('Could not decode HEIC preview');
+  if (result.data.length > MAX_BROWSER_HEIC_VIEW_BYTES) throw Object.assign(new Error('HEIC preview is too large'), { status:413 });
+  const width = Math.max(1, Math.round(Number(result.info?.width) || 1));
+  const height = Math.max(1, Math.round(Number(result.info?.height) || 1));
+  const sourceWidth = Math.max(0, Math.round(Number(result.info?.sourceWidth) || 0));
+  const sourceHeight = Math.max(0, Math.round(Number(result.info?.sourceHeight) || 0));
+  res.writeHead(200, {
+    'content-type':'image/webp',
+    'content-length':result.data.length,
+    'cache-control':'private, max-age=31536000, immutable',
+    ...(etag?{etag}:{}),
+    'x-mochimono-width':width,
+    'x-mochimono-height':height,
+    'x-mochimono-source-width':sourceWidth,
+    'x-mochimono-source-height':sourceHeight
+  });
+  res.end(result.data);
+}
+
+async function serveLocalHeicView(req, res, hash, url) {
+  if (!/^[a-f0-9]{64}$/.test(hash)) return false;
+  const candidate = localCandidate(hash);
+  if (!candidate || (!/\.(?:heic|heif)$/i.test(String(candidate.filename || candidate.path || '')) && !['image/heic','image/heif'].includes(String(candidate.mime || '').toLowerCase()))) return false;
+  const info = await stat(candidate.path).catch(() => null);
+  if (!info?.isFile()) return false;
+  const edge = heicEdge(url);
+  const etag = `\"${hash}-heic-view-e${edge}-v1\"`;
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, { etag, 'cache-control':'private, max-age=31536000, immutable' });
+    res.end();
+    return true;
+  }
+  try {
+    const result = await decodeHeic(candidate.path, { edge, quality:90, effort:1, priority:true, portable:false });
+    sendHeicView(res, hash, edge, result, etag);
+  } catch (error) {
+    if (!res.headersSent) json(res, error.status || 500, { error:error.message || 'Could not decode HEIC image' });
+  }
+  return true;
+}
+
 async function saveBrowserHeicThumbnail(req, res, hash, url) {
   if (!/^[a-f0-9]{64}$/.test(hash)) return json(res, 400, { error:'Invalid SHA-256 hash' });
   await mkdir(TMP_DIR, { recursive:true });
   const source = join(TMP_DIR, `browser-heic-${process.pid}-${Date.now()}-${randomUUID()}`);
   const view = url.searchParams.get('view') === '1';
-  const requestedEdge = Number(url.searchParams.get('edge'));
-  const edge = view
-    ? Math.max(1024, Math.min(BROWSER_HEIC_VIEW_EDGE, Number.isFinite(requestedEdge) && requestedEdge > 0 ? Math.round(requestedEdge) : BROWSER_HEIC_VIEW_EDGE))
-    : BROWSER_HEIC_EDGE;
+  const edge = view ? heicEdge(url) : BROWSER_HEIC_EDGE;
   let size = 0;
   const limit = new Transform({
     transform(chunk, encoding, callback) {
@@ -263,29 +308,24 @@ async function saveBrowserHeicThumbnail(req, res, hash, url) {
   try {
     await pipeline(req, limit, createWriteStream(source, { flags:'wx' }));
     if (!size) throw Object.assign(new Error('Empty HEIC image'), { status:400 });
-    const result = await decodeHeic(source, { edge, quality:view ? 90 : 82, effort:2 });
+    const result = await decodeHeic(source, {
+      edge,
+      quality:view ? 90 : 82,
+      effort:view ? 1 : 2,
+      priority:view,
+      portable:!view
+    });
+    if (view) {
+      sendHeicView(res, hash, edge, result);
+      return;
+    }
     if (!result.data?.length) throw new Error('Could not decode HEIC preview');
-    const maxOutput = view ? MAX_BROWSER_HEIC_VIEW_BYTES : MAX_BROWSER_THUMB_BYTES;
-    if (result.data.length > maxOutput) throw Object.assign(new Error('HEIC preview is too large'), { status:413 });
+    if (result.data.length > MAX_BROWSER_THUMB_BYTES) throw Object.assign(new Error('HEIC preview is too large'), { status:413 });
 
     const width = Math.max(1, Math.round(Number(result.info?.width) || 1));
     const height = Math.max(1, Math.round(Number(result.info?.height) || 1));
     const sourceWidth = Math.max(0, Math.round(Number(result.info?.sourceWidth) || 0));
     const sourceHeight = Math.max(0, Math.round(Number(result.info?.sourceHeight) || 0));
-    if (view) {
-      res.writeHead(200, {
-        'content-type':'image/webp',
-        'content-length':result.data.length,
-        'cache-control':'private, max-age=31536000, immutable',
-        'x-mochimono-width':width,
-        'x-mochimono-height':height,
-        'x-mochimono-source-width':sourceWidth,
-        'x-mochimono-source-height':sourceHeight
-      });
-      res.end(result.data);
-      return;
-    }
-
     const bucket = join(BROWSER_THUMB_DIR, hash.slice(0, 2));
     const destination = browserThumbnailPath(hash);
     const info = join(bucket, `${hash}.json`);
@@ -333,6 +373,10 @@ export async function handleClientImport(req, res, url) {
     return true;
   }
   const browserHeicThumb = /^\/api\/client\/browser-heic-thumb\/([a-f0-9]{64})$/.exec(url.pathname);
+  if (browserHeicThumb && req.method === 'GET') {
+    if (!await serveLocalHeicView(req, res, browserHeicThumb[1], url)) json(res, 404, { error:'Local HEIC source is unavailable' });
+    return true;
+  }
   if (browserHeicThumb && req.method === 'PUT') {
     await saveBrowserHeicThumbnail(req, res, browserHeicThumb[1], url);
     return true;
