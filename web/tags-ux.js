@@ -84,11 +84,16 @@ function installContextTag() {
   button.className = 'file-context-action';
   button.dataset.tagContext = '1';
   button.innerHTML = '<i aria-hidden="true">#</i><span>Tag…</span>';
+  // The context menu focuses its button on click, so remember the focused media
+  // card on pointer-down while it is still the active element.
+  button.addEventListener('pointerdown', () => {
+    const card = document.activeElement?.closest?.('[data-hash]');
+    button.dataset.hash = String(card?.dataset?.hash || '');
+  });
   button.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
-    const card = document.activeElement?.closest?.('[data-hash]');
-    const hash = String(card?.dataset?.hash || '');
+    const hash = String(button.dataset.hash || '');
     if (!/^[a-f0-9]{64}$/.test(hash)) return;
     document.querySelector('.file-context-menu')?.setAttribute('hidden', '');
     api.picker([hash]);
