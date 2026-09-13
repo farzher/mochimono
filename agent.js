@@ -13,6 +13,7 @@ import { backupCollections, backupContents, backupInit, backupLocations, backupR
 import { invalidateClientProviders } from './lib/client-providers.js';
 import { pickFolder } from './lib/folder-picker.js';
 import { noteProviderThumbnailActivity, refreshProviderThumbnailPolicy } from './lib/provider-thumbs.js';
+import { handleSourceExclusions } from './lib/source-exclusion-routes.js';
 import { thumbnailAgentStatus } from './lib/thumbnail-agent.js';
 import { handleClientImport } from './client-import.js';
 import { handleClientGateway } from './client-gateway.js';
@@ -139,6 +140,8 @@ async function openNativePath(path, selectFile = false) {
 }
 
 async function handleLocalApi(req, res, url) {
+  if (await handleSourceExclusions(req, res, url)) return true;
+
   if (req.method === 'POST' && url.pathname === '/api/thumbnail-activity') {
     noteProviderThumbnailActivity();
     json(res, 200, { ok: true });
