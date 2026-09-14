@@ -143,14 +143,82 @@ async function loadSam(id) {
   return samPromise;
 }
 
+async function lowDetailDescription(hash) {
+  if (typeof OffscreenCanvas !== 'function' || typeof createImageBitmap !== 'function') return '';
+  try {
+    const response = await fetch(thumbUrl(hash), { cache:'force-cache' });
+    if (!response.ok) return '';
+    const bitmap = await createImageBitmap(await response.blob());
+    const size = 32;
+    const canvas = new OffscreenCanvas(size, size);
+    const context = canvas.getContext('2d', { willReadFrequently:true });
+    context.drawImage(bitmap, 0, 0, size, size);
+    bitmap.close?.();
+    const pixels = context.getImageData(0, 0, size, size).data;
+    const luma = new Float32Array(size * size);
+    let sum = 0;
+    let sumSq = 0;
+    let red = 0;
+    let green = 0;
+    let blue = 0;
+    for (let index = 0; index < luma.length; index++) {
+      const offset = index * 4;
+      const r = pixels[offset];
+      const g = pixels[offset + 1];
+      const b = pixels[offset + 2];
+      const value = r * .2126 + g * .7152 + b * .0722;
+      luma[index] = value;
+      sum += value;
+      sumSq += value * value;
+      red += r;
+      green += g;
+      blue += b;
+    }
+    const count = luma.length;
+    const mean = sum / count;
+    const deviation = Math.sqrt(Math.max(0, sumSq / count - mean * mean));
+    let edge = 0;
+    let edgeCount = 0;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const index = y * size + x;
+        if (x) { edge += Math.abs(luma[index] - luma[index - 1]); edgeCount++; }
+        if (y) { edge += Math.abs(luma[index] - luma[index - size]); edgeCount++; }
+      }
+    }
+    edge /= Math.max(1, edgeCount);
+    if (deviation > 7 || edge > 4) return '';
+
+    red /= count;
+    green /= count;
+    blue /= count;
+    const spread = Math.max(red, green, blue) - Math.min(red, green, blue);
+    let tone;
+    if (mean > 235) tone = 'white';
+    else if (mean < 20) tone = 'black';
+    else if (spread < 14) tone = mean > 180 ? 'light gray' : mean < 75 ? 'dark gray' : 'gray';
+    else tone = 'a nearly solid color';
+    return `Low-detail image: mostly ${tone}${deviation > 1.5 ? ' or a smooth gradient' : ''}, with no clearly visible subject or readable text.`;
+  } catch {
+    return '';
+  }
+}
+
 async function describeImage(id, hash, promptText = '') {
-  const kind = 'qwen3vl-description-v1';
+  const kind = 'qwen3vl-description-v2';
   const cached = await getMetadata(kind, hash);
   if (cached && !promptText) return cached;
+  if (!promptText) {
+    const lowDetail = await lowDetailDescription(hash);
+    if (lowDetail) {
+      await putMetadata(kind, hash, lowDetail);
+      return lowDetail;
+    }
+  }
   const { processor, model, RawImage, backend } = await loadQwen(id);
   aborted(id);
   const prompt = String(promptText || '').trim() ||
-    'Describe this file for a personal file organizer. Include the main subjects, scene, visible text when useful, document or screenshot type if applicable, and concise searchable keywords. Do not speculate about identities.';
+    'Describe only what is directly visible in this image for search in a personal file organizer. Include clear subjects, scene, visible text, and document or screenshot type only when the pixels actually support it. Never infer hidden text, identities, personal information, medical records, legal records, financial records, file purpose, or other content that is not visibly present. If the image is blank, mostly solid color, a simple gradient, extremely low-detail, unreadable, or ambiguous, say that plainly instead of guessing. If uncertain, say uncertain. End with a few concise searchable keywords grounded in visible evidence.';
   progress(id, 'vlm', 0, 1, `Reading image with Qwen3-VL · ${backend === 'webgpu' ? 'WebGPU' : 'WASM CPU'}…`);
   let image = await RawImage.read(thumbUrl(hash));
   if (typeof image.resize === 'function') image = await image.resize(448, 448);
