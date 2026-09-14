@@ -2,7 +2,7 @@ const WORKER_URL = new URL('./ai-worker.js', import.meta.url);
 const INDEX_WORKER_URL = new URL('./ai-index-worker.js', import.meta.url);
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
-const HEAVY_ACTIONS = new Set(['index','similar','search','groups','describe','mask']);
+const HEAVY_ACTIONS = new Set(['index','similar','classify','search','groups','describe','mask']);
 let worker = null;
 let indexWorker = null;
 let sequence = 0;
@@ -257,6 +257,12 @@ const api = {
   index:(model = 'siglip2', options = {}) => withMedia('index', { model }, options),
   similar:(targetHash, model = 'siglip2', options = {}) =>
     withMedia('similar', { targetHash:String(targetHash || ''), model, limit:options.limit || 40 }, options),
+  classify:(positives, negatives = [], options = {}) =>
+    withMedia('classify', {
+      model:'dinov3',
+      positives:[...new Set((positives || []).map(String))],
+      negatives:[...new Set((negatives || []).map(String))]
+    }, options),
   search:(query, options = {}) =>
     withMedia('search', { query:String(query || ''), limit:options.limit || 80 }, options),
   groups:(options = {}) =>
