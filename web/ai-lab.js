@@ -92,7 +92,7 @@ if (commandbar && files) {
         </section>
         <section class="ai-lab-section" data-ai-mask-section hidden>
           <div class="ai-lab-section-head"><strong>Subject mask</strong><span>SAM · useful foundation for importance-aware compression</span></div>
-          <div class="ai-mask-preview"><canvas data-ai-mask-canvas></canvas><div class="ai-text-output" data-ai-mask-copy></div></div>
+          <div class="ai-mask-preview"><canvas data-ai-mask-canvas></canvas><div class="ai-text-output" data-ai-mask-copy></div>
         </section>
         <section class="ai-lab-section" data-ai-groups-section hidden>
           <div class="ai-lab-section-head"><strong>Suggested groups</strong><span>Preview first; create only the groups you want</span></div>
@@ -175,10 +175,12 @@ if (commandbar && files) {
   }
   function fileFor(hash) { return fileMap.get(hash) || { hash, filename:hash, type:'image' }; }
   function resultHtml(items, count = 40) {
-    if (!items?.length) return '<div class="ai-empty">No indexed matches.</div>';
+    if (!items?.length) return '<div class="ai-empty">No matches.</div>';
     return items.slice(0, count).map(item => {
       const file = fileFor(item.hash);
-      return `<button class="ai-result" type="button" data-ai-open="${item.hash}" title="${escapeHtml(file.filename || item.hash)}"><img loading="lazy" src="/api/thumbs/${item.hash}?v=3" alt=""><span>${Number(item.score) || ''}</span><small>${escapeHtml(file.filename || '')}</small></button>`;
+      const similarity = Number(item.similarity);
+      const scoreTitle = Number.isFinite(similarity) ? `Raw cosine similarity ${similarity.toFixed(4)}` : 'Similarity score';
+      return `<button class="ai-result" type="button" data-ai-open="${item.hash}" title="${escapeHtml(file.filename || item.hash)}"><img loading="lazy" src="/api/thumbs/${item.hash}?v=3" alt=""><span title="${scoreTitle}">${Number(item.score) || ''}</span><small>${escapeHtml(file.filename || '')}</small></button>`;
     }).join('');
   }
   async function openTarget(hash, name = '') {
@@ -221,8 +223,8 @@ if (commandbar && files) {
     resultsNode.innerHTML = '<div class="ai-empty">Building/searching the semantic index…</div>';
     try {
       const result = await ai.search(text, { signal, onProgress, limit:120 });
-      resultsNode.innerHTML = resultHtml(result, 120);
-      resultsSubtitle.textContent = `${result.length.toLocaleString()} closest semantic matches`;
+      resultsNode.innerHTML = result.length ? resultHtml(result, 120) : '<div class="ai-empty">No confident matches.</div>';
+      resultsSubtitle.textContent = result.length ? `${result.length.toLocaleString()} confident semantic matches` : 'No confident semantic matches';
       await refreshStatus();
     } catch (error) {
       if (error.name !== 'AbortError') resultsNode.innerHTML = `<div class="ai-empty">${escapeHtml(error.message)}</div>`;
