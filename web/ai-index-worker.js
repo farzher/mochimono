@@ -7,6 +7,8 @@ const THUMB_VERSION = 3;
 const EMBEDDING_SCHEMA = 3;
 const PREFETCH_AHEAD = 32;
 const MAX_WRITE_BACKLOG = 3;
+const SEMANTIC_NEUTRAL_PROMPT = 'a photo or image';
+const MIN_SEMANTIC_MARGIN = .012;
 
 const MODELS = {
   siglip2:{ id:'onnx-community/siglip2-base-patch16-224-ONNX', label:'SigLIP 2 Base', indexVersion:'siglip2-base-224-v2' },
@@ -543,8 +545,14 @@ async function siglipTextVectors(id, texts, anchorHash) {
   return { vectors:tensorBatchVectors(output.text_embeds || output.text_model_output?.pooler_output, texts.length), backend:runtime.backend };
 }
 
+function rankValue(item) {
+  const rank = Number(item?.rank);
+  return Number.isFinite(rank) ? rank : Number(item?.similarity) || -1;
+}
 function isWorse(left, right) {
-  return left.similarity < right.similarity || (left.similarity === right.similarity && left.hash > right.hash);
+  const a = rankValue(left);
+  const b = rankValue(right);
+  return a < b || (a === b && left.hash > right.hash);
 }
 function isBetter(left, right) { return isWorse(right, left); }
 
@@ -580,7 +588,27 @@ class TopK {
       index = worst;
     }
   }
-  values() { return this.heap.sort((a, b) => b.similarity - a.similarity || a.hash.localeCompare(b.hash)); }
+  values() { return this.heap.sort((a, b) => rankValue(b) - rankValue(a) || a.hash.localeCompare(b.hash)); }
+}
+
+function confidentSemanticMatches(items, limit) {
+  const ranked = items || [];
+  if (!ranked.length) return [];
+  const wanted = Math.max(1, Math.min(ranked.length, Number(limit) || 80));
+  if (ranked.length < 8) {
+    return ranked.slice(0, wanted).filter(item => rankValue(item) >= MIN_SEMANTIC_MARGIN).map(item => ({ ...item, relevance:1 }));
+  }
+  const best = rankValue(ranked[0]);
+  const baselineIndex = Math.min(ranked.length - 1, Math.max(wanted, Math.floor(ranked.length * .75)));
+  const baseline = rankValue(ranked[baselineIndex]);
+  const separation = best - baseline;
+  if (best < MIN_SEMANTIC_MARGIN || separation < .01) return [];
+  const threshold = Math.max(MIN_SEMANTIC_MARGIN, baseline + Math.max(.006, separation * .28));
+  const span = Math.max(.008, best - threshold);
+  return ranked
+    .filter(item => rankValue(item) >= threshold)
+    .slice(0, wanted)
+    .map(item => ({ ...item, relevance:Math.max(0, Math.min(1, (rankValue(item) - threshold) / span)) }));
 }
 
 async function rankSimilar(id, model, media, targetHash, limit = 40) {
@@ -609,22 +637,28 @@ async function semanticSearch(id, media, query, limit = 80) {
   const anchor = media.find(file => /^[a-f0-9]{64}$/.test(String(file?.hash || '')));
   if (!anchor) return [];
   progress(id, 'query', 0, 1, 'Encoding semantic search…', indexResult.runtime);
-  const queryEncoding = await siglipTextVectors(id, [text], anchor.hash);
-  const [queryVectorFloat] = queryEncoding.vectors;
+  const queryEncoding = await siglipTextVectors(id, [text, SEMANTIC_NEUTRAL_PROMPT], anchor.hash);
+  const [queryVectorFloat, neutralVectorFloat] = queryEncoding.vectors;
   const queryVector = quantize(queryVectorFloat);
+  const neutralVector = quantize(neutralVectorFloat);
   const queryRuntime = { ...indexResult.runtime, backend:queryEncoding.backend };
   progress(id, 'query', 1, 1, `Semantic query ready · ${queryEncoding.backend === 'webgpu' ? 'WebGPU' : 'WASM CPU'}`, queryRuntime);
   const allowed = new Set(media.map(file => String(file.hash || '')));
-  const best = new TopK(Math.max(1, Math.min(500, Number(limit) || 80)));
+  const wanted = Math.max(1, Math.min(500, Number(limit) || 80));
+  const probeLimit = Math.min(500, Math.max(240, wanted * 4));
+  const best = new TopK(probeLimit);
   let scanned = 0;
   await forEachModelRow('siglip2', row => {
     if (!allowed.has(row.hash) || !row.vector || Number(row.schema) !== EMBEDDING_SCHEMA) return;
     const similarity = dot(queryVector, row);
-    best.push({ hash:row.hash, similarity, score:scoreFor(similarity) });
+    const neutralSimilarity = dot(neutralVector, row);
+    const rank = similarity - neutralSimilarity;
+    best.push({ hash:row.hash, similarity, neutralSimilarity, rank, score:scoreFor(similarity) });
     scanned++;
   });
-  progress(id, 'rank', scanned, scanned, `Semantic search · ranked ${scanned.toLocaleString()} media`, queryRuntime);
-  return best.values();
+  const matches = confidentSemanticMatches(best.values(), wanted);
+  progress(id, 'rank', scanned, scanned, `Semantic search · ${matches.length.toLocaleString()} confident matches from ${scanned.toLocaleString()} media`, queryRuntime);
+  return matches;
 }
 
 async function autoGroups(id, media, limitPerGroup = 120) {
