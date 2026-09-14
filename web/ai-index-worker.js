@@ -703,7 +703,7 @@ async function rankSimilar(id, model, media, targetHash, limit = 40) {
 function clusterExamples(items) {
   if (!items.length) return [];
   if (items.length === 1) return [{ center:items[0].unit, members:[items[0]] }];
-  const count = Math.min(8, Math.max(1, Math.ceil(Math.sqrt(items.length / 2))));
+  const count = Math.min(12, Math.max(1, Math.ceil(Math.sqrt(items.length))));
   const chosen = new Set();
   const centers = [];
 
@@ -762,35 +762,83 @@ function exactAffinity(record, items, excludeHash = '') {
   return { affinity:affinity(scores), scores:scores.sort((a, b) => b - a) };
 }
 
+function selectScouts(cluster, limit = 3) {
+  const members = cluster.members || [];
+  if (members.length <= limit) return [...members];
+  const picked = [];
+  const chosen = new Set();
+
+  let first = members[0];
+  let bestCenter = -Infinity;
+  for (const member of members) {
+    const similarity = floatDot(member.unit, cluster.center);
+    if (similarity > bestCenter) { bestCenter = similarity; first = member; }
+  }
+  picked.push(first);
+  chosen.add(first.hash);
+
+  while (picked.length < limit) {
+    let next = null;
+    let farthest = Infinity;
+    for (const member of members) {
+      if (chosen.has(member.hash)) continue;
+      let nearest = -Infinity;
+      for (const existing of picked) nearest = Math.max(nearest, floatDot(member.unit, existing.unit));
+      if (nearest < farthest) { farthest = nearest; next = member; }
+    }
+    if (!next) break;
+    picked.push(next);
+    chosen.add(next.hash);
+  }
+  return picked;
+}
+
 function calibrateClusters(clusters, positives, negatives) {
   const negativeItems = negatives || [];
   for (const cluster of clusters) {
     const trainingAffinity = [];
+    const trainingNearest = [];
     const trainingMargins = [];
+    const trainingNearestMargins = [];
     const prototypeScores = [];
     const pool = cluster.members.length > 1 ? cluster.members : positives;
     const centerRecord = quantize(cluster.center);
 
     for (const member of cluster.members) {
-      const positive = exactAffinity(member.record, pool, member.hash).affinity;
+      const positiveResult = exactAffinity(member.record, pool, member.hash);
+      const positive = positiveResult.affinity;
+      const nearestPositive = positiveResult.scores[0] ?? positive;
       if (positive >= 0) trainingAffinity.push(positive);
+      if (nearestPositive >= 0) trainingNearest.push(nearestPositive);
       prototypeScores.push(dot(member.record, centerRecord));
       if (negativeItems.length && positive >= 0) {
-        const negative = exactAffinity(member.record, negativeItems).affinity;
+        const negativeResult = exactAffinity(member.record, negativeItems);
+        const negative = negativeResult.affinity;
+        const nearestNegative = negativeResult.scores[0] ?? negative;
         if (negative >= 0) trainingMargins.push(positive - negative);
+        if (nearestPositive >= 0 && nearestNegative >= 0) trainingNearestMargins.push(nearestPositive - nearestNegative);
       }
     }
 
-    const learned = quantile(trainingAffinity, .10);
+    const learned = quantile(trainingAffinity, .02);
     cluster.floor = cluster.members.length === 1 && positives.length === 1
-      ? .66
-      : clamp((learned ?? .66) - .045, .38, .84);
-    const prototypeLearned = quantile(prototypeScores, .10);
-    cluster.prefilterFloor = clamp((prototypeLearned ?? cluster.floor) - .12, .28, .78);
+      ? .64
+      : clamp((learned ?? .64) - .065, .34, .82);
+    const nearestLearned = quantile(trainingNearest, .02);
+    cluster.nearestFloor = cluster.members.length === 1 && positives.length === 1
+      ? .68
+      : clamp((nearestLearned ?? .68) - .055, .40, .88);
+    const prototypeLearned = quantile(prototypeScores, .02);
+    cluster.prefilterFloor = clamp((prototypeLearned ?? cluster.floor) - .22, .18, .72);
     cluster.marginFloor = negativeItems.length
       ? clamp((quantile(trainingMargins, .10) ?? .02) - .03, -.005, .14)
       : null;
+    cluster.nearestMarginFloor = negativeItems.length
+      ? clamp((quantile(trainingNearestMargins, .10) ?? .015) - .025, -.01, .14)
+      : null;
     cluster.centerRecord = centerRecord;
+    cluster.scouts = selectScouts(cluster, 3);
+    cluster.scoutFloor = clamp(cluster.nearestFloor - .14, .24, .78);
   }
   return clusters;
 }
@@ -835,13 +883,26 @@ async function classifyExamples(id, media, positiveHashes, negativeHashes) {
     if (!record) return;
     const ranked = [];
     for (let index = 0; index < clusters.length; index++) {
-      const similarity = dot(record, clusters[index].centerRecord);
-      ranked.push({ index, similarity, relative:similarity - clusters[index].prefilterFloor });
+      const cluster = clusters[index];
+      const similarity = dot(record, cluster.centerRecord);
+      ranked.push({ index, similarity, relative:similarity - cluster.prefilterFloor, scoutRelative:-Infinity });
     }
+    ranked.sort((a, b) => b.relative - a.relative);
+
+    // Averaged prototypes are fast but can hide unusual screens. Probe the
+    // strongest few visual modes against representative boundary examples too.
+    for (const mode of ranked.slice(0, Math.min(4, ranked.length))) {
+      const cluster = clusters[mode.index];
+      let scoutBest = -1;
+      for (const scout of cluster.scouts) scoutBest = Math.max(scoutBest, dot(record, scout.record));
+      mode.scoutRelative = scoutBest - cluster.scoutFloor;
+      mode.relative = Math.max(mode.relative, mode.scoutRelative);
+    }
+
     ranked.sort((a, b) => b.relative - a.relative);
     scanned++;
     if (ranked[0]?.relative < 0) return;
-    candidates.push({ hash:row.hash, record, modes:ranked.slice(0, Math.min(2, ranked.length)) });
+    candidates.push({ hash:row.hash, record, modes:ranked.slice(0, Math.min(3, ranked.length)) });
   });
 
   aborted(id);
@@ -856,37 +917,53 @@ async function classifyExamples(id, media, positiveHashes, negativeHashes) {
     for (const mode of candidate.modes) {
       const cluster = clusters[mode.index];
       const positiveResult = exactAffinity(candidate.record, cluster.members);
-      const relative = positiveResult.affinity - cluster.floor;
+      const bestPositive = positiveResult.scores[0] ?? positiveResult.affinity;
+      const affinityRelative = positiveResult.affinity - cluster.floor;
+      const nearestRelative = bestPositive - cluster.nearestFloor;
+      const relative = Math.max(affinityRelative, nearestRelative);
       if (!best || relative > best.relative) {
-        best = { cluster, prototype:mode.similarity, positiveResult, relative };
+        best = { cluster, prototype:mode.similarity, positiveResult, bestPositive, affinityRelative, nearestRelative, relative };
       }
     }
-    if (!best || best.positiveResult.affinity < best.cluster.floor) continue;
+    if (!best) continue;
 
-    const bestPositive = best.positiveResult.scores[0] ?? best.positiveResult.affinity;
+    const broadPositive = best.affinityRelative >= 0;
+    const nearestPositive = best.nearestRelative >= 0;
+    if (!broadPositive && !nearestPositive) continue;
+
     const negativeResult = negatives.length ? exactAffinity(candidate.record, negatives) : { affinity:-1, scores:[] };
     const margin = negatives.length ? best.positiveResult.affinity - negativeResult.affinity : null;
     const bestNegative = negativeResult.scores[0] ?? -1;
+    const nearestMargin = negatives.length ? best.bestPositive - bestNegative : null;
 
     if (negatives.length) {
-      if (margin < best.cluster.marginFloor) continue;
-      if (bestNegative > bestPositive + .015) continue;
+      const broadContrast = broadPositive && margin >= best.cluster.marginFloor;
+      const nearestContrast = nearestPositive && nearestMargin >= best.cluster.nearestMarginFloor;
+      if (!broadContrast && !nearestContrast) continue;
+      if (bestNegative > best.bestPositive + .015) continue;
     }
 
-    const positiveStrength = clamp((best.positiveResult.affinity - best.cluster.floor) / Math.max(.08, 1 - best.cluster.floor));
+    const positiveStrength = Math.max(
+      clamp((best.positiveResult.affinity - best.cluster.floor) / Math.max(.08, 1 - best.cluster.floor)),
+      clamp((best.bestPositive - best.cluster.nearestFloor) / Math.max(.08, 1 - best.cluster.nearestFloor))
+    );
     const prototypeStrength = clamp((best.prototype - best.cluster.prefilterFloor) / Math.max(.08, 1 - best.cluster.prefilterFloor));
     const marginStrength = negatives.length
-      ? clamp((margin - best.cluster.marginFloor) / .14)
+      ? Math.max(
+          clamp((margin - best.cluster.marginFloor) / .14),
+          clamp((nearestMargin - best.cluster.nearestMarginFloor) / .14)
+        )
       : .5;
     const confidence = clamp(.55 + positiveStrength * .27 + prototypeStrength * .06 + marginStrength * .12, .55, .99);
 
     matches.push({
       hash:candidate.hash,
       confidence,
-      similarity:bestPositive,
+      similarity:best.bestPositive,
       affinity:best.positiveResult.affinity,
       negativeAffinity:negatives.length ? negativeResult.affinity : null,
       margin,
+      nearestMargin,
       mode:clusters.indexOf(best.cluster)
     });
     refined++;
@@ -908,6 +985,7 @@ async function classifyExamples(id, media, positiveHashes, negativeHashes) {
     matches:resultMatches.length,
     truncated,
     floors:clusters.map(cluster => Number(cluster.floor.toFixed(3))),
+    nearestFloors:clusters.map(cluster => Number(cluster.nearestFloor.toFixed(3))),
     marginFloors:clusters.map(cluster => cluster.marginFloor == null ? null : Number(cluster.marginFloor.toFixed(3)))
   };
   progress(id, 'classify', 3, 3,
