@@ -472,11 +472,20 @@ async function ensureAi() {
 function adaptiveSemanticMatches(matches) {
   const list = (matches || []).filter(item => Number.isFinite(Number(item.similarity))).sort((a, b) => Number(b.similarity) - Number(a.similarity));
   if (!list.length) return [];
+  const calibrated = list.filter(item => Number.isFinite(Number(item.relevance)));
+  if (calibrated.length) {
+    return calibrated.map(item => ({
+      hash:String(item.hash),
+      confidence:Math.max(.58, Math.min(.98, .62 + Number(item.relevance) * .34)),
+      similarity:Number(item.similarity),
+      relevance:Number(item.relevance)
+    }));
+  }
   const best = Number(list[0].similarity);
   const rank = Math.min(list.length - 1, Math.max(12, Math.floor(list.length * .30)));
   const threshold = Math.max(best - .07, Number(list[rank]?.similarity) || -1);
   const span = Math.max(.012, best - threshold);
-  return list.filter(item => Number(item.similarity) >= threshold && Number(item.score) >= 10).map(item => ({
+  return list.filter(item => Number(item.similarity) >= threshold).map(item => ({
     hash:String(item.hash),
     confidence:Math.max(.55, Math.min(.99, .62 + (Number(item.similarity) - threshold) / span * .34)),
     similarity:Number(item.similarity)
@@ -489,13 +498,20 @@ async function semanticCandidates(ai, prompt) {
 }
 
 async function exampleCandidates(ai, positives, negatives) {
+  const examples = positives.slice(0, 5);
+  const exampleSet = new Set(examples);
   const positive = new Map();
   const negative = new Map();
-  for (const [index, hash] of positives.slice(0, 5).entries()) {
-    aiProgress(`Visual examples · ${index + 1} / ${Math.min(5, positives.length)}`);
+  const addPositive = (hash, similarity) => {
+    if (!positive.has(hash)) positive.set(hash, []);
+    positive.get(hash).push(Number(similarity) || -1);
+  };
+
+  for (const [index, hash] of examples.entries()) {
+    aiProgress(`Visual examples · ${index + 1} / ${examples.length}`);
     const matches = await ai.similar(hash, 'dinov3', { limit:200, onProgress:event => { if (event.detail) aiProgress(event.detail); } });
-    positive.set(hash, 1);
-    for (const item of matches || []) positive.set(item.hash, Math.max(positive.get(item.hash) || -1, Number(item.similarity) || -1));
+    addPositive(hash, 1);
+    for (const item of matches || []) addPositive(item.hash, item.similarity);
   }
   for (const [index, hash] of negatives.slice(0, 5).entries()) {
     aiProgress(`Negative examples · ${index + 1} / ${Math.min(5, negatives.length)}`);
@@ -503,12 +519,22 @@ async function exampleCandidates(ai, positives, negatives) {
     negative.set(hash, 1);
     for (const item of matches || []) negative.set(item.hash, Math.max(negative.get(item.hash) || -1, Number(item.similarity) || -1));
   }
+
   const out = [];
-  for (const [hash, similarity] of positive) {
-    if (similarity < .80 && !positives.includes(hash)) continue;
+  const requiredSupport = examples.length > 1 ? 2 : 1;
+  for (const [hash, scores] of positive) {
+    if (exampleSet.has(hash)) {
+      out.push({ hash, confidence:1, similarity:1 });
+      continue;
+    }
+    const ranked = scores.filter(Number.isFinite).sort((a, b) => b - a);
+    if (ranked.length < requiredSupport) continue;
+    const support = ranked.slice(0, requiredSupport);
+    const similarity = support.reduce((sum, value) => sum + value, 0) / support.length;
+    if (similarity < .80) continue;
     const negativeSimilarity = negative.get(hash) ?? -1;
-    if (!positives.includes(hash) && negativeSimilarity >= similarity - .015) continue;
-    const confidence = positives.includes(hash) ? 1 : Math.max(.55, Math.min(.99, .55 + (similarity - .78) * 2.1));
+    if (negativeSimilarity >= similarity - .015) continue;
+    const confidence = Math.max(.55, Math.min(.99, .55 + (similarity - .78) * 2.1 + Math.min(.08, (ranked.length - requiredSupport) * .02)));
     out.push({ hash, confidence, similarity });
   }
   return out;
@@ -520,17 +546,29 @@ async function applyAiToTag(tag) {
   const negatives = exampleHashes(state, -1);
   const ai = await ensureAi();
   const merged = new Map();
-  const prompt = String(managerEditor.querySelector('[data-edit-tag-description]')?.value || tag.description || tag.name).trim() || tag.name;
+  const explicitDescription = String(managerEditor.querySelector('[data-edit-tag-description]')?.value || tag.description || '').trim();
+  const prompt = explicitDescription || tag.name;
   aiProgress('Preparing AI…');
-  const semantic = await semanticCandidates(ai, prompt);
-  for (const item of semantic) merged.set(item.hash, item);
+
   if (positives.length) {
     const visual = await exampleCandidates(ai, positives, negatives);
-    for (const item of visual) {
-      const previous = merged.get(item.hash);
-      merged.set(item.hash, previous ? { ...item, confidence:Math.min(.99, Math.max(previous.confidence, item.confidence) + .04) } : item);
+    for (const item of visual) merged.set(item.hash, item);
+
+    // With examples, the examples define the tag. Semantic text may strengthen
+    // a visual candidate only when the user explicitly described the meaning;
+    // a project/name label by itself must never add unrelated files.
+    if (explicitDescription) {
+      const semantic = new Map((await semanticCandidates(ai, explicitDescription)).map(item => [item.hash, item]));
+      for (const [hash, item] of merged) {
+        const semanticMatch = semantic.get(hash);
+        if (!semanticMatch) continue;
+        merged.set(hash, { ...item, confidence:Math.min(.99, Math.max(item.confidence, semanticMatch.confidence) + .04) });
+      }
     }
+  } else {
+    for (const item of await semanticCandidates(ai, prompt)) merged.set(item.hash, item);
   }
+
   for (const hash of negatives) merged.delete(hash);
   const matches = [...merged.values()].map(item => ({ hash:item.hash, confidence:item.confidence }));
   aiProgress(`Applying ${matches.length.toLocaleString()} matches…`);
