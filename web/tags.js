@@ -501,77 +501,24 @@ async function semanticCandidates(ai, prompt) {
 async function exampleCandidates(ai, positives, negatives) {
   const examples = [...new Set((positives || []).map(String))];
   const negativeExamples = [...new Set((negatives || []).map(String))];
-  const exampleSet = new Set(examples);
-  const negativeSet = new Set(negativeExamples);
-  const positive = new Map();
-  const negative = new Map();
-  const pairwise = [];
+  if (!examples.length) return [];
 
-  const addPositive = (hash, similarity) => {
-    similarity = Number(similarity);
-    if (!Number.isFinite(similarity)) return;
-    if (!positive.has(hash)) positive.set(hash, []);
-    positive.get(hash).push(similarity);
-  };
-
-  for (const [index, hash] of examples.entries()) {
-    aiProgress(`Visual examples · ${index + 1} / ${examples.length}`);
-    const matches = await ai.similar(hash, 'dinov3', { limit:200, onProgress:event => { if (event.detail) aiProgress(event.detail); } });
-    for (const item of matches || []) {
-      const similarity = Number(item.similarity);
-      addPositive(item.hash, similarity);
-      if (exampleSet.has(String(item.hash)) && String(item.hash) !== hash && Number.isFinite(similarity)) pairwise.push(similarity);
-    }
-  }
-
-  for (const [index, hash] of negativeExamples.entries()) {
-    aiProgress(`Negative examples · ${index + 1} / ${negativeExamples.length}`);
-    const matches = await ai.similar(hash, 'dinov3', { limit:200, onProgress:event => { if (event.detail) aiProgress(event.detail); } });
-    negative.set(hash, 1);
-    for (const item of matches || []) {
-      const similarity = Number(item.similarity);
-      if (!Number.isFinite(similarity)) continue;
-      negative.set(item.hash, Math.max(negative.get(item.hash) || -1, similarity));
-    }
-  }
-
-  // Use the visual spread of the user's own examples instead of a universal
-  // cosine cutoff. Adding a more diverse positive can lower this floor, while
-  // extra similar examples add support for candidates; no positive is ignored.
-  const pairwiseFloor = pairwise.length ? Math.min(...pairwise) : null;
-  const threshold = examples.length === 1
-    ? .68
-    : Math.max(.52, Math.min(.72, (pairwiseFloor ?? .72) - .05));
-  const singleThreshold = Math.max(.72, threshold + .05);
-  const out = [];
-
-  for (const [hash, scores] of positive) {
-    if (exampleSet.has(hash) || negativeSet.has(hash)) continue;
-    const ranked = scores.filter(Number.isFinite).sort((a, b) => b - a);
-    if (!ranked.length) continue;
-
-    const best = ranked[0];
-    const average2 = ranked.length >= 2 ? (ranked[0] + ranked[1]) / 2 : -1;
-    const average3 = ranked.length >= 3 ? (ranked[0] + ranked[1] + ranked[2]) / 3 : -1;
-    const strong = best >= singleThreshold;
-    const supported = average2 >= threshold + .01;
-    const broadSupport = average3 >= threshold - .02;
-    if (!strong && !supported && !broadSupport) continue;
-
-    const negativeSimilarity = negative.get(hash) ?? -1;
-    if (negativeSimilarity >= best - .015) continue;
-
-    const evidence = broadSupport ? average3 : supported ? average2 : best;
-    const supportCount = Math.min(3, ranked.length);
-    const confidence = Math.max(.55, Math.min(.99,
-      .58 + Math.max(0, evidence - threshold) * 1.7 + (supportCount - 1) * .045
-    ));
-    out.push({ hash, confidence, similarity:best, support:supportCount });
-  }
-
-  out.sort((a, b) => b.confidence - a.confidence || b.similarity - a.similarity || a.hash.localeCompare(b.hash));
-  aiProgress(`Visual AI · ${out.length.toLocaleString()} matches · ${examples.length.toLocaleString()} examples · cutoff ${threshold.toFixed(2)}`);
-  return out;
+  const result = await ai.classify(examples, negativeExamples, {
+    onProgress:event => { if (event.detail) aiProgress(event.detail); }
+  });
+  const matches = (result?.matches || []).map(item => ({
+    hash:String(item.hash),
+    confidence:Number(item.confidence) || .55,
+    similarity:Number(item.similarity),
+    affinity:Number(item.affinity),
+    negativeAffinity:item.negativeAffinity == null ? null : Number(item.negativeAffinity),
+    margin:item.margin == null ? null : Number(item.margin)
+  }));
+  const stats = result?.stats || {};
+  aiProgress(
+    `Visual AI · ${matches.length.toLocaleString()} matches · ${(Number(stats.positiveExamples) || examples.length).toLocaleString()} positive · ${(Number(stats.negativeExamples) || negativeExamples.length).toLocaleString()} negative · ${Number(stats.clusters) || 1} visual modes${stats.truncated ? ' · capped at 10,000' : ''}`
+  );
+  return matches;
 }
 
 async function applyAiToTag(tag) {
