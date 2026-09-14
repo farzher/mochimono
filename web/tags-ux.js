@@ -239,11 +239,14 @@ function reviewCard(item, mode, positive, negative) {
 
   let actions = '';
   if (mode === 'positive') {
-    actions = `<button type="button" data-review-action="neutral" data-hash="${hash}">Neutral</button><button type="button" data-review-action="negative" data-hash="${hash}">Wrong</button>`;
+    actions = `<button type="button" data-review-action="neutral" data-hash="${hash}">Remove example</button><button type="button" data-review-action="negative" data-hash="${hash}">Make negative</button>`;
   } else if (mode === 'negative') {
-    actions = `<button type="button" data-review-action="neutral" data-hash="${hash}">Neutral</button><button type="button" data-review-action="positive" data-hash="${hash}">Belongs</button>`;
+    actions = `<button type="button" data-review-action="neutral" data-hash="${hash}">Remove example</button><button type="button" data-review-action="positive" data-hash="${hash}">Make positive</button>`;
   } else {
-    actions = `${member?.source === 'manual' ? '' : `<button type="button" data-review-action="confirm" data-hash="${hash}">Confirm</button>`}<button type="button" data-review-action="negative" data-hash="${hash}">Wrong</button><button type="button" data-review-action="remove" data-hash="${hash}">Remove</button>`;
+    const positiveAction = member?.source === 'manual'
+      ? (positive.has(hash) ? '' : `<button type="button" data-review-action="positive" data-hash="${hash}">Use as positive</button>`)
+      : `<button type="button" data-review-action="confirm" data-hash="${hash}">Confirm</button>`;
+    actions = `${positiveAction}<button type="button" data-review-action="negative" data-hash="${hash}">Wrong</button><button type="button" data-review-action="remove" data-hash="${hash}">Untag</button>`;
   }
 
   return `<article class="tag-review-card" data-review-hash="${hash}" title="${hash}">
@@ -251,6 +254,14 @@ function reviewCard(item, mode, positive, negative) {
     <div class="tag-review-badges">${memberBadge}${roleBadge}</div>
     <div class="tag-review-actions">${actions}</div>
   </article>`;
+}
+
+function reviewHelp(mode) {
+  if (mode === 'positive') return 'These teach the matcher what belongs. Remove one or turn it into a negative example.';
+  if (mode === 'negative') return 'These teach the matcher what does not belong. Remove one or turn it into a positive example.';
+  if (mode === 'manual') return 'Files you explicitly tagged.';
+  if (mode === 'ai') return 'Files currently inferred by the matcher.';
+  return 'Everything currently carrying this tag.';
 }
 
 async function renderReview(fields) {
@@ -284,13 +295,14 @@ async function renderReview(fields) {
   else if (mode === 'negative') items = [...negative].map(hash => ({ hash, member:memberMap.get(hash) || null }));
   else items = members.map(member => ({ hash:member.hash, member }));
 
+  const examplesMode = mode === 'positive' || mode === 'negative';
   section.innerHTML = `
     <div class="tag-review-head">
       <strong>Review</strong>
-      <span>Membership and AI training are separate. Confirm = manual + positive; Wrong = negative.</span>
+      <span>${escapeHtml(reviewHelp(mode))}</span>
     </div>
     <div class="tag-review-tabs">${modes.map(([id,label,count]) => `<button type="button" class="${id === mode ? 'active' : ''}" data-review-mode="${id}">${label}<small>${count}</small></button>`).join('')}</div>
-    <div class="tag-review-grid">${items.length ? items.map(item => reviewCard(item, mode, positive, negative)).join('') : '<div class="tag-review-empty">Nothing here.</div>'}</div>`;
+    <div class="tag-review-grid ${examplesMode ? 'examples' : ''}">${items.length ? items.map(item => reviewCard(item, mode, positive, negative)).join('') : '<div class="tag-review-empty">Nothing here.</div>'}</div>`;
 
   section.querySelector('.tag-review-tabs')?.addEventListener('click', event => {
     const button = event.target.closest('[data-review-mode]');
@@ -363,9 +375,9 @@ function polishManager() {
     const find = fields.querySelector('[data-tag-ai-apply]');
     if (find) find.textContent = 'Find matching media';
     const yes = fields.querySelector('[data-tag-positive]');
-    if (yes) yes.textContent = 'Selected belong';
+    if (yes) { yes.textContent = 'Add selection as positive'; yes.title = 'Use the currently selected Library files as positive examples'; }
     const no = fields.querySelector('[data-tag-negative]');
-    if (no) no.textContent = 'Selected don’t belong';
+    if (no) { no.textContent = 'Add selection as negative'; no.title = 'Use the currently selected Library files as negative examples'; }
     const clear = fields.querySelector('[data-tag-clear-ai]');
     if (clear) clear.textContent = 'Clear AI matches';
     const show = fields.querySelector('[data-tag-filter-current]');
