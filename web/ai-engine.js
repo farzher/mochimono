@@ -1,14 +1,17 @@
 const WORKER_URL = new URL('./ai-worker.js', import.meta.url);
 const INDEX_WORKER_URL = new URL('./ai-index-worker.js', import.meta.url);
+const TAG_CLASSIFIER_URL = new URL('./ai-tag-classifier-worker.js?v=exact-v1', import.meta.url);
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
 const HEAVY_ACTIONS = new Set(['index','similar','classify','search','groups','describe','mask']);
 let worker = null;
 let indexWorker = null;
+let tagClassifierWorker = null;
 let sequence = 0;
 let heavyJobs = 0;
 const pending = new Map();
 const indexPending = new Map();
+const tagClassifierPending = new Map();
 const runtimeState = new Map();
 let lastRuntimeModel = '';
 
@@ -130,6 +133,33 @@ function ensureIndexWorker() {
   return indexWorker;
 }
 
+function ensureTagClassifierWorker() {
+  if (tagClassifierWorker) return tagClassifierWorker;
+  tagClassifierWorker = new Worker(TAG_CLASSIFIER_URL, { type:'module' });
+  tagClassifierWorker.onmessage = event => {
+    const data = event.data || {};
+    const job = tagClassifierPending.get(String(data.id || ''));
+    if (!job) return;
+    if (data.type === 'progress') {
+      job.onProgress?.(data);
+      return;
+    }
+    settleJob(tagClassifierPending, data.id);
+    if (data.type === 'error') {
+      const error = new Error(data.error || 'AI tag classification failed');
+      if (data.aborted) error.name = 'AbortError';
+      job.reject(error);
+    } else job.resolve(data.result);
+  };
+  tagClassifierWorker.onerror = event => {
+    const error = new Error(event.message || 'AI tag classifier failed');
+    rejectAll(tagClassifierPending, error);
+    tagClassifierWorker?.terminate();
+    tagClassifierWorker = null;
+  };
+  return tagClassifierWorker;
+}
+
 function releaseIndexWorker() {
   if (indexPending.size) return false;
   indexWorker?.terminate();
@@ -230,6 +260,25 @@ async function withMedia(action, payload = {}, options = {}) {
   return requestIndex(action, { ...payload, media }, options);
 }
 
+async function classifyExact(positives, negatives = [], options = {}) {
+  const media = options.scope === 'view' ? await currentViewMedia() : await catalogMedia();
+  const positiveHashes = [...new Set((positives || []).map(String))];
+  const negativeHashes = [...new Set((negatives || []).map(String))];
+
+  // First make sure every visible media item has a current DINO embedding. The
+  // exact classifier itself never runs model inference; it only compares the
+  // saved vectors, so repeat runs remain fast.
+  await requestIndex('index', { model:'dinov3', media }, options);
+  return requestOn(
+    ensureTagClassifierWorker(),
+    tagClassifierPending,
+    'classify',
+    { media, positives:positiveHashes, negatives:negativeHashes },
+    options,
+    { model:'dinov3' }
+  );
+}
+
 async function status(options = {}) {
   const state = await requestIndex('status', {}, options);
   const lastRuntime = lastRuntimeModel ? runtimeState.get(lastRuntimeModel) : null;
@@ -257,12 +306,7 @@ const api = {
   index:(model = 'siglip2', options = {}) => withMedia('index', { model }, options),
   similar:(targetHash, model = 'siglip2', options = {}) =>
     withMedia('similar', { targetHash:String(targetHash || ''), model, limit:options.limit || 40 }, options),
-  classify:(positives, negatives = [], options = {}) =>
-    withMedia('classify', {
-      model:'dinov3',
-      positives:[...new Set((positives || []).map(String))],
-      negatives:[...new Set((negatives || []).map(String))]
-    }, options),
+  classify:classifyExact,
   search:(query, options = {}) =>
     withMedia('search', { query:String(query || ''), limit:options.limit || 80 }, options),
   groups:(options = {}) =>
@@ -278,9 +322,12 @@ const api = {
     worker = null;
     indexWorker?.terminate();
     indexWorker = null;
+    tagClassifierWorker?.terminate();
+    tagClassifierWorker = null;
     const error = new DOMException('AI worker stopped', 'AbortError');
     rejectAll(pending, error);
     rejectAll(indexPending, error);
+    rejectAll(tagClassifierPending, error);
   }
 };
 
