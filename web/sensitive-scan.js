@@ -1,4 +1,4 @@
-const WORKER_URL = new URL('./ai-sensitive-worker.js?v=falconsai-nsfw-v1', import.meta.url);
+const WORKER_URL = new URL('./ai-sensitive-worker.js?v=falconsai-nsfw-v2', import.meta.url);
 const THRESHOLD_KEY = 'mochimono-sensitive-threshold';
 const DEFAULT_THRESHOLD = .65;
 
@@ -66,18 +66,63 @@ function ensureWorker() {
   return worker;
 }
 
-function classify(media, options = {}) {
+function workerRequest(action, payload, options = {}) {
   const target = ensureWorker();
-  const id = `sensitive-${Date.now().toString(36)}-${(++sequence).toString(36)}`;
+  const id = `${action}-${Date.now().toString(36)}-${(++sequence).toString(36)}`;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject, onProgress:options.onProgress });
-    try { target.postMessage({ id, action:'sensitive', payload:{ media, threshold } }); }
+    try { target.postMessage({ id, action, payload }); }
     catch (error) { pending.delete(id); reject(error); }
   });
 }
 
+function classify(media, options = {}) {
+  return workerRequest('sensitive', { media, threshold }, options);
+}
+
 function sensitiveTag() {
   return window.mochimonoTags?.tags?.().find(tag => String(tag.name || '').toLowerCase() === 'sensitive') || null;
+}
+
+async function sensitiveFileState(hash) {
+  try {
+    const data = await requestJson(`/api/tags/file/${encodeURIComponent(hash)}`);
+    return (data.tags || []).find(row => String(row?.name || '').toLowerCase() === 'sensitive') || null;
+  } catch {
+    return null;
+  }
+}
+
+async function inspectSensitive(hash, options = {}) {
+  hash = String(hash || '');
+  if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('Invalid file hash');
+  const input = options.input === 'original' ? 'original' : 'thumbnail';
+  const result = await workerRequest('inspect-sensitive', {
+    hash,
+    threshold,
+    input,
+    fresh:Boolean(options.fresh)
+  }, options);
+  const tag = await sensitiveFileState(hash);
+  const excluded = Boolean(tag?.suppressed || Number(tag?.examplePolarity) === -1);
+  const passesThreshold = Number(result?.score) >= threshold;
+  let decision;
+  if (input === 'original') decision = passesThreshold ? 'Original passes threshold' : 'Original is below threshold';
+  else if (excluded) decision = 'Excluded by you';
+  else decision = passesThreshold ? 'Scan would mark Sensitive' : 'Below scan threshold';
+  return {
+    ...result,
+    threshold,
+    passesThreshold,
+    decision,
+    tag:{
+      source:tag?.source || null,
+      confidence:tag?.confidence == null ? null : Number(tag.confidence),
+      excluded,
+      manual:tag?.source === 'manual',
+      detected:tag?.source === 'system'
+    }
+  };
 }
 
 async function refreshSensitiveUi(tagId, message = '') {
@@ -183,6 +228,7 @@ if (window.mochimonoTags) window.mochimonoTags.scanSensitive = () => runSensitiv
 
 window.mochimonoSensitiveScan = {
   run:runSensitiveScan,
+  inspect:inspectSensitive,
   busy:() => busy,
   threshold:() => threshold,
   setThreshold(value) {
