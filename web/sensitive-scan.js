@@ -73,14 +73,21 @@ function sensitiveTag() {
 }
 
 async function refreshSensitiveUi(tagId, message = '') {
-  await window.mochimonoTags?.refresh?.().catch?.(() => {});
+  try { await window.mochimonoTags?.refresh?.(); } catch {}
   const mode = document.querySelector('#sensitiveMediaMode')?.value || 'hide';
   window.mochimonoTags?.sensitiveMode?.(mode);
   const manager = document.querySelector('.tag-manager');
   if (manager?.open) {
+    const before = progressNode();
     const tagButton = manager.querySelector(`[data-manage-tag="${CSS.escape(String(tagId))}"]`);
     tagButton?.click();
-    await new Promise(resolve => setTimeout(resolve, 0));
+    if (tagButton) {
+      for (let attempt = 0; attempt < 24; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+        const current = progressNode();
+        if (current && current !== before) break;
+      }
+    }
   }
   if (message) setProgress(message);
 }
@@ -166,7 +173,6 @@ document.addEventListener('click', event => {
 }, true);
 
 if (window.mochimonoTags) window.mochimonoTags.scanSensitive = () => runSensitiveScan();
-else window.addEventListener('mochimono:tags-ready', () => { window.mochimonoTags.scanSensitive = () => runSensitiveScan(); }, { once:true });
 
 window.mochimonoSensitiveScan = {
   run:runSensitiveScan,
