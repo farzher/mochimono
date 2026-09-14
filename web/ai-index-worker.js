@@ -887,11 +887,10 @@ async function classifyExamples(id, media, positiveHashes, negativeHashes) {
       const similarity = dot(record, cluster.centerRecord);
       ranked.push({ index, similarity, relative:similarity - cluster.prefilterFloor, scoutRelative:-Infinity });
     }
-    ranked.sort((a, b) => b.relative - a.relative);
 
-    // Averaged prototypes are fast but can hide unusual screens. Probe the
-    // strongest few visual modes against representative boundary examples too.
-    for (const mode of ranked.slice(0, Math.min(4, ranked.length))) {
+    // A rare visual mode must not be hidden by its averaged center. Probe every
+    // mode against representative positive examples before discarding it.
+    for (const mode of ranked) {
       const cluster = clusters[mode.index];
       let scoutBest = -1;
       for (const scout of cluster.scouts) scoutBest = Math.max(scoutBest, dot(record, scout.record));
@@ -901,8 +900,9 @@ async function classifyExamples(id, media, positiveHashes, negativeHashes) {
 
     ranked.sort((a, b) => b.relative - a.relative);
     scanned++;
-    if (ranked[0]?.relative < 0) return;
-    candidates.push({ hash:row.hash, record, modes:ranked.slice(0, Math.min(3, ranked.length)) });
+    const qualifying = ranked.filter(mode => mode.relative >= 0);
+    if (!qualifying.length) return;
+    candidates.push({ hash:row.hash, record, modes:qualifying });
   });
 
   aborted(id);
