@@ -186,21 +186,19 @@ function replaceAiMembers(id, matches, source = 'ai') {
       added_at=CASE WHEN tag_members.source = 'manual' THEN tag_members.added_at ELSE excluded.added_at END
   `);
   const timestamp = now();
-  let applied = 0;
   db.exec('BEGIN IMMEDIATE');
   try {
     remove.run(current.id);
     for (const hash of allowed) {
       if (suppression.has(hash)) continue;
       insert.run(current.id, hash, source, confidence.get(hash) ?? null, timestamp);
-      applied++;
     }
     db.exec('COMMIT');
   } catch (error) {
     try { db.exec('ROLLBACK'); } catch {}
     throw error;
   }
-  return applied;
+  return Number(db.prepare('SELECT COUNT(*) AS count FROM tag_members WHERE tag_id = ? AND source = ?').get(current.id, source)?.count) || 0;
 }
 
 function removeMembers(id, hashes, suppress) {
