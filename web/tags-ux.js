@@ -17,6 +17,7 @@ style.textContent = `
 .viewer-action.viewer-tag-action{border:0;font:700 11px/1 system-ui;cursor:pointer}.viewer-action.viewer-tag-action[data-count]:not([data-count="0"]){color:#eee8e4}
 .tag-quick-help{padding:9px 10px;border:1px solid rgba(255,255,255,.075);border-radius:9px;background:#111012;color:#928986;font:10.5px/1.5 system-ui}.tag-quick-help strong{color:#d8cfcb;font-weight:750}.tag-editor-toggle.tag-advanced-hidden{display:none!important}
 .file-context-action[data-tag-context]{order:-1}
+.tag-review-clear{margin-left:auto!important;background:transparent!important;color:#b9908e!important;padding:0 7px!important}.tag-review-clear:hover{background:#2b2225!important;color:#efb7b3!important}
 `;
 document.head.append(style);
 
@@ -210,6 +211,19 @@ async function setTrainingRole(tagId, hash, role) {
   });
 }
 
+async function clearTrainingRole(tagId, role) {
+  const state = await requestJson(`/api/tags/${tagId}`);
+  const positive = examplesFromState(state, 1);
+  const negative = examplesFromState(state, -1);
+  await requestJson(`/api/tags/${tagId}/examples`, {
+    method:'POST',
+    body:{
+      positive:role === 'positive' ? [] : positive,
+      negative:role === 'negative' ? [] : negative
+    }
+  });
+}
+
 async function confirmMember(tagId, hash) {
   await requestJson(`/api/tags/${tagId}/members`, { method:'POST', body:{ hashes:[hash], source:'manual' } });
 }
@@ -296,10 +310,12 @@ async function renderReview(fields) {
   else items = members.map(member => ({ hash:member.hash, member }));
 
   const examplesMode = mode === 'positive' || mode === 'negative';
+  const exampleCount = mode === 'positive' ? positive.size : mode === 'negative' ? negative.size : 0;
   section.innerHTML = `
     <div class="tag-review-head">
       <strong>Review</strong>
       <span>${escapeHtml(reviewHelp(mode))}</span>
+      ${examplesMode && exampleCount ? `<button type="button" class="tag-review-clear" data-review-clear="${mode}">Clear ${mode}</button>` : ''}
     </div>
     <div class="tag-review-tabs">${modes.map(([id,label,count]) => `<button type="button" class="${id === mode ? 'active' : ''}" data-review-mode="${id}">${label}<small>${count}</small></button>`).join('')}</div>
     <div class="tag-review-grid ${examplesMode ? 'examples' : ''}">${items.length ? items.map(item => reviewCard(item, mode, positive, negative)).join('') : '<div class="tag-review-empty">Nothing here.</div>'}</div>`;
@@ -309,6 +325,20 @@ async function renderReview(fields) {
     if (!button) return;
     reviewMode.set(tagId, button.dataset.reviewMode);
     renderReview(fields).catch(console.error);
+  });
+  section.querySelector('[data-review-clear]')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const role = String(button.dataset.reviewClear || '');
+    const count = role === 'positive' ? positive.size : negative.size;
+    if (!count || !confirm(`Clear all ${count} ${role} examples?`)) return;
+    button.disabled = true;
+    try {
+      await clearTrainingRole(tagId, role);
+      await refreshManagerTag(tagId);
+    } catch (error) {
+      console.error(error);
+      button.disabled = false;
+    }
   });
   section.querySelector('.tag-review-grid')?.addEventListener('click', async event => {
     const button = event.target.closest('[data-review-action]');
