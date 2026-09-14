@@ -9,6 +9,7 @@ const PREFETCH_AHEAD = 32;
 const MAX_WRITE_BACKLOG = 3;
 const SEMANTIC_NEUTRAL_PROMPT = 'a photo or image';
 const MIN_SEMANTIC_MARGIN = .012;
+const MAX_CLASSIFY_MATCHES = 10000;
 
 const MODELS = {
   siglip2:{ id:'onnx-community/siglip2-base-patch16-224-ONNX', label:'SigLIP 2 Base', indexVersion:'siglip2-base-224-v2' },
@@ -45,6 +46,7 @@ function progress(id, stage, done = 0, total = 0, detail = '', metrics = null) {
 }
 function aborted(id) { if (running.get(id)?.aborted) throw new DOMException('Aborted', 'AbortError'); }
 function sleepTurn() { return new Promise(resolve => setTimeout(resolve, 0)); }
+function clamp(value, min = 0, max = 1) { return Math.max(min, Math.min(max, Number(value) || 0)); }
 
 function normalize(vector) {
   let norm = 0;
@@ -90,6 +92,57 @@ function dot(left, right) {
   let total = 0;
   for (let index = 0; index < length; index++) total += a.data[index] * b.data[index];
   return total / Math.sqrt(a.normSq * b.normSq);
+}
+
+function unitVector(value) {
+  const record = vectorRecord(value);
+  if (!record) return null;
+  const norm = Math.sqrt(record.normSq) || 1;
+  const out = new Float32Array(record.data.length);
+  for (let index = 0; index < out.length; index++) out[index] = record.data[index] / norm;
+  return out;
+}
+
+function floatDot(left, right) {
+  const length = Math.min(left?.length || 0, right?.length || 0);
+  let total = 0;
+  for (let index = 0; index < length; index++) total += left[index] * right[index];
+  return total;
+}
+
+function averageUnit(vectors) {
+  const source = vectors.filter(Boolean);
+  if (!source.length) return new Float32Array();
+  const out = new Float32Array(source[0].length);
+  for (const vector of source) {
+    for (let index = 0; index < out.length; index++) out[index] += vector[index];
+  }
+  return normalize(out);
+}
+
+function quantile(values, q) {
+  const sorted = (values || []).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return null;
+  if (sorted.length === 1) return sorted[0];
+  const position = clamp(q) * (sorted.length - 1);
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  const mix = position - lower;
+  return sorted[lower] * (1 - mix) + sorted[upper] * mix;
+}
+
+function affinity(scores, limit = 4) {
+  const ranked = (scores || []).filter(Number.isFinite).sort((a, b) => b - a).slice(0, Math.max(1, limit));
+  if (!ranked.length) return -1;
+  const weights = [.55, .25, .13, .07];
+  let total = 0;
+  let weight = 0;
+  for (let index = 0; index < ranked.length; index++) {
+    const current = weights[index] ?? .04;
+    total += ranked[index] * current;
+    weight += current;
+  }
+  return total / Math.max(.0001, weight);
 }
 
 function scoreFor(similarity) { return Math.round(Math.max(0, Math.min(1, Number(similarity) || 0)) * 100); }
@@ -212,6 +265,24 @@ async function getEmbedding(model, hash) {
   return row?.vector && Number(row.schema) === EMBEDDING_SCHEMA
     ? vectorRecord({ data:row.vector, normSq:row.normSq, scale:row.scale })
     : null;
+}
+
+async function getEmbeddings(model, hashes) {
+  const wanted = [...new Set((hashes || []).map(String))];
+  if (!wanted.length) return new Map();
+  const db = await openDb();
+  const tx = db.transaction(EMBEDDINGS, 'readonly');
+  const store = tx.objectStore(EMBEDDINGS);
+  const requests = wanted.map(hash => requestResult(store.get(embeddingId(model, hash))).then(row => [hash, row]));
+  const rows = await Promise.all(requests);
+  await transactionDone(tx).catch(() => {});
+  const result = new Map();
+  for (const [hash, row] of rows) {
+    if (!row?.vector || Number(row.schema) !== EMBEDDING_SCHEMA) continue;
+    const record = vectorRecord({ data:row.vector, normSq:row.normSq, scale:row.scale });
+    if (record) result.set(hash, record);
+  }
+  return result;
 }
 
 async function putEmbeddingBatch(model, entries) {
@@ -629,6 +700,222 @@ async function rankSimilar(id, model, media, targetHash, limit = 40) {
   return best.values();
 }
 
+function clusterExamples(items) {
+  if (!items.length) return [];
+  if (items.length === 1) return [{ center:items[0].unit, members:[items[0]] }];
+  const count = Math.min(8, Math.max(1, Math.ceil(Math.sqrt(items.length / 2))));
+  const chosen = new Set();
+  const centers = [];
+
+  let first = 0;
+  let firstScore = -Infinity;
+  for (let index = 0; index < items.length; index++) {
+    let score = 0;
+    for (let other = 0; other < items.length; other++) {
+      if (index !== other) score += floatDot(items[index].unit, items[other].unit);
+    }
+    if (score > firstScore) { firstScore = score; first = index; }
+  }
+  chosen.add(first);
+  centers.push(items[first].unit);
+
+  while (centers.length < count) {
+    let next = -1;
+    let farthest = Infinity;
+    for (let index = 0; index < items.length; index++) {
+      if (chosen.has(index)) continue;
+      let nearest = -Infinity;
+      for (const center of centers) nearest = Math.max(nearest, floatDot(items[index].unit, center));
+      if (nearest < farthest) { farthest = nearest; next = index; }
+    }
+    if (next < 0) break;
+    chosen.add(next);
+    centers.push(items[next].unit);
+  }
+
+  let groups = [];
+  for (let iteration = 0; iteration < 5; iteration++) {
+    groups = Array.from({ length:centers.length }, () => []);
+    for (const item of items) {
+      let best = 0;
+      let bestSimilarity = -Infinity;
+      for (let index = 0; index < centers.length; index++) {
+        const similarity = floatDot(item.unit, centers[index]);
+        if (similarity > bestSimilarity) { bestSimilarity = similarity; best = index; }
+      }
+      groups[best].push(item);
+    }
+    for (let index = 0; index < centers.length; index++) {
+      if (groups[index].length) centers[index] = averageUnit(groups[index].map(item => item.unit));
+    }
+  }
+
+  return groups.map((members, index) => ({ center:centers[index], members })).filter(cluster => cluster.members.length);
+}
+
+function exactAffinity(record, items, excludeHash = '') {
+  const scores = [];
+  for (const item of items) {
+    if (excludeHash && item.hash === excludeHash) continue;
+    scores.push(dot(record, item.record));
+  }
+  return { affinity:affinity(scores), scores:scores.sort((a, b) => b - a) };
+}
+
+function calibrateClusters(clusters, positives, negatives) {
+  const negativeItems = negatives || [];
+  for (const cluster of clusters) {
+    const trainingAffinity = [];
+    const trainingMargins = [];
+    const prototypeScores = [];
+    const pool = cluster.members.length > 1 ? cluster.members : positives;
+    const centerRecord = quantize(cluster.center);
+
+    for (const member of cluster.members) {
+      const positive = exactAffinity(member.record, pool, member.hash).affinity;
+      if (positive >= 0) trainingAffinity.push(positive);
+      prototypeScores.push(dot(member.record, centerRecord));
+      if (negativeItems.length && positive >= 0) {
+        const negative = exactAffinity(member.record, negativeItems).affinity;
+        if (negative >= 0) trainingMargins.push(positive - negative);
+      }
+    }
+
+    const learned = quantile(trainingAffinity, .10);
+    cluster.floor = cluster.members.length === 1 && positives.length === 1
+      ? .66
+      : clamp((learned ?? .66) - .045, .38, .84);
+    const prototypeLearned = quantile(prototypeScores, .10);
+    cluster.prefilterFloor = clamp((prototypeLearned ?? cluster.floor) - .12, .28, .78);
+    cluster.marginFloor = negativeItems.length
+      ? clamp((quantile(trainingMargins, .10) ?? .02) - .03, -.005, .14)
+      : null;
+    cluster.centerRecord = centerRecord;
+  }
+  return clusters;
+}
+
+async function classifyExamples(id, media, positiveHashes, negativeHashes) {
+  const model = 'dinov3';
+  const positivesWanted = [...new Set((positiveHashes || []).map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
+  const positiveSet = new Set(positivesWanted);
+  const negativesWanted = [...new Set((negativeHashes || []).map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash) && !positiveSet.has(hash)))];
+  if (!positivesWanted.length) return { matches:[], stats:{ positiveExamples:0, negativeExamples:negativesWanted.length, scanned:0, candidates:0, clusters:0 } };
+
+  const indexResult = await ensureEmbeddings(id, model, media);
+  aborted(id);
+  progress(id, 'classify', 0, 3, 'Learning visual examples…', indexResult.runtime);
+
+  const labeled = await getEmbeddings(model, positivesWanted.concat(negativesWanted));
+  const positives = positivesWanted.map(hash => {
+    const record = labeled.get(hash);
+    const unit = unitVector(record);
+    return record && unit ? { hash, record, unit } : null;
+  }).filter(Boolean);
+  const negatives = negativesWanted.map(hash => {
+    const record = labeled.get(hash);
+    const unit = unitVector(record);
+    return record && unit ? { hash, record, unit } : null;
+  }).filter(Boolean);
+  if (!positives.length) throw new Error('None of the positive examples have a DINO visual index.');
+
+  const clusters = calibrateClusters(clusterExamples(positives), positives, negatives);
+  const excluded = new Set([...positiveSet, ...negativesWanted]);
+  const allowed = new Set(media.map(file => String(file.hash || '')));
+  const candidates = [];
+  let scanned = 0;
+
+  progress(id, 'classify', 1, 3,
+    `Visual AI · ${positives.length.toLocaleString()} positive · ${negatives.length.toLocaleString()} negative · ${clusters.length} visual modes`,
+    indexResult.runtime);
+
+  await forEachModelRow(model, row => {
+    if (!allowed.has(row.hash) || excluded.has(row.hash) || !row.vector || Number(row.schema) !== EMBEDDING_SCHEMA) return;
+    const record = vectorRecord(row);
+    if (!record) return;
+    const ranked = [];
+    for (let index = 0; index < clusters.length; index++) {
+      const similarity = dot(record, clusters[index].centerRecord);
+      ranked.push({ index, similarity, relative:similarity - clusters[index].prefilterFloor });
+    }
+    ranked.sort((a, b) => b.relative - a.relative);
+    scanned++;
+    if (ranked[0]?.relative < 0) return;
+    candidates.push({ hash:row.hash, record, modes:ranked.slice(0, Math.min(2, ranked.length)) });
+  });
+
+  aborted(id);
+  progress(id, 'classify', 2, 3,
+    `Visual AI · refining ${candidates.length.toLocaleString()} candidates from ${scanned.toLocaleString()} indexed media`,
+    indexResult.runtime);
+
+  const matches = [];
+  let refined = 0;
+  for (const candidate of candidates) {
+    let best = null;
+    for (const mode of candidate.modes) {
+      const cluster = clusters[mode.index];
+      const positiveResult = exactAffinity(candidate.record, cluster.members);
+      const relative = positiveResult.affinity - cluster.floor;
+      if (!best || relative > best.relative) {
+        best = { cluster, prototype:mode.similarity, positiveResult, relative };
+      }
+    }
+    if (!best || best.positiveResult.affinity < best.cluster.floor) continue;
+
+    const bestPositive = best.positiveResult.scores[0] ?? best.positiveResult.affinity;
+    const negativeResult = negatives.length ? exactAffinity(candidate.record, negatives) : { affinity:-1, scores:[] };
+    const margin = negatives.length ? best.positiveResult.affinity - negativeResult.affinity : null;
+    const bestNegative = negativeResult.scores[0] ?? -1;
+
+    if (negatives.length) {
+      if (margin < best.cluster.marginFloor) continue;
+      if (bestNegative > bestPositive + .015) continue;
+    }
+
+    const positiveStrength = clamp((best.positiveResult.affinity - best.cluster.floor) / Math.max(.08, 1 - best.cluster.floor));
+    const prototypeStrength = clamp((best.prototype - best.cluster.prefilterFloor) / Math.max(.08, 1 - best.cluster.prefilterFloor));
+    const marginStrength = negatives.length
+      ? clamp((margin - best.cluster.marginFloor) / .14)
+      : .5;
+    const confidence = clamp(.55 + positiveStrength * .27 + prototypeStrength * .06 + marginStrength * .12, .55, .99);
+
+    matches.push({
+      hash:candidate.hash,
+      confidence,
+      similarity:bestPositive,
+      affinity:best.positiveResult.affinity,
+      negativeAffinity:negatives.length ? negativeResult.affinity : null,
+      margin,
+      mode:clusters.indexOf(best.cluster)
+    });
+    refined++;
+    if (refined % 256 === 0) {
+      aborted(id);
+      await sleepTurn();
+    }
+  }
+
+  matches.sort((a, b) => b.confidence - a.confidence || b.affinity - a.affinity || b.similarity - a.similarity || a.hash.localeCompare(b.hash));
+  const truncated = matches.length > MAX_CLASSIFY_MATCHES;
+  const resultMatches = matches.slice(0, MAX_CLASSIFY_MATCHES);
+  const stats = {
+    positiveExamples:positives.length,
+    negativeExamples:negatives.length,
+    clusters:clusters.length,
+    scanned,
+    candidates:candidates.length,
+    matches:resultMatches.length,
+    truncated,
+    floors:clusters.map(cluster => Number(cluster.floor.toFixed(3))),
+    marginFloors:clusters.map(cluster => cluster.marginFloor == null ? null : Number(cluster.marginFloor.toFixed(3)))
+  };
+  progress(id, 'classify', 3, 3,
+    `Visual AI · ${resultMatches.length.toLocaleString()} matches · ${positives.length.toLocaleString()} positive · ${negatives.length.toLocaleString()} negative · ${clusters.length} visual modes${truncated ? ' · capped at 10,000' : ''}`,
+    indexResult.runtime);
+  return { matches:resultMatches, stats, runtime:indexResult.runtime };
+}
+
 async function semanticSearch(id, media, query, limit = 80) {
   const text = String(query || '').trim();
   if (!text) return [];
@@ -708,6 +995,7 @@ async function handle(id, action, payload) {
     : [];
   if (action === 'index') return ensureEmbeddings(id, payload.model === 'dinov3' ? 'dinov3' : 'siglip2', media);
   if (action === 'similar') return rankSimilar(id, payload.model === 'dinov3' ? 'dinov3' : 'siglip2', media, String(payload.targetHash || ''), payload.limit);
+  if (action === 'classify') return classifyExamples(id, media, payload.positives, payload.negatives);
   if (action === 'search') return semanticSearch(id, media, payload.query, payload.limit);
   if (action === 'groups') return autoGroups(id, media, payload.limitPerGroup);
   throw new Error(`Unknown AI index action: ${action}`);
