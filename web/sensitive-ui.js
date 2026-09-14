@@ -3,7 +3,6 @@ const scanner = window.mochimonoSensitiveScan;
 const manager = document.querySelector('.tag-manager');
 const editor = manager?.querySelector('.tag-editor');
 const list = manager?.querySelector('.tag-list');
-const viewerTags = document.querySelector('#viewerTags');
 
 if (tagsApi && scanner && manager && editor && list) {
   const style = document.createElement('style');
@@ -22,7 +21,7 @@ if (tagsApi && scanner && manager && editor && list) {
 
   let mode = 'detected';
   let generation = 0;
-  let queued = false;
+  let renderQueued = false;
 
   async function requestJson(url, options = {}) {
     const response = await fetch(url, {
@@ -85,27 +84,20 @@ if (tagsApi && scanner && manager && editor && list) {
     const negative = negativeHashes(state);
     for (const hash of hashes) negative.delete(hash);
     await requestJson(`/api/tags/${tagId}/members`, { method:'POST', body:{ hashes, source:'manual' } });
-    // Sensitive is not trained from positive examples. Strip the generic tag
-    // system's automatic positive-example side effect while keeping exclusions.
+    // Sensitive is not trained from positive examples. Keep only exclusions.
     await writeExclusions(tagId, negative);
-  }
-
-  async function removeManual(tagId, hash) {
-    await requestJson(`/api/tags/${tagId}/remove`, { method:'POST', body:{ hashes:[hash] } });
   }
 
   async function refresh(tagId) {
     await tagsApi.refresh().catch(() => {});
-    const button = list.querySelector(`[data-manage-tag="${CSS.escape(String(tagId))}"]`);
-    button?.click();
-    schedule();
+    list.querySelector(`[data-manage-tag="${CSS.escape(String(tagId))}"]`)?.click();
   }
 
   function card(item, cardMode) {
     const hash = String(item.hash);
     const confidence = item.confidence == null ? null : Math.round(Number(item.confidence) * 100);
-    let badge = '';
-    let actions = '';
+    let badge;
+    let actions;
     if (cardMode === 'detected') {
       badge = `<span class="tag-review-badge detected">${confidence == null ? 'Detected' : `${confidence}% NSFW`}</span>`;
       actions = `<button type="button" data-sensitive-action="manual" data-hash="${hash}">Keep manually</button><button type="button" data-sensitive-action="exclude" data-hash="${hash}">Not sensitive</button>`;
@@ -123,17 +115,15 @@ if (tagsApi && scanner && manager && editor && list) {
     </article>`;
   }
 
-  function modeHelp(current) {
-    if (current === 'detected') return 'Marked by the dedicated NSFW detector. Confidence is the model’s NSFW probability.';
-    if (current === 'manual') return 'Files you explicitly marked Sensitive. Scans do not remove these.';
-    return 'False positives the detector is not allowed to mark Sensitive.';
+  function help(current) {
+    if (current === 'detected') return 'Marked by the NSFW detector. Confidence is its NSFW probability.';
+    if (current === 'manual') return 'Files you explicitly marked Sensitive.';
+    return 'False positives excluded from automatic detection.';
   }
 
-  async function render() {
-    queued = false;
+  async function renderSensitiveEditor() {
+    renderQueued = false;
     const tag = activeTag();
-    decorateList();
-    decorateViewer();
     if (!manager.open || !isSensitive(tag)) return;
     if (editor.querySelector(`.sensitive-editor[data-tag-id="${tag.id}"]`)) return;
 
@@ -179,66 +169,40 @@ if (tagsApi && scanner && manager && editor && list) {
       </div>
       <div class="tag-ai-status"></div>
       <section class="tag-review">
-        <div class="tag-review-head"><strong>Review</strong><span>${escapeHtml(modeHelp(mode))}</span>${mode === 'excluded' && excluded.length ? '<button type="button" class="tag-review-clear" data-sensitive-clear-excluded>Clear exclusions</button>' : ''}</div>
+        <div class="tag-review-head"><strong>Review</strong><span>${escapeHtml(help(mode))}</span>${mode === 'excluded' && excluded.length ? '<button type="button" class="tag-review-clear" data-sensitive-clear-excluded>Clear exclusions</button>' : ''}</div>
         <div class="tag-review-tabs">${modes.map(([id,label,count]) => `<button type="button" class="${id === mode ? 'active' : ''}" data-sensitive-mode="${id}">${label}<small>${count}</small></button>`).join('')}</div>
         <div class="tag-review-grid">${items.length ? items.map(item => card(item, mode)).join('') : '<div class="tag-review-empty">Nothing here.</div>'}</div>
       </section>
     </div>`;
   }
 
-  function decorateList() {
-    const tag = tagsApi.tags().find(isSensitive);
-    if (!tag) return;
-    const button = list.querySelector(`[data-manage-tag="${CSS.escape(String(tag.id))}"]`);
-    const small = button?.querySelector('small');
-    if (!small) return;
-    small.textContent = `${Number(tag.systemCount) || 0} auto · ${Number(tag.manualCount) || 0} manual`;
-    button.title = `${Number(tag.systemCount) || 0} detected · ${Number(tag.manualCount) || 0} manual · ${Number(tag.negativeExamples) || 0} excluded`;
-  }
-
-  function decorateViewer() {
-    const chip = viewerTags?.querySelector('.viewer-tag-chip.sensitive');
-    if (chip) {
-      chip.querySelectorAll('.viewer-tag-role.positive').forEach(role => role.remove());
-      const origin = chip.querySelector('.viewer-tag-origin.system');
-      if (origin) {
-        const confidence = chip.title.match(/(\d+)%/)?.[1];
-        origin.textContent = confidence ? `Detected ${confidence}%` : 'Detected';
-      }
-    }
-    for (const chipNode of viewerTags?.querySelectorAll('.viewer-tag-training-only.negative') || []) {
-      const button = chipNode.querySelector('button');
-      if (button?.textContent.includes('Sensitive')) {
-        const role = chipNode.querySelector('.viewer-tag-role');
-        if (role) role.textContent = 'Excluded';
-        button.title = 'Excluded from automatic Sensitive detection';
-      }
-    }
-  }
-
-  function schedule() {
-    if (queued) return;
-    queued = true;
-    queueMicrotask(() => render().catch(error => console.error(error)));
+  function scheduleRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    queueMicrotask(() => renderSensitiveEditor().catch(console.error));
   }
 
   editor.addEventListener('input', event => {
     const input = event.target.closest('[data-sensitive-threshold]');
     if (!input) return;
     const value = scanner.setThreshold(Number(input.value) / 100);
-    editor.querySelector('[data-sensitive-threshold-label]')?.replaceChildren(`${Math.round(value * 100)}%`);
+    const label = editor.querySelector('[data-sensitive-threshold-label]');
+    const text = `${Math.round(value * 100)}%`;
+    if (label && label.textContent !== text) label.textContent = text;
   });
 
   editor.addEventListener('click', async event => {
     const tag = activeTag();
     if (!isSensitive(tag)) return;
+
     const modeButton = event.target.closest('[data-sensitive-mode]');
     if (modeButton) {
       mode = modeButton.dataset.sensitiveMode;
       editor.querySelector('.sensitive-editor')?.remove();
-      schedule();
+      scheduleRender();
       return;
     }
+
     const selection = event.target.closest('[data-sensitive-mark-selection]');
     if (selection) {
       const hashes = selectedHashes();
@@ -252,6 +216,7 @@ if (tagsApi && scanner && manager && editor && list) {
       catch (error) { console.error(error); selection.disabled = false; }
       return;
     }
+
     const clear = event.target.closest('[data-sensitive-clear-excluded]');
     if (clear) {
       const state = await requestJson(`/api/tags/${tag.id}`);
@@ -262,6 +227,7 @@ if (tagsApi && scanner && manager && editor && list) {
       catch (error) { console.error(error); clear.disabled = false; }
       return;
     }
+
     const action = event.target.closest('[data-sensitive-action]');
     if (!action) return;
     const hash = String(action.dataset.hash || '');
@@ -271,7 +237,7 @@ if (tagsApi && scanner && manager && editor && list) {
       if (action.dataset.sensitiveAction === 'exclude') await exclude(tag.id, hash);
       else if (action.dataset.sensitiveAction === 'allow') await allow(tag.id, hash);
       else if (action.dataset.sensitiveAction === 'manual' || action.dataset.sensitiveAction === 'mark') await markManual(tag.id, [hash]);
-      else if (action.dataset.sensitiveAction === 'remove') await removeManual(tag.id, hash);
+      else if (action.dataset.sensitiveAction === 'remove') await requestJson(`/api/tags/${tag.id}/remove`, { method:'POST', body:{ hashes:[hash] } });
       await refresh(tag.id);
     } catch (error) {
       console.error(error);
@@ -279,12 +245,10 @@ if (tagsApi && scanner && manager && editor && list) {
     }
   });
 
-  new MutationObserver(schedule).observe(editor, { childList:true, subtree:true });
-  new MutationObserver(() => { decorateList(); schedule(); }).observe(list, { childList:true, subtree:true });
-  if (viewerTags) new MutationObserver(decorateViewer).observe(viewerTags, { childList:true, subtree:true });
+  // Only the editor needs observing: tags.js replaces its contents when the
+  // active tag changes. The rendered Sensitive editor is detected above and
+  // never rewritten in response to its own DOM mutations.
+  new MutationObserver(scheduleRender).observe(editor, { childList:true });
   manager.addEventListener('close', () => { generation++; });
-  window.addEventListener('mochimono:sensitive-threshold', schedule);
-  decorateList();
-  decorateViewer();
-  schedule();
+  scheduleRender();
 }
