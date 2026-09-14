@@ -199,6 +199,7 @@ if (tagsApi && scanner && manager && editor && list) {
   function decorateViewer() {
     const chip = viewerTags?.querySelector('.viewer-tag-chip.sensitive');
     if (chip) {
+      chip.querySelectorAll('.viewer-tag-role.positive').forEach(role => role.remove());
       const origin = chip.querySelector('.viewer-tag-origin.system');
       if (origin) {
         const confidence = chip.title.match(/(\d+)%/)?.[1];
