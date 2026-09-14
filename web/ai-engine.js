@@ -1,6 +1,6 @@
 const WORKER_URL = new URL('./ai-worker.js', import.meta.url);
 const INDEX_WORKER_URL = new URL('./ai-index-worker.js', import.meta.url);
-const TAG_CLASSIFIER_URL = new URL('./ai-tag-classifier-worker.js?v=exact-local-v2', import.meta.url);
+const TAG_CLASSIFIER_URL = new URL('./ai-tag-classifier-worker.js?v=bridge-v3', import.meta.url);
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff']);
 const VIDEO_EXTENSIONS = new Set(['mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp']);
 const HEAVY_ACTIONS = new Set(['index','similar','classify','search','groups','describe','mask']);
@@ -265,8 +265,8 @@ async function classifyExact(positives, negatives = [], options = {}) {
   const positiveHashes = [...new Set((positives || []).map(String))];
   const negativeHashes = [...new Set((negatives || []).map(String))];
 
-  // Ensure the normal whole-image DINO index is current first. The tag worker
-  // then adds its own cached dense/local DINO features for identity matching.
+  // Ensure the normal whole-image DINO index is current. The bridge classifier
+  // only compares saved vectors, so repeat runs stay fast and deterministic.
   await requestIndex('index', { model:'dinov3', media }, options);
   releaseIndexWorker();
   return requestOn(
