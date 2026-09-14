@@ -30,6 +30,7 @@ export function showAllFiles(historyMode = 'push') {
   if (cleanUrl.href !== location.href) history.replaceState(history.state, '', cleanUrl);
 
   window.mochimonoSourceFolder?.clear?.({ updateUrl:false });
+  window.mochimonoTags?.setFilter?.('');
 
   // Set every control first, then dispatch its normal UI event. This makes each
   // listener observe the complete home state instead of temporarily rebuilding
