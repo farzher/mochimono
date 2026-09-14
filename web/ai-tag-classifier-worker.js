@@ -1,26 +1,19 @@
-const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
-const DINO_MODEL_ID = 'onnx-community/dinov3-vitb16-pretrain-lvd1689m-ONNX';
 const DB_NAME = 'mochimono-ai';
 const DB_VERSION = 2;
 const EMBEDDINGS = 'embeddings';
 const EMBEDDING_SCHEMA = 3;
 const DINO_INDEX_VERSION = 'dinov3-vitb16-v2';
-const LOCAL_INDEX_VERSION = 'dinov3-vitb16-local5x64-v1';
-const CLASSIFIER_VERSION = 'exact-local-v2';
-const THUMB_VERSION = 3;
-const LOCAL_DIMENSION = 64;
-const LOCAL_REGIONS = 5;
-const LOCAL_NEIGHBORS = 6;
+const CLASSIFIER_VERSION = 'bridge-v3';
 const MAX_MATCHES = 10000;
+const MAX_BRIDGES_PER_SEED = 4;
+const MAX_BRIDGES = 320;
 
 const running = new Map();
-let localRuntimePromise = null;
 
 function post(id, type, payload = {}) { self.postMessage({ id, type, ...payload }); }
 function progress(id, done, total, detail) { post(id, 'progress', { stage:'classify', done, total, detail }); }
 function aborted(id) { if (running.get(id)?.aborted) throw new DOMException('Aborted', 'AbortError'); }
 function clamp(value, min = 0, max = 1) { return Math.max(min, Math.min(max, Number(value) || 0)); }
-function thumbUrl(hash) { return new URL(`/api/thumbs/${hash}?v=${THUMB_VERSION}`, self.location.origin).href; }
 
 function requestResult(request) {
   return new Promise((resolve, reject) => {
@@ -46,26 +39,12 @@ function openDb() {
 }
 
 function embeddingId(hash) { return `${DINO_INDEX_VERSION}:${hash}`; }
-function localEmbeddingId(hash) { return `${LOCAL_INDEX_VERSION}:${hash}`; }
 
 function record(row) {
   if (!row?.vector || Number(row.schema) !== EMBEDDING_SCHEMA || Number(row.normSq) <= 0) return null;
   return {
     data:row.vector instanceof Int8Array ? row.vector : Int8Array.from(row.vector),
     normSq:Number(row.normSq)
-  };
-}
-
-function localRecord(row) {
-  const regions = Math.trunc(Number(row?.regions) || 0);
-  const dimension = Math.trunc(Number(row?.dimension) || 0);
-  const norms = row?.regionNormSq;
-  if (!row?.vector || Number(row.schema) !== EMBEDDING_SCHEMA || regions !== LOCAL_REGIONS || dimension !== LOCAL_DIMENSION || !norms?.length) return null;
-  return {
-    data:row.vector instanceof Int8Array ? row.vector : Int8Array.from(row.vector),
-    norms:norms instanceof Float64Array ? norms : Float64Array.from(norms),
-    regions,
-    dimension
   };
 }
 
@@ -79,26 +58,8 @@ function dot(left, right) {
   return total / Math.sqrt(left.normSq * right.normSq);
 }
 
-function localDot(left, leftRegion, right, rightRegion) {
-  if (!left || !right) return -1;
-  const dimension = Math.min(left.dimension, right.dimension);
-  const leftOffset = leftRegion * left.dimension;
-  const rightOffset = rightRegion * right.dimension;
-  let total = 0;
-  for (let index = 0; index < dimension; index++) total += left.data[leftOffset + index] * right.data[rightOffset + index];
-  return total / Math.sqrt(Math.max(1, left.norms[leftRegion]) * Math.max(1, right.norms[rightRegion]));
-}
-
-function insertTop(top, value, limit = 4) {
-  if (!Number.isFinite(value)) return;
-  let index = 0;
-  while (index < top.length && top[index] >= value) index++;
-  if (index >= limit) return;
-  top.splice(index, 0, value);
-  if (top.length > limit) top.length = limit;
-}
-
-function insertNeighbor(top, item, limit = LOCAL_NEIGHBORS) {
+function insertTop(top, item, limit = 4) {
+  if (!Number.isFinite(item?.similarity)) return;
   let index = 0;
   while (index < top.length && top[index].similarity >= item.similarity) index++;
   if (index >= limit) return;
@@ -113,21 +74,8 @@ function affinity(top) {
   let weight = 0;
   for (let index = 0; index < top.length; index++) {
     const current = weights[index] ?? .04;
-    total += top[index] * current;
+    total += top[index].similarity * current;
     weight += current;
-  }
-  return total / Math.max(.0001, weight);
-}
-
-function localAffinity(values) {
-  const ranked = values.filter(Number.isFinite).sort((a, b) => b - a).slice(0, 3);
-  if (!ranked.length) return -1;
-  const weights = [.50, .30, .20];
-  let total = 0;
-  let weight = 0;
-  for (let index = 0; index < ranked.length; index++) {
-    total += ranked[index] * weights[index];
-    weight += weights[index];
   }
   return total / Math.max(.0001, weight);
 }
@@ -145,37 +93,21 @@ function quantile(values, q) {
 
 function scoresAgainst(candidate, examples, skipHash = '') {
   const top = [];
-  const neighbors = [];
-  let bestHash = '';
-  let best = -1;
   for (const example of examples) {
     if (skipHash && example.hash === skipHash) continue;
-    const similarity = dot(candidate, example.record);
-    if (similarity > best) { best = similarity; bestHash = example.hash; }
-    insertTop(top, similarity);
-    insertNeighbor(neighbors, { hash:example.hash, similarity });
+    insertTop(top, {
+      hash:example.hash,
+      similarity:dot(candidate, example.record),
+      seedHash:example.seedHash || example.hash
+    });
   }
-  return { best, bestHash, affinity:affinity(top), top, neighbors };
-}
-
-function localScoresAgainst(candidate, examplesByHash, neighbors) {
-  if (!candidate || !neighbors?.length) return { best:-1, affinity:-1 };
-  const perRegion = [];
-  let best = -1;
-  for (let candidateRegion = 0; candidateRegion < candidate.regions; candidateRegion++) {
-    let regionBest = -1;
-    for (const neighbor of neighbors) {
-      const example = examplesByHash.get(neighbor.hash);
-      if (!example) continue;
-      for (let exampleRegion = 0; exampleRegion < example.regions; exampleRegion++) {
-        const similarity = localDot(candidate, candidateRegion, example, exampleRegion);
-        if (similarity > regionBest) regionBest = similarity;
-        if (similarity > best) best = similarity;
-      }
-    }
-    if (regionBest >= 0) perRegion.push(regionBest);
-  }
-  return { best, affinity:localAffinity(perRegion) };
+  return {
+    best:top[0]?.similarity ?? -1,
+    bestHash:top[0]?.hash || '',
+    bestSeed:top[0]?.seedHash || '',
+    affinity:affinity(top),
+    top
+  };
 }
 
 async function loadExamples(db, hashes) {
@@ -187,238 +119,8 @@ async function loadExamples(db, hashes) {
   await transactionDone(tx).catch(() => {});
   return rows.map(({ hash, row }) => {
     const value = record(row);
-    return value ? { hash, record:value } : null;
+    return value ? { hash, record:value, seedHash:hash } : null;
   }).filter(Boolean);
-}
-
-async function existingLocalHashes(db) {
-  const tx = db.transaction(EMBEDDINGS, 'readonly');
-  const keys = await requestResult(tx.objectStore(EMBEDDINGS).index('model').getAllKeys(IDBKeyRange.only(LOCAL_INDEX_VERSION)));
-  await transactionDone(tx).catch(() => {});
-  const prefix = `${LOCAL_INDEX_VERSION}:`;
-  const result = new Set();
-  for (const key of keys || []) {
-    const value = String(key || '');
-    if (value.startsWith(prefix)) result.add(value.slice(prefix.length));
-  }
-  return result;
-}
-
-async function loadLocalMap(db, allowed) {
-  const result = new Map();
-  const tx = db.transaction(EMBEDDINGS, 'readonly');
-  const request = tx.objectStore(EMBEDDINGS).index('model').openCursor(IDBKeyRange.only(LOCAL_INDEX_VERSION));
-  await new Promise((resolve, reject) => {
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      const cursor = request.result;
-      if (!cursor) return resolve();
-      const row = cursor.value;
-      if (!allowed || allowed.has(row.hash)) {
-        const value = localRecord(row);
-        if (value) result.set(String(row.hash), value);
-      }
-      cursor.continue();
-    };
-  });
-  await transactionDone(tx).catch(() => {});
-  return result;
-}
-
-function normalizeFloat(vector) {
-  let norm = 0;
-  for (const value of vector) norm += value * value;
-  norm = Math.sqrt(norm) || 1;
-  for (let index = 0; index < vector.length; index++) vector[index] /= norm;
-  return vector;
-}
-
-function quantizeFloat(vector) {
-  let maxAbs = 0;
-  for (const value of vector) maxAbs = Math.max(maxAbs, Math.abs(Number(value) || 0));
-  const multiplier = maxAbs > 0 ? 127 / maxAbs : 1;
-  const data = new Int8Array(vector.length);
-  let normSq = 0;
-  for (let index = 0; index < vector.length; index++) {
-    const value = Math.max(-127, Math.min(127, Math.round((Number(vector[index]) || 0) * multiplier)));
-    data[index] = value;
-    normSq += value * value;
-  }
-  return { data, normSq:Math.max(1, normSq) };
-}
-
-function denseLocalDescriptor(tensor) {
-  const data = tensor?.data || tensor?.cpuData;
-  const dims = Array.isArray(tensor?.dims) ? tensor.dims.map(Number) : [];
-  if (!data?.length || !dims.length) throw new Error('DINO returned no dense patch features');
-  const dimension = Number(dims.at(-1)) || 0;
-  if (!dimension) throw new Error('DINO returned invalid dense patch features');
-  const tokenCount = Math.floor(data.length / dimension);
-  let grid = tokenCount >= 196 ? 14 : Math.floor(Math.sqrt(tokenCount));
-  if (grid < 2) throw new Error('DINO returned too few patch features');
-  const patchCount = grid * grid;
-  const patchStart = Math.max(0, tokenCount - patchCount);
-
-  const bounds = [
-    [0, Math.ceil(grid / 2), 0, Math.ceil(grid / 2)],
-    [0, Math.ceil(grid / 2), Math.floor(grid / 2), grid],
-    [Math.floor(grid / 2), grid, 0, Math.ceil(grid / 2)],
-    [Math.floor(grid / 2), grid, Math.floor(grid / 2), grid],
-    [Math.floor(grid * .22), Math.ceil(grid * .78), Math.floor(grid * .22), Math.ceil(grid * .78)]
-  ];
-  const selected = Array.from({ length:LOCAL_DIMENSION }, (_, index) => Math.min(dimension - 1, Math.floor(index * dimension / LOCAL_DIMENSION)));
-  const packed = new Int8Array(LOCAL_REGIONS * LOCAL_DIMENSION);
-  const norms = new Float64Array(LOCAL_REGIONS);
-
-  for (let regionIndex = 0; regionIndex < bounds.length; regionIndex++) {
-    const [rowStart, rowEnd, colStart, colEnd] = bounds[regionIndex];
-    const region = new Float32Array(LOCAL_DIMENSION);
-    let count = 0;
-    for (let row = rowStart; row < rowEnd; row++) {
-      for (let col = colStart; col < colEnd; col++) {
-        const token = patchStart + row * grid + col;
-        const offset = token * dimension;
-        for (let index = 0; index < selected.length; index++) region[index] += Number(data[offset + selected[index]]) || 0;
-        count++;
-      }
-    }
-    if (count) {
-      const scale = 1 / count;
-      for (let index = 0; index < region.length; index++) region[index] *= scale;
-    }
-    normalizeFloat(region);
-    const quantized = quantizeFloat(region);
-    packed.set(quantized.data, regionIndex * LOCAL_DIMENSION);
-    norms[regionIndex] = quantized.normSq;
-  }
-
-  return { vector:packed, regionNormSq:norms, dimension:LOCAL_DIMENSION, regions:LOCAL_REGIONS };
-}
-
-function denseBatchDescriptors(output, expectedBatch) {
-  if (Array.isArray(output)) {
-    if (output.length !== expectedBatch) throw new Error(`DINO returned ${output.length} dense outputs for ${expectedBatch} images`);
-    return output.map(denseLocalDescriptor);
-  }
-  const data = output?.data || output?.cpuData;
-  const dims = Array.isArray(output?.dims) ? output.dims.map(Number) : [];
-  if (!data?.length) throw new Error('DINO returned unreadable dense features');
-  if (expectedBatch === 1) return [denseLocalDescriptor(output)];
-  if (!dims.length || dims[0] !== expectedBatch) throw new Error(`DINO dense output batch does not match input batch (${dims[0] || '?'} != ${expectedBatch})`);
-  const stride = Math.floor(data.length / expectedBatch);
-  const perImageDims = dims.slice(1);
-  const descriptors = [];
-  for (let index = 0; index < expectedBatch; index++) {
-    const slice = data.subarray ? data.subarray(index * stride, (index + 1) * stride) : data.slice(index * stride, (index + 1) * stride);
-    descriptors.push(denseLocalDescriptor({ data:slice, dims:perImageDims }));
-  }
-  return descriptors;
-}
-
-async function loadLocalRuntime(id) {
-  if (localRuntimePromise) return localRuntimePromise;
-  localRuntimePromise = (async () => {
-    const module = await import(TRANSFORMERS_URL);
-    const preferredDevice = self.navigator?.gpu ? 'webgpu' : 'wasm';
-    const load = async (device, dtype) => ({
-      extractor:await module.pipeline('image-feature-extraction', DINO_MODEL_ID, { device, dtype }),
-      RawImage:module.RawImage,
-      backend:device
-    });
-    progress(id, 0, 4, `Visual AI ${CLASSIFIER_VERSION} · loading dense DINO features…`);
-    try { return await load(preferredDevice, preferredDevice === 'webgpu' ? 'fp32' : 'q8'); }
-    catch (error) {
-      if (preferredDevice !== 'webgpu') throw error;
-      progress(id, 0, 4, `Visual AI ${CLASSIFIER_VERSION} · WebGPU dense load failed · using CPU`);
-      return load('wasm', 'q8');
-    }
-  })().catch(error => { localRuntimePromise = null; throw error; });
-  return localRuntimePromise;
-}
-
-async function inferLocalBatch(id, runtime, items) {
-  const loaded = [];
-  for (const item of items) {
-    try { loaded.push({ item, image:await runtime.RawImage.read(thumbUrl(item.hash)) }); }
-    catch {}
-  }
-  if (!loaded.length) return [];
-  aborted(id);
-  const images = loaded.map(item => item.image);
-  try {
-    const output = await runtime.extractor(images.length === 1 ? images[0] : images, { pool:false });
-    const descriptors = denseBatchDescriptors(output, loaded.length);
-    return loaded.map((entry, index) => ({ hash:entry.item.hash, descriptor:descriptors[index] }));
-  } catch (error) {
-    if (loaded.length === 1) throw error;
-    const result = [];
-    for (const entry of loaded) {
-      aborted(id);
-      try {
-        const output = await runtime.extractor(entry.image, { pool:false });
-        result.push({ hash:entry.item.hash, descriptor:denseBatchDescriptors(output, 1)[0] });
-      } catch {}
-    }
-    return result;
-  }
-}
-
-async function putLocalRows(db, entries) {
-  if (!entries.length) return;
-  const tx = db.transaction(EMBEDDINGS, 'readwrite');
-  const store = tx.objectStore(EMBEDDINGS);
-  const stamp = Date.now();
-  for (const entry of entries) {
-    store.put({
-      id:localEmbeddingId(entry.hash),
-      model:LOCAL_INDEX_VERSION,
-      modelKey:'dinov3-local',
-      hash:entry.hash,
-      schema:EMBEDDING_SCHEMA,
-      dimension:entry.descriptor.dimension,
-      regions:entry.descriptor.regions,
-      vector:entry.descriptor.vector,
-      regionNormSq:entry.descriptor.regionNormSq,
-      updatedAt:stamp
-    });
-  }
-  await transactionDone(tx);
-}
-
-async function ensureLocalEmbeddings(id, db, media) {
-  const unique = [];
-  const seen = new Set();
-  for (const file of media) {
-    const hash = String(file?.hash || '');
-    if (!/^[a-f0-9]{64}$/.test(hash) || seen.has(hash)) continue;
-    seen.add(hash);
-    unique.push({ hash });
-  }
-  const existing = await existingLocalHashes(db);
-  const missing = unique.filter(item => !existing.has(item.hash));
-  if (!missing.length) {
-    progress(id, 1, 4, `Visual AI ${CLASSIFIER_VERSION} · local patch index ready · ${unique.length.toLocaleString()} media`);
-    return;
-  }
-
-  const runtime = await loadLocalRuntime(id);
-  const batchSize = runtime.backend === 'webgpu' ? 4 : 1;
-  let completed = 0;
-  let indexed = 0;
-  for (let offset = 0; offset < missing.length; offset += batchSize) {
-    aborted(id);
-    const batch = missing.slice(offset, offset + batchSize);
-    const entries = await inferLocalBatch(id, runtime, batch);
-    await putLocalRows(db, entries);
-    indexed += entries.length;
-    completed += batch.length;
-    if (completed === missing.length || completed % 100 < batchSize) {
-      progress(id, 1, 4,
-        `Visual AI ${CLASSIFIER_VERSION} · building local patch index ${completed.toLocaleString()} / ${missing.length.toLocaleString()} · ${runtime.backend === 'webgpu' ? 'WebGPU' : 'CPU'}`);
-    }
-  }
-  progress(id, 1, 4,
-    `Visual AI ${CLASSIFIER_VERSION} · local patch index ready · ${indexed.toLocaleString()} new · ${unique.length.toLocaleString()} total media`);
 }
 
 function calibrate(positives, negatives) {
@@ -460,32 +162,106 @@ function calibrate(positives, negatives) {
   };
 }
 
-function calibrateLocal(positives, negatives, localMap) {
-  const localPositives = positives.filter(item => localMap.has(item.hash));
-  if (localPositives.length < 2) return { enabled:false, floor:1, marginFloor:null };
-  const affinities = [];
-  const margins = [];
+function evaluateDirect(candidate, positives, negatives, thresholds) {
+  const positive = scoresAgainst(candidate.record, positives);
+  const broadPositive = positive.affinity >= thresholds.affinityFloor;
+  const nearestPositive = positive.best >= thresholds.nearestFloor;
+  const negative = negatives.length ? scoresAgainst(candidate.record, negatives) : { best:-1, affinity:-1 };
+  const nearestMargin = negatives.length ? positive.best - negative.best : null;
+  const affinityMargin = negatives.length ? positive.affinity - negative.affinity : null;
+  const broadContrast = !negatives.length || (broadPositive && affinityMargin >= thresholds.affinityMarginFloor);
+  const nearestContrast = !negatives.length || (nearestPositive && nearestMargin >= thresholds.nearestMarginFloor);
+  const accepted = (broadPositive || nearestPositive)
+    && (broadContrast || nearestContrast)
+    && (!negatives.length || negative.best <= positive.best + .01);
 
-  for (const positive of localPositives) {
-    const local = localMap.get(positive.hash);
-    const positiveGlobal = scoresAgainst(positive.record, positives, positive.hash);
-    const positiveLocal = localScoresAgainst(local, localMap, positiveGlobal.neighbors);
-    if (positiveLocal.affinity >= 0) affinities.push(positiveLocal.affinity);
+  const positiveStrength = Math.max(
+    clamp((positive.best - thresholds.nearestFloor) / Math.max(.08, 1 - thresholds.nearestFloor)),
+    clamp((positive.affinity - thresholds.affinityFloor) / Math.max(.08, 1 - thresholds.affinityFloor))
+  );
+  const contrastStrength = negatives.length
+    ? Math.max(
+        clamp((nearestMargin - thresholds.nearestMarginFloor) / .14),
+        clamp((affinityMargin - thresholds.affinityMarginFloor) / .14)
+      )
+    : .5;
+  const confidence = clamp(.55 + positiveStrength * .31 + contrastStrength * .13, .55, .99);
 
-    if (negatives.length && positiveLocal.affinity >= 0) {
-      const negativeGlobal = scoresAgainst(positive.record, negatives);
-      const negativeLocal = localScoresAgainst(local, localMap, negativeGlobal.neighbors);
-      if (negativeLocal.affinity >= 0) margins.push(positiveLocal.affinity - negativeLocal.affinity);
-    }
+  return { accepted, positive, negative, nearestMargin, affinityMargin, confidence };
+}
+
+function selectBridges(directMatches, thresholds, negatives) {
+  const bySeed = new Map();
+  for (const item of directMatches) {
+    const seed = item.direct.positive.bestSeed || item.direct.positive.bestHash;
+    if (!seed) continue;
+    const strongSimilarity = item.direct.positive.best >= thresholds.nearestFloor + .035;
+    const strongAffinity = item.direct.positive.affinity >= thresholds.affinityFloor + .025;
+    const strongMargin = !negatives.length || (
+      item.direct.nearestMargin >= Math.max(.02, thresholds.nearestMarginFloor + .025)
+      || item.direct.affinityMargin >= Math.max(.02, thresholds.affinityMarginFloor + .025)
+    );
+    if (!(strongMargin && (strongSimilarity || strongAffinity))) continue;
+    const list = bySeed.get(seed) || [];
+    list.push(item);
+    bySeed.set(seed, list);
   }
 
-  return {
-    enabled:Boolean(affinities.length),
-    floor:clamp((quantile(affinities, .01) ?? .58) - .07, .24, .86),
-    marginFloor:negatives.length
-      ? clamp((quantile(margins, .05) ?? .01) - .04, -.04, .14)
-      : null
-  };
+  const bridges = [];
+  for (const [seedHash, items] of bySeed) {
+    items.sort((a, b) => b.direct.confidence - a.direct.confidence || b.direct.positive.best - a.direct.positive.best);
+    for (const item of items.slice(0, MAX_BRIDGES_PER_SEED)) {
+      bridges.push({ hash:item.hash, record:item.record, seedHash });
+    }
+  }
+  bridges.sort((a, b) => a.seedHash.localeCompare(b.seedHash) || a.hash.localeCompare(b.hash));
+  return bridges.slice(0, MAX_BRIDGES);
+}
+
+function distinctSeedSupport(top, minimumSimilarity) {
+  const seeds = new Set();
+  for (const item of top || []) {
+    if (item.similarity < minimumSimilarity) continue;
+    seeds.add(item.seedHash || item.hash);
+  }
+  return seeds.size;
+}
+
+function evaluateBridge(candidate, manual, bridges, negatives, thresholds) {
+  if (!bridges.length) return null;
+  const bridge = scoresAgainst(candidate.record, bridges);
+  const negative = manual.negative;
+
+  // Bridge rescue is deliberately narrower than the direct classifier. The
+  // candidate still has to be a plausible manual-positive near miss, and it
+  // must be supported by multiple independently-seeded bridge examples unless
+  // one bridge is exceptionally close.
+  const manualNear = manual.positive.best >= thresholds.nearestFloor - .14
+    || manual.positive.affinity >= thresholds.affinityFloor - .11;
+  if (!manualNear) return null;
+
+  const bridgeNearestFloor = Math.max(.28, thresholds.nearestFloor - .055);
+  const bridgeAffinityFloor = Math.max(.26, thresholds.affinityFloor - .045);
+  const support = distinctSeedSupport(bridge.top, bridgeNearestFloor - .015);
+  const exceptional = bridge.best >= thresholds.nearestFloor + .025;
+  const positiveEnough = bridge.best >= bridgeNearestFloor || bridge.affinity >= bridgeAffinityFloor;
+  if (!positiveEnough || (support < 2 && !exceptional)) return null;
+
+  const nearestMargin = negatives.length ? bridge.best - negative.best : null;
+  const affinityMargin = negatives.length ? bridge.affinity - negative.affinity : null;
+  if (negatives.length) {
+    const requiredNearestMargin = Math.max(.015, thresholds.nearestMarginFloor);
+    const requiredAffinityMargin = Math.max(.01, thresholds.affinityMarginFloor);
+    if (nearestMargin < requiredNearestMargin && affinityMargin < requiredAffinityMargin) return null;
+    if (negative.best > bridge.best + .005) return null;
+  }
+
+  const bridgeStrength = Math.max(
+    clamp((bridge.best - bridgeNearestFloor) / Math.max(.08, 1 - bridgeNearestFloor)),
+    clamp((bridge.affinity - bridgeAffinityFloor) / Math.max(.08, 1 - bridgeAffinityFloor))
+  );
+  const confidence = clamp(.56 + bridgeStrength * .27 + Math.min(3, support) * .035, .56, .92);
+  return { bridge, nearestMargin, affinityMargin, support, confidence };
 }
 
 async function classify(id, payload) {
@@ -498,29 +274,24 @@ async function classify(id, payload) {
 
   const db = await openDb();
   try {
-    progress(id, 0, 4, `Visual AI ${CLASSIFIER_VERSION} · preparing whole-image + local patch features…`);
-    await ensureLocalEmbeddings(id, db, media);
-    aborted(id);
-
-    const [positives, negatives, localMap] = await Promise.all([
+    progress(id, 0, 4, `Visual AI ${CLASSIFIER_VERSION} · loading labeled examples…`);
+    const [positives, negatives] = await Promise.all([
       loadExamples(db, positiveHashes),
-      loadExamples(db, negativeHashes),
-      loadLocalMap(db, allowed)
+      loadExamples(db, negativeHashes)
     ]);
     aborted(id);
     if (!positives.length) throw new Error('None of the positive examples have a DINO visual index.');
 
     const thresholds = calibrate(positives, negatives);
-    const localThresholds = calibrateLocal(positives, negatives, localMap);
-    progress(id, 2, 4,
-      `Visual AI ${CLASSIFIER_VERSION} · ${positives.length.toLocaleString()} positive · ${negatives.length.toLocaleString()} negative · exact global + local scan`);
-
     const excluded = new Set([...positiveHashes, ...negativeHashes]);
-    const matches = [];
+    const candidates = [];
     let scanned = 0;
+
+    progress(id, 1, 4,
+      `Visual AI ${CLASSIFIER_VERSION} · exact pass · ${positives.length.toLocaleString()} positive · ${negatives.length.toLocaleString()} negative`);
+
     const tx = db.transaction(EMBEDDINGS, 'readonly');
     const cursorRequest = tx.objectStore(EMBEDDINGS).index('model').openCursor(IDBKeyRange.only(DINO_INDEX_VERSION));
-
     await new Promise((resolve, reject) => {
       cursorRequest.onerror = () => reject(cursorRequest.error);
       cursorRequest.onsuccess = () => {
@@ -530,78 +301,17 @@ async function classify(id, payload) {
           if (!cursor) return resolve();
           const row = cursor.value;
           const hash = String(row?.hash || '');
-          if (!allowed.has(hash) || excluded.has(hash)) {
-            cursor.continue();
-            return;
-          }
-          const candidate = record(row);
-          if (!candidate) {
-            cursor.continue();
-            return;
-          }
-
-          const positive = scoresAgainst(candidate, positives);
-          const broadPositive = positive.affinity >= thresholds.affinityFloor;
-          const nearestPositive = positive.best >= thresholds.nearestFloor;
-          const candidateLocal = localMap.get(hash);
-          const positiveLocal = localThresholds.enabled && candidateLocal
-            ? localScoresAgainst(candidateLocal, localMap, positive.neighbors)
-            : { best:-1, affinity:-1 };
-          const localPositive = localThresholds.enabled && positiveLocal.affinity >= localThresholds.floor;
-          scanned++;
-
-          if (broadPositive || nearestPositive || localPositive) {
-            const negative = negatives.length ? scoresAgainst(candidate, negatives) : { best:-1, affinity:-1, neighbors:[] };
-            const nearestMargin = negatives.length ? positive.best - negative.best : null;
-            const affinityMargin = negatives.length ? positive.affinity - negative.affinity : null;
-            const broadContrast = !negatives.length || (broadPositive && affinityMargin >= thresholds.affinityMarginFloor);
-            const nearestContrast = !negatives.length || (nearestPositive && nearestMargin >= thresholds.nearestMarginFloor);
-
-            const negativeLocal = negatives.length && localThresholds.enabled && candidateLocal
-              ? localScoresAgainst(candidateLocal, localMap, negative.neighbors)
-              : { best:-1, affinity:-1 };
-            const localMargin = negatives.length && localPositive ? positiveLocal.affinity - negativeLocal.affinity : null;
-            const localContrast = localPositive && (!negatives.length || localMargin >= localThresholds.marginFloor);
-
-            // Global identity and local UI identity are independent rescue paths.
-            // A hard negative can veto the global path without erasing strong
-            // repeated local evidence from the positive examples.
-            const globalAccepted = (broadContrast || nearestContrast) && (!negatives.length || negative.best <= positive.best + .01);
-            if (globalAccepted || localContrast) {
-              const globalStrength = Math.max(
-                clamp((positive.best - thresholds.nearestFloor) / Math.max(.08, 1 - thresholds.nearestFloor)),
-                clamp((positive.affinity - thresholds.affinityFloor) / Math.max(.08, 1 - thresholds.affinityFloor))
-              );
-              const localStrength = localPositive
-                ? clamp((positiveLocal.affinity - localThresholds.floor) / Math.max(.08, 1 - localThresholds.floor))
-                : 0;
-              const contrastStrength = negatives.length
-                ? Math.max(
-                    clamp((nearestMargin - thresholds.nearestMarginFloor) / .14),
-                    clamp((affinityMargin - thresholds.affinityMarginFloor) / .14),
-                    localMargin == null ? 0 : clamp((localMargin - localThresholds.marginFloor) / .14)
-                  )
-                : .5;
-              const confidence = clamp(.55 + Math.max(globalStrength, localStrength) * .31 + contrastStrength * .13, .55, .99);
-              matches.push({
-                hash,
-                confidence,
-                similarity:positive.best,
-                affinity:positive.affinity,
-                localAffinity:positiveLocal.affinity,
-                nearestPositive:positive.bestHash,
-                negativeAffinity:negatives.length ? negative.affinity : null,
-                nearestMargin,
-                affinityMargin,
-                localMargin,
-                route:localContrast && !globalAccepted ? 'local' : 'global'
-              });
+          if (allowed.has(hash) && !excluded.has(hash)) {
+            const value = record(row);
+            if (value) {
+              const candidate = { hash, record:value };
+              candidate.direct = evaluateDirect(candidate, positives, negatives, thresholds);
+              candidates.push(candidate);
+              scanned++;
             }
           }
-
-          if (scanned && scanned % 250 === 0) {
-            progress(id, 3, 4,
-              `Visual AI ${CLASSIFIER_VERSION} · checked ${scanned.toLocaleString()} media · ${matches.length.toLocaleString()} matches`);
+          if (scanned && scanned % 500 === 0) {
+            progress(id, 1, 4, `Visual AI ${CLASSIFIER_VERSION} · exact pass ${scanned.toLocaleString()} checked`);
           }
           cursor.continue();
         } catch (error) { reject(error); }
@@ -610,27 +320,71 @@ async function classify(id, payload) {
     await transactionDone(tx).catch(() => {});
     aborted(id);
 
-    matches.sort((a, b) => b.confidence - a.confidence || b.localAffinity - a.localAffinity || b.similarity - a.similarity || a.hash.localeCompare(b.hash));
+    const directMatches = candidates.filter(item => item.direct.accepted);
+    const bridges = selectBridges(directMatches, thresholds, negatives);
+    progress(id, 2, 4,
+      `Visual AI ${CLASSIFIER_VERSION} · ${directMatches.length.toLocaleString()} direct · ${bridges.length.toLocaleString()} trusted bridges`);
+
+    const matches = [];
+    let rescued = 0;
+    for (let index = 0; index < candidates.length; index++) {
+      const candidate = candidates[index];
+      if (candidate.direct.accepted) {
+        matches.push({
+          hash:candidate.hash,
+          confidence:candidate.direct.confidence,
+          similarity:candidate.direct.positive.best,
+          affinity:candidate.direct.positive.affinity,
+          nearestPositive:candidate.direct.positive.bestHash,
+          nearestMargin:candidate.direct.nearestMargin,
+          affinityMargin:candidate.direct.affinityMargin,
+          via:'direct'
+        });
+      } else {
+        const bridgeResult = evaluateBridge(candidate, candidate.direct, bridges, negatives, thresholds);
+        if (bridgeResult) {
+          rescued++;
+          matches.push({
+            hash:candidate.hash,
+            confidence:bridgeResult.confidence,
+            similarity:bridgeResult.bridge.best,
+            affinity:bridgeResult.bridge.affinity,
+            nearestPositive:bridgeResult.bridge.bestHash,
+            nearestMargin:bridgeResult.nearestMargin,
+            affinityMargin:bridgeResult.affinityMargin,
+            bridgeSupport:bridgeResult.support,
+            via:'bridge'
+          });
+        }
+      }
+      if (index && index % 500 === 0) {
+        aborted(id);
+        progress(id, 3, 4,
+          `Visual AI ${CLASSIFIER_VERSION} · bridge pass ${index.toLocaleString()} / ${candidates.length.toLocaleString()} · ${rescued.toLocaleString()} rescued`);
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    }
+
+    matches.sort((a, b) => b.confidence - a.confidence || b.similarity - a.similarity || a.hash.localeCompare(b.hash));
     const truncated = matches.length > MAX_MATCHES;
     const resultMatches = matches.slice(0, MAX_MATCHES);
-    const localMatches = resultMatches.filter(item => item.route === 'local').length;
     const stats = {
       version:CLASSIFIER_VERSION,
       positiveExamples:positives.length,
       negativeExamples:negatives.length,
       scanned,
+      directMatches:directMatches.length,
+      bridges:bridges.length,
+      rescued,
       matches:resultMatches.length,
-      localRescues:localMatches,
       truncated,
       nearestFloor:Number(thresholds.nearestFloor.toFixed(3)),
       affinityFloor:Number(thresholds.affinityFloor.toFixed(3)),
-      localFloor:localThresholds.enabled ? Number(localThresholds.floor.toFixed(3)) : null,
       nearestMarginFloor:thresholds.nearestMarginFloor == null ? null : Number(thresholds.nearestMarginFloor.toFixed(3)),
-      affinityMarginFloor:thresholds.affinityMarginFloor == null ? null : Number(thresholds.affinityMarginFloor.toFixed(3)),
-      localMarginFloor:localThresholds.marginFloor == null ? null : Number(localThresholds.marginFloor.toFixed(3))
+      affinityMarginFloor:thresholds.affinityMarginFloor == null ? null : Number(thresholds.affinityMarginFloor.toFixed(3))
     };
     progress(id, 4, 4,
-      `Visual AI ${CLASSIFIER_VERSION} · ${resultMatches.length.toLocaleString()} matches · ${localMatches.toLocaleString()} rescued by local UI features · checked every indexed file${truncated ? ' · capped at 10,000' : ''}`);
+      `Visual AI ${CLASSIFIER_VERSION} · ${resultMatches.length.toLocaleString()} matches · ${directMatches.length.toLocaleString()} direct + ${rescued.toLocaleString()} bridge rescues · no local re-index${truncated ? ' · capped at 10,000' : ''}`);
     return { matches:resultMatches, stats };
   } finally {
     db.close();
