@@ -102,7 +102,7 @@ async function loadClassifier(id) {
     };
 
     if (canWebGpu) {
-      try { return await create('webgpu', 'q4f16'); }
+      try { return await create('webgpu', 'q4'); }
       catch (error) {
         progress(id, 'model', 0, 0, 'GPU model load failed · using CPU fallback');
       }
