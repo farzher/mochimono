@@ -120,7 +120,7 @@ function ensureIndexWorker() {
       if (data.aborted) error.name = 'AbortError';
       job.reject(error);
     } else {
-      if (['webgpu','wasm'].includes(data.result?.runtime?.backend) && job.model) { runtimeState.set(job.model, { ...data.result.runtime }); lastRuntimeModel = model; }
+      if (['webgpu','wasm'].includes(data.result?.runtime?.backend) && job.model) { runtimeState.set(job.model, { ...data.result.runtime }); lastRuntimeModel = job.model; }
       job.resolve(data.result);
     }
   };
