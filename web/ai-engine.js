@@ -120,7 +120,7 @@ function ensureIndexWorker() {
       if (data.aborted) error.name = 'AbortError';
       job.reject(error);
     } else {
-      if (['webgpu','wasm'].includes(data.result?.runtime?.backend) && job.model) { runtimeState.set(job.model, { ...data.result.runtime }); lastRuntimeModel = job.model; }
+      if (['webgpu','wasm'].includes(data.result?.runtime?.backend) && job.model) { runtimeState.set(job.model, { ...data.result.runtime }); lastRuntimeModel = model; }
       job.resolve(data.result);
     }
   };
@@ -264,9 +264,6 @@ async function classifyExact(positives, negatives = [], options = {}) {
   const media = options.scope === 'view' ? await currentViewMedia() : await catalogMedia();
   const positiveHashes = [...new Set((positives || []).map(String))];
   const negativeHashes = [...new Set((negatives || []).map(String))];
-
-  // Ensure the normal whole-image DINO index is current. The bridge classifier
-  // only compares saved vectors, so repeat runs stay fast and deterministic.
   await requestIndex('index', { model:'dinov3', media }, options);
   releaseIndexWorker();
   return requestOn(
