@@ -232,10 +232,6 @@ function evaluateBridge(candidate, manual, bridges, negatives, thresholds) {
   const bridge = scoresAgainst(candidate.record, bridges);
   const negative = manual.negative;
 
-  // Bridge rescue is deliberately narrower than the direct classifier. The
-  // candidate still has to be a plausible manual-positive near miss, and it
-  // must be supported by multiple independently-seeded bridge examples unless
-  // one bridge is exceptionally close.
   const manualNear = manual.positive.best >= thresholds.nearestFloor - .14
     || manual.positive.affinity >= thresholds.affinityFloor - .11;
   if (!manualNear) return null;
