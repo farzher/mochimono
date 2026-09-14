@@ -1,10 +1,18 @@
 const WORKER_URL = new URL('./ai-sensitive-worker.js?v=falconsai-nsfw-v1', import.meta.url);
-const THRESHOLD = .65;
+const THRESHOLD_KEY = 'mochimono-sensitive-threshold';
+const DEFAULT_THRESHOLD = .65;
 
+let threshold = clampThreshold(localStorage.getItem(THRESHOLD_KEY));
 let worker = null;
 let sequence = 0;
 let busy = false;
 const pending = new Map();
+
+function clampThreshold(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return DEFAULT_THRESHOLD;
+  return Math.max(.5, Math.min(.95, number));
+}
 
 function requestJson(url, options = {}) {
   return fetch(url, {
@@ -63,7 +71,7 @@ function classify(media, options = {}) {
   const id = `sensitive-${Date.now().toString(36)}-${(++sequence).toString(36)}`;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject, onProgress:options.onProgress });
-    try { target.postMessage({ id, action:'sensitive', payload:{ media, threshold:THRESHOLD } }); }
+    try { target.postMessage({ id, action:'sensitive', payload:{ media, threshold } }); }
     catch (error) { pending.delete(id); reject(error); }
   });
 }
@@ -125,7 +133,7 @@ async function runSensitiveScan({ openManager = false } = {}) {
     });
     const matches = (result?.matches || [])
       .filter(item => !negatives.has(String(item.hash)))
-      .map(item => ({ hash:String(item.hash), confidence:Number(item.confidence) || THRESHOLD }));
+      .map(item => ({ hash:String(item.hash), confidence:Number(item.confidence) || threshold }));
     const stats = result?.stats || {};
     const runtime = result?.runtime || {};
 
@@ -141,6 +149,7 @@ async function runSensitiveScan({ openManager = false } = {}) {
     const backend = runtime.backend === 'webgpu' ? 'GPU' : runtime.backend === 'wasm' ? 'CPU' : 'cache';
     const parts = [
       `${Number(applied.count || 0).toLocaleString()} sensitive items marked`,
+      `${Math.round(threshold * 100)}% threshold`,
       classified ? `${classified.toLocaleString()} scanned` : '',
       cached ? `${cached.toLocaleString()} cached` : '',
       failed ? `${failed.toLocaleString()} skipped` : '',
@@ -162,8 +171,6 @@ async function runSensitiveScan({ openManager = false } = {}) {
   }
 }
 
-// The legacy tags module owns these buttons. Intercept them before its old
-// semantic-prompt scan runs, then route them through the dedicated classifier.
 document.addEventListener('click', event => {
   const button = event.target.closest?.('[data-scan-sensitive],[data-tag-sensitive-scan]');
   if (!button) return;
@@ -177,5 +184,11 @@ if (window.mochimonoTags) window.mochimonoTags.scanSensitive = () => runSensitiv
 window.mochimonoSensitiveScan = {
   run:runSensitiveScan,
   busy:() => busy,
-  threshold:THRESHOLD
+  threshold:() => threshold,
+  setThreshold(value) {
+    threshold = clampThreshold(value);
+    localStorage.setItem(THRESHOLD_KEY, String(threshold));
+    window.dispatchEvent(new CustomEvent('mochimono:sensitive-threshold', { detail:{ threshold } }));
+    return threshold;
+  }
 };
