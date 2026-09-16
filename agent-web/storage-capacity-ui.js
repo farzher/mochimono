@@ -17,7 +17,17 @@ if (storagePane) {
 
   function bytes(number) { const units=['B','KB','MB','GB','TB','PB']; let value=Math.max(0,Number(number)||0),unit=0; while(value>=1000&&unit<units.length-1){value/=1000;unit++;} return `${value<10&&unit?value.toFixed(1):Math.round(value)} ${units[unit]}`; }
   async function read(url){const response=await fetch(url,{cache:'no-store'});if(!response.ok)throw new Error(response.statusText);return response.json();}
+  const pathKey = value => String(value || '').trim().replace(/[\\/]+$/, '').toLowerCase();
   const byId = id => locations.find(item => String(item.id) === String(id));
+  function byUiId(id, type = '') {
+    const exact = byId(id);
+    if (exact) return exact;
+    if (type === 'backup') {
+      const path = String(id || '').replace(/^backup:\d+:/, '');
+      return locations.find(item => item.type === 'backup' && pathKey(item.path) === pathKey(path));
+    }
+    return null;
+  }
 
   function capacityState(location) {
     if (!location?.online) return null;
@@ -38,7 +48,7 @@ if (storagePane) {
   function decorateCards() {
     for (const card of storagePane.querySelectorAll('.managed-storage-card[data-location-id]')) {
       card.querySelector('[data-capacity-note]')?.remove();
-      const location = byId(card.dataset.locationId);
+      const location = byUiId(card.dataset.locationId, card.dataset.locationType);
       const state = capacityState(location);
       if (!state) continue;
       const note = document.createElement('span');
@@ -54,7 +64,8 @@ if (storagePane) {
     const dialog = document.querySelector('.storage-location-dialog[open][data-location-id]');
     if (!dialog) return;
     dialog.querySelector('[data-capacity-guidance]')?.remove();
-    const location = byId(dialog.dataset.locationId);
+    const card = storagePane.querySelector(`.managed-storage-card[data-location-id="${CSS.escape(dialog.dataset.locationId)}"]`);
+    const location = byUiId(dialog.dataset.locationId, card?.dataset.locationType || '');
     const state = capacityState(location);
     if (!state) return;
     const node = document.createElement('div');
