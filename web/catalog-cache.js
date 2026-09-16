@@ -1,12 +1,10 @@
 import './startup-geometry.js';
 
 const DB_NAME = 'mochimono-library';
-const DB_VERSION = 2;
-const SCHEMA = 2;
+const DB_VERSION = 1;
+const SCHEMA = 1;
 const META_KEY = 'catalog';
 const WRITE_BATCH = 1500;
-const READ_PARALLELISM = 4;
-const HASH_PREFIXES = '0123456789abcdef';
 const QUICK_FILES = 600;
 const QUICK_MEDIA = 5000;
 const CLIENT = document.documentElement.classList.contains('client-library');
@@ -44,8 +42,7 @@ document.head.append(startupStyle);
 if (CLIENT) document.documentElement.classList.add('mochimono-quick-grid-pending');
 
 function enqueueWrite(work) {
-  const run = () => work();
-  const result = writeChain.then(run, run);
+  const result = writeChain.then(work, work);
   writeChain = result.catch(() => {});
   return result;
 }
@@ -57,9 +54,6 @@ function openDb() {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
-      // This is acceleration data, not user data. A cache schema change is a
-      // clean reset so release builds never carry browser-cache migrations.
-      for (const name of [...db.objectStoreNames]) db.deleteObjectStore(name);
       db.createObjectStore('files', { keyPath:'hash' });
       db.createObjectStore('meta', { keyPath:'key' });
     };
@@ -72,45 +66,28 @@ function openDb() {
   return dbPromise;
 }
 
-function publicFile(file) {
-  if (!file) return file;
-  const { __snapshot, ...clean } = file;
-  return clean;
-}
-
 function mergeGeometry(file) {
-  const hash = String(file?.hash || '');
+  if (!file) return file;
   if (Number(file.width) > 0 && Number(file.height) > 0) return file;
+  const hash = String(file.hash || '');
   const startup = window.mochimonoStartupGeometry?.get?.(hash);
   if (startup?.width && startup?.height) return { ...file, width:startup.width, height:startup.height };
   const pending = pendingGeometry.get(hash);
   if (pending?.width && pending?.height) return { ...file, width:pending.width, height:pending.height };
   const previous = records.get(hash);
-  if (!(Number(previous?.width) > 0 && Number(previous?.height) > 0)) return file;
-  return { ...file, width:Number(previous.width), height:Number(previous.height) };
+  if (Number(previous?.width) > 0 && Number(previous?.height) > 0) return { ...file, width:Number(previous.width), height:Number(previous.height) };
+  return file;
 }
 
-function validMeta(value) {
-  return Boolean(value && value.schema === SCHEMA && value.version);
-}
-
-function memorySnapshot() {
-  if (!meta?.version || records.size !== Number(meta.count || 0)) return null;
-  return {
-    version:String(meta.version),
-    imports:Array.isArray(meta.imports) ? meta.imports : [],
-    files:[...records.values()].map(file => mergeGeometry(file)),
-    savedAt:Number(meta.savedAt) || 0
-  };
-}
+const validMeta = value => Boolean(value && value.schema === SCHEMA && value.version && Number(value.count) >= 0);
 
 function quickSnapshot(value = meta) {
-  if (!validMeta(value) || !Array.isArray(value.quickFiles) || !value.quickFiles.length) return null;
+  if (!validMeta(value) || !Array.isArray(value.quickFiles)) return null;
   return {
     version:String(value.version),
     imports:Array.isArray(value.imports) ? value.imports : [],
-    files:value.quickFiles.map(file => mergeGeometry(file)),
-    totalCount:Number(value.count) || value.quickFiles.length,
+    files:value.quickFiles.map(mergeGeometry),
+    totalCount:Number(value.count) || 0,
     savedAt:Number(value.savedAt) || 0,
     partial:true
   };
@@ -129,68 +106,30 @@ async function loadQuick() {
   const started = performance.now();
   const db = await openDb();
   if (!db) return quickSnapshot();
-  const storedMeta = validMeta(meta) ? meta : await readMeta(db);
-  if (!storedMeta) return null;
-  meta = storedMeta;
-  const snapshot = quickSnapshot(storedMeta);
+  meta = validMeta(meta) ? meta : await readMeta(db);
   lastQuickLoadMs = performance.now() - started;
-  return snapshot;
+  return quickSnapshot(meta);
 }
 
-async function readPrefix(db, prefix, version) {
-  const transaction = db.transaction('files', 'readonly');
-  const done = transactionDone(transaction);
-  const store = transaction.objectStore('files');
-  const range = IDBKeyRange.bound(prefix, `${prefix}\uffff`);
-  const rows = await requestResult(store.getAll(range));
-  await done;
-
-  const files = [];
-  for (const file of rows) {
-    if (file?.__snapshot !== version) continue;
-    delete file.__snapshot;
-    files.push(file);
-  }
-  return files;
-}
-
-async function readFilesParallel(db, version) {
-  const files = [];
-  let cursor = 0;
-  const workers = Array.from({ length:READ_PARALLELISM }, async () => {
-    while (cursor < HASH_PREFIXES.length) {
-      const prefix = HASH_PREFIXES[cursor++];
-      files.push(...await readPrefix(db, prefix, version));
-    }
-  });
-  await Promise.all(workers);
-  return files;
-}
-
-async function loadFromDb(knownMeta = null) {
+async function loadFromDb() {
   const started = performance.now();
   const db = await openDb();
   if (!db) return null;
-  const storedMeta = validMeta(knownMeta) ? knownMeta : await readMeta(db);
+  const storedMeta = validMeta(meta) ? meta : await readMeta(db);
   if (!storedMeta) return null;
-
-  const files = await readFilesParallel(db, String(storedMeta.version));
-  if (files.length !== Number(storedMeta.count || 0)) return null;
+  const transaction = db.transaction('files', 'readonly');
+  const done = transactionDone(transaction);
+  const files = await requestResult(transaction.objectStore('files').getAll()).catch(() => []);
+  await done.catch(() => {});
+  if (files.length !== Number(storedMeta.count)) return null;
+  const next = files.map(mergeGeometry);
+  records = new Map(next.map(file => [String(file.hash), file]));
   meta = storedMeta;
-
-  const nextRecords = new Map();
-  for (let index = 0; index < files.length; index++) {
-    const file = mergeGeometry(files[index]);
-    files[index] = file;
-    nextRecords.set(String(file.hash), file);
-  }
-  records = nextRecords;
   lastFullLoadMs = performance.now() - started;
-
   return {
     version:String(storedMeta.version),
     imports:Array.isArray(storedMeta.imports) ? storedMeta.imports : [],
-    files,
+    files:next,
     savedAt:Number(storedMeta.savedAt) || 0
   };
 }
@@ -203,13 +142,12 @@ function waitForQuickGrid() {
     const finish = () => {
       if (settled) return;
       settled = true;
-      window.removeEventListener('mochimono:stable-grid-installed', onGrid);
+      window.removeEventListener('mochimono:stable-grid-installed', finish);
       clearTimeout(timer);
       paintTurn().then(resolve);
     };
-    const onGrid = () => finish();
     const timer = setTimeout(finish, 900);
-    window.addEventListener('mochimono:stable-grid-installed', onGrid, { once:true });
+    window.addEventListener('mochimono:stable-grid-installed', finish, { once:true });
   });
 }
 
@@ -223,21 +161,17 @@ async function installQuickPreview(snapshot) {
     document.documentElement.classList.remove('mochimono-quick-grid-pending');
     return false;
   }
-
-  const login = document.querySelector('#login');
+  document.querySelector('#login')?.setAttribute('hidden', '');
   const app = document.querySelector('#app');
   const logout = document.querySelector('#logout');
-  if (login) login.hidden = true;
   if (app) app.hidden = false;
   if (logout) logout.hidden = false;
-
   try {
     library.upsertMany(snapshot.files);
     await waitForQuickGrid();
   } finally {
     document.documentElement.classList.remove('mochimono-quick-grid-pending');
   }
-
   window.dispatchEvent(new CustomEvent('mochimono:catalog-quick-restored', {
     detail:{ count:snapshot.files.length, totalCount:snapshot.totalCount, version:snapshot.version }
   }));
@@ -245,20 +179,16 @@ async function installQuickPreview(snapshot) {
 }
 
 async function load() {
-  const memory = memorySnapshot();
-  if (memory) {
+  if (meta?.version && records.size === Number(meta.count)) {
     document.documentElement.classList.remove('mochimono-quick-grid-pending');
-    return memory;
+    return { version:String(meta.version), imports:meta.imports || [], files:[...records.values()], savedAt:Number(meta.savedAt) || 0 };
   }
   if (!loadPromise) {
     loadPromise = (async () => {
       const quick = await loadQuick().catch(() => null);
       if (!quick) document.documentElement.classList.remove('mochimono-quick-grid-pending');
-      await installQuickPreview(quick).catch(() => {
-        document.documentElement.classList.remove('mochimono-quick-grid-pending');
-        return false;
-      });
-      return loadFromDb(meta);
+      await installQuickPreview(quick).catch(() => document.documentElement.classList.remove('mochimono-quick-grid-pending'));
+      return loadFromDb();
     })().finally(() => { loadPromise = null; });
   }
   return loadPromise;
@@ -272,21 +202,20 @@ function isMediaFile(file) {
   return MEDIA_EXTENSIONS.has(extension);
 }
 
-function quickFiles(files) {
+function selectQuickFiles(files) {
   const sorted = [...files].sort((a, b) => {
     const aDate = Number(a.dateMs) || Date.parse(a.fileDate || a.createdAt || 0) || 0;
     const bDate = Number(b.dateMs) || Date.parse(b.fileDate || b.createdAt || 0) || 0;
     return bDate - aDate || String(a.hash || '').localeCompare(String(b.hash || ''));
   });
-  const selected = new Map();
-  for (const file of sorted.slice(0, QUICK_FILES)) selected.set(String(file.hash), file);
+  const selected = new Map(sorted.slice(0, QUICK_FILES).map(file => [String(file.hash), file]));
   let media = 0;
   for (const file of sorted) {
     if (!isMediaFile(file)) continue;
     selected.set(String(file.hash), file);
     if (++media >= QUICK_MEDIA) break;
   }
-  return [...selected.values()].map(publicFile);
+  return [...selected.values()];
 }
 
 function save(files, options = {}) {
@@ -295,20 +224,21 @@ function save(files, options = {}) {
 
 async function saveNow(files, options = {}) {
   const db = await openDb();
-  if (!db || !Array.isArray(files)) return;
   const version = String(options.version || '');
-  if (!version) return;
+  if (!db || !version || !Array.isArray(files)) return;
+  const clean = files.filter(file => /^[a-f0-9]{64}$/.test(String(file?.hash || ''))).map(mergeGeometry);
 
-  const clean = files
-    .filter(file => /^[a-f0-9]{64}$/.test(String(file?.hash || '')))
-    .map(file => mergeGeometry(publicFile(file)));
-
+  {
+    const transaction = db.transaction(['files', 'meta'], 'readwrite');
+    transaction.objectStore('files').clear();
+    transaction.objectStore('meta').clear();
+    await transactionDone(transaction);
+  }
   for (let offset = 0; offset < clean.length; offset += WRITE_BATCH) {
     const transaction = db.transaction('files', 'readwrite');
-    const done = transactionDone(transaction);
     const store = transaction.objectStore('files');
-    for (const file of clean.slice(offset, offset + WRITE_BATCH)) store.put({ ...file, __snapshot:version });
-    await done;
+    for (const file of clean.slice(offset, offset + WRITE_BATCH)) store.put(file);
+    await transactionDone(transaction);
     await idle();
   }
 
@@ -318,43 +248,16 @@ async function saveNow(files, options = {}) {
     version,
     imports:Array.isArray(options.imports) ? options.imports : [],
     count:clean.length,
-    quickFiles:quickFiles(clean),
+    quickFiles:selectQuickFiles(clean),
     savedAt:Date.now()
   };
   {
     const transaction = db.transaction('meta', 'readwrite');
-    const done = transactionDone(transaction);
     transaction.objectStore('meta').put(nextMeta);
-    await done;
+    await transactionDone(transaction);
   }
-
   meta = nextMeta;
   records = new Map(clean.map(file => [String(file.hash), file]));
-  for (const file of clean) {
-    const geometry = pendingGeometry.get(String(file.hash));
-    if (geometry && Number(file.width) === geometry.width && Number(file.height) === geometry.height) pendingGeometry.delete(String(file.hash));
-  }
-  idle().then(() => enqueueWrite(() => cleanupOldSnapshots(version))).catch(() => {});
-}
-
-async function cleanupOldSnapshots(version) {
-  if (meta?.version !== version) return;
-  const db = await openDb();
-  if (!db || meta?.version !== version) return;
-  const transaction = db.transaction('files', 'readwrite');
-  const done = transactionDone(transaction);
-  const store = transaction.objectStore('files');
-  await new Promise((resolve, reject) => {
-    const request = store.openCursor();
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      const cursor = request.result;
-      if (!cursor) return resolve();
-      if (cursor.value?.__snapshot !== version) cursor.delete();
-      cursor.continue();
-    };
-  });
-  await done;
 }
 
 function scheduleGeometryWrite() {
@@ -375,14 +278,11 @@ async function flushDimensionsNow() {
   if (!pendingGeometry.size) return;
   if (!records.size) await load().catch(() => null);
   if (!records.size) return;
-
   const batch = [...pendingGeometry];
   pendingGeometry.clear();
   const db = await openDb();
   if (!db) return;
-
   const transaction = db.transaction(['files', 'meta'], 'readwrite');
-  const done = transactionDone(transaction);
   const store = transaction.objectStore('files');
   const changed = new Map();
   for (const [hash, geometry] of batch) {
@@ -391,19 +291,19 @@ async function flushDimensionsNow() {
     const next = { ...previous, width:geometry.width, height:geometry.height };
     records.set(hash, next);
     changed.set(hash, geometry);
-    store.put({ ...next, __snapshot:meta?.version || '' });
+    store.put(next);
   }
-
   if (changed.size && meta?.version && Array.isArray(meta.quickFiles)) {
-    const nextQuick = meta.quickFiles.map(file => {
-      const geometry = changed.get(String(file.hash || ''));
-      return geometry ? { ...file, width:geometry.width, height:geometry.height } : file;
-    });
-    meta = { ...meta, quickFiles:nextQuick };
+    meta = {
+      ...meta,
+      quickFiles:meta.quickFiles.map(file => {
+        const geometry = changed.get(String(file.hash || ''));
+        return geometry ? { ...file, width:geometry.width, height:geometry.height } : file;
+      })
+    };
     transaction.objectStore('meta').put(meta);
   }
-
-  await done.catch(() => {});
+  await transactionDone(transaction).catch(() => {});
   if (pendingGeometry.size) scheduleGeometryWrite();
 }
 
@@ -412,7 +312,6 @@ function rememberDimensions(hash, width, height) {
   width = Number(width) || 0;
   height = Number(height) || 0;
   if (!hash || !width || !height) return;
-
   const previous = records.get(hash);
   if (previous && Number(previous.width) === width && Number(previous.height) === height) return;
   if (previous) records.set(hash, { ...previous, width, height });
@@ -435,10 +334,9 @@ async function clearNow() {
   const db = await openDb();
   if (!db) return;
   const transaction = db.transaction(['files', 'meta'], 'readwrite');
-  const done = transactionDone(transaction);
   transaction.objectStore('files').clear();
   transaction.objectStore('meta').clear();
-  await done;
+  await transactionDone(transaction);
   meta = null;
   records.clear();
 }
