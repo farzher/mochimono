@@ -45,8 +45,8 @@ if (storagePane) {
       return null;
     }
     if (location.type === 'backup') {
-      if (free <= lowThreshold) return { tone:'low', short:`Backup space low · ${bytes(free)} free`, detail:'This backup drive is nearly full. Mochimono will keep its existing verified copies, but add or free storage before relying on it for more Protection work.' };
-      if (libraryBytes && capacity && capacity < libraryBytes) return { tone:'partial', short:`Smaller than library · ${bytes(free)} free`, detail:`This drive cannot hold the full ${bytes(libraryBytes)} Cloud library. Protection can still combine multiple destinations, but local backup-drive filling is not yet as flexible as Friend Drive filling.` };
+      if (free <= lowThreshold) return { tone:'partial', short:`Nearly full · ${bytes(free)} free`, detail:'This backup drive can still protect copies that fit. Mochimono keeps scanning for useful files that fit and leaves the remaining Protection work for other destinations.' };
+      if (libraryBytes && capacity && capacity < libraryBytes) return { tone:'partial', short:`Partial capacity · ${bytes(free)} free`, detail:`This drive is smaller than the ${bytes(libraryBytes)} Cloud library. That is okay: Protection fills useful verified copies here and uses other destinations for the rest.` };
     }
     return null;
   }
@@ -77,7 +77,7 @@ if (storagePane) {
     const node = document.createElement('div');
     node.dataset.capacityGuidance = '1';
     node.className = 'storage-capacity-guidance';
-    node.innerHTML = `<strong>${state.tone === 'low' ? 'Space needs attention.' : location?.type === 'friend' ? 'Partial storage is supported.' : 'Capacity is limited.'}</strong> ${state.detail}`;
+    node.innerHTML = `<strong>${state.tone === 'low' ? 'Space needs attention.' : 'Partial storage is supported.'}</strong> ${state.detail}`;
     const actions = dialog.querySelector('.storage-location-actions');
     actions?.before(node);
     if (!actions) dialog.querySelector('.storage-location-inspect')?.append(node);

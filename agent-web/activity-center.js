@@ -68,18 +68,20 @@ if (activityHost) {
 
   function progress(job){
     const p=job?.progress||{};
+    const finished=job?.status&&job.status!=='running'&&job.status!=='queued';
     const totalBytes=Number(p.totalBytes)||0,doneBytes=Math.min(totalBytes,Number(p.doneBytes)||Number(p.copiedBytes)||0);
     const total=Number(p.total)||0,checked=Number(p.checked??p.hashed??p.scanned)||0;
     const percent=totalBytes?doneBytes/totalBytes*100:total?checked/total*100:null;
     const details=[];
-    if(p.phase)details.push(p.phase);
+    const phase=finished&&job?.type==='protection'&&String(p.phase||'').startsWith('Protected what fits')?'Done':p.phase;
+    if(phase)details.push(phase);
     if(totalBytes)details.push(`${bytes(doneBytes)} / ${bytes(totalBytes)}`);
     else if(total)details.push(`${checked.toLocaleString()} / ${total.toLocaleString()}`);
     else if(p.scanned!=null)details.push(`${Number(p.scanned).toLocaleString()} files`);
     if(p.copied!=null)details.push(`${Number(p.copied).toLocaleString()} copied`);
     if(p.already!=null)details.push(`${Number(p.already).toLocaleString()} already there`);
-    if(p.skipped!=null&&Number(p.skipped)>0)details.push(`${Number(p.skipped).toLocaleString()} waiting for other storage`);
-    if(p.remainingCapacityBytes!=null)details.push(`${bytes(p.remainingCapacityBytes)} free`);
+    if(!finished&&p.skipped!=null&&Number(p.skipped)>0)details.push(`${Number(p.skipped).toLocaleString()} waiting for other storage`);
+    if(!finished&&p.remainingCapacityBytes!=null)details.push(`${bytes(p.remainingCapacityBytes)} free`);
     if(p.speedBps>0)details.push(`${bytes(p.speedBps)}/s`);
     if(p.etaSeconds>0)details.push(`${duration(p.etaSeconds)} left`);
     return {percent,details:details.join(' · '),current:p.current||'',indeterminate:Boolean(p.indeterminate)||percent==null};
