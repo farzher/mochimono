@@ -174,18 +174,37 @@ function sourceCopies(hash) {
     remote: Boolean(row.remote),
     encrypted: Boolean(row.encrypted),
     verified: Boolean(row.verifiedAt),
-    verifiedAt: row.verifiedAt
+    verifiedAt: row.verifiedAt,
+    representation: 'original'
   }));
 }
 
 function backupCopies(hash) {
   return db.prepare(`
     SELECT r.drive_id AS id,r.verified_at AS verifiedAt,d.name,d.last_seen AS lastSeen,
-           sl.kind,sl.device_name AS deviceName,sl.site,sl.reliability,sl.remote,sl.encrypted
+           sl.kind,sl.device_name AS deviceName,sl.site,sl.reliability,sl.remote,sl.encrypted,
+           'original' AS representation
     FROM replicas r JOIN drives d ON d.id=r.drive_id
     LEFT JOIN storage_locations sl ON sl.id=r.drive_id
-    WHERE r.object_hash=? ORDER BY d.name
-  `).all(hash).map(row => ({
+    WHERE r.object_hash=?
+
+    UNION ALL
+
+    SELECT substr(rp.location_id,8) AS id,rp.verified_at AS verifiedAt,d.name,d.last_seen AS lastSeen,
+           sl.kind,sl.device_name AS deviceName,sl.site,sl.reliability,sl.remote,sl.encrypted,
+           'compact' AS representation
+    FROM representation_presence rp
+    JOIN drives d ON rp.location_id=('backup:' || d.id)
+    JOIN objects o ON o.hash=rp.original_hash
+    JOIN representation_policies p ON p.location_id=rp.location_id
+      AND p.media_type=CASE WHEN o.mime LIKE 'image/%' THEN 'image' WHEN o.mime LIKE 'video/%' THEN 'video' ELSE '' END
+      AND p.representation='compact'
+    JOIN representation_retention rr ON rr.location_id=p.location_id AND rr.media_type=p.media_type AND rr.allow_original_removal=1
+    LEFT JOIN storage_locations sl ON sl.id=d.id
+    LEFT JOIN replicas existing ON existing.object_hash=rp.original_hash AND existing.drive_id=d.id
+    WHERE rp.original_hash=? AND rp.representation='compact' AND rp.verified_at IS NOT NULL AND existing.object_hash IS NULL
+    ORDER BY name
+  `).all(hash, hash).map(row => ({
     id: row.id,
     kind: row.kind || 'backup',
     name: row.name,
@@ -196,14 +215,16 @@ function backupCopies(hash) {
     encrypted: Boolean(row.encrypted),
     verified: Boolean(row.verifiedAt),
     verifiedAt: row.verifiedAt,
-    lastSeen: row.lastSeen
+    lastSeen: row.lastSeen,
+    representation: row.representation,
+    reducedFidelity: row.representation === 'compact'
   }));
 }
 
 function primaryCopy(hash) {
   const integrity = db.prepare('SELECT status,verified_at AS verifiedAt FROM object_integrity WHERE hash=?').get(hash);
   if (integrity && integrity.status !== 'healthy') return null;
-  return { ...primaryLocation(), verified: true, verifiedAt: integrity?.verifiedAt || null };
+  return { ...primaryLocation(), verified: true, verifiedAt: integrity?.verifiedAt || null, representation: 'original' };
 }
 
 function evaluate(level, copies) {
@@ -223,17 +244,20 @@ function evaluate(level, copies) {
     copies: copies.length,
     verified: copies.filter(copy => copy.verified).length,
     qualifyingCopies: qualified.length,
+    originals: qualified.filter(copy => copy.representation !== 'compact').length,
+    reducedFidelity: qualified.filter(copy => copy.representation === 'compact').length,
     devices: devices.size,
     sites: sites.size,
     remote
   };
   const missing = {
     copies: Math.max(0, target.copies - status.qualifyingCopies),
+    originals: Math.max(0, 1 - status.originals),
     devices: Math.max(0, target.devices - status.devices),
     remote: Math.max(0, target.remote - status.remote),
     sites: Math.max(0, target.sites - status.sites)
   };
-  return { target, status, missing, meets: !missing.copies && !missing.devices && !missing.remote && !missing.sites };
+  return { target, status, missing, meets: !missing.copies && !missing.originals && !missing.devices && !missing.remote && !missing.sites };
 }
 
 function protectionState(hash, { excludeSourceDevice = '' } = {}) {
@@ -278,11 +302,11 @@ function protectionSummary(force = false) {
   const addCopy = (hash, copy) => {
     let copies = copiesByHash.get(hash);
     if (!copies) copiesByHash.set(hash, copies = []);
-    copies.push(copy);
+    if (!copies.some(existing => existing.id === copy.id)) copies.push(copy);
   };
   const primary = primaryLocation();
   const bad = new Set(db.prepare("SELECT hash FROM object_integrity WHERE status!='healthy'").all().map(row => row.hash));
-  for (const object of objects) if (!bad.has(object.hash)) addCopy(object.hash, { ...primary, verified: true });
+  for (const object of objects) if (!bad.has(object.hash)) addCopy(object.hash, { ...primary, verified: true, representation: 'original' });
 
   for (const row of db.prepare(`
     SELECT sr.object_hash AS hash,sr.device_name AS deviceName,sr.site,sr.reliability,sr.verified_at AS verifiedAt,
@@ -291,7 +315,7 @@ function protectionSummary(force = false) {
   `).all()) addCopy(row.hash, {
     id: `source:${row.deviceName}`, kind: 'source', name: row.name || row.deviceName,
     deviceName: row.deviceName, site: row.site || row.deviceName, reliability: row.reliability || 'normal',
-    remote: Boolean(row.remote), encrypted: Boolean(row.encrypted), verified: Boolean(row.verifiedAt)
+    remote: Boolean(row.remote), encrypted: Boolean(row.encrypted), verified: Boolean(row.verifiedAt), representation: 'original'
   });
 
   for (const row of db.prepare(`
@@ -301,7 +325,27 @@ function protectionSummary(force = false) {
   `).all()) addCopy(row.hash, {
     id: row.id, kind: row.kind || 'backup', name: row.name, deviceName: row.deviceName || row.name,
     site: row.site || row.deviceName || row.name, reliability: row.reliability || 'normal',
-    remote: Boolean(row.remote), encrypted: Boolean(row.encrypted), verified: Boolean(row.verifiedAt)
+    remote: Boolean(row.remote), encrypted: Boolean(row.encrypted), verified: Boolean(row.verifiedAt), representation: 'original'
+  });
+
+  for (const row of db.prepare(`
+    SELECT rp.original_hash AS hash,substr(rp.location_id,8) AS id,rp.verified_at AS verifiedAt,d.name,
+           sl.kind,sl.device_name AS deviceName,sl.site,sl.reliability,sl.remote,sl.encrypted
+    FROM representation_presence rp
+    JOIN drives d ON rp.location_id=('backup:' || d.id)
+    JOIN objects o ON o.hash=rp.original_hash AND o.state='active'
+    JOIN representation_policies p ON p.location_id=rp.location_id
+      AND p.media_type=CASE WHEN o.mime LIKE 'image/%' THEN 'image' WHEN o.mime LIKE 'video/%' THEN 'video' ELSE '' END
+      AND p.representation='compact'
+    JOIN representation_retention rr ON rr.location_id=p.location_id AND rr.media_type=p.media_type AND rr.allow_original_removal=1
+    LEFT JOIN storage_locations sl ON sl.id=d.id
+    LEFT JOIN replicas existing ON existing.object_hash=rp.original_hash AND existing.drive_id=d.id
+    WHERE rp.representation='compact' AND rp.verified_at IS NOT NULL AND existing.object_hash IS NULL
+  `).all()) addCopy(row.hash, {
+    id: row.id, kind: row.kind || 'backup', name: row.name, deviceName: row.deviceName || row.name,
+    site: row.site || row.deviceName || row.name, reliability: row.reliability || 'normal',
+    remote: Boolean(row.remote), encrypted: Boolean(row.encrypted), verified: true, verifiedAt: row.verifiedAt,
+    representation: 'compact', reducedFidelity: true
   });
 
   const levels = Object.fromEntries(LEVELS.map(level => [level, { files: 0, bytes: 0, needsProtection: 0 }]));
@@ -333,9 +377,9 @@ function protectionSummary(force = false) {
 
 function improvesWithTarget(state, target) {
   if (!state || !target || target.reliability === 'low' || state.copies.some(copy => copy.id === target.id)) return false;
-  const candidate = { ...target, verified: true, deviceName: target.deviceName || target.id, site: target.site || target.deviceName || target.id };
+  const candidate = { ...target, verified: true, deviceName: target.deviceName || target.id, site: target.site || target.deviceName || target.id, representation: 'original' };
   const next = evaluate(state.level, [...state.copies, candidate]);
-  return next.missing.copies < state.missing.copies || next.missing.devices < state.missing.devices ||
+  return next.missing.copies < state.missing.copies || next.missing.originals < state.missing.originals || next.missing.devices < state.missing.devices ||
     next.missing.remote < state.missing.remote || next.missing.sites < state.missing.sites;
 }
 
