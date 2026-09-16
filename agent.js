@@ -5,11 +5,11 @@ import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
-import { api, cancelJob, currentJob, DEVICE, json, persistSettings, preemptBackgroundJob, readJson, serverState, settings, startJob } from './lib/agent-context.js';
+import { api, cancelJob, currentJob, DEVICE, json, pathKey, persistSettings, preemptBackgroundJob, readJson, serverState, settings, startJob } from './lib/agent-context.js';
 import { backgroundWorkStatus } from './lib/background-work.js';
 import { addFolder, folderFor, folderStats, queueFolderSync, removeFolder, startSyncService } from './lib/agent-sync.js';
 import { backupContents, backupInit, backupLocations, backupRestore, backupStatus, backupVerify } from './lib/agent-backups.js';
-import { invalidateClientProviders } from './lib/client-providers.js';
+import { invalidateClientProviders } from './lib/client-provider-cache.js';
 import { pickFolder } from './lib/folder-picker.js';
 import { handleSourceExclusions } from './lib/source-exclusion-routes.js';
 import { thumbnailAgentStatus } from './lib/thumbnail-agent.js';
@@ -69,8 +69,6 @@ async function handleLazyClientImport(req, res, url) {
 }
 
 async function handleLazyClientGateway(req, res, url) {
-  // Compression defaults are data, not a startup service. Seed them only when
-  // the Library feature stack is first requested.
   await compressionDefaults();
   const [gateway, background] = await Promise.all([clientGateway(), libraryBackground()]);
   background.startLibraryBackground().catch(error => console.error('Library background failed', error));
@@ -190,6 +188,26 @@ async function openNativePath(path, selectFile = false) {
   });
 }
 
+async function lightweightDrives() {
+  if (settings.token) {
+    try { return await api('/api/drives'); }
+    catch {}
+  }
+  const backups = await backupLocations();
+  return {
+    drives:backups.map(item => item.remote || {
+      id:item.meta?.id || item.path,
+      name:item.meta?.name || item.path,
+      lastSeen:item.meta?.lastBackupAt || null,
+      storedCount:Number(item.local?.count) || 0,
+      storedBytes:Number(item.local?.bytes) || 0,
+      verifiedCount:0,
+      oldestVerifiedAt:item.local?.oldestVerification || null,
+      lastVerifiedAt:item.meta?.lastVerifiedAt || null
+    })
+  };
+}
+
 async function handleLocalApi(req, res, url) {
   if (await handleSourceExclusions(req, res, url)) return true;
 
@@ -214,6 +232,11 @@ async function handleLocalApi(req, res, url) {
       previews:thumbnailAgentStatus(),
       job:currentJob()
     });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/drives') {
+    json(res, 200, await lightweightDrives());
     return true;
   }
 
@@ -462,7 +485,7 @@ const server = http.createServer(async (req, res) => {
       if (await handleLazyClientGateway(req, res, url)) return;
     } else {
       if (await serveStatic(res, decodeURIComponent(url.pathname))) return;
-      if (await handleLazyClientGateway(req, res, url)) return;
+      if ((url.pathname === '/files' || url.pathname.startsWith('/files/')) && await handleLazyClientGateway(req, res, url)) return;
     }
     json(res, 404, { error:'Not found' });
   } catch (error) {
