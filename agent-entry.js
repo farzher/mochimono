@@ -22,6 +22,9 @@ registerHooks({
   }
 });
 
+// Seed clean-install defaults before client-gateway imports compression-work.
+await import('./lib/compression-defaults.js');
+
 const [
   { startThumbnailAgent },
   { startMediaMetadataAgent },
