@@ -142,14 +142,16 @@ function renderMain() {
     return;
   }
 
-  const percent = summary.files ? Math.round(summary.protectedFiles / summary.files * 100) : 100;
+  const files = Number(summary.files) || 0;
+  const hasFiles = files > 0;
+  const percent = hasFiles ? Math.round(summary.protectedFiles / files * 100) : 0;
   const needs = Number(summary.needsProtection) || 0;
   const background = state.config?.background === 'paused' ? 'Paused' : state.config?.background === 'normal' ? 'Normal' : 'Low impact';
   const job = state.job?.status === 'running' && state.job.type === 'protection' ? state.job : null;
   const progress = job?.progress || {};
   const offline = trustedOfflineLocations();
   const renderKey = JSON.stringify([
-    percent, needs, background,
+    files, percent, needs, background,
     job?.id || '', job?.status || '', progress.phase || '',
     progress.copied ?? null, progress.copiedBytes ?? null, progress.checked ?? null,
     offline.map(location => location.id).sort()
@@ -162,16 +164,20 @@ function renderMain() {
       <span><strong>${esc(progress.phase || job.label || 'Protecting')}</strong>${progress.copied != null ? ` · ${Number(progress.copied).toLocaleString()} copied` : ''}${progress.copiedBytes ? ` · ${bytes(progress.copiedBytes)}` : ''}${progress.checked != null ? ` · ${Number(progress.checked).toLocaleString()} checked` : ''}</span>
       <button class="action-link" id="pauseProtection">Pause</button>
     </div>` : '';
+  const title = hasFiles ? `${percent}% protected` : 'No protected files yet';
+  const detail = !hasFiles
+    ? `Add a folder to protect · Automatic: ${background}`
+    : `${needs ? `${needs.toLocaleString()} ${needs === 1 ? 'file needs' : 'files need'} another copy` : 'Everything meets its protection target'} · Automatic: ${background}`;
 
   body.className = '';
   body.innerHTML = `
     <div class="protection-main">
       <div class="protection-copy">
-        <strong class="${needs ? 'warn' : 'good'}">${percent}% protected</strong>
-        <span>${needs ? `${needs.toLocaleString()} ${needs === 1 ? 'file needs' : 'files need'} another copy` : 'Everything meets its protection target'} · Automatic: ${background}</span>
+        <strong class="${hasFiles ? (needs ? 'warn' : 'good') : ''}">${title}</strong>
+        <span>${detail}</span>
       </div>
       <div class="protection-actions">
-        <button id="runProtection" class="secondary" ${job ? 'disabled' : ''}>Protect now</button>
+        <button id="runProtection" class="secondary" ${job || !hasFiles ? 'disabled' : ''}>Protect now</button>
       </div>
     </div>
     ${offline.length ? `<div class="protection-offline">${offline.length} trusted backup ${offline.length === 1 ? 'location is' : 'locations are'} offline. Last-known copies are remembered but not currently confirmed.</div>` : ''}
