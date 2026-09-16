@@ -1,0 +1,28 @@
+[Unit]
+Description=Mochimono Server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=mochimono
+Group=mochimono
+WorkingDirectory=/opt/mochimono
+EnvironmentFile=/etc/mochimono.env
+ExecStart=/opt/mochimono/runtime/node --max-old-space-size=384 server-entry.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+KillSignal=SIGTERM
+LimitNOFILE=65536
+CPUQuota=100%
+MemoryHigh=384M
+MemoryMax=512M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mochimono
+
+[Install]
+WantedBy=multi-user.target

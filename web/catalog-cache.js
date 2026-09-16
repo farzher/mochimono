@@ -1,16 +1,14 @@
 import './startup-geometry.js';
 
 const DB_NAME = 'mochimono-library';
-const DB_VERSION = 1;
-const SCHEMA = 1;
+const DB_VERSION = 2;
+const SCHEMA = 2;
 const META_KEY = 'catalog';
 const WRITE_BATCH = 1500;
 const READ_PARALLELISM = 4;
 const HASH_PREFIXES = '0123456789abcdef';
-const QUICK_VERSION = 2;
 const QUICK_FILES = 600;
 const QUICK_MEDIA = 5000;
-const QUICK_UPGRADE_DELAY = 8000;
 const CLIENT = document.documentElement.classList.contains('client-library');
 
 let dbPromise = null;
@@ -19,7 +17,6 @@ let meta = null;
 let records = new Map();
 let pendingGeometry = new Map();
 let geometryJob = 0;
-let quickUpgradeJob = 0;
 let writeChain = Promise.resolve();
 let lastQuickLoadMs = 0;
 let lastFullLoadMs = 0;
@@ -36,7 +33,7 @@ const transactionDone = transaction => new Promise((resolve, reject) => {
 });
 
 const idle = () => new Promise(resolve => {
-  if ('requestIdleCallback' in window) requestIdleCallback(() => resolve(), { timeout: 500 });
+  if ('requestIdleCallback' in window) requestIdleCallback(() => resolve(), { timeout:500 });
   else setTimeout(resolve, 0);
 });
 
@@ -60,8 +57,11 @@ function openDb() {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
-      db.createObjectStore('files', { keyPath: 'hash' });
-      db.createObjectStore('meta', { keyPath: 'key' });
+      // This is acceleration data, not user data. A cache schema change is a
+      // clean reset so release builds never carry browser-cache migrations.
+      for (const name of [...db.objectStoreNames]) db.deleteObjectStore(name);
+      db.createObjectStore('files', { keyPath:'hash' });
+      db.createObjectStore('meta', { keyPath:'key' });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -82,12 +82,12 @@ function mergeGeometry(file) {
   const hash = String(file?.hash || '');
   if (Number(file.width) > 0 && Number(file.height) > 0) return file;
   const startup = window.mochimonoStartupGeometry?.get?.(hash);
-  if (startup?.width && startup?.height) return { ...file, width: startup.width, height: startup.height };
+  if (startup?.width && startup?.height) return { ...file, width:startup.width, height:startup.height };
   const pending = pendingGeometry.get(hash);
-  if (pending?.width && pending?.height) return { ...file, width: pending.width, height: pending.height };
+  if (pending?.width && pending?.height) return { ...file, width:pending.width, height:pending.height };
   const previous = records.get(hash);
   if (!(Number(previous?.width) > 0 && Number(previous?.height) > 0)) return file;
-  return { ...file, width: Number(previous.width), height: Number(previous.height) };
+  return { ...file, width:Number(previous.width), height:Number(previous.height) };
 }
 
 function validMeta(value) {
@@ -97,22 +97,22 @@ function validMeta(value) {
 function memorySnapshot() {
   if (!meta?.version || records.size !== Number(meta.count || 0)) return null;
   return {
-    version: String(meta.version),
-    imports: Array.isArray(meta.imports) ? meta.imports : [],
-    files: [...records.values()].map(file => mergeGeometry(file)),
-    savedAt: Number(meta.savedAt) || 0
+    version:String(meta.version),
+    imports:Array.isArray(meta.imports) ? meta.imports : [],
+    files:[...records.values()].map(file => mergeGeometry(file)),
+    savedAt:Number(meta.savedAt) || 0
   };
 }
 
 function quickSnapshot(value = meta) {
   if (!validMeta(value) || !Array.isArray(value.quickFiles) || !value.quickFiles.length) return null;
   return {
-    version: String(value.version),
-    imports: Array.isArray(value.imports) ? value.imports : [],
-    files: value.quickFiles.map(file => mergeGeometry(file)),
-    totalCount: Number(value.count) || value.quickFiles.length,
-    savedAt: Number(value.savedAt) || 0,
-    partial: true
+    version:String(value.version),
+    imports:Array.isArray(value.imports) ? value.imports : [],
+    files:value.quickFiles.map(file => mergeGeometry(file)),
+    totalCount:Number(value.count) || value.quickFiles.length,
+    savedAt:Number(value.savedAt) || 0,
+    partial:true
   };
 }
 
@@ -132,10 +132,6 @@ async function loadQuick() {
   const storedMeta = validMeta(meta) ? meta : await readMeta(db);
   if (!storedMeta) return null;
   meta = storedMeta;
-
-  // quickFiles is already a self-contained saved snapshot, and geometry writes
-  // update the same metadata record. Re-reading every quick hash individually
-  // added hundreds/thousands of IndexedDB requests before first paint for no gain.
   const snapshot = quickSnapshot(storedMeta);
   lastQuickLoadMs = performance.now() - started;
   return snapshot;
@@ -152,8 +148,6 @@ async function readPrefix(db, prefix, version) {
   const files = [];
   for (const file of rows) {
     if (file?.__snapshot !== version) continue;
-    // IndexedDB returned a fresh mutable object. Strip the internal marker in
-    // place instead of allocating one complete duplicate of the whole catalog.
     delete file.__snapshot;
     files.push(file);
   }
@@ -171,34 +165,6 @@ async function readFilesParallel(db, version) {
   });
   await Promise.all(workers);
   return files;
-}
-
-function scheduleQuickUpgrade(files, storedMeta) {
-  if (!validMeta(storedMeta) || Number(storedMeta.quickVersion) === QUICK_VERSION || quickUpgradeJob) return;
-  const run = () => {
-    quickUpgradeJob = 0;
-    // This is a one-time local migration and sorts the complete catalog. Do not
-    // trust requestIdleCallback here: Chrome can call it during cold startup.
-    // Wait for a real quiet period and keep backing off while the user navigates.
-    if (window.mochimonoGridInteraction?.state?.().active) {
-      quickUpgradeJob = setTimeout(run, 2000);
-      return;
-    }
-    enqueueWrite(() => upgradeQuickMeta(files, storedMeta)).catch(() => {});
-  };
-  quickUpgradeJob = setTimeout(run, QUICK_UPGRADE_DELAY);
-}
-
-async function upgradeQuickMeta(files, expectedMeta) {
-  if (!validMeta(meta) || meta.version !== expectedMeta.version) return;
-  const db = await openDb();
-  if (!db || meta.version !== expectedMeta.version) return;
-  const nextMeta = { ...meta, quickVersion:QUICK_VERSION, quickFiles:quickFiles(files) };
-  const transaction = db.transaction('meta', 'readwrite');
-  const done = transactionDone(transaction);
-  transaction.objectStore('meta').put(nextMeta);
-  await done;
-  if (meta?.version === nextMeta.version) meta = nextMeta;
 }
 
 async function loadFromDb(knownMeta = null) {
@@ -220,11 +186,7 @@ async function loadFromDb(knownMeta = null) {
   }
   records = nextRecords;
   lastFullLoadMs = performance.now() - started;
-  scheduleQuickUpgrade(files, storedMeta);
 
-  // Return the already-loaded objects directly. The old path rebuilt another
-  // full array of cloned objects through memorySnapshot() immediately before
-  // library-app normalized them yet again.
   return {
     version:String(storedMeta.version),
     imports:Array.isArray(storedMeta.imports) ? storedMeta.imports : [],
@@ -246,9 +208,6 @@ function waitForQuickGrid() {
       paintTurn().then(resolve);
     };
     const onGrid = () => finish();
-    // Keep the temporary startup empty state hidden long enough for the quick
-    // worker geometry to actually arrive. The old 140ms timeout exposed
-    // "No files" while a valid quick layout was still being built.
     const timer = setTimeout(finish, 900);
     window.addEventListener('mochimono:stable-grid-installed', onGrid, { once:true });
   });
@@ -280,7 +239,7 @@ async function installQuickPreview(snapshot) {
   }
 
   window.dispatchEvent(new CustomEvent('mochimono:catalog-quick-restored', {
-    detail: { count:snapshot.files.length, totalCount:snapshot.totalCount, version:snapshot.version }
+    detail:{ count:snapshot.files.length, totalCount:snapshot.totalCount, version:snapshot.version }
   }));
   return true;
 }
@@ -299,9 +258,6 @@ async function load() {
         document.documentElement.classList.remove('mochimono-quick-grid-pending');
         return false;
       });
-      // The quick grid has had a paint turn. Hydrate the complete local catalog
-      // immediately, but do it with parallel readonly ranges rather than a long
-      // chain of sequential transactions.
       return loadFromDb(meta);
     })().finally(() => { loadPromise = null; });
   }
@@ -351,20 +307,19 @@ async function saveNow(files, options = {}) {
     const transaction = db.transaction('files', 'readwrite');
     const done = transactionDone(transaction);
     const store = transaction.objectStore('files');
-    for (const file of clean.slice(offset, offset + WRITE_BATCH)) store.put({ ...file, __snapshot: version });
+    for (const file of clean.slice(offset, offset + WRITE_BATCH)) store.put({ ...file, __snapshot:version });
     await done;
     await idle();
   }
 
   const nextMeta = {
-    key: META_KEY,
-    schema: SCHEMA,
+    key:META_KEY,
+    schema:SCHEMA,
     version,
-    imports: Array.isArray(options.imports) ? options.imports : [],
-    count: clean.length,
-    quickVersion: QUICK_VERSION,
-    quickFiles: quickFiles(clean),
-    savedAt: Date.now()
+    imports:Array.isArray(options.imports) ? options.imports : [],
+    count:clean.length,
+    quickFiles:quickFiles(clean),
+    savedAt:Date.now()
   };
   {
     const transaction = db.transaction('meta', 'readwrite');
@@ -408,7 +363,7 @@ function scheduleGeometryWrite() {
     geometryJob = 0;
     flushDimensions().catch(() => {});
   };
-  if ('requestIdleCallback' in window) geometryJob = requestIdleCallback(run, { timeout: 650 });
+  if ('requestIdleCallback' in window) geometryJob = requestIdleCallback(run, { timeout:650 });
   else geometryJob = setTimeout(run, 100);
 }
 
@@ -433,18 +388,18 @@ async function flushDimensionsNow() {
   for (const [hash, geometry] of batch) {
     const previous = records.get(hash);
     if (!previous) continue;
-    const next = { ...previous, width: geometry.width, height: geometry.height };
+    const next = { ...previous, width:geometry.width, height:geometry.height };
     records.set(hash, next);
     changed.set(hash, geometry);
-    store.put({ ...next, __snapshot: meta?.version || '' });
+    store.put({ ...next, __snapshot:meta?.version || '' });
   }
 
   if (changed.size && meta?.version && Array.isArray(meta.quickFiles)) {
     const nextQuick = meta.quickFiles.map(file => {
       const geometry = changed.get(String(file.hash || ''));
-      return geometry ? { ...file, width: geometry.width, height: geometry.height } : file;
+      return geometry ? { ...file, width:geometry.width, height:geometry.height } : file;
     });
-    meta = { ...meta, quickFiles: nextQuick };
+    meta = { ...meta, quickFiles:nextQuick };
     transaction.objectStore('meta').put(meta);
   }
 
@@ -471,10 +426,6 @@ function clear() {
     else clearTimeout(geometryJob);
     geometryJob = 0;
   }
-  if (quickUpgradeJob) {
-    clearTimeout(quickUpgradeJob);
-    quickUpgradeJob = 0;
-  }
   pendingGeometry.clear();
   document.documentElement.classList.remove('mochimono-quick-grid-pending');
   return enqueueWrite(clearNow);
@@ -498,12 +449,11 @@ window.mochimonoCatalogCache = {
   save,
   rememberDimensions,
   clear,
-  state: () => ({
-    version: meta?.version || '',
-    count: records.size,
+  state:() => ({
+    version:meta?.version || '',
+    count:records.size,
     quickCount:Array.isArray(meta?.quickFiles) ? meta.quickFiles.length : 0,
-    quickVersion:Number(meta?.quickVersion) || 0,
-    savedAt: Number(meta?.savedAt) || 0,
+    savedAt:Number(meta?.savedAt) || 0,
     quickLoadMs:Math.round(lastQuickLoadMs * 10) / 10,
     fullLoadMs:Math.round(lastFullLoadMs * 10) / 10
   })
