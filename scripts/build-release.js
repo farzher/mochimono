@@ -71,7 +71,7 @@ if (process.platform !== 'win32') await chmod(runtimeNode, 0o755);
 
 if (target === 'agent') {
   if (process.platform === 'win32') {
-    await writeFile(join(out, 'Mochimono.ps1'), `$ErrorActionPreference = 'SilentlyContinue'\n$here = $PSScriptRoot\n$url = 'http://127.0.0.1:8643'\nfunction Ready {\n  try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 "$url/api/health" | Out-Null; return $true } catch { return $false }\n}\nif (-not (Ready)) {\n  Start-Process -WindowStyle Hidden -FilePath "$here\\runtime\\node.exe" -ArgumentList @("$here\\agent-entry.js")\n  for ($i = 0; $i -lt 80 -and -not (Ready); $i++) { Start-Sleep -Milliseconds 250 }\n}\nif (Ready) { Start-Process $url; exit 0 }\nWrite-Error 'Mochimono Agent did not start.'\nexit 1\n`);
+    await writeFile(join(out, 'Mochimono.ps1'), `$ErrorActionPreference = 'SilentlyContinue'\n$here = $PSScriptRoot\n$url = 'http://127.0.0.1:8643'\nfunction Ready {\n  try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 "$url/api/health" | Out-Null; return $true } catch { return $false }\n}\nif (-not (Ready)) {\n  Start-Process -WindowStyle Hidden -WorkingDirectory $here -FilePath "$here\\runtime\\node.exe" -ArgumentList @('agent-entry.js')\n  for ($i = 0; $i -lt 80 -and -not (Ready); $i++) { Start-Sleep -Milliseconds 250 }\n}\nif (Ready) { Start-Process $url; exit 0 }\nWrite-Error 'Mochimono Agent did not start.'\nexit 1\n`);
     await writeFile(join(out, 'Mochimono.cmd'), `@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0Mochimono.ps1"\r\n`);
   } else {
     await writeFile(join(out, 'mochimono'), `#!/bin/sh\nset -eu\nHERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nexec "$HERE/runtime/node" "$HERE/agent-entry.js"\n`, { mode:0o755 });
