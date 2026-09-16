@@ -1,5 +1,5 @@
-import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { copyFile, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
@@ -16,20 +16,15 @@ const out = join(DIST, target);
 await rm(out, { recursive:true, force:true });
 await mkdir(out, { recursive:true });
 
-const skip = new Set(['.git', '.github', 'data', 'dist', 'node_modules']);
-await cp(ROOT, out, {
-  recursive:true,
-  filter(source) {
-    if (resolve(source) === resolve(out) || resolve(source).startsWith(`${resolve(out)}${process.platform === 'win32' ? '\\' : '/'}`)) return false;
-    const rel = source.slice(ROOT.length).replace(/^[/\\]+/, '').replaceAll('\\', '/');
-    if (!rel) return true;
-    const first = rel.split('/')[0];
-    if (skip.has(first)) return false;
-    if (first === 'scripts') return false;
-    if (target === 'server' && first === 'agent-web') return false;
-    return true;
-  }
-});
+const skip = new Set(['.git', '.github', 'data', 'dist', 'node_modules', 'scripts']);
+if (target === 'server') skip.add('agent-web');
+for (const entry of await readdir(ROOT, { withFileTypes:true })) {
+  if (skip.has(entry.name)) continue;
+  const source = join(ROOT, entry.name);
+  const destination = join(out, entry.name);
+  if (entry.isDirectory()) await cp(source, destination, { recursive:true });
+  else if (entry.isFile()) await copyFile(source, destination);
+}
 
 const agentDependencies = sourcePackage.dependencies || {};
 const serverDependencies = Object.fromEntries(
