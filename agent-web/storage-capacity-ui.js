@@ -38,10 +38,16 @@ if (storagePane) {
       if (free <= lowThreshold) return { tone:'low', short:`Cloud space low · ${bytes(free)} free`, detail:'Cloud folders need room here for their Original copies. Add Cloud capacity or keep new folders Local until space is available.' };
       return null;
     }
-    if (!['backup','friend'].includes(location.type)) return null;
-    if (free <= lowThreshold) return { tone:'partial', short:`Nearly full · ${bytes(free)} free`, detail:'This storage can still protect the copies that fit. It does not need to hold the whole library; remaining protection work stays for other destinations.' };
-    if (libraryBytes && capacity && capacity < libraryBytes) return { tone:'partial', short:`Partial capacity · ${bytes(free)} free`, detail:`This destination is smaller than the ${bytes(libraryBytes)} Cloud library. That is okay: Protection can use it for part of the recovery set and use other destinations for the rest.` };
-    if (location.capacityLimited) return { tone:'partial', short:`Partial capacity · ${bytes(free)} free`, detail:'This destination filled the space available to it. Files that did not fit remain visible as protection work for other storage.' };
+    if (location.type === 'friend') {
+      if (free <= lowThreshold) return { tone:'partial', short:`Nearly full · ${bytes(free)} free`, detail:'This Friend Drive can still protect the copies that fit. It does not need to hold the whole library; remaining Protection work stays for other destinations.' };
+      if (libraryBytes && capacity && capacity < libraryBytes) return { tone:'partial', short:`Partial capacity · ${bytes(free)} free`, detail:`This Friend Drive is smaller than the ${bytes(libraryBytes)} Cloud library. That is okay: Protection fills useful copies here and uses other destinations for the rest.` };
+      if (location.capacityLimited) return { tone:'partial', short:`Partial capacity · ${bytes(free)} free`, detail:'This Friend Drive filled the space available to it. Files that did not fit remain visible as Protection work for other storage.' };
+      return null;
+    }
+    if (location.type === 'backup') {
+      if (free <= lowThreshold) return { tone:'low', short:`Backup space low · ${bytes(free)} free`, detail:'This backup drive is nearly full. Mochimono will keep its existing verified copies, but add or free storage before relying on it for more Protection work.' };
+      if (libraryBytes && capacity && capacity < libraryBytes) return { tone:'partial', short:`Smaller than library · ${bytes(free)} free`, detail:`This drive cannot hold the full ${bytes(libraryBytes)} Cloud library. Protection can still combine multiple destinations, but local backup-drive filling is not yet as flexible as Friend Drive filling.` };
+    }
     return null;
   }
 
@@ -71,7 +77,7 @@ if (storagePane) {
     const node = document.createElement('div');
     node.dataset.capacityGuidance = '1';
     node.className = 'storage-capacity-guidance';
-    node.innerHTML = `<strong>${state.tone === 'low' ? 'Space needs attention.' : 'Partial storage is supported.'}</strong> ${state.detail}`;
+    node.innerHTML = `<strong>${state.tone === 'low' ? 'Space needs attention.' : location?.type === 'friend' ? 'Partial storage is supported.' : 'Capacity is limited.'}</strong> ${state.detail}`;
     const actions = dialog.querySelector('.storage-location-actions');
     actions?.before(node);
     if (!actions) dialog.querySelector('.storage-location-inspect')?.append(node);
