@@ -40,10 +40,9 @@ The VPS is intentionally a storage/catalog service, not a media-processing machi
 
 If a file only exists in Cloud and needs a thumbnail, an Agent can download/stream that original, generate the preview locally, and upload the finished thumbnail. The server never falls back to decoding the media itself.
 
-Build the server release on Linux for the target architecture:
+Build the server release on Linux for the target architecture. No dependency install is needed for the server target:
 
 ```sh
-npm ci
 npm run release:server
 ```
 
@@ -69,6 +68,8 @@ sudo systemctl enable --now mochimono
 
 Generate a long random `MOCHIMONO_TOKEN`; do not use the example value. Keep `MOCHIMONO_DATA=/var/lib/mochimono`. The service binds to `127.0.0.1:8642` by default so it is not directly exposed to the Internet.
 
+The low-resource example also sets `MOCHIMONO_SCRUB_DAYS=0`. That disables scheduled full-object integrity scans, which can otherwise consume substantial disk bandwidth and CPU on a tiny VPS. Manual integrity verification remains available, and scheduled scrubbing can be enabled later if the server has enough headroom.
+
 ### Nginx
 
 Install Nginx, copy/adapt `deploy/nginx.conf` inside the Nginx `http` context (the normal Debian/Ubuntu `sites-enabled` location is fine), set your real `server_name`, then add TLS with your normal certificate tooling.
@@ -82,7 +83,8 @@ The supplied systemd unit is aimed at a small 1 GB-class VPS:
 - Node old-space capped at 256 MB
 - soft service pressure at 256 MB
 - hard service memory ceiling at 384 MB
-- no image/video decode or transcoding on the VPS
+- no image/video decode, resize, or transcoding on the VPS
+- scheduled full-object scrubbing disabled by default
 - one CPU worth of quota
 - automatic restart on failure
 - persistent writes restricted to `/var/lib/mochimono`
