@@ -13,11 +13,11 @@ import { mimeFor } from './lib/mime.js';
 
 const TMP_DIR = join(CONFIG_DIR, 'tmp');
 const BROWSER_THUMB_DIR = join(homedir(), '.mochimono', 'provider-thumbs');
-const BROWSER_THUMB_VERSION = 3;
+const BROWSER_THUMB_VERSION = 1;
 const MAX_BROWSER_THUMB_BYTES = 8 * 1024 * 1024;
 const MAX_BROWSER_HEIC_BYTES = 128 * 1024 * 1024;
 const MAX_BROWSER_HEIC_VIEW_BYTES = 32 * 1024 * 1024;
-const BROWSER_HEIC_EDGE = 768;
+const BROWSER_HEIC_EDGE = 1080;
 const BROWSER_HEIC_VIEW_EDGE = 4096;
 const sessions = new Map();
 
@@ -310,8 +310,8 @@ async function saveBrowserHeicThumbnail(req, res, hash, url) {
     if (!size) throw Object.assign(new Error('Empty HEIC image'), { status:400 });
     const result = await decodeHeic(source, {
       edge,
-      quality:view ? 90 : 82,
-      effort:view ? 1 : 2,
+      quality:view ? 90 : 83,
+      effort:view ? 1 : 4,
       priority:view,
       portable:!view
     });

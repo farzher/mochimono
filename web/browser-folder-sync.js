@@ -3,8 +3,8 @@ const DB_VERSION = 1;
 const SOURCES = 'sources';
 const FILES = 'files';
 const AUTO_SYNC_MS = 5 * 60 * 1000;
-const THUMB_EDGE = 768;
-const THUMB_VERSION = 3;
+const THUMB_EDGE = 1080;
+const THUMB_VERSION = 1;
 const MEDIA_EXTENSIONS = new Set([
   'jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff',
   'mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp'
@@ -249,8 +249,8 @@ const canvasFor = (width, height) => typeof OffscreenCanvas !== 'undefined'
 
 async function canvasBlob(canvas) {
   const blob = 'convertToBlob' in canvas
-    ? await canvas.convertToBlob({ type:'image/webp', quality:.82 })
-    : await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .82));
+    ? await canvas.convertToBlob({ type:'image/webp', quality:.83 })
+    : await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .83));
   if (!blob) throw new Error('Could not encode thumbnail');
   return blob;
 }

@@ -14,7 +14,9 @@ const header = document.querySelector('.client-header');
 const brand = document.querySelector('.app-brand');
 const manageButton = tabs.find(button => button.dataset.clientTab === 'storage');
 const clientMenu = document.querySelector('.client-menu');
+const TAB_KEY = 'mochimono:client-tab';
 let libraryScrollY = 0;
+let libraryLoaded = false;
 
 const fileHash = value => /^[a-f0-9]{64}$/.test(String(value || '')) ? String(value) : '';
 function shellFileHash() {
@@ -29,7 +31,12 @@ function syncShellFileUrl(hash = '') {
 }
 
 const initialFileHash = shellFileHash();
-if (initialFileHash && frame) frame.src = `/files/?file=${encodeURIComponent(initialFileHash)}`;
+function loadLibrary(url = '') {
+  if (!frame) return;
+  if (!url && libraryLoaded) return;
+  frame.src = url || (initialFileHash ? `/files/?file=${encodeURIComponent(initialFileHash)}` : '/files/');
+  libraryLoaded = true;
+}
 
 if (brand && manageButton) {
   manageButton.textContent = 'Storage';
@@ -48,9 +55,11 @@ function syncHeaderScroll() {
 
 function showTab(name) {
   const files = name !== 'storage';
+  if (files) loadLibrary();
   filesPane.hidden = !files;
   storagePane.hidden = files;
   document.body.classList.toggle('client-library-active', files);
+  localStorage.setItem(TAB_KEY, files ? 'files' : 'storage');
   if (manageButton) {
     manageButton.classList.toggle('active', !files);
     manageButton.textContent = files ? 'Storage' : 'Library';
@@ -87,7 +96,8 @@ addEventListener('keyup', event => {
   frame.contentWindow?.mochimonoGridKeyboard?.release?.();
 }, true);
 
-showTab('files');
+const savedTab = localStorage.getItem(TAB_KEY);
+showTab(initialFileHash ? 'files' : savedTab === 'storage' ? 'storage' : 'files');
 addEventListener('resize', syncHeaderScroll, { passive: true });
 
 async function json(path, options = {}) {
@@ -185,7 +195,7 @@ connectButton.addEventListener('click', async event => {
     connection.close();
     libraryScrollY = 0;
     syncShellFileUrl('');
-    frame.src = `/files/?connected=${Date.now()}`;
+    loadLibrary(`/files/?connected=${Date.now()}`);
     showTab('files');
     await refreshShellState();
     notify('Connected');
@@ -206,12 +216,13 @@ logoutButton.addEventListener('click', async () => {
   connectMenuButton.hidden = false;
   logoutButton.disabled = false;
   syncShellFileUrl('');
-  frame.src = `/files/?offline=${Date.now()}`;
+  if (libraryLoaded) loadLibrary(`/files/?offline=${Date.now()}`);
   openConnection();
   notify('Logged out');
 });
 
 function refreshLibraryFrame() {
+  if (!libraryLoaded) return;
   frame.contentWindow?.mochimonoLibrary?.refresh?.().catch?.(() => {});
   frame.contentWindow?.mochimonoLocations?.refresh?.().catch?.(() => {});
 }
@@ -271,4 +282,9 @@ window.addEventListener('message', event => {
 });
 
 refreshShellState(true);
-setInterval(refreshShellState, 5000);
+setInterval(() => {
+  if (document.visibilityState === 'visible') refreshShellState();
+}, 5000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refreshShellState();
+});

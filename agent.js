@@ -5,18 +5,14 @@ import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
-import { api, cancelJob, currentJob, DEVICE, json, persistSettings, preemptBackgroundJob, readJson, serverState, settings, startJob } from './lib/agent-context.js';
+import { api, cancelJob, currentJob, DEVICE, json, pathKey, persistSettings, preemptBackgroundJob, readJson, serverState, settings, startJob } from './lib/agent-context.js';
 import { backgroundWorkStatus } from './lib/background-work.js';
 import { addFolder, folderFor, folderStats, queueFolderSync, removeFolder, startSyncService } from './lib/agent-sync.js';
-import { addBrowseFolder, browseFolderFor, browseFolderScope, browseFolderStats, indexBrowseFolder, protectBrowseFolder, refreshBrowsePreviewPolicy, removeBrowseFolder, startBrowseService } from './lib/browse-folders.js';
-import { backupCollections, backupContents, backupInit, backupLocations, backupRestore, backupStatus, backupUpdate, backupVerify, setBackupPolicy } from './lib/agent-backups.js';
-import { invalidateClientProviders } from './lib/client-providers.js';
+import { backupContents, backupInit, backupLocations, backupRestore, backupStatus, backupVerify } from './lib/agent-backups.js';
+import { invalidateClientProviders } from './lib/client-provider-cache.js';
 import { pickFolder } from './lib/folder-picker.js';
-import { noteProviderThumbnailActivity, refreshProviderThumbnailPolicy } from './lib/provider-thumbs.js';
 import { handleSourceExclusions } from './lib/source-exclusion-routes.js';
 import { thumbnailAgentStatus } from './lib/thumbnail-agent.js';
-import { handleClientImport } from './client-import.js';
-import { handleClientGateway } from './client-gateway.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'agent-web');
@@ -25,6 +21,59 @@ const PORT = Number(process.env.MOCHIMONO_AGENT_PORT || 8643);
 const desiredHost = () => HOST_OVERRIDE || (settings.lanAccess ? '0.0.0.0' : '127.0.0.1');
 let activeHost = desiredHost();
 let deviceIdentityReconciled = false;
+let providerThumbsPromise = null;
+let browseFoldersPromise = null;
+let clientImportPromise = null;
+let clientGatewayPromise = null;
+let libraryBackgroundPromise = null;
+let compressionDefaultsPromise = null;
+let browseServiceStarted = false;
+let syncServiceStarted = false;
+
+const providerThumbs = () => providerThumbsPromise ||= import('./lib/provider-thumbs.js');
+const clientImport = () => clientImportPromise ||= import('./client-import.js');
+const clientGateway = () => clientGatewayPromise ||= import('./client-gateway.js');
+const libraryBackground = () => libraryBackgroundPromise ||= import('./lib/library-background.js');
+const compressionDefaults = () => compressionDefaultsPromise ||= import('./lib/compression-defaults.js');
+
+function ensureSyncService() {
+  if (syncServiceStarted) return;
+  syncServiceStarted = true;
+  startSyncService();
+}
+
+async function browseFolders(startService = false) {
+  const module = await (browseFoldersPromise ||= import('./lib/browse-folders.js'));
+  if (startService && !browseServiceStarted) {
+    browseServiceStarted = true;
+    module.startBrowseService(invalidateClientProviders);
+  }
+  return module;
+}
+
+const browseScope = path => String(settings.browseFolderScopes?.[pathKey(path)] || '').toLowerCase() === 'all' ? 'all' : 'media';
+const configuredBrowsePath = path => settings.browseFolders.find(item => pathKey(item) === pathKey(path));
+
+function clientImportRoute(pathname) {
+  return pathname === '/api/client/folder-browser' ||
+    pathname === '/api/client/folder-tree' ||
+    pathname.startsWith('/api/client/import/') ||
+    pathname.startsWith('/api/client/browser-') ||
+    pathname.startsWith('/api/video-optimize/cloud-') ||
+    /^\/api\/thumbs\/[a-f0-9]{64}$/.test(pathname);
+}
+
+async function handleLazyClientImport(req, res, url) {
+  if (!clientImportRoute(url.pathname)) return false;
+  return (await clientImport()).handleClientImport(req, res, url);
+}
+
+async function handleLazyClientGateway(req, res, url) {
+  await compressionDefaults();
+  const [gateway, background] = await Promise.all([clientGateway(), libraryBackground()]);
+  background.startLibraryBackground().catch(error => console.error('Library background failed', error));
+  return gateway.handleClientGateway(req, res, url);
+}
 
 function lanUrls() {
   if (activeHost === '127.0.0.1' || activeHost === 'localhost') return [];
@@ -53,7 +102,7 @@ async function serveStatic(res, pathname) {
   try {
     const info = await stat(file);
     if (!info.isFile()) return false;
-    res.writeHead(200, { 'content-type': staticType(file), 'content-length': info.size, 'cache-control': 'no-cache' });
+    res.writeHead(200, { 'content-type':staticType(file), 'content-length':info.size, 'cache-control':'no-cache' });
     createReadStream(file).pipe(res);
     return true;
   } catch { return false; }
@@ -61,8 +110,8 @@ async function serveStatic(res, pathname) {
 
 function visibleFolders() {
   return [
-    ...settings.folders.map(folder => ({ ...folder, protected: true })),
-    ...settings.browseFolders.map(path => ({ path, importId: null, lastSynced: null, protected: false, scope: browseFolderScope(path) }))
+    ...settings.folders.map(folder => ({ ...folder, protected:true })),
+    ...settings.browseFolders.map(path => ({ path, importId:null, lastSynced:null, protected:false, scope:browseScope(path) }))
   ];
 }
 
@@ -97,7 +146,7 @@ async function reconcileDeviceIdentity() {
   for (const alias of aliases) {
     if (!alias || alias.toLowerCase() === settings.device.toLowerCase()) continue;
     try {
-      await api('/api/device-identity/rename', { method: 'POST', body: { from: alias, to: settings.device } });
+      await api('/api/device-identity/rename', { method:'POST', body:{ from:alias, to:settings.device } });
       settings.deviceAliases = settings.deviceAliases.filter(item => item.toLowerCase() !== alias.toLowerCase());
     } catch {
       complete = false;
@@ -113,7 +162,7 @@ async function openNativePath(path, selectFile = false) {
   const target = resolve(String(path || ''));
   const info = await stat(target).catch(() => null);
   if (selectFile ? !info?.isFile() : !info?.isDirectory()) {
-    throw Object.assign(new Error(selectFile ? 'File is unavailable' : 'Folder is unavailable'), { status: 404 });
+    throw Object.assign(new Error(selectFile ? 'File is unavailable' : 'Folder is unavailable'), { status:404 });
   }
 
   let command;
@@ -130,7 +179,7 @@ async function openNativePath(path, selectFile = false) {
   }
 
   await new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: false });
+    const child = spawn(command, args, { detached:true, stdio:'ignore', windowsHide:false });
     child.once('error', reject);
     child.once('spawn', () => {
       child.unref();
@@ -139,30 +188,55 @@ async function openNativePath(path, selectFile = false) {
   });
 }
 
+async function lightweightDrives() {
+  if (settings.token) {
+    try { return await api('/api/drives'); }
+    catch {}
+  }
+  const backups = await backupLocations();
+  return {
+    drives:backups.map(item => item.remote || {
+      id:item.meta?.id || item.path,
+      name:item.meta?.name || item.path,
+      lastSeen:item.meta?.lastBackupAt || null,
+      storedCount:Number(item.local?.count) || 0,
+      storedBytes:Number(item.local?.bytes) || 0,
+      verifiedCount:0,
+      oldestVerifiedAt:item.local?.oldestVerification || null,
+      lastVerifiedAt:item.meta?.lastVerifiedAt || null
+    })
+  };
+}
+
 async function handleLocalApi(req, res, url) {
   if (await handleSourceExclusions(req, res, url)) return true;
 
   if (req.method === 'POST' && url.pathname === '/api/thumbnail-activity') {
-    noteProviderThumbnailActivity();
-    json(res, 200, { ok: true });
+    (await providerThumbs()).noteProviderThumbnailActivity();
+    json(res, 200, { ok:true });
     return true;
   }
 
   if (req.method === 'GET' && url.pathname === '/api/state') {
     await reconcileDeviceIdentity();
     json(res, 200, {
-      settings: {
-        server: settings.server, hasToken: Boolean(settings.token), device: settings.device,
-        uploadWorkers: settings.uploadWorkers, thumbnailMode: settings.thumbnailMode, folders: visibleFolders(),
-        lanAccess: activeHost !== '127.0.0.1' && activeHost !== 'localhost',
-        lanAccessLocked: Boolean(HOST_OVERRIDE),
-        lanUrls: lanUrls()
+      settings:{
+        server:settings.server, hasToken:Boolean(settings.token), device:settings.device,
+        uploadWorkers:settings.uploadWorkers, thumbnailMode:settings.thumbnailMode, folders:visibleFolders(),
+        lanAccess:activeHost !== '127.0.0.1' && activeHost !== 'localhost',
+        lanAccessLocked:Boolean(HOST_OVERRIDE),
+        lanUrls:lanUrls()
       },
-      server: await serverState(),
-      background: backgroundWorkStatus(),
-      previews: thumbnailAgentStatus(),
-      job: currentJob()
+      server:await serverState(),
+      background:backgroundWorkStatus(),
+      previews:thumbnailAgentStatus(),
+      job:currentJob()
     });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/drives') {
+    json(res, 200, await lightweightDrives());
     return true;
   }
 
@@ -177,19 +251,17 @@ async function handleLocalApi(req, res, url) {
     if (body.token !== undefined) settings.token = String(body.token || '');
     if (body.device !== undefined) {
       const nextDevice = String(body.device || DEVICE).trim() || DEVICE;
-      if (nextDevice.toLowerCase() !== previousDevice.toLowerCase()) {
-        settings.deviceAliases = [...new Set([...(settings.deviceAliases || []), previousDevice])];
-      }
+      if (nextDevice.toLowerCase() !== previousDevice.toLowerCase()) settings.deviceAliases = [...new Set([...(settings.deviceAliases || []), previousDevice])];
       settings.device = nextDevice;
     }
     if (body.uploadWorkers !== undefined) {
       const workers = Number(body.uploadWorkers);
-      if (![1, 2, 4].includes(workers)) return json(res, 400, { error: 'Upload concurrency must be 1, 2, or 4' });
+      if (![1, 2, 4].includes(workers)) return json(res, 400, { error:'Upload concurrency must be 1, 2, or 4' });
       settings.uploadWorkers = workers;
     }
     if (body.thumbnailMode !== undefined) {
       const mode = String(body.thumbnailMode || '');
-      if (!['off', 'idle', 'max'].includes(mode)) return json(res, 400, { error: 'Background mode must be off, idle, or max' });
+      if (!['off', 'idle', 'max'].includes(mode)) return json(res, 400, { error:'Background mode must be off, idle, or max' });
       settings.thumbnailMode = mode;
     }
     if (body.lanAccess !== undefined && !HOST_OVERRIDE) settings.lanAccess = body.lanAccess === true;
@@ -204,69 +276,68 @@ async function handleLocalApi(req, res, url) {
 
     if (settings.token && deviceChanged) {
       const ids = [...new Set(settings.folders.map(folder => folder.importId).filter(Boolean))];
-      await Promise.allSettled(ids.map(id => api(`/api/imports/${id}`, { method: 'POST', body: { sourceName: settings.device } })));
+      await Promise.allSettled(ids.map(id => api(`/api/imports/${id}`, { method:'POST', body:{ sourceName:settings.device } })));
     }
     if (settings.token && (connectionChanged || deviceChanged)) settings.folders.forEach(folder => queueFolderSync(folder.path, undefined, 0));
     if (previewModeChanged) {
-      refreshProviderThumbnailPolicy();
-      refreshBrowsePreviewPolicy(previousThumbnailMode);
+      (await providerThumbs()).refreshProviderThumbnailPolicy();
+      if (settings.browseFolders.length || browseFoldersPromise) (await browseFolders()).refreshBrowsePreviewPolicy(previousThumbnailMode);
     }
     if (connectionChanged || deviceChanged) invalidateClientProviders();
-    json(res, 200, { ok: true, thumbnailMode: settings.thumbnailMode, lanAccess: settings.lanAccess });
+    json(res, 200, { ok:true, thumbnailMode:settings.thumbnailMode, lanAccess:settings.lanAccess });
     if (lanChanged) setTimeout(() => rebindServer(desiredHost()).catch(error => console.error('Could not change LAN access:', error)), 40);
     return true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/auth/revoke-self') {
-    if (settings.token) await api('/api/auth/revoke-self', { method: 'POST' }).catch(() => {});
+    if (settings.token) await api('/api/auth/revoke-self', { method:'POST' }).catch(() => {});
     settings.token = '';
     deviceIdentityReconciled = false;
     await persistSettings();
     invalidateClientProviders();
-    json(res, 200, { ok: true });
+    json(res, 200, { ok:true });
     return true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/job/cancel') {
-    if (!cancelJob()) json(res, 409, { error: 'No operation is running' });
-    else json(res, 200, { ok: true });
+    if (!cancelJob()) json(res, 409, { error:'No operation is running' });
+    else json(res, 200, { ok:true });
     return true;
   }
 
   if (req.method === 'GET' && url.pathname === '/api/pick-folder') {
     const multiple = url.searchParams.get('multiple') === '1';
-    const picked = await pickFolder({ multiple, title: multiple ? 'Choose folders for Mochimono' : 'Choose a folder for Mochimono' });
+    const picked = await pickFolder({ multiple, title:multiple ? 'Choose folders for Mochimono' : 'Choose a folder for Mochimono' });
     const paths = multiple ? picked : picked ? [picked] : [];
-    json(res, 200, { path: paths[0] || null, paths });
+    json(res, 200, { path:paths[0] || null, paths });
     return true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/open-folder') {
     const body = await readJson(req);
-    if (!body.path) json(res, 400, { error: body.select ? 'File required' : 'Folder required' });
+    if (!body.path) json(res, 400, { error:body.select ? 'File required' : 'Folder required' });
     else {
       await openNativePath(body.path, body.select === true);
-      json(res, 200, { ok: true });
+      json(res, 200, { ok:true });
     }
     return true;
   }
 
   if (req.method === 'GET' && url.pathname === '/api/folder-stats') {
-    const [protectedFolders, browseFolders] = await Promise.all([folderStats(), browseFolderStats()]);
+    const browseStats = settings.browseFolders.length ? await (await browseFolders()).browseFolderStats() : [];
+    const protectedFolders = await folderStats();
     json(res, 200, {
-      folders: [
-        ...protectedFolders.map(folder => ({ ...folder, protected: true })),
-        ...browseFolders
-      ]
+      folders:[...protectedFolders.map(folder => ({ ...folder, protected:true })), ...browseStats]
     });
     return true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/folders') {
     const body = await readJson(req);
-    if (!body.path) json(res, 400, { error: 'Choose a folder' });
+    if (!body.path) json(res, 400, { error:'Choose a folder' });
     else {
       const folder = await addFolder(body.path, body.scope);
+      ensureSyncService();
       invalidateClientProviders();
       json(res, 200, { folder });
     }
@@ -276,37 +347,39 @@ async function handleLocalApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/folders/sync') {
     const body = await readJson(req);
     const protectedFolder = body.path ? folderFor(body.path) : null;
-    const browseFolder = body.path ? browseFolderFor(body.path) : null;
+    const browseFolder = body.path ? configuredBrowsePath(body.path) : null;
     if (protectedFolder) {
+      ensureSyncService();
       const continuing = await takeOverBackgroundJob(protectedFolder.path);
       if (!continuing) queueFolderSync(protectedFolder.path, undefined, 0, true);
-      json(res, 200, { ok: true });
+      json(res, 200, { ok:true });
     } else if (browseFolder) {
+      const browse = await browseFolders(true);
       const continuing = await takeOverBackgroundJob(browseFolder);
-      if (!continuing) await addBrowseFolder(browseFolder, browseFolderScope(browseFolder));
-      json(res, 200, { ok: true });
-    } else json(res, 404, { error: 'Folder not found' });
+      if (!continuing) await browse.addBrowseFolder(browseFolder, browseScope(browseFolder));
+      json(res, 200, { ok:true });
+    } else json(res, 404, { error:'Folder not found' });
     return true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/folders/remove') {
     const body = await readJson(req);
-    if (!body.path) json(res, 400, { error: 'Folder required' });
+    if (!body.path) json(res, 400, { error:'Folder required' });
     else {
       if (folderFor(body.path)) await removeFolder(body.path);
-      else if (browseFolderFor(body.path)) await removeBrowseFolder(body.path);
-      else return json(res, 404, { error: 'Folder not found' });
+      else if (configuredBrowsePath(body.path)) await (await browseFolders(true)).removeBrowseFolder(body.path);
+      else return json(res, 404, { error:'Folder not found' });
       invalidateClientProviders();
-      json(res, 200, { ok: true });
+      json(res, 200, { ok:true });
     }
     return true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/browse-folders') {
     const body = await readJson(req);
-    if (!body.path) json(res, 400, { error: 'Choose a folder' });
+    if (!body.path) json(res, 400, { error:'Choose a folder' });
     else {
-      const path = await addBrowseFolder(body.path, body.scope);
+      const path = await (await browseFolders(true)).addBrowseFolder(body.path, body.scope);
       invalidateClientProviders();
       json(res, 200, { path });
     }
@@ -315,21 +388,22 @@ async function handleLocalApi(req, res, url) {
 
   if (req.method === 'POST' && url.pathname === '/api/browse-folders/index') {
     const body = await readJson(req);
-    const path = body.path ? browseFolderFor(body.path) : null;
-    if (!path) json(res, 404, { error: 'Folder not found' });
+    const path = body.path ? configuredBrowsePath(body.path) : null;
+    if (!path) json(res, 404, { error:'Folder not found' });
     else {
       const continuing = await takeOverBackgroundJob(path);
-      if (!continuing) await addBrowseFolder(path, browseFolderScope(path));
-      json(res, 200, { ok: true });
+      if (!continuing) await (await browseFolders(true)).addBrowseFolder(path, browseScope(path));
+      json(res, 200, { ok:true });
     }
     return true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/browse-folders/protect') {
     const body = await readJson(req);
-    if (!body.path) json(res, 400, { error: 'Folder required' });
+    if (!body.path) json(res, 400, { error:'Folder required' });
     else {
-      const folder = await protectBrowseFolder(body.path, addFolder);
+      const folder = await (await browseFolders(true)).protectBrowseFolder(body.path, addFolder);
+      ensureSyncService();
       invalidateClientProviders();
       json(res, 200, { folder });
     }
@@ -338,42 +412,37 @@ async function handleLocalApi(req, res, url) {
 
   if (req.method === 'POST' && url.pathname === '/api/browse-folders/remove') {
     const body = await readJson(req);
-    if (!body.path) json(res, 400, { error: 'Folder required' });
+    if (!body.path) json(res, 400, { error:'Folder required' });
     else {
-      await removeBrowseFolder(body.path);
+      await (await browseFolders(true)).removeBrowseFolder(body.path);
       invalidateClientProviders();
-      json(res, 200, { ok: true });
+      json(res, 200, { ok:true });
     }
     return true;
   }
 
   if (req.method === 'GET' && url.pathname === '/api/backups') {
-    json(res, 200, { backups: await backupLocations() });
+    json(res, 200, { backups:await backupLocations() });
     return true;
   }
 
   if (req.method === 'GET' && url.pathname === '/api/backup/status') {
     const path = url.searchParams.get('path');
-    if (!path) json(res, 400, { error: 'Backup folder required' });
+    if (!path) json(res, 400, { error:'Backup folder required' });
     else json(res, 200, await backupStatus(path));
     return true;
   }
 
   if (req.method === 'GET' && url.pathname === '/api/backup/contents') {
     const path = url.searchParams.get('path');
-    if (!path) json(res, 400, { error: 'Backup folder required' });
+    if (!path) json(res, 400, { error:'Backup folder required' });
     else json(res, 200, await backupContents(path));
-    return true;
-  }
-
-  if (req.method === 'GET' && url.pathname === '/api/backup-collections') {
-    json(res, 200, { collections: await backupCollections() });
     return true;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/backup/init') {
     const body = await readJson(req);
-    if (!body.path) json(res, 400, { error: 'Choose a backup folder' });
+    if (!body.path) json(res, 400, { error:'Choose a backup folder' });
     else {
       const result = await backupInit(body.path, body.name, body.configure === true);
       invalidateClientProviders();
@@ -382,27 +451,9 @@ async function handleLocalApi(req, res, url) {
     return true;
   }
 
-  if (req.method === 'POST' && url.pathname === '/api/backup/policy') {
-    const body = await readJson(req);
-    if (!body.path) json(res, 400, { error: 'Choose a backup folder' });
-    else json(res, 200, await setBackupPolicy(body.path, body.collectionId, body.collectionName));
-    return true;
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/backup/update') {
-    const body = await readJson(req);
-    if (!body.path) json(res, 400, { error: 'Choose a backup location' });
-    else startJob(res, 'backup', `Update ${body.path}`, async update => {
-      const result = await backupUpdate(body.path, update);
-      invalidateClientProviders();
-      return result;
-    });
-    return true;
-  }
-
   if (req.method === 'POST' && url.pathname === '/api/backup/verify') {
     const body = await readJson(req);
-    if (!body.path) json(res, 400, { error: 'Choose a backup location' });
+    if (!body.path) json(res, 400, { error:'Choose a backup location' });
     else startJob(res, 'verify', `Verify ${body.path}`, async update => {
       const result = await backupVerify(body.path, update);
       invalidateClientProviders();
@@ -413,7 +464,7 @@ async function handleLocalApi(req, res, url) {
 
   if (req.method === 'POST' && url.pathname === '/api/backup/restore') {
     const body = await readJson(req);
-    if (!body.path) json(res, 400, { error: 'Choose a backup location' });
+    if (!body.path) json(res, 400, { error:'Choose a backup location' });
     else startJob(res, 'restore', `Restore ${body.path}`, async update => {
       const result = await backupRestore(body.path, update);
       invalidateClientProviders();
@@ -430,14 +481,16 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     if (url.pathname.startsWith('/api/')) {
       if (await handleLocalApi(req, res, url)) return;
-      if (await handleClientImport(req, res, url)) return;
+      if (await handleLazyClientImport(req, res, url)) return;
+      if (await handleLazyClientGateway(req, res, url)) return;
+    } else {
+      if (await serveStatic(res, decodeURIComponent(url.pathname))) return;
+      if ((url.pathname === '/files' || url.pathname.startsWith('/files/')) && await handleLazyClientGateway(req, res, url)) return;
     }
-    if (await handleClientGateway(req, res, url)) return;
-    if (await serveStatic(res, decodeURIComponent(url.pathname))) return;
-    json(res, 404, { error: 'Not found' });
+    json(res, 404, { error:'Not found' });
   } catch (error) {
     console.error(error);
-    if (!res.headersSent) json(res, error.status || 500, { error: error.message || 'Internal error' });
+    if (!res.headersSent) json(res, error.status || 500, { error:error.message || 'Internal error' });
     else if (!res.destroyed) res.destroy();
   }
 });
@@ -480,16 +533,16 @@ function openBrowser(url) {
   if (process.env.MOCHIMONO_NO_OPEN === '1') return;
   try {
     const child = platform() === 'win32'
-      ? spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' })
+      ? spawn('cmd', ['/c', 'start', '', url], { detached:true, stdio:'ignore' })
       : platform() === 'darwin'
-        ? spawn('open', [url], { detached: true, stdio: 'ignore' })
-        : spawn('xdg-open', [url], { detached: true, stdio: 'ignore' });
+        ? spawn('open', [url], { detached:true, stdio:'ignore' })
+        : spawn('xdg-open', [url], { detached:true, stdio:'ignore' });
     child.unref();
   } catch {}
 }
 
-startSyncService();
-startBrowseService(invalidateClientProviders);
+if (settings.folders.length) ensureSyncService();
+if (settings.browseFolders.length) browseFolders(true).catch(error => console.error('Browse service failed', error));
 listenServer(activeHost).then(() => {
   const browserHost = activeHost === '0.0.0.0' ? '127.0.0.1' : activeHost;
   const url = `http://${browserHost}:${PORT}`;

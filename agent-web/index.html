@@ -32,7 +32,7 @@
   </header>
 
   <main id="filesPane" class="files-pane">
-    <iframe id="filesFrame" src="/files/" title="Mochimono Library"></iframe>
+    <iframe id="filesFrame" title="Mochimono Library"></iframe>
   </main>
 
   <main id="storagePane" class="dashboard" hidden>
@@ -105,11 +105,7 @@
 
   <dialog id="backupDialog" class="small-dialog">
     <div class="dialog-head"><div><h3>Backup</h3><div id="backupPathLabel" class="picker-path"></div></div><button class="icon" data-close>×</button></div>
-    <div class="field-stack">
-      <input id="backupName" placeholder="Backup name">
-      <label class="field-label" for="backupScope">Back up</label>
-      <select id="backupScope"><option value="">Everything</option></select>
-    </div>
+    <div class="field-stack"><input id="backupName" placeholder="Backup name"></div>
     <div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="initializeBackup" class="primary">Save</button></div>
   </dialog>
 
@@ -136,7 +132,6 @@
   <script type="module" src="/preview-progress-ui.js"></script>
   <script type="module" src="/storage-workflow-ui.js"></script>
   <script type="module" src="/storage-locations-ui.js"></script>
-  <script type="module" src="/backup-protection-actions.js"></script>
   <script type="module" src="/storage-capacity-ui.js"></script>
   <script type="module" src="/backup-center.js"></script>
   <script type="module" src="/activity-center.js"></script>
