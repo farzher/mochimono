@@ -30,7 +30,6 @@ if (storagePane && sourceSection) {
     .backup-job{margin-top:9px;padding:9px 11px;border:1px solid #282429;border-radius:9px;background:#0f0e10;color:#8e8582;font-size:11px}.backup-job strong{color:#d8cfcb}
     .backup-plans{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px}.backup-plan{min-width:0;padding:10px 11px;border:1px solid #272428;border-radius:10px;background:#100f11}.backup-plan strong{display:block;color:#cfc6c2;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.backup-plan span{display:block;margin-top:3px;color:#7f7774;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.backup-plan b{font-weight:720;color:#aaa19d}
     .backup-attention{margin-top:10px;color:#9f928b;font-size:11px;line-height:1.5}.backup-attention strong{color:#d9c3ae}
-
     .backup-center-dialog{width:min(780px,calc(100vw - 28px));max-height:min(820px,calc(100dvh - 28px));overflow:auto}.backup-center-dialog .dialog-head{position:sticky;top:0;z-index:4;background:#151315}
     .backup-settings{display:grid;gap:23px}.backup-settings-section{display:grid;gap:9px}.backup-settings-section>header{display:flex;align-items:end;justify-content:space-between;gap:12px}.backup-settings-section h4{margin:0;color:#dcd3cf;font-size:13px}.backup-settings-section header span{color:#7f7774;font-size:10px;text-align:right}
     .backup-plan-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.backup-plan-row{padding:11px 12px;border:1px solid #292529;border-radius:10px;background:#111012}.backup-plan-row strong{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#d2c9c5;font-size:11px}.backup-plan-row strong b{color:#8d8581;font-size:10px;font-weight:680}.backup-plan-row p{margin:5px 0 0;color:#817976;font-size:10px;line-height:1.45}
@@ -51,8 +50,9 @@ if (storagePane && sourceSection) {
 
   function placeSection() {
     const storage = document.querySelector('.managed-storage-section');
-    if (storage) storage.before(section);
-    else sourceSection.after(section);
+    if (storage) {
+      if (storage.previousElementSibling !== section) storage.before(section);
+    } else if (sourceSection.nextElementSibling !== section) sourceSection.after(section);
   }
   placeSection();
 
@@ -113,7 +113,12 @@ if (storagePane && sourceSection) {
 
   function modeMap(snapshot) {
     const policies = new Map((snapshot?.policies || []).map(item => [`${item.locationId}\0${item.mediaType}`, item.representation]));
-    return (locationId, mediaType) => policies.get(`${locationId}\0${mediaType}`) === 'compact' ? 'compact' : 'original';
+    const retention = new Map((snapshot?.retention || []).map(item => [`${item.locationId}\0${item.mediaType}`, item.allowOriginalRemoval === true]));
+    return (locationId, mediaType) => {
+      const key = `${locationId}\0${mediaType}`;
+      if (policies.get(key) !== 'compact') return 'original';
+      return retention.get(key) ? 'compact-only' : 'compact';
+    };
   }
 
   function planCount(level) {
@@ -166,23 +171,17 @@ if (storagePane && sourceSection) {
   }
 
   function backupFor(id) { return (model?.state?.backups || []).find(item => item.id === id); }
-  function driveFor(id) { return (model?.drives || []).find(item => item.id === id); }
   function peerFor(id) { return (model?.state?.peers || []).find(item => item.id === id); }
 
   function destinationStatus(location) {
     if (location.kind === 'primary') return 'Cloud · original library';
-    const drive = driveFor(location.id);
     const peer = peerFor(location.id);
     const backup = backupFor(location.id);
     const parts = [];
     if (location.kind === 'peer') parts.push(peer?.online ? 'Online' : 'Offline', 'encrypted remote');
     else if (location.kind === 'backup') parts.push(backup ? 'Connected' : 'Offline');
-    if (drive) {
-      if (drive.desiredCount) parts.push(`${Number(drive.protectedCount || 0).toLocaleString()}/${Number(drive.desiredCount).toLocaleString()} stored`);
-      if (drive.verifiedCount) parts.push(`${Number(drive.verifiedCount).toLocaleString()} verified`);
-      if (drive.lastVerifiedAt) parts.push(`verified ${age(drive.lastVerifiedAt)}`);
-    }
     if (location.encrypted) parts.push('encrypted');
+    if (!backup && !peer?.online && location.lastSeen) parts.push(`last seen ${age(location.lastSeen)}`);
     if (location.reliability === 'low') parts.push('not counted toward protection');
     return parts.filter(Boolean).join(' · ') || 'Backup storage';
   }
@@ -191,7 +190,8 @@ if (storagePane && sourceSection) {
     if (location.kind !== 'backup') return '';
     const locationId = `backup:${location.id}`;
     const current = mode(locationId, mediaType);
-    return `<label>${mediaType === 'image' ? 'Images' : 'Video'}<select data-representation data-location-id="${esc(locationId)}" data-location-name="${esc(location.name)}" data-media="${mediaType}"><option value="original" ${current === 'original' ? 'selected' : ''}>Original</option><option value="compact" ${current === 'compact' ? 'selected' : ''}>Original + Squished</option></select></label>`;
+    const legacy = current === 'compact-only' ? '<option value="compact-only" selected disabled>Squished only · existing</option>' : '';
+    return `<label>${mediaType === 'image' ? 'Images' : 'Video'}<select data-representation data-location-id="${esc(locationId)}" data-media="${mediaType}">${legacy}<option value="original" ${current === 'original' ? 'selected' : ''}>Original</option><option value="compact" ${current === 'compact' ? 'selected' : ''}>Original + Squished</option></select></label>`;
   }
 
   function destinationRows() {
@@ -242,7 +242,7 @@ if (storagePane && sourceSection) {
         <section class="backup-settings-section">
           <header><h4>Destinations</h4><span>Where Mochimono may place recovery copies.</span></header>
           <div class="backup-destination-list">${destinationRows()}</div>
-          <div class="backup-safety-note"><strong>Protection, availability, and quality are separate.</strong> Protection decides how many independent recovery copies are required. Cloud-only should remove a local source only after that target is still satisfied. Squished versions are currently additive here; destructive Squished-only stays out of this screen until reduced-fidelity copies participate correctly in Protection.</div>
+          <div class="backup-safety-note"><strong>Protection, availability, and quality are separate.</strong> Protection decides how many independent recovery copies are required. Cloud-only should remove a local source only after that target is still satisfied. New destructive Squished-only settings stay out of this screen until reduced-fidelity copies participate correctly in Protection.</div>
         </section>
         <section class="backup-settings-section">
           <header><h4>Automatic work</h4></header>
@@ -337,15 +337,13 @@ if (storagePane && sourceSection) {
     if (busy || (!force && (document.hidden || storagePane.hidden))) return schedule(2500);
     busy = true;
     try {
-      const [stateResult, drivesResult, storageResult] = await Promise.allSettled([
+      const [stateResult, storageResult] = await Promise.allSettled([
         control('/api/client/protection/state'),
-        server('/api/drives'),
         server('/api/compression/storage-snapshot')
       ]);
       if (stateResult.status !== 'fulfilled') throw stateResult.reason;
       model = {
         state:stateResult.value,
-        drives:drivesResult.status === 'fulfilled' ? drivesResult.value.drives || [] : [],
         storage:storageResult.status === 'fulfilled' ? storageResult.value : { policies:[], retention:[] }
       };
       renderMain();
