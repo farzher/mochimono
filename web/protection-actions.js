@@ -46,7 +46,7 @@ async function jsonRequest(path, options = {}) {
 
 async function enrichManagedCopies(state, hash) {
   const copies = await Promise.all((state?.copies || []).map(async copy => {
-    if (!copy.id || !['backup','peer'].includes(copy.kind)) return copy;
+    if (copy.representation === 'compact' || !copy.id || !['backup','peer'].includes(copy.kind)) return copy;
     try {
       const replica = await jsonRequest(`/api/drives/${encodeURIComponent(copy.id)}/files/${hash}`);
       return { ...copy, verifiedAt: replica.verifiedAt || null, lastSeen: replica.lastSeen || null };
@@ -66,6 +66,7 @@ function protectionLabel(state) {
   parts.push(`${state.status?.devices || 0} ${state.status?.devices === 1 ? 'device' : 'devices'}`);
   parts.push(`${state.status?.sites || 0} ${state.status?.sites === 1 ? 'place' : 'places'}`);
   if (state.status?.remote) parts.push(`${state.status.remote} remote`);
+  if (state.status?.reducedFidelity) parts.push(`${state.status.reducedFidelity} Squished`);
   return parts.join(' · ');
 }
 
@@ -73,6 +74,7 @@ function missingLabel(state) {
   if (state?.meets) return 'Protection target met';
   const missing = [];
   if (state?.missing?.copies) missing.push(`${state.missing.copies} more verified ${state.missing.copies === 1 ? 'copy' : 'copies'}`);
+  if (state?.missing?.originals) missing.push('an Original copy');
   if (state?.missing?.devices) missing.push(`${state.missing.devices} more ${state.missing.devices === 1 ? 'device' : 'devices'}`);
   if (state?.missing?.remote) missing.push('remote copy');
   if (state?.missing?.sites) missing.push(`${state.missing.sites} more ${state.missing.sites === 1 ? 'place' : 'places'}`);
@@ -81,7 +83,8 @@ function missingLabel(state) {
 
 function copyDescription(copy) {
   const parts = [
-    copy.kind === 'peer' ? 'Encrypted remote' : copy.kind === 'primary' ? 'Cloud' : copy.kind === 'source' ? 'Local source' : 'Backup'
+    copy.kind === 'peer' ? 'Encrypted remote' : copy.kind === 'primary' ? 'Cloud' : copy.kind === 'source' ? 'Local source' : 'Backup',
+    copy.representation === 'compact' ? 'Squished recovery' : 'Original'
   ];
   if (copy.site && copy.site !== copy.name) parts.push(copy.site);
   if (copy.kind === 'source') {
