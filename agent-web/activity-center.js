@@ -149,7 +149,7 @@ if (activityHost) {
     rememberAgent(state?.job);
     const active=[],queued=[],recent=[];
     if(state?.job?.status==='running') active.push(jobItem(state.job,'agent',true));
-    for(const item of state?.job?.queue||[]) queued.push(jobItem(item,'agent-queue',true));
+    for(const item of state?.job?.queue||[]) queued.push(jobItem(item,'agent-queue',false));
     const folders=folderItems(state,stats),squish=squishItems(work),previews=previewItems(state);
     active.push(...folders.active,...squish.active,...previews.active);
     queued.push(...folders.queued,...squish.queued,...previews.queued);
@@ -200,7 +200,6 @@ if (activityHost) {
     try{
       if(item.source==='squish')await request(`/api/work/${item.rawId}/cancel`,{method:'POST'});
       else if(item.source==='squish-batch')await Promise.allSettled(item.rawIds.map(id=>request(`/api/work/${id}/cancel`,{method:'POST'})));
-      else if(item.source==='agent-queue')await request('/api/job/cancel',{method:'POST',body:{id:item.id}});
       else await request('/api/job/cancel',{method:'POST'});
       schedule(0);
     }catch(error){toast(error.message);cancel.disabled=false;}
