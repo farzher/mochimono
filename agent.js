@@ -12,11 +12,8 @@ import { addBrowseFolder, browseFolderFor, browseFolderScope, browseFolderStats,
 import { backupContents, backupInit, backupLocations, backupRestore, backupStatus, backupVerify } from './lib/agent-backups.js';
 import { invalidateClientProviders } from './lib/client-providers.js';
 import { pickFolder } from './lib/folder-picker.js';
-import { noteProviderThumbnailActivity, refreshProviderThumbnailPolicy } from './lib/provider-thumbs.js';
 import { handleSourceExclusions } from './lib/source-exclusion-routes.js';
 import { thumbnailAgentStatus } from './lib/thumbnail-agent.js';
-import { handleClientImport } from './client-import.js';
-import { handleClientGateway } from './client-gateway.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'agent-web');
@@ -25,6 +22,35 @@ const PORT = Number(process.env.MOCHIMONO_AGENT_PORT || 8643);
 const desiredHost = () => HOST_OVERRIDE || (settings.lanAccess ? '0.0.0.0' : '127.0.0.1');
 let activeHost = desiredHost();
 let deviceIdentityReconciled = false;
+let providerThumbsPromise = null;
+let clientImportPromise = null;
+let clientGatewayPromise = null;
+let libraryBackgroundPromise = null;
+
+const providerThumbs = () => providerThumbsPromise ||= import('./lib/provider-thumbs.js');
+const clientImport = () => clientImportPromise ||= import('./client-import.js');
+const clientGateway = () => clientGatewayPromise ||= import('./client-gateway.js');
+const libraryBackground = () => libraryBackgroundPromise ||= import('./lib/library-background.js');
+
+function clientImportRoute(pathname) {
+  return pathname === '/api/client/folder-browser' ||
+    pathname === '/api/client/folder-tree' ||
+    pathname.startsWith('/api/client/import/') ||
+    pathname.startsWith('/api/client/browser-') ||
+    pathname.startsWith('/api/video-optimize/cloud-') ||
+    /^\/api\/thumbs\/[a-f0-9]{64}$/.test(pathname);
+}
+
+async function handleLazyClientImport(req, res, url) {
+  if (!clientImportRoute(url.pathname)) return false;
+  return (await clientImport()).handleClientImport(req, res, url);
+}
+
+async function handleLazyClientGateway(req, res, url) {
+  const [gateway, background] = await Promise.all([clientGateway(), libraryBackground()]);
+  background.startLibraryBackground().catch(error => console.error('Library background failed', error));
+  return gateway.handleClientGateway(req, res, url);
+}
 
 function lanUrls() {
   if (activeHost === '127.0.0.1' || activeHost === 'localhost') return [];
@@ -143,7 +169,7 @@ async function handleLocalApi(req, res, url) {
   if (await handleSourceExclusions(req, res, url)) return true;
 
   if (req.method === 'POST' && url.pathname === '/api/thumbnail-activity') {
-    noteProviderThumbnailActivity();
+    (await providerThumbs()).noteProviderThumbnailActivity();
     json(res, 200, { ok:true });
     return true;
   }
@@ -206,7 +232,7 @@ async function handleLocalApi(req, res, url) {
     }
     if (settings.token && (connectionChanged || deviceChanged)) settings.folders.forEach(folder => queueFolderSync(folder.path, undefined, 0));
     if (previewModeChanged) {
-      refreshProviderThumbnailPolicy();
+      (await providerThumbs()).refreshProviderThumbnailPolicy();
       refreshBrowsePreviewPolicy(previousThumbnailMode);
     }
     if (connectionChanged || deviceChanged) invalidateClientProviders();
@@ -402,10 +428,12 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     if (url.pathname.startsWith('/api/')) {
       if (await handleLocalApi(req, res, url)) return;
-      if (await handleClientImport(req, res, url)) return;
+      if (await handleLazyClientImport(req, res, url)) return;
+      if (await handleLazyClientGateway(req, res, url)) return;
+    } else {
+      if (await serveStatic(res, decodeURIComponent(url.pathname))) return;
+      if (await handleLazyClientGateway(req, res, url)) return;
     }
-    if (await handleClientGateway(req, res, url)) return;
-    if (await serveStatic(res, decodeURIComponent(url.pathname))) return;
     json(res, 404, { error:'Not found' });
   } catch (error) {
     console.error(error);
