@@ -9,15 +9,15 @@ User=mochimono
 Group=mochimono
 WorkingDirectory=/opt/mochimono
 EnvironmentFile=/etc/mochimono.env
-ExecStart=/opt/mochimono/runtime/node --max-old-space-size=384 server-entry.js
+ExecStart=/opt/mochimono/runtime/node --max-old-space-size=256 server-entry.js
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30
 KillSignal=SIGTERM
 LimitNOFILE=65536
 CPUQuota=100%
-MemoryHigh=384M
-MemoryMax=512M
+MemoryHigh=256M
+MemoryMax=384M
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
