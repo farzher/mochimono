@@ -95,7 +95,7 @@ The replacement is destination eligibility inside Protection. Future placement r
 
 ## Safety rules
 
-- Keep at least one verified Original.
+- Keep at least one verified Original in the protection model.
 - Create and verify Squished before removing an Original from that backup.
 - Never count Original + Squished on one physical device as two independent copies.
 - Never count a destination marked Do not rely on.
@@ -131,5 +131,6 @@ File details show the inherited/overridden protection level, concrete target, an
 
 1. Retire the legacy per-drive collection scope completely and move any useful advanced placement rules into Protection.
 2. Make availability (`Keep local`, `Cloud-only`, later `Automatic`) an explicit first-class control layered on top of protection.
-3. Add destination capacity/preference rules for power users without making manual placement the default.
-4. Add recovery-impact views such as what survives if this PC, drive, or site disappears.
+3. Tighten the local-freeing gate so its reachable-copy calculation explicitly requires a reachable Original when reduced-fidelity recovery copies are involved.
+4. Add destination capacity/preference rules for power users without making manual placement the default.
+5. Add recovery-impact views such as what survives if this PC, drive, or site disappears.
