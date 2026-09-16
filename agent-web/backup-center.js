@@ -177,7 +177,6 @@ if (storagePane && sourceSection) {
     const parts = [];
     if (location.kind === 'peer') parts.push(peer?.online ? 'Online' : 'Offline', 'encrypted remote');
     else if (location.kind === 'backup') parts.push(backup ? 'Connected' : 'Offline');
-    if (location.encrypted) parts.push('encrypted');
     if (!backup && !peer?.online && location.lastSeen) parts.push(`last seen ${age(location.lastSeen)}`);
     if (location.reliability === 'low') parts.push('not counted toward protection');
     return parts.filter(Boolean).join(' · ') || 'Backup storage';
