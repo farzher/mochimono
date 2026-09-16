@@ -8,7 +8,6 @@ import http from 'node:http';
 import { api, cancelJob, currentJob, DEVICE, json, persistSettings, preemptBackgroundJob, readJson, serverState, settings, startJob } from './lib/agent-context.js';
 import { backgroundWorkStatus } from './lib/background-work.js';
 import { addFolder, folderFor, folderStats, queueFolderSync, removeFolder, startSyncService } from './lib/agent-sync.js';
-import { addBrowseFolder, browseFolderFor, browseFolderScope, browseFolderStats, protectBrowseFolder, refreshBrowsePreviewPolicy, removeBrowseFolder, startBrowseService } from './lib/browse-folders.js';
 import { backupContents, backupInit, backupLocations, backupRestore, backupStatus, backupVerify } from './lib/agent-backups.js';
 import { invalidateClientProviders } from './lib/client-providers.js';
 import { pickFolder } from './lib/folder-picker.js';
@@ -23,14 +22,28 @@ const desiredHost = () => HOST_OVERRIDE || (settings.lanAccess ? '0.0.0.0' : '12
 let activeHost = desiredHost();
 let deviceIdentityReconciled = false;
 let providerThumbsPromise = null;
+let browseFoldersPromise = null;
 let clientImportPromise = null;
 let clientGatewayPromise = null;
 let libraryBackgroundPromise = null;
+let browseServiceStarted = false;
 
 const providerThumbs = () => providerThumbsPromise ||= import('./lib/provider-thumbs.js');
 const clientImport = () => clientImportPromise ||= import('./client-import.js');
 const clientGateway = () => clientGatewayPromise ||= import('./client-gateway.js');
 const libraryBackground = () => libraryBackgroundPromise ||= import('./lib/library-background.js');
+
+async function browseFolders(startService = false) {
+  const module = await (browseFoldersPromise ||= import('./lib/browse-folders.js'));
+  if (startService && !browseServiceStarted) {
+    browseServiceStarted = true;
+    module.startBrowseService(invalidateClientProviders);
+  }
+  return module;
+}
+
+const browseScope = path => String(settings.browseFolderScopes?.[pathKey(path)] || '').toLowerCase() === 'all' ? 'all' : 'media';
+const configuredBrowsePath = path => settings.browseFolders.find(item => pathKey(item) === pathKey(path));
 
 function clientImportRoute(pathname) {
   return pathname === '/api/client/folder-browser' ||
@@ -88,7 +101,7 @@ async function serveStatic(res, pathname) {
 function visibleFolders() {
   return [
     ...settings.folders.map(folder => ({ ...folder, protected:true })),
-    ...settings.browseFolders.map(path => ({ path, importId:null, lastSynced:null, protected:false, scope:browseFolderScope(path) }))
+    ...settings.browseFolders.map(path => ({ path, importId:null, lastSynced:null, protected:false, scope:browseScope(path) }))
   ];
 }
 
@@ -233,7 +246,7 @@ async function handleLocalApi(req, res, url) {
     if (settings.token && (connectionChanged || deviceChanged)) settings.folders.forEach(folder => queueFolderSync(folder.path, undefined, 0));
     if (previewModeChanged) {
       (await providerThumbs()).refreshProviderThumbnailPolicy();
-      refreshBrowsePreviewPolicy(previousThumbnailMode);
+      if (settings.browseFolders.length || browseFoldersPromise) (await browseFolders()).refreshBrowsePreviewPolicy(previousThumbnailMode);
     }
     if (connectionChanged || deviceChanged) invalidateClientProviders();
     json(res, 200, { ok:true, thumbnailMode:settings.thumbnailMode, lanAccess:settings.lanAccess });
@@ -276,9 +289,10 @@ async function handleLocalApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/folder-stats') {
-    const [protectedFolders, browseFolders] = await Promise.all([folderStats(), browseFolderStats()]);
+    const browseStats = settings.browseFolders.length ? (await browseFolders()).browseFolderStats() : [];
+    const protectedFolders = await folderStats();
     json(res, 200, {
-      folders:[...protectedFolders.map(folder => ({ ...folder, protected:true })), ...browseFolders]
+      folders:[...protectedFolders.map(folder => ({ ...folder, protected:true })), ...browseStats]
     });
     return true;
   }
@@ -297,14 +311,15 @@ async function handleLocalApi(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/folders/sync') {
     const body = await readJson(req);
     const protectedFolder = body.path ? folderFor(body.path) : null;
-    const browseFolder = body.path ? browseFolderFor(body.path) : null;
+    const browseFolder = body.path ? configuredBrowsePath(body.path) : null;
     if (protectedFolder) {
       const continuing = await takeOverBackgroundJob(protectedFolder.path);
       if (!continuing) queueFolderSync(protectedFolder.path, undefined, 0, true);
       json(res, 200, { ok:true });
     } else if (browseFolder) {
+      const browse = await browseFolders(true);
       const continuing = await takeOverBackgroundJob(browseFolder);
-      if (!continuing) await addBrowseFolder(browseFolder, browseFolderScope(browseFolder));
+      if (!continuing) await browse.addBrowseFolder(browseFolder, browseScope(browseFolder));
       json(res, 200, { ok:true });
     } else json(res, 404, { error:'Folder not found' });
     return true;
@@ -315,7 +330,7 @@ async function handleLocalApi(req, res, url) {
     if (!body.path) json(res, 400, { error:'Folder required' });
     else {
       if (folderFor(body.path)) await removeFolder(body.path);
-      else if (browseFolderFor(body.path)) await removeBrowseFolder(body.path);
+      else if (configuredBrowsePath(body.path)) await (await browseFolders(true)).removeBrowseFolder(body.path);
       else return json(res, 404, { error:'Folder not found' });
       invalidateClientProviders();
       json(res, 200, { ok:true });
@@ -327,7 +342,7 @@ async function handleLocalApi(req, res, url) {
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error:'Choose a folder' });
     else {
-      const path = await addBrowseFolder(body.path, body.scope);
+      const path = await (await browseFolders(true)).addBrowseFolder(body.path, body.scope);
       invalidateClientProviders();
       json(res, 200, { path });
     }
@@ -336,11 +351,11 @@ async function handleLocalApi(req, res, url) {
 
   if (req.method === 'POST' && url.pathname === '/api/browse-folders/index') {
     const body = await readJson(req);
-    const path = body.path ? browseFolderFor(body.path) : null;
+    const path = body.path ? configuredBrowsePath(body.path) : null;
     if (!path) json(res, 404, { error:'Folder not found' });
     else {
       const continuing = await takeOverBackgroundJob(path);
-      if (!continuing) await addBrowseFolder(path, browseFolderScope(path));
+      if (!continuing) await (await browseFolders(true)).addBrowseFolder(path, browseScope(path));
       json(res, 200, { ok:true });
     }
     return true;
@@ -350,7 +365,7 @@ async function handleLocalApi(req, res, url) {
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error:'Folder required' });
     else {
-      const folder = await protectBrowseFolder(body.path, addFolder);
+      const folder = await (await browseFolders(true)).protectBrowseFolder(body.path, addFolder);
       invalidateClientProviders();
       json(res, 200, { folder });
     }
@@ -361,7 +376,7 @@ async function handleLocalApi(req, res, url) {
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error:'Folder required' });
     else {
-      await removeBrowseFolder(body.path);
+      await (await browseFolders(true)).removeBrowseFolder(body.path);
       invalidateClientProviders();
       json(res, 200, { ok:true });
     }
@@ -489,7 +504,7 @@ function openBrowser(url) {
 }
 
 startSyncService();
-startBrowseService(invalidateClientProviders);
+if (settings.browseFolders.length) browseFolders(true).catch(error => console.error('Browse service failed', error));
 listenServer(activeHost).then(() => {
   const browserHost = activeHost === '0.0.0.0' ? '127.0.0.1' : activeHost;
   const url = `http://${browserHost}:${PORT}`;
