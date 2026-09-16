@@ -9,7 +9,7 @@ User=mochimono
 Group=mochimono
 WorkingDirectory=/opt/mochimono
 EnvironmentFile=/etc/mochimono.env
-ExecStart=/usr/bin/node --max-old-space-size=384 server-entry.js
+ExecStart=/opt/mochimono/runtime/node --max-old-space-size=384 server-entry.js
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30
