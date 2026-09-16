@@ -101,7 +101,7 @@ function normalizeSource(source) {
   return {
     ...source,
     scope:source.scope === 'all' ? 'all' : 'media',
-    cloud:source.cloud === true || (source.cloud == null && Number(source.importId) > 0)
+    cloud:source.cloud === true
   };
 }
 
