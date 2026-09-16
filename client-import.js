@@ -12,7 +12,7 @@ import { localCandidate } from './lib/local-locations.js';
 import { mimeFor } from './lib/mime.js';
 
 const TMP_DIR = join(CONFIG_DIR, 'tmp');
-const BROWSER_THUMB_DIR = join(homedir(), '.mochimono', 'provider-thumbs');
+const BROWSER_THUMB_DIR = join(CONFIG_DIR, 'provider-thumbs');
 const BROWSER_THUMB_VERSION = 1;
 const MAX_BROWSER_THUMB_BYTES = 8 * 1024 * 1024;
 const MAX_BROWSER_HEIC_BYTES = 128 * 1024 * 1024;
