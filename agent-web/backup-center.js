@@ -56,9 +56,6 @@ if (storagePane && sourceSection) {
   }
   placeSection();
 
-  // The old per-drive collection selector is not authoritative for automatic
-  // Protection. Hide it until destination eligibility is part of the planner so
-  // the UI cannot promise a placement rule that the backup engine ignores.
   const legacyScope = document.querySelector('[data-backup-scope]');
   if (legacyScope) {
     legacyScope.value = '';
@@ -190,8 +187,7 @@ if (storagePane && sourceSection) {
     if (location.kind !== 'backup') return '';
     const locationId = `backup:${location.id}`;
     const current = mode(locationId, mediaType);
-    const legacy = current === 'compact-only' ? '<option value="compact-only" selected disabled>Squished only · existing</option>' : '';
-    return `<label>${mediaType === 'image' ? 'Images' : 'Video'}<select data-representation data-location-id="${esc(locationId)}" data-media="${mediaType}">${legacy}<option value="original" ${current === 'original' ? 'selected' : ''}>Original</option><option value="compact" ${current === 'compact' ? 'selected' : ''}>Original + Squished</option></select></label>`;
+    return `<label>${mediaType === 'image' ? 'Images' : 'Video'}<select data-representation data-location-id="${esc(locationId)}" data-location-name="${esc(location.name)}" data-media="${mediaType}"><option value="original" ${current === 'original' ? 'selected' : ''}>Original</option><option value="compact" ${current === 'compact' ? 'selected' : ''}>Original + Squished</option><option value="compact-only" ${current === 'compact-only' ? 'selected' : ''}>Squished only</option></select></label>`;
   }
 
   function destinationRows() {
@@ -242,7 +238,7 @@ if (storagePane && sourceSection) {
         <section class="backup-settings-section">
           <header><h4>Destinations</h4><span>Where Mochimono may place recovery copies.</span></header>
           <div class="backup-destination-list">${destinationRows()}</div>
-          <div class="backup-safety-note"><strong>Protection, availability, and quality are separate.</strong> Protection decides how many independent recovery copies are required. Cloud-only should remove a local source only after that target is still satisfied. New destructive Squished-only settings stay out of this screen until reduced-fidelity copies participate correctly in Protection.</div>
+          <div class="backup-safety-note"><strong>Squished only still counts as one physical recovery copy.</strong> Mochimono creates and verifies it before removing that drive's Original, and keeps at least one verified Original somewhere else.</div>
         </section>
         <section class="backup-settings-section">
           <header><h4>Automatic work</h4></header>
@@ -287,14 +283,22 @@ if (storagePane && sourceSection) {
 
   async function updateRepresentation(event) {
     const select = event.currentTarget;
+    const next = select.value;
     const locationId = select.dataset.locationId;
     const mediaType = select.dataset.media;
     const previous = modeMap(model?.storage)(locationId, mediaType);
+    if (next === 'compact-only') {
+      const okay = confirm(`Use Squished only for ${mediaType === 'image' ? 'images' : 'video'} on ${select.dataset.locationName}?\n\nMochimono will create and verify the Squished copy first, and will keep an Original on another verified location.`);
+      if (!okay) { select.value = previous; return; }
+    }
     select.disabled = true;
     try {
-      await server('/api/compression/storage-policy', { method:'POST', body:{ locationId, mediaType, representation:select.value } });
-      if (select.value === 'compact') {
-        await server('/api/compression/retention', { method:'POST', body:{ locationId, mediaType, allowOriginalRemoval:false } });
+      if (next === 'compact-only') {
+        await server('/api/compression/storage-policy', { method:'POST', body:{ locationId, mediaType, representation:'compact' } });
+        await server('/api/compression/retention', { method:'POST', body:{ locationId, mediaType, allowOriginalRemoval:true, confirmation:'compact-only' } });
+      } else {
+        await server('/api/compression/storage-policy', { method:'POST', body:{ locationId, mediaType, representation:next } });
+        if (next === 'compact') await server('/api/compression/retention', { method:'POST', body:{ locationId, mediaType, allowOriginalRemoval:false } });
       }
       toast('Storage format updated');
       await refresh(true);
