@@ -28,7 +28,7 @@ for (const entry of await readdir(ROOT, { withFileTypes:true })) {
 
 const agentDependencies = sourcePackage.dependencies || {};
 const serverDependencies = Object.fromEntries(
-  Object.entries(agentDependencies).filter(([name]) => ['sharp','heic-decode'].includes(name))
+  Object.entries(agentDependencies).filter(([name]) => ['sharp','heic-decode','ffmpeg-static'].includes(name))
 );
 const releasePackage = {
   name:`mochimono-${target}`,
