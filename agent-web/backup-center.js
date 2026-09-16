@@ -35,10 +35,11 @@ if (storagePane && sourceSection) {
     .backup-settings{display:grid;gap:23px}.backup-settings-section{display:grid;gap:9px}.backup-settings-section>header{display:flex;align-items:end;justify-content:space-between;gap:12px}.backup-settings-section h4{margin:0;color:#dcd3cf;font-size:13px}.backup-settings-section header span{color:#7f7774;font-size:10px;text-align:right}
     .backup-plan-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.backup-plan-row{padding:11px 12px;border:1px solid #292529;border-radius:10px;background:#111012}.backup-plan-row strong{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#d2c9c5;font-size:11px}.backup-plan-row strong b{color:#8d8581;font-size:10px;font-weight:680}.backup-plan-row p{margin:5px 0 0;color:#817976;font-size:10px;line-height:1.45}
     .backup-source-list,.backup-destination-list{display:grid;gap:6px}.backup-source-row,.backup-destination-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 11px;border:1px solid #292529;border-radius:10px;background:#111012}.backup-row-copy{min-width:0}.backup-row-copy strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#d6cdca;font-size:11px}.backup-row-copy small{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#7f7774;font-size:9.5px}.backup-source-row select,.backup-destination-row select,.backup-background select{width:auto;min-width:132px;padding:6px 8px;font-size:10px}
-    .backup-destination-controls{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}.backup-destination-controls label{display:flex;align-items:center;gap:5px;color:#817976;font-size:9px}.backup-destination-controls select{min-width:106px}.backup-rely{border:0;background:transparent;color:#a69c98;font-size:10px;font-weight:700;padding:5px}.backup-rely:hover{color:#eee}.backup-rely.off{color:#726a68}
+    .backup-destination-controls{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}.backup-destination-controls label{display:flex;align-items:center;gap:5px;color:#817976;font-size:9px}.backup-destination-controls select{min-width:116px}.backup-rely{border:0;background:transparent;color:#a69c98;font-size:10px;font-weight:700;padding:5px}.backup-rely:hover{color:#eee}.backup-rely.off{color:#726a68}
     .backup-background{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 11px;border:1px solid #292529;border-radius:10px;background:#111012}.backup-background strong{display:block;color:#d6cdca;font-size:11px}.backup-background small{display:block;margin-top:3px;color:#7f7774;font-size:9.5px}
     .backup-safety-note{padding:10px 11px;border-radius:9px;background:#0e0d0f;color:#817976;font-size:10px;line-height:1.5}.backup-safety-note strong{color:#bdb3af}
     .backup-empty{padding:11px;color:#807875;font-size:10px}
+    [data-backup-scope].backup-legacy-hidden{display:none!important}
     @media(max-width:760px){.backup-health{grid-template-columns:1fr}.backup-health-actions{justify-content:flex-start}.backup-plans{grid-template-columns:repeat(2,minmax(0,1fr))}.backup-plan-list{grid-template-columns:1fr}.backup-source-row,.backup-destination-row{grid-template-columns:1fr}.backup-destination-controls{justify-content:flex-start}.backup-settings-section>header{align-items:start;flex-direction:column}.backup-settings-section header span{text-align:left}}
   `;
   document.head.append(style);
@@ -54,6 +55,16 @@ if (storagePane && sourceSection) {
     else sourceSection.after(section);
   }
   placeSection();
+
+  // The old per-drive collection selector is not authoritative for automatic
+  // Protection. Hide it until destination eligibility is part of the planner so
+  // the UI cannot promise a placement rule that the backup engine ignores.
+  const legacyScope = document.querySelector('[data-backup-scope]');
+  if (legacyScope) {
+    legacyScope.value = '';
+    legacyScope.classList.add('backup-legacy-hidden');
+    legacyScope.previousElementSibling?.setAttribute('hidden', '');
+  }
 
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char]));
   const baseName = value => String(value || '').replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).at(-1) || String(value || '');
@@ -102,11 +113,7 @@ if (storagePane && sourceSection) {
 
   function modeMap(snapshot) {
     const policies = new Map((snapshot?.policies || []).map(item => [`${item.locationId}\0${item.mediaType}`, item.representation]));
-    const retention = new Map((snapshot?.retention || []).map(item => [`${item.locationId}\0${item.mediaType}`, item.allowOriginalRemoval === true]));
-    return (locationId, mediaType) => {
-      const key = `${locationId}\0${mediaType}`;
-      return policies.get(key) === 'compact' ? (retention.get(key) ? 'compact-only' : 'compact') : 'original';
-    };
+    return (locationId, mediaType) => policies.get(`${locationId}\0${mediaType}`) === 'compact' ? 'compact' : 'original';
   }
 
   function planCount(level) {
@@ -184,9 +191,7 @@ if (storagePane && sourceSection) {
     if (location.kind !== 'backup') return '';
     const locationId = `backup:${location.id}`;
     const current = mode(locationId, mediaType);
-    // compact-only remains intentionally available because the existing storage
-    // reconciler performs verified safe-removal checks before dropping Originals.
-    return `<label>${mediaType === 'image' ? 'Images' : 'Video'}<select data-representation data-location-id="${esc(locationId)}" data-location-name="${esc(location.name)}" data-media="${mediaType}"><option value="original" ${current === 'original' ? 'selected' : ''}>Original</option><option value="compact" ${current === 'compact' ? 'selected' : ''}>Original + Squished</option><option value="compact-only" ${current === 'compact-only' ? 'selected' : ''}>Squished only</option></select></label>`;
+    return `<label>${mediaType === 'image' ? 'Images' : 'Video'}<select data-representation data-location-id="${esc(locationId)}" data-location-name="${esc(location.name)}" data-media="${mediaType}"><option value="original" ${current === 'original' ? 'selected' : ''}>Original</option><option value="compact" ${current === 'compact' ? 'selected' : ''}>Original + Squished</option></select></label>`;
   }
 
   function destinationRows() {
@@ -237,7 +242,7 @@ if (storagePane && sourceSection) {
         <section class="backup-settings-section">
           <header><h4>Destinations</h4><span>Where Mochimono may place recovery copies.</span></header>
           <div class="backup-destination-list">${destinationRows()}</div>
-          <div class="backup-safety-note"><strong>Cloud-only is an availability choice, not a protection level.</strong> Mochimono should remove a local source only when the copies that remain still satisfy that file's protection target. Squished-only storage is kept separate from this choice.</div>
+          <div class="backup-safety-note"><strong>Protection, availability, and quality are separate.</strong> Protection decides how many independent recovery copies are required. Cloud-only should remove a local source only after that target is still satisfied. Squished versions are currently additive here; destructive Squished-only stays out of this screen until reduced-fidelity copies participate correctly in Protection.</div>
         </section>
         <section class="backup-settings-section">
           <header><h4>Automatic work</h4></header>
@@ -282,22 +287,14 @@ if (storagePane && sourceSection) {
 
   async function updateRepresentation(event) {
     const select = event.currentTarget;
-    const next = select.value;
     const locationId = select.dataset.locationId;
     const mediaType = select.dataset.media;
     const previous = modeMap(model?.storage)(locationId, mediaType);
-    if (next === 'compact-only') {
-      const okay = confirm(`Use Squished only for ${mediaType === 'image' ? 'images' : 'video'} on ${select.dataset.locationName}?\n\nMochimono will create and verify the Squished copy first. It only removes an Original from this backup when another verified Original exists elsewhere.`);
-      if (!okay) { select.value = previous; return; }
-    }
     select.disabled = true;
     try {
-      if (next === 'compact-only') {
-        await server('/api/compression/storage-policy', { method:'POST', body:{ locationId, mediaType, representation:'compact' } });
-        await server('/api/compression/retention', { method:'POST', body:{ locationId, mediaType, allowOriginalRemoval:true, confirmation:'compact-only' } });
-      } else {
-        await server('/api/compression/storage-policy', { method:'POST', body:{ locationId, mediaType, representation:next } });
-        if (next === 'compact') await server('/api/compression/retention', { method:'POST', body:{ locationId, mediaType, allowOriginalRemoval:false } });
+      await server('/api/compression/storage-policy', { method:'POST', body:{ locationId, mediaType, representation:select.value } });
+      if (select.value === 'compact') {
+        await server('/api/compression/retention', { method:'POST', body:{ locationId, mediaType, allowOriginalRemoval:false } });
       }
       toast('Storage format updated');
       await refresh(true);
