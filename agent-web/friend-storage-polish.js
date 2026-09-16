@@ -141,6 +141,15 @@ if (backups && actions && sharesNode) {
         }
       }
 
+      const queued = (stateCache?.job?.queue || []).some(item => String(item.label || '').startsWith('Friend ') && (String(item.label || '').includes(target.name) || String(item.label || '').includes(target.id)));
+      if (!running && queued) {
+        const status = row.querySelector('.item-state');
+        if (status) {
+          status.textContent = 'Queued';
+          status.classList.remove('good','warning');
+        }
+      }
+
       const meta = row.querySelector('.storage-meta');
       if (meta) {
         meta.querySelectorAll('[data-friend-polish-fact]').forEach(node => node.remove());
