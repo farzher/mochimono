@@ -26,12 +26,21 @@ let browseFoldersPromise = null;
 let clientImportPromise = null;
 let clientGatewayPromise = null;
 let libraryBackgroundPromise = null;
+let compressionDefaultsPromise = null;
 let browseServiceStarted = false;
+let syncServiceStarted = false;
 
 const providerThumbs = () => providerThumbsPromise ||= import('./lib/provider-thumbs.js');
 const clientImport = () => clientImportPromise ||= import('./client-import.js');
 const clientGateway = () => clientGatewayPromise ||= import('./client-gateway.js');
 const libraryBackground = () => libraryBackgroundPromise ||= import('./lib/library-background.js');
+const compressionDefaults = () => compressionDefaultsPromise ||= import('./lib/compression-defaults.js');
+
+function ensureSyncService() {
+  if (syncServiceStarted) return;
+  syncServiceStarted = true;
+  startSyncService();
+}
 
 async function browseFolders(startService = false) {
   const module = await (browseFoldersPromise ||= import('./lib/browse-folders.js'));
@@ -60,6 +69,9 @@ async function handleLazyClientImport(req, res, url) {
 }
 
 async function handleLazyClientGateway(req, res, url) {
+  // Compression defaults are data, not a startup service. Seed them only when
+  // the Library feature stack is first requested.
+  await compressionDefaults();
   const [gateway, background] = await Promise.all([clientGateway(), libraryBackground()]);
   background.startLibraryBackground().catch(error => console.error('Library background failed', error));
   return gateway.handleClientGateway(req, res, url);
@@ -289,7 +301,7 @@ async function handleLocalApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/folder-stats') {
-    const browseStats = settings.browseFolders.length ? (await browseFolders()).browseFolderStats() : [];
+    const browseStats = settings.browseFolders.length ? await (await browseFolders()).browseFolderStats() : [];
     const protectedFolders = await folderStats();
     json(res, 200, {
       folders:[...protectedFolders.map(folder => ({ ...folder, protected:true })), ...browseStats]
@@ -302,6 +314,7 @@ async function handleLocalApi(req, res, url) {
     if (!body.path) json(res, 400, { error:'Choose a folder' });
     else {
       const folder = await addFolder(body.path, body.scope);
+      ensureSyncService();
       invalidateClientProviders();
       json(res, 200, { folder });
     }
@@ -313,6 +326,7 @@ async function handleLocalApi(req, res, url) {
     const protectedFolder = body.path ? folderFor(body.path) : null;
     const browseFolder = body.path ? configuredBrowsePath(body.path) : null;
     if (protectedFolder) {
+      ensureSyncService();
       const continuing = await takeOverBackgroundJob(protectedFolder.path);
       if (!continuing) queueFolderSync(protectedFolder.path, undefined, 0, true);
       json(res, 200, { ok:true });
@@ -366,6 +380,7 @@ async function handleLocalApi(req, res, url) {
     if (!body.path) json(res, 400, { error:'Folder required' });
     else {
       const folder = await (await browseFolders(true)).protectBrowseFolder(body.path, addFolder);
+      ensureSyncService();
       invalidateClientProviders();
       json(res, 200, { folder });
     }
@@ -503,7 +518,7 @@ function openBrowser(url) {
   } catch {}
 }
 
-startSyncService();
+if (settings.folders.length) ensureSyncService();
 if (settings.browseFolders.length) browseFolders(true).catch(error => console.error('Browse service failed', error));
 listenServer(activeHost).then(() => {
   const browserHost = activeHost === '0.0.0.0' ? '127.0.0.1' : activeHost;
