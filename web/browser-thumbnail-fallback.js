@@ -1,6 +1,5 @@
-const EDGE = 768;
-const VERSION = 3;
-const HEIC_CACHE_REV = 2;
+const EDGE = 1080;
+const VERSION = 1;
 const BROWSER_DB = 'mochimono-browser-folders';
 const BROWSER_DB_VERSION = 1;
 const BROWSER_SOURCES = 'sources';
@@ -22,7 +21,7 @@ const MIME = new Map([
 const extension = name => String(name || '').toLowerCase().match(/\.([^.]+)$/)?.[1] || '';
 const sourceMime = record => MIME.get(extension(record.filename)) || 'application/octet-stream';
 export const isHeicRecord = record => ['heic','heif'].includes(extension(record?.filename)) || ['image/heic','image/heif'].includes(String(record?.mime || '').toLowerCase());
-export const heicThumbUrl = hash => `/api/thumbs/${encodeURIComponent(hash)}?v=${VERSION}&heic=${HEIC_CACHE_REV}`;
+export const heicThumbUrl = hash => `/api/thumbs/${encodeURIComponent(hash)}?v=${VERSION}`;
 const visibleCard = hash => {
   const card = document.querySelector(`#files [data-hash="${CSS.escape(hash)}"]`);
   if (!card) return null;
@@ -64,9 +63,7 @@ async function browserFileAt(root, relative) {
   const parts = browserParts(relative);
   let handle = root;
   for (let index = 0; index < parts.length; index++) {
-    handle = index === parts.length - 1
-      ? await handle.getFileHandle(parts[index])
-      : await handle.getDirectoryHandle(parts[index]);
+    handle = index === parts.length - 1 ? await handle.getFileHandle(parts[index]) : await handle.getDirectoryHandle(parts[index]);
   }
   return handle?.getFile?.();
 }
@@ -74,9 +71,7 @@ async function browserFileAt(root, relative) {
 async function buildBrowserIndex() {
   const db = await openBrowserDb();
   try {
-    if (!db.objectStoreNames.contains(BROWSER_SOURCES) || !db.objectStoreNames.contains(BROWSER_FILES)) {
-      throw new Error('Browser folder database is not ready');
-    }
+    if (!db.objectStoreNames.contains(BROWSER_SOURCES) || !db.objectStoreNames.contains(BROWSER_FILES)) throw new Error('Browser folder database is not ready');
     const tx = db.transaction([BROWSER_SOURCES, BROWSER_FILES], 'readonly');
     const [sources, rows] = await Promise.all([
       requestAll(tx.objectStore(BROWSER_SOURCES)),
@@ -122,9 +117,7 @@ async function fastBrowserFileForHash(hash) {
 
 async function localBrowserFile(hash) {
   try { return await fastBrowserFileForHash(hash); }
-  catch {
-    return window.mochimonoBrowserFolders?.fileForHash?.(hash).catch?.(() => null) || null;
-  }
+  catch { return window.mochimonoBrowserFolders?.fileForHash?.(hash).catch?.(() => null) || null; }
 }
 
 function invalidateBrowserIndex() {
@@ -149,8 +142,8 @@ function waitFor(target, event, timeout = 8000) {
     };
     const loaded = () => done();
     const failed = () => done(new Error('Media could not be decoded'));
-    target.addEventListener(event, loaded, { once: true });
-    target.addEventListener('error', failed, { once: true });
+    target.addEventListener(event, loaded, { once:true });
+    target.addEventListener('error', failed, { once:true });
   });
 }
 
@@ -160,23 +153,21 @@ const canvasFor = (width, height) => typeof OffscreenCanvas !== 'undefined'
 
 async function canvasBlob(canvas) {
   const blob = 'convertToBlob' in canvas
-    ? await canvas.convertToBlob({ type: 'image/webp', quality: .82 })
-    : await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .82));
+    ? await canvas.convertToBlob({ type:'image/webp', quality:.83 })
+    : await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .83));
   if (!blob) throw new Error('Could not encode preview');
   return blob;
 }
 
 async function decodeImage(blob) {
-  if ('createImageBitmap' in window) return createImageBitmap(blob, { imageOrientation: 'from-image' });
+  if ('createImageBitmap' in window) return createImageBitmap(blob, { imageOrientation:'from-image' });
   const image = new Image();
   const url = URL.createObjectURL(blob);
   try {
     image.src = url;
     if (!image.complete) await waitFor(image, 'load');
     return image;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  } finally { URL.revokeObjectURL(url); }
 }
 
 async function mediaSource(record) {
@@ -200,9 +191,9 @@ async function imageResult(record) {
   const width = Math.max(1, Math.round(sourceWidth * scale));
   const height = Math.max(1, Math.round(sourceHeight * scale));
   const canvas = canvasFor(width, height);
-  canvas.getContext('2d', { alpha: false }).drawImage(image, 0, 0, width, height);
+  canvas.getContext('2d', { alpha:false }).drawImage(image, 0, 0, width, height);
   image.close?.();
-  return { blob: await canvasBlob(canvas), width, height, duration: null, local:source.local };
+  return { blob:await canvasBlob(canvas), width, height, duration:null, local:source.local };
 }
 
 async function videoResult(record) {
@@ -225,8 +216,8 @@ async function videoResult(record) {
     const width = Math.max(1, Math.round(video.videoWidth * scale));
     const height = Math.max(1, Math.round(video.videoHeight * scale));
     const canvas = canvasFor(width, height);
-    canvas.getContext('2d', { alpha: false }).drawImage(video, 0, 0, width, height);
-    return { blob: await canvasBlob(canvas), width, height, duration: Number.isFinite(video.duration) ? video.duration : null, local:source.local };
+    canvas.getContext('2d', { alpha:false }).drawImage(video, 0, 0, width, height);
+    return { blob:await canvasBlob(canvas), width, height, duration:Number.isFinite(video.duration) ? video.duration : null, local:source.local };
   } finally {
     video.removeAttribute('src');
     video.load();
@@ -285,7 +276,7 @@ export function heicViewBlob(record, edge = 4096) {
 
 async function generate(record) {
   if (isHeicRecord(record)) return heicResult(record);
-  const existing = await fetch(`/api/thumbs/${record.hash}?v=${VERSION}`, { method: 'HEAD' }).catch(() => null);
+  const existing = await fetch(`/api/thumbs/${record.hash}?v=${VERSION}`, { method:'HEAD' }).catch(() => null);
   if (existing?.ok) return null;
   const result = record.kind === 'video' ? await videoResult(record) : await imageResult(record);
   const endpoint = result.local ? `/api/client/browser-thumb/${record.hash}` : `/api/thumbs/${record.hash}`;
@@ -294,12 +285,12 @@ async function generate(record) {
     'x-mochimono-width':String(result.width),
     'x-mochimono-height':String(result.height)
   } : {
-    'content-type': 'image/webp',
-    'x-mochimono-thumb-version': String(VERSION),
-    'x-mochimono-width': String(result.width),
-    'x-mochimono-height': String(result.height),
-    ...(result.duration == null ? {} : { 'x-mochimono-duration': String(result.duration) }),
-    'x-mochimono-source-mime': sourceMime(record)
+    'content-type':'image/webp',
+    'x-mochimono-thumb-version':String(VERSION),
+    'x-mochimono-width':String(result.width),
+    'x-mochimono-height':String(result.height),
+    ...(result.duration == null ? {} : { 'x-mochimono-duration':String(result.duration) }),
+    'x-mochimono-source-mime':sourceMime(record)
   };
   const response = await fetch(endpoint, { method:'PUT', headers, body:result.blob });
   if (!response.ok) throw new Error('Could not save preview');
@@ -342,12 +333,12 @@ function pump() {
   if (!record) return;
   busy = true;
   const run = () => ensureBrowserThumbnail(record).then(result => {
-    if (result) window.dispatchEvent(new CustomEvent('mochimono:browser-thumbnail-ready', { detail: { hash: record.hash, ...result } }));
+    if (result) window.dispatchEvent(new CustomEvent('mochimono:browser-thumbnail-ready', { detail:{ hash:record.hash, ...result } }));
   }).catch(() => {}).finally(() => {
     busy = false;
     schedule(250);
   });
-  if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout: 800 });
+  if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout:800 });
   else setTimeout(run, 20);
 }
 
