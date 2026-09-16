@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import { DATA_DIR, db, json, now, readJson } from './lib/server-context.js';
 import { validHash } from './lib/store.js';
 
-const THUMB_VERSION = 3;
+const THUMB_VERSION = 4;
 const MAX_THUMB_BYTES = 5 * 1024 * 1024;
 const PRIORITY_WINDOW_MS = 20_000;
 const uploadLocks = new Map();
