@@ -1,151 +1,25 @@
-const folders = document.querySelector('#folders');
-const headActions = document.querySelector('.client-head-actions');
-const serverStorage = document.querySelector('#serverStorage');
-
 const style = document.createElement('style');
 style.textContent = `
-  .preview-mode-row{position:relative;flex:0 0 auto}
-  .preview-mode-row>summary{height:31px;display:flex;align-items:center;gap:6px;padding:0 9px;border:1px solid transparent;border-radius:8px;color:#8d8584;cursor:pointer;list-style:none;white-space:nowrap;font-size:10px;font-weight:650;transition:background .14s ease,border-color .14s ease,color .14s ease}
-  .preview-mode-row>summary::-webkit-details-marker{display:none}
-  .preview-mode-row>summary:hover,.preview-mode-row[open]>summary{border-color:#2d292d;background:#211e22;color:#eee7e3}
-  .preview-mode-row>summary span{color:#777072;font-weight:580}
-  .preview-mode-row>summary strong{color:inherit;font-size:10px;font-weight:730}
-  .preview-mode-row>summary:after{content:'⌄';margin-left:1px;color:#686164;font-size:10px;line-height:1;transform:translateY(-1px)}
-  .preview-mode-row[open]>summary:after{transform:rotate(180deg) translateY(1px)}
-  .preview-mode-popover{position:absolute;right:0;top:38px;z-index:45;width:260px;padding:6px;border:1px solid #302b30;border-radius:11px;background:#171518;box-shadow:0 16px 46px rgba(0,0,0,.46)}
-  .preview-mode-popover button{position:relative;width:100%;min-height:43px;display:grid;gap:2px;padding:8px 31px 8px 9px;border:0;border-radius:7px;background:transparent;color:#c8bfbc;text-align:left;cursor:pointer}
-  .preview-mode-popover button:hover{background:#252126;color:#fff}
-  .preview-mode-popover button.active{background:#252126;color:#fff}
-  .preview-mode-popover button.active:after{content:'✓';position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#efa09a;font-size:12px;font-weight:800}
-  .preview-mode-popover button strong{font-size:11px;font-weight:700;color:inherit}
-  .preview-mode-popover button span{font-size:9px;font-weight:550;line-height:1.25;color:#817978}
-  .preview-mode-popover button:hover span,.preview-mode-popover button.active span{color:#aaa19e}
-  .preview-mode-popover button:disabled{cursor:default;opacity:.55}
-
-  #storagePane [data-preview-progress]{display:block;margin-top:10px;padding-top:8px;border-top:1px solid #211e21}
-  #storagePane .preview-progress-head{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:9px;line-height:1.2}
-  #storagePane .preview-progress-title{display:flex;align-items:center;gap:5px;flex:0 0 auto;color:#a69d9a;font-weight:650}
-  #storagePane .preview-progress-title:before{content:'';width:5px;height:5px;border-radius:50%;background:#655e60;opacity:.75}
-  #storagePane [data-preview-progress-text]{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#746e6e;font-variant-numeric:tabular-nums}
-  #storagePane [data-preview-percent]{flex:0 0 auto;color:#bdb3af;font-variant-numeric:tabular-nums;font-weight:700}
-  #storagePane .preview-progress-track{position:relative;height:4px;margin-top:6px;overflow:hidden;border-radius:999px;background:#292429}
-  #storagePane .preview-progress-track>i{position:absolute;inset:0;background:#e99b95;transform:scaleX(var(--preview-progress,0));transform-origin:left center;transition:transform .5s cubic-bezier(.22,1,.36,1),opacity .2s ease;will-change:transform}
-  #storagePane [data-preview-progress].preview-indeterminate .preview-progress-track>i{width:34%;transform:none;animation:preview-progress-slide 1.35s ease-in-out infinite}
-
-  #storagePane [data-preview-progress].preview-active .preview-progress-title:before{background:#e99b95;opacity:1;animation:preview-dot-pulse .9s ease-in-out infinite}
-  #storagePane [data-preview-progress].preview-active .preview-progress-track>i:after{content:'';position:absolute;inset:0;width:38%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.38),transparent);transform:translateX(-130%);animation:preview-progress-sheen 1.15s linear infinite}
-  #storagePane [data-preview-progress].preview-active [data-preview-progress-text]{color:#a99e9c}
-  #storagePane [data-preview-progress].preview-queued .preview-progress-title:before{background:#7b7375;opacity:.58}
-  #storagePane [data-preview-progress].preview-queued .preview-progress-track>i{opacity:.48}
-  #storagePane [data-preview-progress].preview-queued [data-preview-progress-text]{color:#6f696a}
-  #storagePane [data-preview-progress].preview-checking .preview-progress-title:before{background:#9b8f90;animation:preview-dot-soft 1.5s ease-in-out infinite}
-  #storagePane [data-preview-progress].preview-waiting .preview-progress-title:before,
-  #storagePane [data-preview-progress].preview-paused .preview-progress-title:before{opacity:.35}
-  #storagePane [data-preview-progress].preview-waiting .preview-progress-track>i,
-  #storagePane [data-preview-progress].preview-paused .preview-progress-track>i{animation:none!important;opacity:.32}
-
-  @keyframes preview-progress-slide{0%{transform:translateX(-110%)}50%{transform:translateX(100%)}100%{transform:translateX(310%)}}
-  @keyframes preview-progress-sheen{to{transform:translateX(360%)}}
-  @keyframes preview-dot-pulse{0%,100%{transform:scale(.72);opacity:.55}50%{transform:scale(1.18);opacity:1}}
-  @keyframes preview-dot-soft{0%,100%{opacity:.35}50%{opacity:.9}}
-
   html.background-paused [data-folder-status][data-waiting-idle="1"]:after{content:'Paused'}
   html.background-paused .folder-item[data-waiting-idle="1"] .inline-progress-head strong{font-size:0}
   html.background-paused .folder-item[data-waiting-idle="1"] .inline-progress-head strong:after{content:'Paused';font-size:10px}
   html.background-waiting #activity>span,html.background-paused #activity>span{font-size:0}
   html.background-waiting #activity>span:after{content:'Background · Waiting for idle';font-size:10px}
-  html.background-paused #activity>span:after{content:'Background · Paused';font-size:10px}
+  html.background-paused #activity>span:after{content:'Background · On demand';font-size:10px}
   html.background-waiting #activity .progress-bar>i,html.background-paused #activity .progress-bar>i{animation:none!important;transform:none!important;left:0!important;opacity:.45}
-
-  @media(max-width:700px){
-    .preview-mode-row>summary{padding:0 7px}
-    .preview-mode-row>summary span{display:none}
-    .preview-mode-popover{right:-2px;width:244px}
-  }
-  @media(prefers-reduced-motion:reduce){
-    #storagePane .preview-progress-track>i,#storagePane .preview-progress-track>i:after,#storagePane .preview-progress-title:before{transition:none!important;animation:none!important}
-  }
 `;
 document.head.append(style);
 
-const modeLabel = {
-  off: 'On demand',
-  idle: 'Idle',
-  max: 'Max'
-};
-let modeControl = null;
-let modeValue = null;
 let currentMode = 'idle';
-let currentBackgroundAllowed = false;
+let currentAllowed = false;
 
-function syncBackgroundClasses() {
+function apply({ mode = currentMode, allowed = currentAllowed } = {}) {
+  currentMode = ['off','idle','max'].includes(mode) ? mode : 'idle';
+  currentAllowed = Boolean(allowed);
   document.documentElement.classList.toggle('background-paused', currentMode === 'off');
-  document.documentElement.classList.toggle('background-waiting', currentMode === 'idle' && !currentBackgroundAllowed);
+  document.documentElement.classList.toggle('background-waiting', currentMode === 'idle' && !currentAllowed);
 }
 
-function setMode(mode) {
-  mode = ['off','idle','max'].includes(mode) ? mode : 'idle';
-  currentMode = mode;
-  modeControl?.querySelectorAll('[data-preview-mode]').forEach(button => button.classList.toggle('active', button.dataset.previewMode === mode));
-  if (modeValue) modeValue.textContent = modeLabel[mode];
-  syncBackgroundClasses();
-  window.dispatchEvent(new CustomEvent('mochimono:preview-mode', { detail: { mode } }));
-}
 window.mochimonoPreviewMode = () => currentMode;
-
-async function refreshBackgroundState() {
-  try {
-    const response = await fetch('/api/state', { cache:'no-store' });
-    if (!response.ok) return;
-    const state = await response.json();
-    currentBackgroundAllowed = Boolean(state?.background?.allowed);
-    setMode(state?.settings?.thumbnailMode || currentMode);
-  } catch {}
-}
-
-if (headActions) {
-  modeControl = document.createElement('details');
-  modeControl.className = 'preview-mode-row';
-  modeControl.innerHTML = `
-    <summary title="Background work"><span>Background</span><strong data-preview-mode-value>Idle</strong></summary>
-    <div class="preview-mode-popover" role="group" aria-label="Background work">
-      <button type="button" data-preview-mode="off" title="Do not automatically scan, sync, or generate thumbnails"><strong>On demand</strong><span>Only run expensive work when you ask</span></button>
-      <button type="button" data-preview-mode="idle" title="Run folder sync, indexing, and thumbnail work only when this computer is idle"><strong>Idle</strong><span>Wait until the computer is idle · recommended</span></button>
-      <button type="button" data-preview-mode="max" title="Run pending sync, indexing, and thumbnail work immediately"><strong>Max</strong><span>Finish pending background work now</span></button>
-    </div>`;
-  modeValue = modeControl.querySelector('[data-preview-mode-value]');
-  if (serverStorage) serverStorage.insertAdjacentElement('afterend', modeControl);
-  else headActions.prepend(modeControl);
-
-  modeControl.addEventListener('click', async event => {
-    const button = event.target.closest('[data-preview-mode]');
-    if (!button || button.classList.contains('active')) return;
-    const mode = button.dataset.previewMode;
-    const previous = currentMode;
-    const buttons = [...modeControl.querySelectorAll('button')];
-    buttons.forEach(item => item.disabled = true);
-    setMode(mode);
-    modeControl.open = false;
-    try {
-      const response = await fetch('/api/settings', {
-        method:'POST',
-        headers:{ 'content-type':'application/json' },
-        body:JSON.stringify({ thumbnailMode:mode })
-      });
-      if (!response.ok) throw new Error('Could not change background mode');
-      await refreshBackgroundState();
-    } catch {
-      setMode(previous);
-    } finally {
-      buttons.forEach(item => item.disabled = false);
-    }
-  });
-
-  document.addEventListener('pointerdown', event => {
-    if (modeControl.open && !modeControl.contains(event.target)) modeControl.open = false;
-  });
-
-  refreshBackgroundState();
-  const backgroundStateTimer = setInterval(refreshBackgroundState, 5000);
-  addEventListener('beforeunload', () => clearInterval(backgroundStateTimer), { once:true });
-}
+window.addEventListener('mochimono:background-state', event => apply(event.detail || {}));
+apply();
