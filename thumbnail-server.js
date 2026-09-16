@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import { DATA_DIR, db, json, now, readJson } from './lib/server-context.js';
 import { validHash } from './lib/store.js';
 
-const THUMB_VERSION = 4;
+const THUMB_VERSION = 1;
 const MAX_THUMB_BYTES = 5 * 1024 * 1024;
 const PRIORITY_WINDOW_MS = 20_000;
 const uploadLocks = new Map();
@@ -15,15 +15,6 @@ const isDeclarationName = name => /\.d\.(?:mts|cts|ts)$/i.test(String(name || ''
 
 const staleRequestCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 db.prepare('DELETE FROM thumbnail_requests WHERE requested_at < ?').run(staleRequestCutoff);
-for (const row of db.prepare(`
-  SELECT t.object_hash AS hash
-  FROM thumbnails t
-  JOIN objects o ON o.hash = t.object_hash
-  WHERE o.state != 'active' OR t.version != ?
-`).all(THUMB_VERSION)) {
-  db.prepare('DELETE FROM thumbnails WHERE object_hash = ?').run(row.hash);
-  await rm(thumbPath(row.hash), { force:true }).catch(() => {});
-}
 
 function integerHeader(req, name) {
   const value = Number(req.headers[name]);
@@ -70,9 +61,6 @@ async function serveThumbnail(req, res, hash) {
     return json(res, 404, { error:'Thumbnail not found' });
   }
 
-  // The VPS is intentionally storage-only. Agents create the canonical WebP
-  // preview and the server streams it unchanged, even when callers include an
-  // old ?edge=64/192 hint. Resizing belongs on client machines, not the VPS.
   const etag = `"${hash}-thumb-${THUMB_VERSION}"`;
   const cacheControl = 'private, max-age=31536000, immutable';
   if (req.headers['if-none-match'] === etag) {
@@ -219,9 +207,7 @@ async function requestThumbnails(req, res) {
 }
 
 async function uploadThumbnail(req, res, hash) {
-  if (!db.prepare("SELECT 1 FROM objects WHERE hash = ? AND state = 'active'").get(hash)) {
-    return json(res, 404, { error:'Object not found' });
-  }
+  if (!db.prepare("SELECT 1 FROM objects WHERE hash = ? AND state = 'active'").get(hash)) return json(res, 404, { error:'Object not found' });
   const version = Number(req.headers['x-mochimono-thumb-version'] || THUMB_VERSION);
   if (version !== THUMB_VERSION) return json(res, 400, { error:'Unsupported thumbnail version' });
   const mime = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
@@ -237,15 +223,13 @@ async function uploadThumbnail(req, res, hash) {
       INSERT INTO thumbnails(object_hash, version, mime, size, width, height, duration, created_at)
       VALUES(?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(object_hash) DO UPDATE SET
-        version = excluded.version, mime = excluded.mime, size = excluded.size,
-        width = excluded.width, height = excluded.height, duration = excluded.duration,
-        created_at = excluded.created_at
+        version=excluded.version, mime=excluded.mime, size=excluded.size,
+        width=excluded.width, height=excluded.height, duration=excluded.duration,
+        created_at=excluded.created_at
     `).run(hash, THUMB_VERSION, mime, size, width, height, duration, now());
     db.prepare('DELETE FROM thumbnail_requests WHERE object_hash = ?').run(hash);
     const sourceMime = String(req.headers['x-mochimono-source-mime'] || '').slice(0, 200);
-    if (sourceMime && sourceMime !== 'application/octet-stream') {
-      db.prepare("UPDATE objects SET mime = ? WHERE hash = ? AND mime = 'application/octet-stream'").run(sourceMime, hash);
-    }
+    if (sourceMime && sourceMime !== 'application/octet-stream') db.prepare("UPDATE objects SET mime = ? WHERE hash = ? AND mime = 'application/octet-stream'").run(sourceMime, hash);
     return { size, width, height, duration };
   });
   uploadLocks.set(hash, operation);
