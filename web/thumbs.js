@@ -1,7 +1,7 @@
 const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
 const CLIENT = document.documentElement.classList.contains('client-library');
-const THUMB_VERSION = 3;
+const THUMB_VERSION = 4;
 const CHECK_LIMIT = 160;
 const RECHECK_DELAY = CLIENT ? 140 : 500;
 const CARD_PRELOAD_MARGIN = Math.max(900, Math.round(innerHeight * 2.25));
