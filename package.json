@@ -9,7 +9,9 @@
   "scripts": {
     "dev": "node dev-watch.js",
     "start": "node server-entry.js",
-    "agent": "node ensure-deps.js && node agent-entry.js"
+    "agent": "node ensure-deps.js && node agent-entry.js",
+    "release:agent": "node scripts/build-release.js agent",
+    "release:server": "node scripts/build-release.js server"
   },
   "dependencies": {
     "ffmpeg-static": "5.3.0",
