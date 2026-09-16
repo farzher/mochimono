@@ -64,8 +64,10 @@ startProtectionAgent().catch(error => console.error('Protection agent failed', e
 // when offline this immediately claims local indexing work first.
 await startOfflineIndexService();
 await import('./agent.js');
-try { await import('./lib/friend-storage.js'); }
-catch (error) { console.error('Encrypted friend storage failed to start', error); }
+try {
+  await import('./lib/friend-storage.js');
+  await import('./lib/friend-auto.js');
+} catch (error) { console.error('Friend Drive failed to start', error); }
 await import('./lib/squish-defaults-migration.js');
 const [{ startCompressionServerSync }, { startRepresentationReconciler }] = await Promise.all([
   import('./lib/compression-server-sync.js'),
