@@ -4,11 +4,17 @@ const viewerClose = document.querySelector('#viewer-close');
 const panel = document.querySelector('#viewerInfo');
 const LEVELS = [
   ['inherit', 'Inherit'],
-  ['disposable', 'Disposable'],
-  ['normal', 'Normal'],
+  ['disposable', 'One copy'],
+  ['normal', 'Standard'],
   ['important', 'Important'],
   ['critical', 'Critical']
 ];
+const LEVEL_HINTS = {
+  disposable: '1 copy',
+  normal: '2 copies · 2 devices',
+  important: '3 copies · remote',
+  critical: '3 devices · 2 places'
+};
 let generation = 0;
 let decorating = false;
 
@@ -58,7 +64,7 @@ function protectionLabel(state) {
   const parts = [`${known} known ${known === 1 ? 'copy' : 'copies'}`];
   if (qualifying !== known) parts.push(`${qualifying} count toward target`);
   parts.push(`${state.status?.devices || 0} ${state.status?.devices === 1 ? 'device' : 'devices'}`);
-  parts.push(`${state.status?.sites || 0} ${state.status?.sites === 1 ? 'location' : 'locations'}`);
+  parts.push(`${state.status?.sites || 0} ${state.status?.sites === 1 ? 'place' : 'places'}`);
   if (state.status?.remote) parts.push(`${state.status.remote} remote`);
   return parts.join(' · ');
 }
@@ -69,13 +75,13 @@ function missingLabel(state) {
   if (state?.missing?.copies) missing.push(`${state.missing.copies} more verified ${state.missing.copies === 1 ? 'copy' : 'copies'}`);
   if (state?.missing?.devices) missing.push(`${state.missing.devices} more ${state.missing.devices === 1 ? 'device' : 'devices'}`);
   if (state?.missing?.remote) missing.push('remote copy');
-  if (state?.missing?.sites) missing.push(`${state.missing.sites} more ${state.missing.sites === 1 ? 'location' : 'locations'}`);
+  if (state?.missing?.sites) missing.push(`${state.missing.sites} more ${state.missing.sites === 1 ? 'place' : 'places'}`);
   return missing.length ? `Needs ${missing.join(' · ')}` : 'Needs protection';
 }
 
 function copyDescription(copy) {
   const parts = [
-    copy.kind === 'peer' ? 'Encrypted remote' : copy.kind === 'primary' ? 'Mochimono' : copy.kind === 'source' ? 'Local source' : 'Backup'
+    copy.kind === 'peer' ? 'Encrypted remote' : copy.kind === 'primary' ? 'Cloud' : copy.kind === 'source' ? 'Local source' : 'Backup'
   ];
   if (copy.site && copy.site !== copy.name) parts.push(copy.site);
   if (copy.kind === 'source') {
@@ -91,7 +97,10 @@ function copyDescription(copy) {
 
 function sectionHtml(state, hash) {
   const selected = state.overrideLevel || 'inherit';
-  const options = LEVELS.map(([value,label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}${value === 'inherit' ? ` (${state.level})` : ''}</option>`).join('');
+  const options = LEVELS.map(([value,label]) => {
+    const suffix = value === 'inherit' ? ` (${state.level})` : ` · ${LEVEL_HINTS[value] || ''}`;
+    return `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}${suffix}</option>`;
+  }).join('');
   const copyCards = (state.copies || []).map(copy => `<div class="protection-copy-row">
     <span>${esc(copy.name || copy.deviceName || copy.kind)}</span>
     <small>${esc(copyDescription(copy))}</small>
@@ -99,7 +108,7 @@ function sectionHtml(state, hash) {
   return `<section class="viewer-info-section protection-detail" data-protection-section data-hash="${hash}">
     <div class="viewer-section-head"><h3>Protection</h3><span class="protection-state ${state.meets ? 'good' : 'warn'}">${state.meets ? 'Protected' : 'Needs protection'}</span></div>
     <div class="protection-detail-summary"><strong>${esc(protectionLabel(state))}</strong><span>${esc(missingLabel(state))}</span></div>
-    <label class="protection-level-field"><span>Importance</span><select data-file-protection>${options}</select></label>
+    <label class="protection-level-field"><span>Protection</span><select data-file-protection>${options}</select></label>
     <div class="protection-copy-list">${copyCards || '<div class="viewer-info-empty">No known copies.</div>'}</div>
     <div class="protection-action-status" data-protection-status></div>
   </section>`;
@@ -175,6 +184,6 @@ panel?.addEventListener('change', event => {
   if (select) updateLevel(select);
 });
 document.addEventListener('click', interceptDelete, true);
-if (panel) new MutationObserver(() => queueMicrotask(decorateDetails)).observe(panel, { childList:true, subtree:true });
+if (panel) new MutationObserver(() => queueMicrotask(decorateDetails)).observe(panel, { childList:true,subtree:true });
 window.addEventListener('mochimono:viewer-opened', () => { generation++; queueMicrotask(decorateDetails); });
 viewerOpen?.addEventListener('click', () => setTimeout(decorateDetails));
