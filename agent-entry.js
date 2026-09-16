@@ -22,26 +22,12 @@ registerHooks({
   }
 });
 
-// Seed clean-install defaults before client-gateway imports compression-work.
-await import('./lib/compression-defaults.js');
-
-const [
-  { startThumbnailAgent },
-  { startMediaMetadataAgent },
-  { startProtectionAgent },
-  { startBrowseFastDedupe },
-  { invalidateClientProviders }
-] = await Promise.all([
-  import('./lib/thumbnail-agent.js'),
-  import('./lib/media-metadata-agent.js'),
-  import('./lib/protection-agent.js'),
-  import('./lib/browse-fast-dedupe.js'),
-  import('./lib/client-providers.js')
-]);
-
-startThumbnailAgent();
-startMediaMetadataAgent();
+const { startProtectionAgent } = await import('./lib/protection-agent.js');
 startProtectionAgent().catch(error => console.error('Protection agent failed', error));
+
+// Bring up the Agent and backup workflows first. Media previews, metadata,
+// Squish reconciliation, and other Library background services are loaded only
+// when the Library is actually opened.
 await import('./agent.js');
 try {
   await import('./lib/friend-storage.js');
@@ -49,10 +35,3 @@ try {
 } catch (error) {
   console.error('Friend Drive failed to start', error);
 }
-const [{ startCompressionServerSync }, { startRepresentationReconciler }] = await Promise.all([
-  import('./lib/compression-server-sync.js'),
-  import('./lib/representation-reconciler.js')
-]);
-startCompressionServerSync();
-startRepresentationReconciler();
-startBrowseFastDedupe(invalidateClientProviders);
