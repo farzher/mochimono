@@ -24,8 +24,8 @@ if (storagePane) {
 
   function polish() {
     for (const button of document.querySelectorAll('.storage-location-dialog [data-action="backup-update"]')) {
-      button.textContent = 'Protect';
-      button.title = 'Fill useful verified copies here. Anything that does not fit stays available for other storage destinations.';
+      button.textContent = 'Protect now';
+      button.title = 'Run Protection across available storage, including this drive. Each destination keeps only useful verified copies that fit.';
     }
   }
 
