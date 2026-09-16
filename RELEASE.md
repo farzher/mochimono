@@ -1,6 +1,6 @@
 # Mochimono release builds
 
-Mochimono has two release targets: a portable desktop Agent and a small VPS server. Build releases on the same OS/architecture they will run on because the Agent includes native modules.
+Mochimono has two release targets: a portable desktop Agent and a small VPS server. Build each release on the same OS/architecture it will run on because both targets include platform-specific native modules and the exact Node runtime used to build them.
 
 ## Portable Agent
 
@@ -22,7 +22,7 @@ Build on Windows for a Windows release. `dist/agent` contains:
 - the exact `node.exe` used to build the release
 - `Mochimono.cmd`
 
-Zip the **contents of `dist/agent` together**. The recipient extracts it and double-clicks `Mochimono.cmd`. The launcher starts the Agent minimized, waits for `http://127.0.0.1:8643/api/health`, then opens Mochimono in the browser.
+Zip the **contents of `dist/agent` together**. The recipient extracts it and double-clicks `Mochimono.cmd`. The launcher starts the Agent hidden if needed, waits for `http://127.0.0.1:8643/api/health`, then opens Mochimono in the browser. If the Agent is already running, the launcher only opens it.
 
 No Node/npm installation is required on the recipient PC. User configuration, indexes, thumbnails, Squished renditions, and activity history live in the normal per-user Mochimono config directory rather than beside the executable.
 
@@ -30,21 +30,21 @@ A release should be rebuilt on each target OS/architecture instead of copying `n
 
 ## VPS server
 
-The server is intentionally smaller than the Agent release. Build it on Linux:
+Build the server release on Linux for the Linux architecture/distro family that will run it:
 
 ```sh
 npm ci
 npm run release:server
 ```
 
-The finished directory is `dist/server`. It installs only the native packages needed by the server (`sharp` and `heic-decode`); Agent-only FFmpeg and peer-to-peer native dependencies are omitted.
+The finished directory is `dist/server`. It contains its own Node runtime and only the runtime packages the server needs: `sharp`, `heic-decode`, and `ffmpeg-static`. Agent-only peer-to-peer/native dependencies such as `node-datachannel` are omitted.
 
-A typical Debian/Ubuntu deployment is:
+No Node/npm installation is required on the VPS after the release directory has been built. A typical Debian/Ubuntu deployment from inside the extracted server release is:
 
 ```sh
 sudo useradd --system --home /var/lib/mochimono --shell /usr/sbin/nologin mochimono
 sudo mkdir -p /opt/mochimono /var/lib/mochimono
-sudo cp -a dist/server/. /opt/mochimono/
+sudo cp -a . /opt/mochimono/
 sudo chown -R root:root /opt/mochimono
 sudo chown -R mochimono:mochimono /var/lib/mochimono
 
@@ -63,7 +63,7 @@ Generate a long random `MOCHIMONO_TOKEN`; do not use the example value. Keep `MO
 
 Install Nginx, copy/adapt `deploy/nginx.conf` inside the Nginx `http` context (the normal Debian/Ubuntu `sites-enabled` location is fine), set your real `server_name`, then add TLS with your normal certificate tooling.
 
-The example deliberately disables request/response buffering for the Mochimono upstream. Large object uploads and downloads therefore stream through Nginx instead of being duplicated into proxy temp files or buffered in RAM. The WebSocket upgrade headers also support Friend Drive signaling.
+The example deliberately disables request/response buffering for the Mochimono upstream. Large object uploads and downloads therefore stream through Nginx instead of being duplicated into proxy temp files or buffered in RAM. The upgrade headers also allow protocols that use HTTP connection upgrades.
 
 ### Small VPS resource profile
 
