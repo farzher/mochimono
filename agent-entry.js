@@ -8,15 +8,20 @@ process.env.MOCHIMONO_PROVIDER_THUMBNAIL_WORKERS ||= String(cpus);
 process.env.MOCHIMONO_PROVIDER_THUMBNAIL_VIDEO_WORKERS ||= String(cpus);
 process.env.MOCHIMONO_PROVIDER_SHARP_WORKERS ||= process.env.MOCHIMONO_PROVIDER_THUMBNAIL_WORKERS;
 
-// Provider thumbnails decode arbitrary local files. Redirect only that Sharp
-// import through a child-process proxy so a malformed image cannot kill the
-// Agent or indexing work.
 const providerThumbsUrl = new URL('./lib/provider-thumbs.js', import.meta.url).href;
 const providerSharpProxyUrl = new URL('./lib/sharp-provider-proxy.js', import.meta.url).href;
+const agentSyncUrl = new URL('./lib/agent-sync.js', import.meta.url).href;
+const agentUrl = new URL('./agent.js', import.meta.url).href;
+const thumbnailLazyUrl = new URL('./lib/thumbnail-agent-lazy.js', import.meta.url).href;
+
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === 'sharp' && context.parentURL === providerThumbsUrl) {
       return { url:providerSharpProxyUrl, shortCircuit:true };
+    }
+    if ((specifier === './thumbnail-agent.js' && context.parentURL === agentSyncUrl) ||
+        (specifier === './lib/thumbnail-agent.js' && context.parentURL === agentUrl)) {
+      return { url:thumbnailLazyUrl, shortCircuit:true };
     }
     return nextResolve(specifier, context);
   }
@@ -25,9 +30,8 @@ registerHooks({
 const { startProtectionAgent } = await import('./lib/protection-agent.js');
 startProtectionAgent().catch(error => console.error('Protection agent failed', error));
 
-// Bring up the Agent and backup workflows first. Media previews, metadata,
-// Squish reconciliation, and other Library background services are loaded only
-// when the Library is actually opened.
+// Bring up backup/protection first. Library media services stay unloaded until
+// the Library is actually opened.
 await import('./agent.js');
 try {
   await import('./lib/friend-storage.js');
