@@ -11,6 +11,7 @@ if (backups && actions && sharesNode) {
   let friendBackups = [];
   let shares = [];
   let indexedRoots = [];
+  let stateCache = null;
   let syncing = false;
 
   const style = document.createElement('style');
@@ -29,6 +30,12 @@ if (backups && actions && sharesNode) {
   if (offerCopy) offerCopy.textContent = 'Share space';
   if (addButton) addButton.title = 'Use end-to-end encrypted storage on a friend’s device';
   if (offerButton) offerButton.title = 'Give a friend a private encrypted quota on this device or drive';
+
+  for (const dialog of document.querySelectorAll('dialog.friend-dialog')) {
+    const heading = dialog.querySelector('.dialog-head h3');
+    if (heading?.textContent === 'Friend backup') heading.textContent = 'Add Friend Drive';
+    if (heading?.textContent === 'Restore friend backup') heading.textContent = 'Restore Friend Drive';
+  }
 
   const notice = document.createElement('div');
   notice.className = 'friend-preflight';
@@ -125,6 +132,15 @@ if (backups && actions && sharesNode) {
         warning?.remove();
       }
 
+      const running = stateCache?.job?.status === 'running' && String(stateCache.job.label || '').startsWith('Friend ') && (String(stateCache.job.label || '').includes(target.name) || String(stateCache.job.label || '').includes(target.id));
+      if (running) {
+        const status = row.querySelector('.item-state');
+        if (status) {
+          status.textContent = stateCache.job.progress?.phase || 'Working…';
+          status.classList.remove('good','warning');
+        }
+      }
+
       const meta = row.querySelector('.storage-meta');
       if (meta) {
         meta.querySelectorAll('[data-friend-polish-fact]').forEach(node => node.remove());
@@ -174,6 +190,7 @@ if (backups && actions && sharesNode) {
       ]);
       friendBackups = backupData.backups || [];
       shares = shareData.shares || [];
+      stateCache = state;
       indexedRoots = (state?.settings?.folders || []).map(folder => folder.path).filter(Boolean);
       notice.hidden = true;
       polishBackups();
@@ -218,5 +235,5 @@ if (backups && actions && sharesNode) {
 
   new MutationObserver(() => { polishBackups(); polishShares(); }).observe(document.querySelector('#storagePane'), { childList:true,subtree:true });
   sync();
-  setInterval(sync, 12000);
+  setInterval(sync, 3000);
 }
