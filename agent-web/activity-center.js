@@ -16,7 +16,7 @@ if (activityHost) {
     .activity-button{height:31px;display:flex;align-items:center;gap:7px;padding:0 9px;border:1px solid transparent;border-radius:8px;background:transparent;color:#8d8584;font-size:10px;font-weight:680;white-space:nowrap}
     .activity-button:hover,.activity-button.active{border-color:#2d292d;background:#211e22;color:#eee7e3}.activity-dot{width:6px;height:6px;border-radius:50%;background:#696164}.activity-button.working .activity-dot{background:#e99b95;animation:activity-pulse .9s ease-in-out infinite}.activity-button.issue .activity-dot{background:#d3a067}.activity-count{color:#d8cfcb;font-variant-numeric:tabular-nums}
     .activity-dialog{width:min(720px,calc(100vw - 26px));max-height:min(820px,calc(100dvh - 26px));padding:0;overflow:hidden}.activity-dialog .dialog-head{padding:14px 16px 11px;border-bottom:1px solid #292529}.activity-dialog-body{max-height:calc(min(820px,100dvh - 26px) - 58px);overflow:auto;padding:13px 16px 17px}.activity-summary{display:flex;align-items:center;gap:8px;margin-bottom:12px;color:#89817e;font-size:10px}.activity-summary strong{color:#d9d0cc;font-size:12px}.activity-summary .spacer{flex:1}
-    .activity-section{margin-top:16px}.activity-section:first-child{margin-top:0}.activity-section-head{display:flex;align-items:baseline;gap:8px;margin:0 0 7px;color:#77706e;font-size:9px;font-weight:720;text-transform:uppercase;letter-spacing:.055em}.activity-section-head b{color:#99908d;font-size:9px}.activity-list{display:grid;gap:6px}.activity-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:10px 11px;border:1px solid #292529;border-radius:10px;background:#111012}.activity-row.running{border-color:#3b3032;background:#151113}.activity-row.error{border-color:#442d31}.activity-main{min-width:0}.activity-title{display:flex;align-items:center;gap:7px;color:#d8cfcb;font-size:11px;font-weight:710}.activity-kind{flex:0 0 auto;padding:2px 5px;border-radius:99px;background:#282329;color:#928987;font-size:8px;font-weight:750;text-transform:uppercase;letter-spacing:.04em}.activity-title span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.activity-detail{margin-top:4px;color:#817976;font-size:9.5px;line-height:1.4}.activity-current{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#6f6968;font:9px ui-monospace,SFMono-Regular,Consolas,monospace}.activity-progress{height:4px;margin-top:7px;overflow:hidden;border-radius:99px;background:#292529}.activity-progress i{display:block;height:100%;min-width:2px;border-radius:inherit;background:#e99b95;transition:width .3s ease}.activity-progress.indeterminate i{width:32%;animation:activity-slide 1.3s ease-in-out infinite}.activity-side{display:flex;align-items:start;gap:7px;color:#756e6c;font-size:9px;white-space:nowrap}.activity-side time{padding-top:4px}.activity-cancel{border:0;background:transparent;color:#918784;padding:3px 4px;font-size:9px;font-weight:700}.activity-cancel:hover{color:#e2d8d4}.activity-empty{padding:15px 10px;color:#77706e;text-align:center;font-size:10px}.activity-wait{color:#a99386}.activity-error-text{color:#c99a97}.activity-recent .activity-row{padding-top:8px;padding-bottom:8px;background:#0f0e10}.activity-recent .activity-detail{margin-top:2px}.activity-clear{border:0;background:transparent;color:#77706e;font-size:9px;padding:0}.activity-clear:hover{color:#bbb0ad}
+    .activity-section{margin-top:16px}.activity-section:first-child{margin-top:0}.activity-section-head{display:flex;align-items:baseline;gap:8px;margin:0 0 7px;color:#77706e;font-size:9px;font-weight:720;text-transform:uppercase;letter-spacing:.055em}.activity-section-head b{color:#99908d;font-size:9px}.activity-list{display:grid;gap:6px}.activity-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:10px 11px;border:1px solid #292529;border-radius:10px;background:#111012}.activity-row.running{border-color:#3b3032;background:#151113}.activity-row.error{border-color:#442d31}.activity-main{min-width:0}.activity-title{display:flex;align-items:center;gap:7px;color:#d8cfcb;font-size:11px;font-weight:710}.activity-kind{flex:0 0 auto;padding:2px 5px;border-radius:99px;background:#282329;color:#928987;font-size:8px;font-weight:750;text-transform:uppercase;letter-spacing:.04em}.activity-title span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.activity-detail{margin-top:4px;color:#817976;font-size:9.5px;line-height:1.4}.activity-current{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#6f6968;font:9px ui-monospace,SFMono-Regular,Consolas,monospace}.activity-progress{height:4px;margin-top:7px;overflow:hidden;border-radius:99px;background:#292529}.activity-progress i{display:block;height:100%;min-width:2px;border-radius:inherit;background:#e99b95;transition:width .3s ease}.activity-progress.indeterminate i{width:32%;animation:activity-slide 1.3s ease-in-out infinite}.activity-side{display:flex;align-items:start;gap:7px;color:#756e6c;font-size:9px;white-space:nowrap}.activity-side time{padding-top:4px}.activity-cancel{border:0;background:transparent;color:#918784;padding:3px 4px;font-size:9px;font-weight:700}.activity-cancel:hover{color:#e2d8d4}.activity-empty{padding:15px 10px;color:#77706e;text-align:center;font-size:10px}.activity-wait{color:#a99386}.activity-error-text{color:#c99a97}.activity-recent .activity-row{padding-top:8px;padding-bottom:8px;background:#0f0e10}.activity-recent .activity-detail{margin-top:2px}
     @keyframes activity-pulse{0%,100%{transform:scale(.72);opacity:.55}50%{transform:scale(1.2);opacity:1}}@keyframes activity-slide{0%{transform:translateX(-115%)}50%{transform:translateX(105%)}100%{transform:translateX(315%)}}
     @media(max-width:700px){.activity-button{padding:0 7px}.activity-button .activity-label{display:none}.activity-row{grid-template-columns:1fr}.activity-side{justify-content:flex-end}.activity-dialog-body{padding-left:11px;padding-right:11px}}
     @media(prefers-reduced-motion:reduce){.activity-dot,.activity-progress i{animation:none!important;transition:none!important}}
@@ -35,7 +35,7 @@ if (activityHost) {
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char]));
   const baseName = value => String(value || '').replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).at(-1) || String(value || '');
   function bytes(number) { const units=['B','KB','MB','GB','TB','PB']; let value=Math.max(0,Number(number)||0),unit=0; while(value>=1000&&unit<units.length-1){value/=1000;unit++;} return `${value<10&&unit?value.toFixed(1):Math.round(value)} ${units[unit]}`; }
-  function age(value) { const time=new Date(value||0).getTime(); if(!time)return ''; const s=Math.max(0,Math.floor((Date.now()-time)/1000)); if(s<60)return s<8?'just now':`${s}s ago`; const m=Math.floor(s/60); if(m<60)return `${m}m ago`; const h=Math.floor(m/60); if(h<48)return `${h}h ago`; const d=Math.floor(h/24); return `${d}d ago`; }
+  function age(value) { const time=new Date(value||0).getTime(); if(!time)return ''; const s=Math.max(0,Math.floor((Date.now()-time)/1000)); if(s<60)return s<8?'just now':`${s}s ago`; const m=Math.floor(s/60); if(m<60)return `${m}m ago`; const h=Math.floor(m/60); if(h<48)return `${h}h ago`; return `${Math.floor(h/24)}d ago`; }
   function duration(seconds){seconds=Math.max(0,Math.round(Number(seconds)||0));if(seconds<60)return `${seconds}s`;const m=Math.floor(seconds/60);if(m<60)return `${m}m`;return `${Math.floor(m/60)}h ${m%60}m`;}
   function toast(text){if(!activityToast)return;activityToast.textContent=text;activityToast.classList.add('show');clearTimeout(activityToast.timer);activityToast.timer=setTimeout(()=>activityToast.classList.remove('show'),2800);}
 
@@ -78,6 +78,8 @@ if (activityHost) {
     else if(p.scanned!=null)details.push(`${Number(p.scanned).toLocaleString()} files`);
     if(p.copied!=null)details.push(`${Number(p.copied).toLocaleString()} copied`);
     if(p.already!=null)details.push(`${Number(p.already).toLocaleString()} already there`);
+    if(p.skipped!=null&&Number(p.skipped)>0)details.push(`${Number(p.skipped).toLocaleString()} waiting for other storage`);
+    if(p.remainingCapacityBytes!=null)details.push(`${bytes(p.remainingCapacityBytes)} free`);
     if(p.speedBps>0)details.push(`${bytes(p.speedBps)}/s`);
     if(p.etaSeconds>0)details.push(`${duration(p.etaSeconds)} left`);
     return {percent,details:details.join(' · '),current:p.current||'',indeterminate:Boolean(p.indeterminate)||percent==null};
@@ -131,24 +133,30 @@ if (activityHost) {
   function friendRecent(friendData){
     const result=[];
     for(const target of friendData?.backups||[]){
-      if(target.lastBackupAt)result.push({id:`friend-backup:${target.id}:${target.lastBackupAt}`,source:'friend',kind:'Friend Drive',title:target.name,status:'done',finishedAt:target.lastBackupAt,detail:'Backup updated'});
+      if(target.lastBackupAt)result.push({id:`friend-backup:${target.id}:${target.lastBackupAt}`,source:'friend',kind:'Friend Drive',title:target.name,status:'done',finishedAt:target.lastBackupAt,detail:target.lastCapacitySkippedBytes?`Updated · ${bytes(target.lastCapacitySkippedBytes)} left for other storage`:'Updated'});
       if(target.lastVerifiedAt)result.push({id:`friend-verify:${target.id}:${target.lastVerifiedAt}`,source:'friend',kind:'Friend Drive',title:target.name,status:target.lastVerifyBad?'error':'done',finishedAt:target.lastVerifiedAt,detail:target.lastVerifyBad?`${target.lastVerifyBad} damaged`:'Verified'});
       if(target.lastRestoreAt)result.push({id:`friend-restore:${target.id}:${target.lastRestoreAt}`,source:'friend',kind:'Friend Drive',title:target.name,status:'done',finishedAt:target.lastRestoreAt,detail:'Restored'});
     }
     return result;
   }
 
+  function jobItem(item, source, cancelable=false){
+    const op=operation(item);
+    return {...item,source,kind:op.kind,title:op.title,cancelable};
+  }
+
   function buildModel(state,stats,work,friends){
     rememberAgent(state?.job);
     const active=[],queued=[],recent=[];
-    if(state?.job?.status==='running'){
-      const op=operation(state.job);active.push({...state.job,source:'agent',kind:op.kind,title:op.title,cancelable:true});
-    }
+    if(state?.job?.status==='running') active.push(jobItem(state.job,'agent',true));
+    for(const item of state?.job?.queue||[]) queued.push(jobItem(item,'agent-queue',false));
     const folders=folderItems(state,stats),squish=squishItems(work),previews=previewItems(state);
     active.push(...folders.active,...squish.active,...previews.active);
     queued.push(...folders.queued,...squish.queued,...previews.queued);
-    recent.push(...savedRecent().map(item=>{const op=operation(item);return {...item,source:'agent-history',kind:op.kind,title:op.title};}),...folders.recent,...squish.recent,...friendRecent(friends));
-    const uniqueRecent=[...new Map(recent.filter(item=>item.finishedAt).sort((a,b)=>new Date(b.finishedAt)-new Date(a.finishedAt)).map(item=>[item.id,item])).values()].slice(0,24);
+    const backendRecent=(state?.job?.recent||[]).map(item=>jobItem(item,'agent-history',false));
+    const browserRecent=savedRecent().map(item=>jobItem(item,'agent-history',false));
+    recent.push(...backendRecent,...browserRecent,...folders.recent,...squish.recent,...friendRecent(friends));
+    const uniqueRecent=[...new Map(recent.filter(item=>item.finishedAt).sort((a,b)=>new Date(b.finishedAt)-new Date(a.finishedAt)).map(item=>[item.id,item])).values()].slice(0,28);
     return {state,active,queued,recent:uniqueRecent};
   }
 
@@ -182,11 +190,10 @@ if (activityHost) {
     button.title=active||queued?`${active} working · ${queued} queued`:'Activity';
     if(!dialog?.open)return;
     const body=dialog.querySelector('[data-activity-body]');
-    body.innerHTML=`<div class="activity-summary"><strong>${active?`${active} working`:queued?'Ready to work':'All caught up'}</strong>${queued?`<span>· ${queued} queued</span>`:''}<span class="spacer"></span><span>${esc(model.state?.background?.waiting?'Waiting for idle':model.state?.settings?.thumbnailMode==='off'?'Background paused':'')}</span></div>${active?`<section class="activity-section"><div class="activity-section-head">Now <b>${active}</b></div><div class="activity-list">${model.active.map(item=>row(item)).join('')}</div></section>`:''}${queued?`<section class="activity-section"><div class="activity-section-head">Next <b>${queued}</b></div><div class="activity-list">${model.queued.map(item=>row(item)).join('')}</div></section>`:''}<section class="activity-section activity-recent"><div class="activity-section-head">Recently <b>${model.recent.length}</b><span style="flex:1"></span>${model.recent.length?'<button class="activity-clear" data-activity-clear>Clear Agent history</button>':''}</div>${model.recent.length?`<div class="activity-list">${model.recent.map(item=>row(item,true)).join('')}</div>`:'<div class="activity-empty">Nothing recent.</div>'}</section>`;
+    body.innerHTML=`<div class="activity-summary"><strong>${active?`${active} working`:queued?'Ready to work':'All caught up'}</strong>${queued?`<span>· ${queued} queued</span>`:''}<span class="spacer"></span><span>${esc(model.state?.background?.waiting?'Waiting for idle':model.state?.settings?.thumbnailMode==='off'?'Background paused':'')}</span></div>${active?`<section class="activity-section"><div class="activity-section-head">Now <b>${active}</b></div><div class="activity-list">${model.active.map(item=>row(item)).join('')}</div></section>`:''}${queued?`<section class="activity-section"><div class="activity-section-head">Next <b>${queued}</b></div><div class="activity-list">${model.queued.map(item=>row(item)).join('')}</div></section>`:''}<section class="activity-section activity-recent"><div class="activity-section-head">Recently <b>${model.recent.length}</b></div>${model.recent.length?`<div class="activity-list">${model.recent.map(item=>row(item,true)).join('')}</div>`:'<div class="activity-empty">Nothing recent.</div>'}</section>`;
   }
 
   async function handleAction(event){
-    if(event.target.closest('[data-activity-clear]')){saveRecent([]);render(lastModel?{...lastModel,recent:lastModel.recent.filter(item=>item.source!=='agent-history')}:lastModel);return;}
     const cancel=event.target.closest('[data-activity-cancel]');if(!cancel)return;
     const item=[...(lastModel?.active||[]),...(lastModel?.queued||[])].find(entry=>entry.id===cancel.dataset.activityCancel);if(!item)return;
     cancel.disabled=true;
