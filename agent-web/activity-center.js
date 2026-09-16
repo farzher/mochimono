@@ -32,7 +32,7 @@ if (activityHost) {
   menu?.before(button);
   if (!menu) activityHost.append(button);
 
-  const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char]));
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;' }[char]));
   const baseName = value => String(value || '').replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).at(-1) || String(value || '');
   function bytes(number) { const units=['B','KB','MB','GB','TB','PB']; let value=Math.max(0,Number(number)||0),unit=0; while(value>=1000&&unit<units.length-1){value/=1000;unit++;} return `${value<10&&unit?value.toFixed(1):Math.round(value)} ${units[unit]}`; }
   function age(value) { const time=new Date(value||0).getTime(); if(!time)return ''; const s=Math.max(0,Math.floor((Date.now()-time)/1000)); if(s<60)return s<8?'just now':`${s}s ago`; const m=Math.floor(s/60); if(m<60)return `${m}m ago`; const h=Math.floor(m/60); if(h<48)return `${h}h ago`; return `${Math.floor(h/24)}d ago`; }
@@ -149,7 +149,7 @@ if (activityHost) {
     rememberAgent(state?.job);
     const active=[],queued=[],recent=[];
     if(state?.job?.status==='running') active.push(jobItem(state.job,'agent',true));
-    for(const item of state?.job?.queue||[]) queued.push(jobItem(item,'agent-queue',false));
+    for(const item of state?.job?.queue||[]) queued.push(jobItem(item,'agent-queue',true));
     const folders=folderItems(state,stats),squish=squishItems(work),previews=previewItems(state);
     active.push(...folders.active,...squish.active,...previews.active);
     queued.push(...folders.queued,...squish.queued,...previews.queued);
@@ -200,6 +200,7 @@ if (activityHost) {
     try{
       if(item.source==='squish')await request(`/api/work/${item.rawId}/cancel`,{method:'POST'});
       else if(item.source==='squish-batch')await Promise.allSettled(item.rawIds.map(id=>request(`/api/work/${id}/cancel`,{method:'POST'})));
+      else if(item.source==='agent-queue')await request('/api/job/cancel',{method:'POST',body:{id:item.id}});
       else await request('/api/job/cancel',{method:'POST'});
       schedule(0);
     }catch(error){toast(error.message);cancel.disabled=false;}
