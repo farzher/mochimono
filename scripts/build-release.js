@@ -1,4 +1,4 @@
-import { copyFile, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -62,12 +62,14 @@ async function run(command, args, cwd) {
 console.log(`Installing ${target} runtime dependencies...`);
 await run('npm', ['install','--omit=dev','--no-audit','--no-fund','--package-lock=false'], out);
 
-if (target === 'agent') {
-  const runtime = join(out, 'runtime');
-  await mkdir(runtime, { recursive:true });
-  const executable = process.platform === 'win32' ? 'node.exe' : 'node';
-  await copyFile(process.execPath, join(runtime, executable));
+const runtime = join(out, 'runtime');
+await mkdir(runtime, { recursive:true });
+const executable = process.platform === 'win32' ? 'node.exe' : 'node';
+const runtimeNode = join(runtime, executable);
+await copyFile(process.execPath, runtimeNode);
+if (process.platform !== 'win32') await chmod(runtimeNode, 0o755);
 
+if (target === 'agent') {
   if (process.platform === 'win32') {
     await writeFile(join(out, 'Mochimono.ps1'), `$ErrorActionPreference = 'SilentlyContinue'\n$here = $PSScriptRoot\n$url = 'http://127.0.0.1:8643'\nfunction Ready {\n  try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 "$url/api/health" | Out-Null; return $true } catch { return $false }\n}\nif (-not (Ready)) {\n  Start-Process -WindowStyle Hidden -FilePath "$here\\runtime\\node.exe" -ArgumentList @("$here\\agent-entry.js")\n  for ($i = 0; $i -lt 80 -and -not (Ready); $i++) { Start-Sleep -Milliseconds 250 }\n}\nif (Ready) { Start-Process $url; exit 0 }\nWrite-Error 'Mochimono Agent did not start.'\nexit 1\n`);
     await writeFile(join(out, 'Mochimono.cmd'), `@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0Mochimono.ps1"\r\n`);
@@ -81,7 +83,7 @@ await writeFile(join(out, 'RELEASE.txt'), [
   `Built with ${process.version} for ${process.platform}-${process.arch}.`,
   target === 'agent'
     ? 'This directory is portable. Keep all files together. User data is stored outside this directory in the normal Mochimono config location.'
-    : 'Set MOCHIMONO_TOKEN and MOCHIMONO_DATA before starting. Run behind a reverse proxy; the default bind address is localhost.'
+    : 'This directory includes its Node runtime. Set MOCHIMONO_TOKEN and MOCHIMONO_DATA before starting it behind a reverse proxy.'
 ].join('\n') + '\n');
 
 console.log(`Release ready: ${out}`);
