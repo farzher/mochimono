@@ -1,6 +1,6 @@
 # Mochimono release builds
 
-Mochimono has two release targets: a portable desktop Agent and a small VPS server. Build each release on the same OS/architecture it will run on because both targets include platform-specific native modules and the exact Node runtime used to build them.
+Mochimono has two release targets: a portable desktop Agent and a lightweight VPS server. Build the Agent on the same OS/architecture it will run on because it includes native media and peer-to-peer modules. The server has no npm runtime dependencies, but its release still includes the exact Node runtime used to build it, so build it for the target Linux architecture.
 
 ## Portable Agent
 
@@ -30,14 +30,23 @@ A release should be rebuilt on each target OS/architecture instead of copying `n
 
 ## VPS server
 
-Build the server release on Linux for the Linux architecture/distro family that will run it:
+The VPS is intentionally a storage/catalog service, not a media-processing machine. CPU-heavy work belongs to the Agent:
+
+- image and HEIC decoding happens on the Agent
+- video frame extraction happens on the Agent
+- thumbnail WebP encoding happens on the Agent
+- Squishing/transcoding happens on the Agent
+- the server only stores finished thumbnails/renditions and streams their bytes unchanged
+
+If a file only exists in Cloud and needs a thumbnail, an Agent can download/stream that original, generate the preview locally, and upload the finished thumbnail. The server never falls back to decoding the media itself.
+
+Build the server release on Linux for the target architecture. No dependency install is needed for the server target:
 
 ```sh
-npm ci
 npm run release:server
 ```
 
-The finished directory is `dist/server`. It contains its own Node runtime and only the runtime packages the server needs: `sharp`, `heic-decode`, and `ffmpeg-static`. Agent-only peer-to-peer/native dependencies such as `node-datachannel` are omitted.
+The finished directory is `dist/server`. It contains its own Node runtime and **no npm runtime dependencies**: no `sharp`, `heic-decode`, `ffmpeg-static`, or `node-datachannel`. Building the server therefore does not install native media packages at all.
 
 No Node/npm installation is required on the VPS after the release directory has been built. A typical Debian/Ubuntu deployment from inside the extracted server release is:
 
@@ -59,6 +68,8 @@ sudo systemctl enable --now mochimono
 
 Generate a long random `MOCHIMONO_TOKEN`; do not use the example value. Keep `MOCHIMONO_DATA=/var/lib/mochimono`. The service binds to `127.0.0.1:8642` by default so it is not directly exposed to the Internet.
 
+The low-resource example also sets `MOCHIMONO_SCRUB_DAYS=0`. That disables scheduled full-object integrity scans, which can otherwise consume substantial disk bandwidth and CPU on a tiny VPS. Manual integrity verification remains available, and scheduled scrubbing can be enabled later if the server has enough headroom.
+
 ### Nginx
 
 Install Nginx, copy/adapt `deploy/nginx.conf` inside the Nginx `http` context (the normal Debian/Ubuntu `sites-enabled` location is fine), set your real `server_name`, then add TLS with your normal certificate tooling.
@@ -69,16 +80,16 @@ The example deliberately disables request/response buffering for the Mochimono u
 
 The supplied systemd unit is aimed at a small 1 GB-class VPS:
 
-- Node old-space capped at 384 MB
-- soft service pressure at 384 MB
-- hard service memory ceiling at 512 MB
+- Node old-space capped at 256 MB
+- soft service pressure at 256 MB
+- hard service memory ceiling at 384 MB
+- no image/video decode, resize, or transcoding on the VPS
+- scheduled full-object scrubbing disabled by default
 - one CPU worth of quota
 - automatic restart on failure
 - persistent writes restricted to `/var/lib/mochimono`
 
-Server-side Sharp already runs at low concurrency and with a small memory cache. SQLite uses WAL + `synchronous=NORMAL`, so normal metadata work stays light while object bytes remain streamed on disk rather than loaded into memory.
-
-If the server legitimately needs more memory for unusually large media, raise `MemoryHigh`, `MemoryMax`, and `--max-old-space-size` together.
+SQLite uses WAL + `synchronous=NORMAL`, and object/thumbnail bytes are streamed from disk. Normal server work should therefore mostly be SQLite queries plus file/network I/O rather than CPU-heavy media work.
 
 ## Pre-release data contract
 

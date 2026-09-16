@@ -27,9 +27,6 @@ for (const entry of await readdir(ROOT, { withFileTypes:true })) {
 }
 
 const agentDependencies = sourcePackage.dependencies || {};
-const serverDependencies = Object.fromEntries(
-  Object.entries(agentDependencies).filter(([name]) => ['sharp','heic-decode','ffmpeg-static'].includes(name))
-);
 const releasePackage = {
   name:`mochimono-${target}`,
   version:sourcePackage.version,
@@ -39,7 +36,7 @@ const releasePackage = {
   scripts:target === 'agent'
     ? { start:'node agent-entry.js' }
     : { start:'node server-entry.js' },
-  dependencies:target === 'agent' ? agentDependencies : serverDependencies
+  dependencies:target === 'agent' ? agentDependencies : {}
 };
 await writeFile(join(out, 'package.json'), `${JSON.stringify(releasePackage, null, 2)}\n`);
 await rm(join(out, 'package-lock.json'), { force:true });
@@ -59,8 +56,12 @@ async function run(command, args, cwd) {
   if (code) throw new Error(`${command} exited with ${code}`);
 }
 
-console.log(`Installing ${target} runtime dependencies...`);
-await run('npm', ['install','--omit=dev','--no-audit','--no-fund','--package-lock=false'], out);
+if (target === 'agent') {
+  console.log('Installing Agent runtime dependencies...');
+  await run('npm', ['install','--omit=dev','--no-audit','--no-fund','--package-lock=false'], out);
+} else {
+  console.log('Server uses Node built-ins only; no npm runtime dependencies to install.');
+}
 
 const runtime = join(out, 'runtime');
 await mkdir(runtime, { recursive:true });
@@ -83,7 +84,7 @@ await writeFile(join(out, 'RELEASE.txt'), [
   `Built with ${process.version} for ${process.platform}-${process.arch}.`,
   target === 'agent'
     ? 'This directory is portable. Keep all files together. User data is stored outside this directory in the normal Mochimono config location.'
-    : 'This directory includes its Node runtime. Set MOCHIMONO_TOKEN and MOCHIMONO_DATA before starting it behind a reverse proxy.'
+    : 'This directory includes its Node runtime and has no npm runtime dependencies. Set MOCHIMONO_TOKEN and MOCHIMONO_DATA before starting it behind a reverse proxy.'
 ].join('\n') + '\n');
 
 console.log(`Release ready: ${out}`);
