@@ -1,7 +1,6 @@
 const actions = document.querySelector('.client-head-actions');
 const storagePane = document.querySelector('#storagePane');
 const storageToggle = document.querySelector('[data-client-tab="storage"]');
-const brand = document.querySelector('.client-header .app-brand');
 
 if (actions && storagePane && storageToggle) {
   const style = document.createElement('style');
@@ -21,9 +20,7 @@ if (actions && storagePane && storageToggle) {
   nav.innerHTML = `
     <button type="button" data-primary-view="library">Library</button>
     <button type="button" data-primary-view="storage">Storage</button>`;
-
-  const menu = actions.querySelector('.client-menu');
-  actions.insertBefore(nav, actions.firstChild || menu);
+  actions.insertBefore(nav, actions.firstChild);
 
   const libraryButton = nav.querySelector('[data-primary-view="library"]');
   const storageButton = nav.querySelector('[data-primary-view="storage"]');
@@ -38,7 +35,6 @@ if (actions && storagePane && storageToggle) {
 
   libraryButton.onclick = () => {
     if (!storagePane.hidden) storageToggle.click();
-    else brand?.click();
     sync();
   };
   storageButton.onclick = () => {
@@ -50,9 +46,8 @@ if (actions && storagePane && storageToggle) {
   addEventListener('popstate', () => queueMicrotask(sync));
   sync();
 
-  // Pre-release first-run UX: setup/storage is the useful starting surface.
-  // This is a UI preference only, not a data migration or compatibility path.
-  const FIRST_VIEW_KEY = 'mochimono:primary-nav-seen-v1';
+  // Pre-release first-run UX: Storage is the setup surface, so show it first.
+  const FIRST_VIEW_KEY = 'mochimono:primary-nav-seen';
   if (!localStorage.getItem(FIRST_VIEW_KEY)) {
     localStorage.setItem(FIRST_VIEW_KEY, '1');
     if (!new URL(location.href).searchParams.get('file') && storagePane.hidden) {
