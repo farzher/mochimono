@@ -10,6 +10,8 @@ if (folders) {
   let enriching = false;
   let renderedKey = '';
   let apiPromise = null;
+  let writingRows = false;
+  let lastSources = [];
   const detailCache = new Map();
   const liveSyncs = new Map();
 
@@ -134,15 +136,18 @@ if (folders) {
   }
 
   function render(sources) {
+    lastSources=sources;
     const key=JSON.stringify(sources.map(sourceKey));
-    if(key===renderedKey)return;
+    if(key===renderedKey&&(!sources.length||folders.querySelector(':scope > [data-browser-folder]')))return;
     renderedKey=key;
+    writingRows=true;
     for(const row of folders.querySelectorAll(':scope > [data-browser-folder]'))row.remove();
     if(sources.length){
       const holder=document.createElement('div');
       holder.innerHTML=sources.map(card).join('');
       folders.append(...holder.children);
     }
+    requestAnimationFrame(()=>{writingRows=false;});
     window.mochimonoSourceControls?.refresh?.();
   }
 
@@ -240,7 +245,15 @@ if (folders) {
     catch {} finally { remove.disabled=false; }
   },true);
 
+  new MutationObserver(records=>{
+    if(writingRows||!lastSources.length)return;
+    if(records.some(record=>record.addedNodes.length||record.removedNodes.length)&&!folders.querySelector(':scope > [data-browser-folder]')){
+      renderedKey='';
+      render(lastSources);
+    }
+  }).observe(folders,{childList:true});
+
   frame?.addEventListener('load',()=>{exposeToFrame();});
-  window.mochimonoBrowserFolderShell={setCloud,setScope,sync};
+  window.mochimonoBrowserFolderShell={setCloud,setScope,sync,refresh:()=>schedule(0,true)};
   schedule(0,true);
 }
