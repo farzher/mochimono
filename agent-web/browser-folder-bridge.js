@@ -134,6 +134,10 @@ function notifyFrame() {
   try { frame?.contentWindow?.postMessage({ type:'mochimono-browser-catalog-changed' }, location.origin); } catch {}
 }
 
+function forwardToLibrary(type, detail) {
+  try { frame?.contentWindow?.dispatchEvent(new CustomEvent(type, { detail })); } catch {}
+}
+
 function wrapApi(api) {
   if (!api || api[WRAPPED]) return api;
   const sync = api.sync?.bind(api);
@@ -160,13 +164,18 @@ async function repairCloudSources() {
 }
 
 window.mochimonoBrowserFolderCatalog = browserCatalog;
-window.addEventListener('mochimono:browser-folders-ready', () => {
+window.addEventListener('mochimono:browser-folders-ready', event => {
   patchCurrentApi();
   void repairCloudSources();
   notifyFrame();
+  forwardToLibrary('mochimono:browser-folders-ready', event.detail);
 });
-window.addEventListener('mochimono:browser-folders-changed', notifyFrame);
+window.addEventListener('mochimono:browser-folders-changed', event => {
+  notifyFrame();
+  forwardToLibrary('mochimono:browser-folders-changed', event.detail);
+});
 window.addEventListener('mochimono:browser-folder-sync', event => {
+  forwardToLibrary('mochimono:browser-folder-sync', event.detail);
   if (event.detail?.state === 'done') notifyFrame();
 });
 frame?.addEventListener('load', notifyFrame);
