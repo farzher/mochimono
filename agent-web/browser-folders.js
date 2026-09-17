@@ -21,7 +21,7 @@ if (folders) {
   style.textContent = `.browser-folder-item .storage-meta:empty{display:none!important}`;
   document.head.append(style);
 
-  const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char]));
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;' }[char]));
   const normalize = source => source ? { ...source, scope:source.scope === 'all' ? 'all' : 'media', cloud:source.cloud === true } : source;
 
   function bytes(number) {
@@ -191,8 +191,10 @@ if (folders) {
     const wasBusy=liveSyncs.has(id);
     if(detail.state==='running'){
       liveSyncs.set(id,detail);
-      relay('mochimono:browser-folder-sync',detail);
-      if(!wasBusy){renderedKey='';render(lastSources);}
+      if(!wasBusy){
+        relay('mochimono:browser-folder-sync',detail);
+        renderedKey='';render(lastSources);
+      }
       return;
     }
     liveSyncs.delete(id);
