@@ -152,15 +152,6 @@ if (storagePane && sourceSection && backupSection) {
   function hiddenBackupButton(location, selector) {
     return document.querySelector(`#backups [data-backup-index="${Number(location.backupIndex)}"] ${selector}`);
   }
-  function hiddenFriendButton(location, selector) {
-    const id = location.targetId || String(location.id || '').replace(/^friend:/, '');
-    return document.querySelector(`#backups [data-friend-backup="${CSS.escape(id)}"] ${selector}`);
-  }
-  function trigger(selector) {
-    const button = document.querySelector(selector);
-    if (!button) return toast('Still loading');
-    button.click();
-  }
 
   function openLocation(location) {
     const u = usage(location);
@@ -209,7 +200,7 @@ if (storagePane && sourceSection && backupSection) {
     } catch (error) { toast(error.message); }
   }
 
-  function handleAction(action) {
+  async function handleAction(action) {
     const current = locations.find(item => item.id === inspectDialog.dataset.locationId);
     const share = shares.find(item => item.id === inspectDialog.dataset.shareId);
     if (action === 'cloud') {
@@ -227,15 +218,19 @@ if (storagePane && sourceSection && backupSection) {
       return;
     }
     if (action?.startsWith('friend-') && current) {
-      const selectors = { 'friend-update':'[data-friend-update]', 'friend-verify':'[data-friend-verify]', 'friend-restore':'[data-friend-restore]', 'friend-key':'[data-friend-key]' };
-      const button = hiddenFriendButton(current, selectors[action]);
-      if (!button) return toast('Still loading');
+      const api = window.mochimonoFriendStorage;
+      const id = current.targetId || String(current.id || '').replace(/^friend:/, '');
+      if (!api?.backup) return toast('Still loading');
       inspectDialog.close();
-      button.click();
+      if (!await api.backup(id, action.slice(7))) toast('Still loading');
       return;
     }
-    if (action === 'share-invite' && share) { inspectDialog.close(); trigger(`.friend-share-list [data-friend-share="${CSS.escape(share.id)}"] [data-share-invite]`); return; }
-    if (action === 'share-remove' && share) { inspectDialog.close(); trigger(`.friend-share-list [data-friend-share="${CSS.escape(share.id)}"] [data-share-remove]`); }
+    if (action?.startsWith('share-') && share) {
+      const api = window.mochimonoFriendStorage;
+      if (!api?.share) return toast('Still loading');
+      inspectDialog.close();
+      if (!await api.share(share.id, action.slice(6))) toast('Still loading');
+    }
   }
 
   function fallbackLocations(state) {
@@ -309,7 +304,10 @@ if (storagePane && sourceSection && backupSection) {
     else if (kind === 'friend') { addDialog.close(); window.mochimonoFriendStorage?.openAdd?.(); }
     else if (kind === 'offer') { addDialog.close(); window.mochimonoFriendStorage?.openOffer?.(); }
   });
-  inspectDialog.addEventListener('click', event => { const action = event.target.closest('[data-action]')?.dataset.action; if (action) handleAction(action); });
+  inspectDialog.addEventListener('click', event => {
+    const action = event.target.closest('[data-action]')?.dataset.action;
+    if (action) handleAction(action).catch(error => toast(error.message));
+  });
   inspectDialog.querySelector('[data-inspect-close]').onclick = () => inspectDialog.close();
   addDialog.querySelector('[data-add-close]').onclick = () => addDialog.close();
 
