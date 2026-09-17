@@ -20,6 +20,7 @@ if (storagePane && sourceSection && backupSection) {
   const style = document.createElement('style');
   style.textContent = `
     .storage-section-heading{margin:0 0 10px}.storage-section-heading h2{margin:0;color:#eee6e2;font-size:19px;font-weight:780;letter-spacing:-.025em}
+    #storagePane .storage-folders-section>.storage-section-heading{grid-column:1/-1}
     .managed-storage-section{margin-top:20px;padding-top:27px;border-top:1px solid #211e21}
     .managed-storage-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
     .managed-storage-card{min-width:0;padding:0;overflow:hidden;border:1px solid #2b282b;border-radius:15px;background:#121013;color:#ebe3df;text-align:left;transition:border-color .12s ease,background .12s ease}
