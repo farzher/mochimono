@@ -60,8 +60,10 @@ if (document.documentElement.classList.contains('client-library')) {
     dispatchEvent(new CustomEvent('mochimono:browser-folders-ready'));
   }
 
-  await import('./browser-folder-viewer.js')
-    .catch(error => console.warn('Browser folder viewer bridge unavailable', error));
+  await Promise.all([
+    import('./browser-folder-viewer.js'),
+    import('./browser-folder-thumbnail-repair.js')
+  ]).catch(error => console.warn('Browser folder media bridge unavailable', error));
 
   addEventListener('message', event => {
     if (event.source !== parent || event.origin !== location.origin) return;
