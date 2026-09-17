@@ -1,5 +1,3 @@
-import './fetch-coalescer.js';
-
 const dialog = document.querySelector('#deviceDialog');
 const fields = dialog?.querySelector('.field-stack');
 const saveButton = document.querySelector('#saveDevice');
