@@ -17,7 +17,6 @@ if (storagePane && sourceSection) {
 
   const style = document.createElement('style');
   style.textContent = `
-    #protectionDashboard{display:none!important}
     .backup-center{margin-top:20px;padding-top:27px;border-top:1px solid #211e21}
     .backup-center-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
     .backup-center-head h2{margin:0;color:#eee6e2;font-size:19px;font-weight:760;letter-spacing:-.025em}
@@ -275,7 +274,6 @@ if (storagePane && sourceSection) {
   const menuButton=document.querySelector('#clientProtection');
   if(menuButton){menuButton.querySelector('.menu-label')?.replaceChildren(document.createTextNode('Backup'));menuButton.onclick=event=>{event.preventDefault();openManage();};}
 
-  new MutationObserver(()=>{document.querySelector('#protectionDashboard')?.setAttribute('hidden','');placeSection();}).observe(storagePane,{childList:true});
   window.addEventListener('mochimono:protection-changed',()=>refresh(true));
   window.addEventListener('focus',()=>schedule(0));
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)schedule(0);});
