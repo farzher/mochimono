@@ -1,3 +1,5 @@
+import './fetch-coalescer.js';
+
 const dialog = document.querySelector('#deviceDialog');
 const fields = dialog?.querySelector('.field-stack');
 const saveButton = document.querySelector('#saveDevice');
@@ -65,6 +67,7 @@ if (dialog && fields && saveButton) {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || response.statusText);
+      window.mochimonoInvalidateShellFetch?.('/api/state');
       dialog.close();
       setTimeout(refresh, 250);
     } catch (error) {
