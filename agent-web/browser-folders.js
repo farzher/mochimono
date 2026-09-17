@@ -1,3 +1,5 @@
+import './storage-source-controls.js';
+
 const folders = document.querySelector('#folders');
 const frame = document.querySelector('#filesFrame');
 
@@ -16,10 +18,7 @@ if (folders) {
   const liveSyncs = new Map();
 
   const style = document.createElement('style');
-  style.textContent = `
-    .browser-folder-item .browser-folder-warning{position:absolute;right:13px;bottom:14px;width:7px;height:7px;border-radius:50%;background:#c28f76}
-    .browser-folder-item .storage-meta:empty{display:none!important}
-  `;
+  style.textContent = `.browser-folder-item .storage-meta:empty{display:none!important}`;
   document.head.append(style);
 
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char]));
@@ -27,13 +26,13 @@ if (folders) {
 
   function bytes(number) {
     const units=['B','KB','MB','GB','TB'];
-    let value=Math.max(0,Number(number)||0), unit=0;
+    let value=Math.max(0,Number(number)||0),unit=0;
     while(value>=1000&&unit<units.length-1){value/=1000;unit++;}
     return `${value<10&&unit?value.toFixed(1):Math.round(value)} ${units[unit]}`;
   }
 
   function openDb() {
-    return new Promise((resolve,reject) => {
+    return new Promise((resolve,reject)=>{
       const request=indexedDB.open(DB_NAME,DB_VERSION);
       request.onupgradeneeded=()=>{
         const db=request.result;
@@ -46,7 +45,7 @@ if (folders) {
   }
 
   function getAll(store) {
-    return new Promise((resolve,reject) => {
+    return new Promise((resolve,reject)=>{
       const request=store.getAll();
       request.onsuccess=()=>resolve(request.result||[]);
       request.onerror=()=>reject(request.error);
@@ -55,8 +54,8 @@ if (folders) {
 
   async function readSources() {
     const db=await openDb();
-    try { return (await getAll(db.transaction(SOURCES,'readonly').objectStore(SOURCES))).map(normalize); }
-    finally { db.close(); }
+    try{return (await getAll(db.transaction(SOURCES,'readonly').objectStore(SOURCES))).map(normalize);}
+    finally{db.close();}
   }
 
   async function permission(handle) {
@@ -68,13 +67,12 @@ if (folders) {
   async function readDetails(sources) {
     const db=await openDb();
     let rows=[];
-    try { rows=await getAll(db.transaction(FILES,'readonly').objectStore(FILES)); }
-    finally { db.close(); }
+    try{rows=await getAll(db.transaction(FILES,'readonly').objectStore(FILES));}
+    finally{db.close();}
     const groups=new Map(sources.map(source=>[String(source.id),[]]));
     for(const row of rows){
-      const key=String(row?.key||''), split=key.indexOf('\u0000');
-      if(split<=0)continue;
-      groups.get(key.slice(0,split))?.push(row);
+      const key=String(row?.key||''),split=key.indexOf('\u0000');
+      if(split>0)groups.get(key.slice(0,split))?.push(row);
     }
     return Promise.all(sources.map(async source=>{
       const manifest=groups.get(String(source.id))||[];
@@ -82,14 +80,8 @@ if (folders) {
         .filter(row=>row.hash&&(String(row.mime||'').startsWith('image/')||String(row.mime||'').startsWith('video/')))
         .sort((a,b)=>Number(b.lastModified||0)-Number(a.lastModified||0))
         .slice(0,3)
-        .map(row=>({hash:row.hash,filename:String(row.path||'').split('/').at(-1)||'',mime:row.mime}));
-      return {
-        ...source,
-        permission:await permission(source.handle),
-        files:manifest.length,
-        bytes:manifest.reduce((sum,row)=>sum+(Number(row.size)||0),0),
-        previews
-      };
+        .map(row=>({hash:row.hash,mime:row.mime}));
+      return {...source,permission:await permission(source.handle),files:manifest.length,bytes:manifest.reduce((sum,row)=>sum+(Number(row.size)||0),0),previews};
     }));
   }
 
@@ -122,10 +114,7 @@ if (folders) {
     const busy=liveSyncs.has(String(source.id));
     return `<article class="storage-item folder-item browser-folder-item${busy?' source-busy':''}" data-browser-folder="${esc(source.id)}" data-source-cloud="${source.cloud?'1':'0'}" data-source-scope="${esc(source.scope)}" data-source-health="${health}">
       <a class="storage-folder-samples storage-source-link" href="#" title="Library">${[0,1,2].map(index=>previewCell(previews[index],index)).join('')}</a>
-      <div class="storage-copy">
-        <div class="storage-title"><strong title="${esc(source.rootPath||source.name)}">${titleHtml(source)}</strong></div>
-        <div class="storage-meta">${meta?`<span>${esc(meta)}</span>`:''}</div>
-      </div>
+      <div class="storage-copy"><div class="storage-title"><strong title="${esc(source.rootPath||source.name)}">${titleHtml(source)}</strong></div><div class="storage-meta">${meta?`<span>${esc(meta)}</span>`:''}</div></div>
       <div class="item-actions"><button class="icon tiny" data-browser-remove aria-label="Remove" title="Remove">×</button></div>
     </article>`;
   }
@@ -143,9 +132,7 @@ if (folders) {
     writingRows=true;
     for(const row of folders.querySelectorAll(':scope > [data-browser-folder]'))row.remove();
     if(sources.length){
-      const holder=document.createElement('div');
-      holder.innerHTML=sources.map(card).join('');
-      folders.append(...holder.children);
+      const holder=document.createElement('div');holder.innerHTML=sources.map(card).join('');folders.append(...holder.children);
     }
     requestAnimationFrame(()=>{writingRows=false;});
     window.mochimonoSourceControls?.refresh?.();
@@ -164,70 +151,50 @@ if (folders) {
   function exposeToFrame() {
     const child=frame?.contentWindow;
     if(!child||!window.mochimonoBrowserFolders)return;
-    try { child.mochimonoBrowserFolders=window.mochimonoBrowserFolders; } catch {}
+    try{child.mochimonoBrowserFolders=window.mochimonoBrowserFolders;}catch{}
   }
 
   function relay(name,detail) {
     exposeToFrame();
-    try { frame?.contentWindow?.dispatchEvent(new CustomEvent(name,{detail})); } catch {}
+    try{frame?.contentWindow?.dispatchEvent(new CustomEvent(name,{detail}));}catch{}
   }
 
   async function refresh(enrich=true) {
     clearTimeout(refreshTimer);refreshTimer=0;
     let sources=[];
-    try { sources=await readSources(); } catch { return; }
+    try{sources=await readSources();}catch{return;}
     render(sources);
     if(sources.length)ensureApi().catch(()=>{});
     if(!enrich||enriching||!sources.length)return;
     enriching=true;
-    try {
+    try{
       const details=await readDetails(sources);
       for(const detail of details)detailCache.set(String(detail.id),detail);
       render(sources);
-    } catch {}
-    finally { enriching=false; }
+    }catch{}finally{enriching=false;}
   }
 
   function schedule(delay=0,enrich=true) {
-    clearTimeout(refreshTimer);
-    refreshTimer=setTimeout(()=>refresh(enrich),Math.max(0,delay));
+    clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>refresh(enrich),Math.max(0,delay));
   }
 
   async function setCloud(id,enabled) {
-    const api=await ensureApi();
-    await api.setCloud(id,enabled);
-    schedule(0,false);
-    if(enabled)api.sync(id,{userGesture:true}).catch(()=>{});
+    const api=await ensureApi();await api.setCloud(id,enabled);schedule(0,false);if(enabled)api.sync(id,{userGesture:true}).catch(()=>{});
   }
   async function setScope(id,scope) {
-    const api=await ensureApi();
-    await api.setScope(id,scope);
-    schedule(0,false);
-    api.sync(id,{userGesture:true}).catch(()=>{});
+    const api=await ensureApi();await api.setScope(id,scope);schedule(0,false);api.sync(id,{userGesture:true}).catch(()=>{});
   }
-  async function sync(id) {
-    const api=await ensureApi();
-    return api.sync(id,{userGesture:true});
-  }
+  async function sync(id) { return (await ensureApi()).sync(id,{userGesture:true}); }
 
   function onSync(event) {
-    const detail=event.detail||{},id=String(detail.id||'');
-    if(!id)return;
-    if(detail.state==='running')liveSyncs.set(id,detail); else liveSyncs.delete(id);
+    const detail=event.detail||{},id=String(detail.id||'');if(!id)return;
+    if(detail.state==='running')liveSyncs.set(id,detail);else liveSyncs.delete(id);
     relay('mochimono:browser-folder-sync',detail);
     schedule(detail.state==='running'?0:30,detail.state!=='running');
   }
-  function onThumbnail(event) {
-    relay('mochimono:browser-thumbnail-ready',event.detail||{});
-  }
-  function onChanged(event) {
-    relay('mochimono:browser-folders-changed',event.detail||{});
-    schedule(0,true);
-  }
-  function onReady(event) {
-    exposeToFrame();
-    relay('mochimono:browser-folders-ready',event.detail||{});
-  }
+  function onThumbnail(event){relay('mochimono:browser-thumbnail-ready',event.detail||{});}
+  function onChanged(event){relay('mochimono:browser-folders-changed',event.detail||{});schedule(0,true);}
+  function onReady(event){exposeToFrame();relay('mochimono:browser-folders-ready',event.detail||{});}
 
   window.addEventListener('mochimono:browser-folder-sync',onSync);
   window.addEventListener('mochimono:browser-thumbnail-ready',onThumbnail);
@@ -235,25 +202,18 @@ if (folders) {
   window.addEventListener('mochimono:browser-folders-ready',onReady);
 
   folders.addEventListener('click',async event=>{
-    const remove=event.target.closest('[data-browser-remove]');
-    if(!remove)return;
-    const row=remove.closest('[data-browser-folder]');
-    const id=row?.dataset.browserFolder;
-    if(!id)return;
+    const remove=event.target.closest('[data-browser-remove]');if(!remove)return;
+    const row=remove.closest('[data-browser-folder]'),id=row?.dataset.browserFolder;if(!id)return;
     remove.disabled=true;
-    try { await (await ensureApi()).remove(id); detailCache.delete(id); schedule(0,true); }
-    catch {} finally { remove.disabled=false; }
+    try{await (await ensureApi()).remove(id);detailCache.delete(id);schedule(0,true);}catch{}finally{remove.disabled=false;}
   },true);
 
   new MutationObserver(records=>{
     if(writingRows||!lastSources.length)return;
-    if(records.some(record=>record.addedNodes.length||record.removedNodes.length)&&!folders.querySelector(':scope > [data-browser-folder]')){
-      renderedKey='';
-      render(lastSources);
-    }
+    if(records.some(record=>record.addedNodes.length||record.removedNodes.length)&&!folders.querySelector(':scope > [data-browser-folder]')){renderedKey='';render(lastSources);}
   }).observe(folders,{childList:true});
 
   frame?.addEventListener('load',()=>{exposeToFrame();});
-  window.mochimonoBrowserFolderShell={setCloud,setScope,sync,refresh:()=>schedule(0,true)};
+  window.mochimonoBrowserFolderShell={setCloud,setScope,sync,refresh:()=>schedule(0,true),activate:ensureApi};
   schedule(0,true);
 }
