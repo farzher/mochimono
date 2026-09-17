@@ -13,7 +13,6 @@ import './client-shell.js';
 import './friend-storage.js';
 import './storage-locations-ui.js';
 import './navigation-shell.js';
-import './library-keyboard-bridge.js';
 import './preview-progress-ui.js';
 import './backup-center.js';
 import './activity-center.js';

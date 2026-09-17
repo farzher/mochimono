@@ -120,22 +120,6 @@ function libraryWindow() {
   return frame.contentWindow;
 }
 
-function editableTarget(target) {
-  return target?.closest?.('input,select,textarea,[contenteditable="true"]');
-}
-
-window.addEventListener('keydown', event => {
-  if (event.key !== 'PageUp' && event.key !== 'PageDown') return;
-  if (editableTarget(event.target)) return;
-  const child = libraryWindow();
-  if (!child) return;
-  const viewport = child.innerHeight || frame.clientHeight || innerHeight;
-  child.scrollBy({ top: (event.key === 'PageUp' ? -1 : 1) * Math.max(1, Math.floor(viewport * .9)), behavior: 'auto' });
-  child.focus();
-  event.preventDefault();
-  event.stopImmediatePropagation();
-}, true);
-
 header?.addEventListener('wheel', event => {
   if (event.ctrlKey || !event.deltaY || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;
   const child = libraryWindow();
