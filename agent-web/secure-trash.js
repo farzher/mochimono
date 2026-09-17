@@ -57,7 +57,7 @@ async function confirmPurge(sourceDialog) {
     try {
       await json('/api/protection/purge', {
         method:'POST',
-        headers:{ 'content-type':'application/json', 'x-mochimono-delete-password':value },
+        headers:{ 'content-type':'application/json', 'x-mochimono-delete-password':encodeURIComponent(value) },
         body:JSON.stringify({ hashes:files.map(file => file.hash), confirm:'DELETE' })
       });
       box.close();
