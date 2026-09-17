@@ -1,6 +1,7 @@
 import { db, json, now, readJson } from './lib/server-context.js';
 import { handleDeviceIdentity } from './device-identity-server.js';
 import { handleProtectionServer, registerProtectionStorage } from './protection-server.js';
+import { verifyServerPassword } from './server-auth.js';
 
 export function getDrive(id) {
   return db.prepare('SELECT * FROM drives WHERE id = ?').get(id);
@@ -29,8 +30,17 @@ function driveSummary(row) {
   };
 }
 
+function destructivePassword(req) {
+  try { return decodeURIComponent(String(req.headers['x-mochimono-delete-password'] || '')); }
+  catch { return ''; }
+}
+
 export async function handleBackupPolicy(req, res, url) {
   if (await handleDeviceIdentity(req, res, url)) return true;
+  if (req.method === 'POST' && url.pathname === '/api/protection/purge' && !verifyServerPassword(destructivePassword(req))) {
+    json(res, 401, { error:'Password required for permanent deletion' });
+    return true;
+  }
   if (await handleProtectionServer(req, res, url)) return true;
 
   const files = /^\/api\/drives\/([^/]+)\/files$/.exec(url.pathname);

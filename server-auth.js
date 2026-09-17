@@ -13,6 +13,8 @@ function equal(a, b) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+export const verifyServerPassword = value => equal(value, PASSWORD);
+
 function deviceToken(req) {
   const auth = String(req.headers.authorization || '');
   return auth.startsWith('Bearer ') ? auth.slice(7) : cookie(req, 'mochimono_device');
