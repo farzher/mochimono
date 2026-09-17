@@ -6,7 +6,7 @@ const root = fileURLToPath(new URL('.', import.meta.url));
 const token = process.env.MOCHIMONO_TOKEN || 'dev';
 const serverUrl = 'http://127.0.0.1:8642';
 const devData = join(root, 'dev-data');
-const devConfigDir = join(devData, '.agent');
+const devConfigDir = join(root, 'dev-agent-data');
 const children = [];
 
 function exitDescription(code, signal) {
@@ -46,7 +46,8 @@ process.on('SIGTERM', () => stop());
 console.log('Mochimono local development');
 console.log(`Library: ${serverUrl}  (token: ${token})`);
 console.log('Agent:   http://127.0.0.1:8643');
-console.log(`Data:    ${devData}`);
+console.log(`Cloud data: ${devData}`);
+console.log(`Agent data: ${devConfigDir}`);
 console.log('');
 
 run('server-entry.js', {
