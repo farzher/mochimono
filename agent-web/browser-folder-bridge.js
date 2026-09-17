@@ -91,9 +91,9 @@ async function writeCloudState(source, rows) {
 async function cloudPreflight(id) {
   const { sources, files } = await snapshot();
   const source = sources.find(item => String(item.id) === String(id));
-  if (!source?.cloud) return;
+  if (!source?.cloud) return false;
   const rows = files.filter(row => sourceIdFromRow(row) === String(source.id));
-  if (!rows.length) return;
+  if (!rows.length) return false;
 
   let importMissing = !Number(source.importId);
   if (!importMissing) {
@@ -104,16 +104,14 @@ async function cloudPreflight(id) {
 
   if (importMissing) {
     source.importId = 0;
-    let changed = false;
-    for (const row of rows) {
-      if (row.cloudSynced === true) { row.cloudSynced = false; changed = true; }
-    }
-    if (changed || Number(source.importId) === 0) await writeCloudState(source, rows);
-    return;
+    source.lastSynced = '';
+    for (const row of rows) row.cloudSynced = false;
+    await writeCloudState(source, rows);
+    return true;
   }
 
   const syncedHashes = [...new Set(rows.filter(row => row.cloudSynced === true && SHA256.test(String(row.hash || ''))).map(row => String(row.hash)))];
-  if (!syncedHashes.length) return;
+  if (!syncedHashes.length) return false;
   const unavailable = new Set();
   for (let offset = 0; offset < syncedHashes.length; offset += 1000) {
     const response = await fetch('/api/objects/check', {
@@ -125,9 +123,11 @@ async function cloudPreflight(id) {
     if (!response.ok) throw new Error(data.error || 'Could not verify Cloud files');
     for (const hash of [...(data.missing || []), ...(data.ignored || [])]) unavailable.add(String(hash));
   }
-  if (!unavailable.size) return;
+  if (!unavailable.size) return false;
+  source.lastSynced = '';
   for (const row of rows) if (unavailable.has(String(row.hash))) row.cloudSynced = false;
   await writeCloudState(source, rows);
+  return true;
 }
 
 function notifyFrame() {
