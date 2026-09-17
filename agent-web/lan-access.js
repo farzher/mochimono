@@ -65,7 +65,6 @@ if (dialog && fields && saveButton) {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || response.statusText);
-      window.mochimonoInvalidateShellFetch?.('/api/state');
       dialog.close();
       setTimeout(refresh, 250);
     } catch (error) {
