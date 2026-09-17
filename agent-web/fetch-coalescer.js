@@ -44,7 +44,3 @@ window.fetch = async function coalescedFetch(input, options = {}) {
   }
   return responseFrom(await pending);
 };
-
-// Kept as a harmless compatibility hook for modules that explicitly invalidate
-// after writes. There is no response cache anymore; only concurrent requests are shared.
-window.mochimonoInvalidateShellFetch = () => {};
