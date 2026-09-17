@@ -1,9 +1,7 @@
-const backups = document.querySelector('#backups');
-const backupSection = document.querySelector('.storage-backups-section');
 const storagePane = document.querySelector('#storagePane');
 const toastNode = document.querySelector('#toast');
 
-if (backups && backupSection) {
+if (storagePane) {
   const host = location.hostname.includes(':') ? `[${location.hostname}]` : location.hostname;
   const friendOrigin = `http://${host}:8644`;
 
@@ -13,17 +11,8 @@ if (backups && backupSection) {
     .friend-dialog .field-stack{gap:10px}.friend-dialog input{width:100%}
     .friend-secret{display:block;max-width:100%;overflow:auto;padding:11px;border:1px solid #302b30;border-radius:9px;background:#100e11;color:#d9d0cd;font:13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:nowrap;user-select:all}
     .friend-note{color:#918783;font-size:12px;line-height:1.4}.friend-inline{display:flex;gap:7px}.friend-inline input{min-width:0;flex:1}
-    .friend-controller{display:none!important}
   `;
   document.head.append(style);
-
-  // The unified Storage screen owns presentation. These hidden controls provide
-  // a tiny action surface for storage-locations-ui without rendering a second UI.
-  const controller = document.createElement('div');
-  controller.className = 'friend-controller';
-  controller.innerHTML = '<button data-add-friend-backup></button><button data-offer-friend-storage></button><div class="friend-share-list"></div>';
-  backupSection.append(controller);
-  const shareList = controller.querySelector('.friend-share-list');
 
   const addDialog = document.createElement('dialog');
   addDialog.className = 'small-dialog friend-dialog';
@@ -92,18 +81,8 @@ if (backups && backupSection) {
   }
   const local = (path, options) => request(friendOrigin, path, options);
   const main = (path, options) => request('', path, options);
-
-  function renderControllers() {
-    for (const row of backups.querySelectorAll(':scope > [data-friend-backup]')) row.remove();
-    for (const target of friendBackups) {
-      const row = document.createElement('div');
-      row.hidden = true;
-      row.dataset.friendBackup = target.id;
-      row.innerHTML = '<button data-friend-update></button><button data-friend-restore></button><button data-friend-verify></button><button data-friend-key></button><button data-friend-remove></button>';
-      backups.append(row);
-    }
-    shareList.innerHTML = shares.map(share => `<div data-friend-share="${esc(share.id)}"><button data-share-invite></button><button data-share-remove></button></div>`).join('');
-  }
+  const backupById = id => friendBackups.find(item => String(item.id) === String(id));
+  const shareById = id => shares.find(item => String(item.id) === String(id));
 
   async function refresh() {
     if (refreshPromise) return refreshPromise;
@@ -113,7 +92,6 @@ if (backups && backupSection) {
     ]).then(([backupData, shareData]) => {
       friendBackups = backupData.backups || [];
       shares = shareData.shares || [];
-      renderControllers();
       dispatchEvent(new CustomEvent('mochimono:friend-storage-changed'));
       return { friendBackups, shares };
     }).finally(() => { refreshPromise = null; });
@@ -141,17 +119,22 @@ if (backups && backupSection) {
     } catch (error) { toast(error.message); }
   }
 
-  backups.addEventListener('click', async event => {
-    const row = event.target.closest('[data-friend-backup]');
-    if (!row) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    const target = friendBackups.find(item => String(item.id) === row.dataset.friendBackup);
-    if (!target) { await refresh(); return; }
-    if (event.target.closest('[data-friend-update]')) return action(target.id, 'update');
-    if (event.target.closest('[data-friend-verify]')) return action(target.id, 'verify');
-    if (event.target.closest('[data-friend-key]')) return showRecovery(target);
-    if (event.target.closest('[data-friend-restore]')) {
+  async function backupAction(id, verb) {
+    let target = backupById(id);
+    if (!target) {
+      await refresh();
+      target = backupById(id);
+    }
+    if (!target) return false;
+    if (verb === 'update' || verb === 'verify') {
+      await action(target.id, verb);
+      return true;
+    }
+    if (verb === 'key') {
+      showRecovery(target);
+      return true;
+    }
+    if (verb === 'restore') {
       restoreId = target.id;
       const summary = restoreDialog.querySelector('[data-friend-restore-summary]');
       const start = restoreDialog.querySelector('[data-friend-restore-start]');
@@ -163,32 +146,36 @@ if (backups && backupSection) {
         summary.innerHTML = `<strong>${Number(contents.count).toLocaleString()} files</strong><span>${bytes(contents.bytes)}</span>`;
         start.disabled = !Number(contents.count);
       } catch (error) { summary.textContent = error.message; }
-      return;
+      return true;
     }
-    if (event.target.closest('[data-friend-remove]')) {
-      if (!confirm('Forget this friend backup? Encrypted bytes on the friend drive are left untouched.')) return;
-      try { await local(`/local/friend-backups/${encodeURIComponent(target.id)}`, { method:'DELETE' }); await refresh(); }
-      catch (error) { toast(error.message); }
-    }
-  }, true);
+    return false;
+  }
 
-  shareList.addEventListener('click', async event => {
-    const row = event.target.closest('[data-friend-share]');
-    if (!row) return;
-    const share = shares.find(item => String(item.id) === row.dataset.friendShare);
-    if (!share) { await refresh(); return; }
+  async function shareAction(id, verb) {
+    let share = shareById(id);
+    if (!share) {
+      await refresh();
+      share = shareById(id);
+    }
+    if (!share) return false;
     try {
-      if (event.target.closest('[data-share-invite]')) return await showShareInvite(share);
-      if (event.target.closest('[data-share-remove]')) {
-        if (!confirm('Stop offering this storage? Existing encrypted files are left on disk.')) return;
+      if (verb === 'invite') {
+        await showShareInvite(share);
+        return true;
+      }
+      if (verb === 'remove') {
+        if (!confirm('Stop offering this storage? Existing encrypted files are left on disk.')) return true;
         await local(`/local/friend-shares/${encodeURIComponent(share.id)}`, { method:'DELETE' });
         await refresh();
+        return true;
       }
-    } catch (error) { toast(error.message); }
-  });
+    } catch (error) {
+      toast(error.message);
+      return true;
+    }
+    return false;
+  }
 
-  controller.querySelector('[data-add-friend-backup]').onclick = () => addDialog.showModal();
-  controller.querySelector('[data-offer-friend-storage]').onclick = () => offerDialog.showModal();
   addDialog.querySelectorAll('[data-friend-close]').forEach(button => button.onclick = () => addDialog.close());
   offerDialog.querySelectorAll('[data-offer-close]').forEach(button => button.onclick = () => offerDialog.close());
   secretDialog.querySelectorAll('[data-secret-close]').forEach(button => button.onclick = () => secretDialog.close());
@@ -209,7 +196,7 @@ if (backups && backupSection) {
       addDialog.close();
       addDialog.querySelectorAll('input').forEach(input => { input.value = ''; });
       await refresh();
-      showRecovery(friendBackups.find(item => item.id === target.id) || target);
+      showRecovery(backupById(target.id) || target);
     } catch (error) { toast(error.message); }
     finally { button.disabled = false; }
   };
@@ -236,7 +223,7 @@ if (backups && backupSection) {
       offerDialog.close();
       offerDialog.querySelectorAll('input').forEach(input => { input.value = ''; });
       await refresh();
-      await showShareInvite(shares.find(item => item.id === share.id) || share);
+      await showShareInvite(shareById(share.id) || share);
     } catch (error) { toast(error.message); }
     finally { button.disabled = false; }
   };
@@ -255,7 +242,13 @@ if (backups && backupSection) {
     finally { button.disabled = false; }
   };
 
-  window.mochimonoFriendStorage = { refresh, openAdd:() => addDialog.showModal(), openOffer:() => offerDialog.showModal() };
+  window.mochimonoFriendStorage = {
+    refresh,
+    openAdd:() => addDialog.showModal(),
+    openOffer:() => offerDialog.showModal(),
+    backup:backupAction,
+    share:shareAction
+  };
   refresh().catch(() => {});
-  window.addEventListener('focus', () => { if (storagePane && !storagePane.hidden) refresh().catch(() => {}); });
+  window.addEventListener('focus', () => { if (!storagePane.hidden) refresh().catch(() => {}); });
 }
