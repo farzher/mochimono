@@ -1,4 +1,4 @@
-const viewer = document.querySelector('#viewer');
+const viewerMenu = document.querySelector('#viewer-menu');
 let imageTools = null;
 let sensitiveTools = null;
 
@@ -32,12 +32,11 @@ async function loadSensitiveTools() {
   return sensitiveTools;
 }
 
-function watchViewer() {
-  if (!viewer) return;
-  const maybeLoad = () => { if (!viewer.hidden) void loadImageTools(); };
-  new MutationObserver(maybeLoad).observe(viewer, { attributes:true, attributeFilter:['hidden'] });
-  maybeLoad();
-}
+// Normal viewing stays on the core path. Image optimization is experimental and
+// loads only when the viewer's extra-tools menu is actually opened.
+viewerMenu?.addEventListener('toggle', () => {
+  if (viewerMenu.open) void loadImageTools();
+});
 
 function watchTagManager() {
   const manager = document.querySelector('.tag-manager');
@@ -48,7 +47,6 @@ function watchTagManager() {
   return true;
 }
 
-watchViewer();
 if (!watchTagManager()) {
   const observer = new MutationObserver(() => {
     if (!watchTagManager()) return;
