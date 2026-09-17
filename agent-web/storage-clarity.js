@@ -130,9 +130,10 @@ async function loadCacheStats(force = false) {
 function decorateCacheCard() {
   const card = document.querySelector('[data-location-id="local-cache"]');
   if (!card || !cacheStats) return;
+  const indexed = Math.max(0, Number(cacheStats.indexedFiles) || 0);
   const path = String(cacheStats.path || '');
   const meta = card.querySelector('.managed-storage-meta');
-  setText(meta, path || 'This device');
+  setText(meta, `${indexed.toLocaleString()} files indexed${path ? ` · ${path}` : ''}`);
   if (meta) meta.title = path;
   const used = card.querySelector('.managed-storage-space > span:first-child');
   setText(used, `${bytes(cacheStats.bytes)} cache`);
@@ -170,16 +171,11 @@ window.addEventListener('click', event => {
   })().catch(error => toast(error.message));
 }, true);
 
-if (folders) new MutationObserver(scheduleDecorate).observe(folders, { childList:true, subtree:true });
-const storageGrid = document.querySelector('[data-storage-grid]');
-if (storageGrid) new MutationObserver(scheduleDecorate).observe(storageGrid, { childList:true });
 if (storagePane) {
   new MutationObserver(() => {
-    if (!storagePane.hidden) {
-      scheduleDecorate();
-      refreshCache().catch(() => {});
-    }
-  }).observe(storagePane, { attributes:true, attributeFilter:['hidden'] });
+    scheduleDecorate();
+    if (!storagePane.hidden) refreshCache().catch(() => {});
+  }).observe(storagePane, { childList:true, subtree:true, attributes:true, attributeFilter:['class','hidden'] });
 }
 
 window.addEventListener('focus', () => {
