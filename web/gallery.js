@@ -22,8 +22,4 @@ for (const button of sizeButtons) {
 
 sizeInput?.addEventListener('input', syncSizeButtons);
 window.addEventListener('mochimono:media-size', syncSizeButtons);
-
-// Compatibility for old keyboard code. Geometry is no longer discovered by
-// observing or rebuilding DOM; stable-grid.js is the only grid layout owner.
-window.mochimonoGallery = { layoutNow:() => false };
 syncSizeButtons();

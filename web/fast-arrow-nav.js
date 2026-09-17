@@ -160,7 +160,6 @@ function ensureAdjacentWindow(current, direction) {
   const hash = current.dataset.hash || '';
   const top = current.getBoundingClientRect().top;
   if (!library.extend(direction)) return false;
-  window.mochimonoGallery?.layoutNow?.();
   restoreWindowAnchor(hash, top);
   return true;
 }
