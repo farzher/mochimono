@@ -1,13 +1,9 @@
-import './browser-folder-sync.js';
-
 let pendingHandles = Promise.resolve([]);
 let currentHandles = [];
 let button = null;
 let choiceObserver = null;
 
 async function directoryHandles(dataTransfer) {
-  // getAsFileSystemHandle() must be invoked while the drop event still owns the
-  // protected DataTransfer store. Start every request synchronously, then await.
   const requests = [];
   for (const item of dataTransfer?.items || []) {
     if (item.kind !== 'file' || !item.getAsFileSystemHandle) continue;
@@ -45,7 +41,7 @@ function removeButton(choice = document.querySelector('.client-drop-choice')) {
 async function decorateChoice(choice) {
   currentHandles = await pendingHandles.catch(() => []);
   removeButton(choice);
-  if (!currentHandles.length || choice.hidden) return;
+  if (!currentHandles.length || choice.hidden || !window.mochimonoBrowserFolders) return;
   const actions = choice.querySelector('.client-drop-actions');
   if (!actions) return;
 
@@ -53,24 +49,19 @@ async function decorateChoice(choice) {
   button.type = 'button';
   button.className = 'client-drop-action primary';
   button.dataset.dropBrowserSync = '';
-  button.innerHTML = '<b>Index folder</b><span>Media only · local by default · remembers browser access</span>';
+  button.innerHTML = '<b>Index folder</b>';
   actions.prepend(button);
-
-  const existingPrimary = actions.querySelector('[data-drop-copy]');
-  existingPrimary?.classList.remove('primary');
-
+  actions.querySelector('[data-drop-copy]')?.classList.remove('primary');
   const note = choice.querySelector('[data-drop-note]');
-  if (note) note.textContent = 'Nothing is uploaded by default. You can enable Cloud later in Storage, and optionally set the full native path.';
+  if (note) note.hidden = true;
 
   button.onclick = async () => {
     const handles = [...currentHandles];
     choice.querySelector('.client-drop-choice-close')?.click();
     removeButton(choice);
     if (!handles.length) return;
-    toast(handles.length === 1 ? `Indexing ${handles[0].name}…` : `Indexing ${handles.length} folders…`);
     try {
       await window.mochimonoBrowserFolders.addHandles(handles, 'media', { sync:true });
-      toast(handles.length === 1 ? `${handles[0].name} indexed` : `${handles.length} folders indexed`);
     } catch (error) {
       toast(error.message || 'Could not index folder');
     }
@@ -100,5 +91,5 @@ else {
     finder.disconnect();
     watchChoice(choice);
   });
-  finder.observe(document.body, { childList:true });
+  finder.observe(document.body, { childList:true, subtree:true });
 }

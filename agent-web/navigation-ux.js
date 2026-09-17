@@ -1,3 +1,5 @@
+import './storage-source-controls.js';
+
 const actions = document.querySelector('.client-head-actions');
 const storagePane = document.querySelector('#storagePane');
 const storageToggle = document.querySelector('[data-client-tab="storage"]');
@@ -45,13 +47,4 @@ if (actions && storagePane && storageToggle) {
   new MutationObserver(sync).observe(storagePane, { attributes:true, attributeFilter:['hidden'] });
   addEventListener('popstate', () => queueMicrotask(sync));
   sync();
-
-  // Pre-release first-run UX: Storage is the setup surface, so show it first.
-  const FIRST_VIEW_KEY = 'mochimono:primary-nav-seen';
-  if (!localStorage.getItem(FIRST_VIEW_KEY)) {
-    localStorage.setItem(FIRST_VIEW_KEY, '1');
-    if (!new URL(location.href).searchParams.get('file') && storagePane.hidden) {
-      queueMicrotask(() => { storageToggle.click(); sync(); });
-    }
-  }
 }
