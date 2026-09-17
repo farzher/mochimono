@@ -1,3 +1,5 @@
+import './browser-preview-repair.js';
+
 const frame = document.querySelector('#filesFrame');
 
 const style = document.createElement('style');
