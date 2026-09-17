@@ -1,4 +1,5 @@
 import './fetch-coalescer.js';
+import './dialog-behavior.js';
 import './app.js';
 import './lan-access.js';
 import './protection.js';
