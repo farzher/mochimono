@@ -1,6 +1,8 @@
 import './client-navigation-bridge.js';
 import './source-folder-scope.js';
 import './video-optimize-cloud-fallback.js';
+import './client-empty-state.js';
+import './browser-folder-client-loader.js';
 
 if (location.pathname.startsWith('/files')) {
   const viewer = document.querySelector('#viewer');
