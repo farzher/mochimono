@@ -279,7 +279,7 @@ function openNativePath(path, selectFile = false) {
 async function proxyApi(req, res, url) {
   if (!settings.token) return json(res, 503, { error: 'Mochimono Server is offline or not connected' });
   const headers = { authorization: `Bearer ${settings.token}` };
-  for (const name of ['content-type','content-length','range','if-none-match','if-modified-since','x-mochimono-mime','x-mochimono-thumb-version','x-mochimono-width','x-mochimono-height','x-mochimono-duration','x-mochimono-source-mime']) {
+  for (const name of ['content-type','content-length','range','if-none-match','if-modified-since','x-mochimono-mime','x-mochimono-thumb-version','x-mochimono-width','x-mochimono-height','x-mochimono-duration','x-mochimono-source-mime','x-mochimono-delete-password']) {
     if (req.headers[name] != null) headers[name] = req.headers[name];
   }
   const body = ['GET', 'HEAD'].includes(req.method) ? undefined : req;
