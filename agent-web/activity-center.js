@@ -7,11 +7,7 @@ const frame = document.querySelector('#filesFrame');
 if (host) {
   const RECENT_KEY = 'mochimono.activity.recent';
   const RECENT_OPEN_KEY = 'mochimono.activity.recent.open';
-  const MODE_LABEL = { off:'On demand', idle:'Idle', max:'Max' };
-  const KIND_GLYPH = new Map([
-    ['Index','▦'],['Sync','↻'],['Hash','#'],['Thumbnail','▧'],['Backup','◇'],
-    ['Friend Drive','↔'],['Squish','⇥'],['Verify','✓'],['Restore','↩'],['Work','•']
-  ]);
+  const MODE_LABEL = { off:'On demand', idle:'When idle', max:'Always' };
   let dialog = null;
   let button = null;
   let timer = 0;
@@ -28,17 +24,16 @@ if (host) {
 
   const style = document.createElement('style');
   style.textContent = `
-    .activity-button{height:31px;display:flex;align-items:center;gap:8px;padding:0 9px;border:1px solid transparent;border-radius:8px;background:transparent;color:#8d8584;font-size:12px;font-weight:760;white-space:nowrap}
-    .activity-button:hover,.activity-button.active{border-color:#2d292d;background:#211e22;color:#eee7e3}.activity-dot{width:6px;height:6px;border-radius:50%;background:#696164}.activity-button.working .activity-dot{background:#e99b95;animation:activity-pulse .9s ease-in-out infinite}.activity-button.issue .activity-dot{background:#d3a067}.activity-count{display:inline-flex;gap:4px;align-items:center;color:#d8cfcb;font-size:11px;font-variant-numeric:tabular-nums}.activity-count i{font-style:normal;color:#7f7775}.activity-count b{color:#d8cfcb;font-weight:800}
-    .activity-dialog{width:min(620px,calc(100vw - 24px));max-height:min(820px,calc(100dvh - 24px));padding:0;overflow:hidden}.activity-dialog .dialog-head{padding:16px 18px 13px;border-bottom:1px solid #292529}.activity-dialog .dialog-head h3{font-size:16px;font-weight:800;letter-spacing:-.015em}.activity-body{max-height:calc(min(820px,100dvh - 24px) - 58px);overflow:auto;overscroll-behavior:contain;padding:14px 16px 18px;scrollbar-gutter:stable}
-    .activity-mode{display:block;padding:3px;margin:0 0 13px;border:0;background:transparent}.activity-mode-copy{display:none}.activity-mode-buttons{width:100%;display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:4px;border-radius:12px;background:#1d1a1e}.activity-mode-buttons button{height:38px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:#817977;font-size:12px;font-weight:780}.activity-mode-buttons button:hover{color:#ddd4d0}.activity-mode-buttons button.active{background:#302b30;color:#f0e8e4}
-    .activity-summary{display:flex;align-items:center;min-height:36px;gap:8px;margin:0 0 11px}.activity-stat{display:inline-flex;align-items:center;gap:6px;min-height:29px;padding:6px 11px;border:1px solid #292529;border-radius:999px;background:#111012;color:#8c8380;font-size:11px;font-weight:680;font-variant-numeric:tabular-nums}.activity-stat b{font-size:13px;color:#d8cfcb;font-weight:800}.activity-stat.working{border-color:#3b3032}.activity-stat.waiting{color:#948a86}
-    .activity-section{margin-top:14px}.activity-section-head{display:flex;align-items:center;gap:7px;min-height:26px;margin:0 0 8px;color:#918884;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.035em}.activity-section-head b{min-width:21px;height:20px;display:inline-grid;place-items:center;padding:0 6px;border-radius:999px;background:#211e22;color:#b9afab;font-size:10px;font-weight:800}.activity-list{display:grid;gap:6px}
-    .activity-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:11px;padding:12px 13px;border:1px solid #292529;border-radius:12px;background:#111012}.activity-row.running{border-color:#3b3032;background:#151113}.activity-row.error{border-color:#442d31}.activity-main{min-width:0}.activity-title{display:flex;align-items:center;gap:10px;color:#e4dbd7;font-size:13px;font-weight:780}.activity-kind{flex:0 0 auto;width:30px;height:30px;display:grid;place-items:center;border-radius:8px;background:#262227;color:#aaa09c;font-size:14px}.activity-title span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.activity-detail{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:7px}.activity-metric{display:inline-flex;align-items:center;min-height:24px;padding:4px 8px;border-radius:7px;background:#211e22;color:#aaa19d;font-size:11px;font-weight:650;font-variant-numeric:tabular-nums}.activity-detail.wait .activity-metric{color:#b5a397}.activity-current{display:none}
-    .activity-progress{height:6px;margin-top:9px;overflow:hidden;border-radius:99px;background:#292529}.activity-progress i{display:block;height:100%;min-width:2px;border-radius:inherit;background:#e99b95;transition:width .3s ease}.activity-progress.indeterminate i{width:30%;animation:activity-slide 1.3s ease-in-out infinite}.activity-side{display:flex;align-items:start;gap:7px;color:#8d8581;font-size:10.5px;font-weight:650;white-space:nowrap}.activity-side time{padding-top:5px}.activity-cancel{width:29px;height:29px;border:0;border-radius:7px;background:transparent;color:#918784;padding:0;font-size:0}.activity-cancel:after{content:'×';font-size:14px}.activity-empty{padding:16px 8px;color:#77706e;text-align:center;font-size:12px;font-weight:650}
-    .activity-recent{margin-top:8px;padding-top:4px}.activity-recent .activity-list,.activity-recent .activity-empty{display:none}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{display:grid}.activity-recent .activity-section-head{margin:0;padding:10px 4px;border-top:1px solid #292529;cursor:pointer;user-select:none}.activity-recent .activity-section-head:hover{color:#d3c9c5}.activity-recent .activity-section-head:after{content:'›';margin-left:auto;font-size:18px;color:#8f8582;transform:rotate(90deg);transition:transform .15s}.activity-recent.open .activity-section-head:after{transform:rotate(-90deg)}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{margin-top:7px}.activity-recent .activity-row:not(.error){min-height:56px;align-items:center}.activity-recent .activity-row:not(.error) .activity-detail{display:none}
+    .activity-button{height:31px;display:flex;align-items:center;gap:7px;padding:0 9px;border:1px solid transparent;border-radius:8px;background:transparent;color:#8d8584;font-size:12px;font-weight:760;white-space:nowrap}
+    .activity-button:hover,.activity-button.active{border-color:#2d292d;background:#211e22;color:#eee7e3}.activity-dot{width:6px;height:6px;border-radius:50%;background:#696164}.activity-button.working .activity-dot{background:#e99b95;animation:activity-pulse .9s ease-in-out infinite}.activity-button.issue .activity-dot{background:#d3a067}.activity-count{color:#bdb3af;font-size:11px;font-variant-numeric:tabular-nums}
+    .activity-dialog{width:min(590px,calc(100vw - 24px));max-height:min(780px,calc(100dvh - 24px));padding:0;overflow:hidden}.activity-dialog .dialog-head{padding:16px 18px 13px;border-bottom:1px solid #292529}.activity-dialog .dialog-head h3{font-size:16px;font-weight:800;letter-spacing:-.015em}.activity-body{max-height:calc(min(780px,100dvh - 24px) - 58px);overflow:auto;overscroll-behavior:contain;padding:16px 18px 18px;scrollbar-gutter:stable}
+    .activity-overview{padding:2px 1px 15px}.activity-overview strong{display:block;color:#eee6e2;font-size:17px;font-weight:780;letter-spacing:-.018em}.activity-overview span{display:block;margin-top:4px;color:#918884;font-size:12px;line-height:1.4}.activity-overview.working strong{color:#f0d1cd}.activity-overview.issue strong{color:#dfb27d}
+    .activity-setting{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;margin-bottom:17px;padding:11px 12px;border:1px solid #292529;border-radius:11px;background:#111012}.activity-setting-copy strong{display:block;color:#d8cfcb;font-size:12px}.activity-setting-copy span{display:block;margin-top:2px;color:#756e6c;font-size:10px;line-height:1.35}.activity-mode-buttons{display:flex;gap:3px;padding:3px;border-radius:9px;background:#1d1a1e}.activity-mode-buttons button{height:30px;padding:0 9px;border:0;border-radius:6px;background:transparent;color:#817977;font-size:10.5px;font-weight:740;white-space:nowrap}.activity-mode-buttons button:hover{color:#ddd4d0}.activity-mode-buttons button.active{background:#302b30;color:#f0e8e4}
+    .activity-section{margin-top:15px}.activity-section-head{display:flex;align-items:center;gap:7px;margin:0 0 8px;color:#9b918e;font-size:11px;font-weight:780}.activity-section-head b{color:#706967;font-size:10px;font-weight:700}.activity-list{display:grid;gap:6px}
+    .activity-row{position:relative;padding:11px 12px;border:1px solid #292529;border-radius:11px;background:#111012}.activity-row.running{border-color:#3b3032;background:#151113}.activity-row.error{border-color:#442d31}.activity-row-head{display:flex;align-items:baseline;gap:8px;min-width:0;padding-right:58px}.activity-row-head strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e4dbd7;font-size:12.5px;font-weight:760}.activity-kind{flex:0 0 auto;color:#766e6c;font-size:9.5px;font-weight:760;text-transform:uppercase;letter-spacing:.035em}.activity-detail{margin-top:5px;color:#948b88;font-size:10.5px;line-height:1.4;font-variant-numeric:tabular-nums}.activity-current{display:block;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#696260;font-size:9.5px}.activity-progress{height:4px;margin-top:9px;overflow:hidden;border-radius:99px;background:#292529}.activity-progress i{display:block;height:100%;min-width:2px;border-radius:inherit;background:#e99b95;transition:width .3s ease}.activity-progress.indeterminate i{width:30%;animation:activity-slide 1.3s ease-in-out infinite}.activity-side{position:absolute;right:9px;top:8px;display:flex;align-items:center;gap:4px;color:#746c6a;font-size:9.5px;white-space:nowrap}.activity-cancel{width:26px;height:26px;border:0;border-radius:6px;background:transparent;color:#918784;padding:0;font-size:0}.activity-cancel:hover{background:#252126;color:#eee6e2}.activity-cancel:after{content:'×';font-size:14px}.activity-empty{padding:12px 1px;color:#77706e;font-size:11px}
+    .activity-recent{margin-top:18px;padding-top:2px;border-top:1px solid #292529}.activity-recent .activity-list,.activity-recent .activity-empty{display:none}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{display:grid}.activity-recent .activity-section-head{margin:0;padding:12px 2px 4px;cursor:pointer;user-select:none}.activity-recent .activity-section-head:hover{color:#d3c9c5}.activity-recent .activity-section-head:after{content:'›';margin-left:auto;font-size:17px;color:#8f8582;transform:rotate(90deg);transition:transform .15s}.activity-recent.open .activity-section-head:after{transform:rotate(-90deg)}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{margin-top:5px}.activity-recent .activity-row:not(.error){padding-top:10px;padding-bottom:10px}.activity-recent .activity-row:not(.error) .activity-detail,.activity-recent .activity-row:not(.error) .activity-current{display:none}
     @keyframes activity-pulse{0%,100%{transform:scale(.72);opacity:.55}50%{transform:scale(1.2);opacity:1}}@keyframes activity-slide{0%{transform:translateX(-115%)}50%{transform:translateX(105%)}100%{transform:translateX(315%)}}
-    @media(max-width:700px){.activity-button{padding:0 7px}.activity-button .activity-label{display:none}.activity-dialog .activity-body{padding:12px}.activity-mode-buttons button{height:36px}.activity-row{grid-template-columns:1fr}.activity-title{font-size:12.5px}.activity-side{justify-content:flex-end}}
+    @media(max-width:700px){.activity-button{padding:0 7px}.activity-button .activity-label{display:none}.activity-body{padding:14px}.activity-setting{grid-template-columns:1fr}.activity-mode-buttons{display:grid;grid-template-columns:repeat(3,1fr)}.activity-row-head{padding-right:48px}}
     @media(prefers-reduced-motion:reduce){.activity-dot,.activity-progress i{animation:none!important;transition:none!important}}
   `;
   document.head.append(style);
@@ -71,15 +66,6 @@ if (host) {
   }
   function duration(seconds){seconds=Math.max(0,Math.round(Number(seconds)||0));if(seconds<60)return `${seconds}s`;const m=Math.floor(seconds/60);if(m<60)return `${m}m`;return `${Math.floor(m/60)}h ${m%60}m`;}
   function toast(text){if(!toastNode)return;toastNode.textContent=text;toastNode.classList.add('show');clearTimeout(toastNode.timer);toastNode.timer=setTimeout(()=>toastNode.classList.remove('show'),2800);}
-  function metricText(value) {
-    let text=String(value||'').trim();
-    if(!text)return '';
-    if(/^waiting for idle$/i.test(text))return '◷';
-    if(/^on demand$/i.test(text))return 'Ⅱ';
-    return text.replace(/\bfiles?\b/gi,'').replace(/\bready\b/gi,'').replace(/\bchecked\b/gi,'').replace(/\bfound\b/gi,'')
-      .replace(/^([\d,.]+)\s+generating$/i,'↻ $1').replace(/^([\d,.]+)\s+(queued|waiting)$/i,'… $1').replace(/^([\d,.]+)\s+copied$/i,'↑ $1')
-      .replace(/\s+left$/i,'').replace(/\s+/g,' ').trim();
-  }
 
   async function request(url, options={}) {
     const response=await fetch(url,{cache:'no-store',...options,headers:{'content-type':'application/json',...(options.headers||{})},body:options.body&&typeof options.body!=='string'?JSON.stringify(options.body):options.body});
@@ -100,14 +86,27 @@ if (host) {
 
   function operation(job){
     const label=String(job?.label||'');
-    if(/^Friend /.test(label))return {kind:'Friend Drive',title:label.replace(/^Friend (update|verify|restore) /,(_,verb)=>`${verb[0].toUpperCase()+verb.slice(1)} · `)};
-    if(job?.type==='sync')return {kind:'Index',title:label.replace(/^(Sync|Check|Update) /,'')};
+    if(/^Friend /.test(label))return {kind:'Friend Drive',title:label.replace(/^Friend (update|verify|restore) /,(_,verb)=>`${verb[0].toUpperCase()+verb.slice(1)} ${''}`.trim())};
+    if(job?.type==='sync'){
+      const index=/^(Check|Update) /.test(label);
+      return {kind:index?'Index':'Sync',title:label.replace(/^(Sync|Check|Update) /,'')};
+    }
     if(job?.type==='backup'||job?.type==='protection')return {kind:'Backup',title:label.replace(/^Update /,'')};
     if(job?.type==='verify')return {kind:'Verify',title:label.replace(/^Verify /,'')};
     if(job?.type==='restore')return {kind:'Restore',title:label.replace(/^Restore /,'')};
-    return {kind:'Work',title:label||job?.type||'Working'};
+    return {kind:'Work',title:label||job?.type||'Background work'};
   }
   function jobItem(job, source, cancelable=false){const op=operation(job);return {...job,source,kind:op.kind,title:op.title,cancelable};}
+
+  function taskTitle(item){
+    const title=String(item?.title||'').trim();
+    const kind=String(item?.kind||'Work');
+    if(!title)return kind;
+    if(kind==='Thumbnail')return title==='Library'?'Generate thumbnails':`Generate thumbnails · ${title}`;
+    if(kind==='Friend Drive')return title;
+    if(kind==='Work')return title;
+    return new RegExp(`^${kind}\\b`,'i').test(title)?title:`${kind} ${title}`;
+  }
 
   function progress(job){
     const p=job?.progress||{};
@@ -142,9 +141,9 @@ if (host) {
         const total=Number(diagnostics.hashTotal)||0;
         active.push({id:`folder:${key}`,source:'folder',kind:hashing?'Hash':'Index',title:name,status:'running',detail:total?`${done.toLocaleString()} / ${total.toLocaleString()} files`:`${Number(folder.files||0).toLocaleString()} files found`,percent:total?done/total*100:null,phase:hashing?'Hashing files':'Indexing files'});
       } else if(folder.pending&&!globalHere){
-        queued.push({id:`folder:${key}`,source:'folder',kind:folder.protected===false?'Index':'Sync',title:name,status:'queued',detail:folder.waitingForIdle?'Waiting for idle':'Waiting to scan'});
+        queued.push({id:`folder:${key}`,source:'folder',kind:folder.protected===false?'Index':'Sync',title:name,status:'queued',detail:folder.waitingForIdle?'Waiting until your PC is idle':'Waiting to start'});
       }
-      if(folder.hashPending>0&&!folder.hashing)queued.push({id:`hash:${key}`,source:'folder',kind:'Hash',title:name,status:'queued',detail:`${Number(folder.hashPending).toLocaleString()} files${folder.hashWaiting?' · waiting for idle':''}`});
+      if(folder.hashPending>0&&!folder.hashing)queued.push({id:`hash:${key}`,source:'folder',kind:'Hash',title:name,status:'queued',detail:`${Number(folder.hashPending).toLocaleString()} files${folder.hashWaiting?' · waiting until your PC is idle':''}`});
       if(folder.lastIndexed)recent.push({id:`recent-index:${key}:${folder.lastIndexed}`,source:'folder',kind:'Index',title:name,status:'done',finishedAt:folder.lastIndexed,detail:`${Number(folder.files||0).toLocaleString()} files indexed`});
     }
     return {active,queued,recent};
@@ -167,8 +166,8 @@ if (host) {
       if(activeCount)detail.push(`${activeCount} generating`);
       if(folder.previewQueueBackground)detail.push(`${Number(folder.previewQueueBackground).toLocaleString()} queued`);
       if(folder.previewFailed)detail.push(`${Number(folder.previewFailed).toLocaleString()} failed`);
-      if(waiting)detail.push('waiting for idle');
-      const item={id:`thumbs:${String(folder.path||'').toLowerCase()}`,source:'preview',kind:'Thumbnail',title:name,status:activeCount?'running':'queued',detail:detail.join(' · '),percent:total?done/total*100:null,phase:checking?'Checking thumbnails':waiting?'Waiting for idle':'Generating thumbnails'};
+      if(waiting)detail.push('Waiting until your PC is idle');
+      const item={id:`thumbs:${String(folder.path||'').toLowerCase()}`,source:'preview',kind:'Thumbnail',title:name,status:activeCount?'running':'queued',detail:detail.join(' · '),percent:total?done/total*100:null,phase:checking?'Checking thumbnails':waiting?'Waiting until your PC is idle':'Generating thumbnails'};
       (activeCount?active:queued).push(item);
     }
 
@@ -176,7 +175,7 @@ if (host) {
     const activeCount=Number(previews.active)||0;
     const waitingCount=(Number(previews.urgent)||0)+(Number(previews.priority)||0)+(Number(previews.queued)||0);
     if(activeCount||waitingCount){
-      const wait=state?.settings?.thumbnailMode==='off'?'On demand':previews.waitingForIdle?'Waiting for idle':'';
+      const wait=state?.settings?.thumbnailMode==='off'?'Generated when viewed':previews.waitingForIdle?'Waiting until your PC is idle':'';
       const item={id:'thumbs:library',source:'preview',kind:'Thumbnail',title:'Library',status:activeCount?'running':'queued',detail:[activeCount?`${activeCount} generating`:'',waitingCount?`${waitingCount.toLocaleString()} waiting`:'',wait].filter(Boolean).join(' · '),phase:wait||'Generating thumbnails'};
       (activeCount?active:queued).push(item);
     }
@@ -186,8 +185,8 @@ if (host) {
   function browserItems(){
     return [...browserSyncs.values()].map(item=>({
       id:`browser:${item.id}`,source:'browser',kind:'Index',title:browserNames.get(item.id)||'Browser folder',status:'running',
-      detail:[`${Number(item.scanned||0).toLocaleString()} files processed`,item.transferred?`${Number(item.transferred).toLocaleString()} new/changed`:'',item.skipped?`${Number(item.skipped).toLocaleString()} unchanged`:'' ].filter(Boolean).join(' · '),
-      phase:'Indexing + thumbnails'
+      detail:[`${Number(item.scanned||0).toLocaleString()} files processed`,item.transferred?`${Number(item.transferred).toLocaleString()} new or changed`:'',item.skipped?`${Number(item.skipped).toLocaleString()} unchanged`:'' ].filter(Boolean).join(' · '),
+      phase:'Indexing and generating thumbnails'
     }));
   }
 
@@ -195,7 +194,7 @@ if (host) {
     const jobs=work?.jobs||[],active=[],queued=[],recent=[];
     for(const item of jobs.filter(item=>item.status==='running'))active.push({id:`squish:${item.id}`,rawId:item.id,source:'squish',kind:'Squish',title:item.filename||item.originalHash?.slice(0,12)||'Media',status:'running',startedAt:item.startedAt,phase:item.message||'Squishing',percent:Number(item.progress)||0,cancelable:true});
     const waiting=jobs.filter(item=>item.status==='queued');
-    if(waiting.length)queued.push({id:'squish:queued',source:'squish-batch',rawIds:waiting.map(item=>item.id),kind:'Squish',title:`${waiting.length.toLocaleString()} files`,status:'queued',detail:'Waiting to squish',cancelable:true});
+    if(waiting.length)queued.push({id:'squish:queued',source:'squish-batch',rawIds:waiting.map(item=>item.id),kind:'Squish',title:`${waiting.length.toLocaleString()} files`,status:'queued',detail:'Waiting to start',cancelable:true});
     for(const item of jobs.filter(item=>['done','error','canceled'].includes(item.status)).slice(0,12))recent.push({id:`squish:${item.id}`,source:'squish',kind:'Squish',title:item.filename||'Media',status:item.status,finishedAt:item.finishedAt,error:item.status==='error'?item.message:'',detail:item.status==='done'?'Squished':''});
     return {active,queued,recent};
   }
@@ -239,10 +238,22 @@ if (host) {
     const statusClass=item.status==='error'?'error':item.status==='running'?'running':'';
     const cancel=item.cancelable&&!recent?`<button class="activity-cancel" data-cancel="${esc(item.id)}" aria-label="Cancel"></button>`:'';
     const bar=!recent&&item.status==='running'?`<div class="activity-progress ${indeterminate?'indeterminate':''}"><i style="width:${indeterminate?'30%':`${Math.max(1,pct(percent))}%`}"></i></div>`:'';
-    const text=recent&&item.status!=='error'?'':([detail,item.error].filter(Boolean).join(' · '));
-    const metrics=text?text.split(' · ').map(metricText).filter(Boolean).map(value=>`<span class="activity-metric">${esc(value)}</span>`).join(''):'';
+    const text=[detail,item.error].filter(Boolean).join(' · ');
     const kind=item.kind||'Work';
-    return `<div class="activity-row ${statusClass}"><div class="activity-main"><div class="activity-title"><span class="activity-kind" data-visual="1" title="${esc(kind)}">${esc(KIND_GLYPH.get(kind)||'•')}</span><span>${esc(item.title||'Working')}</span></div>${metrics?`<div class="activity-detail ${/waiting for idle|on demand/i.test(text)?'wait':''}" data-visual="1">${metrics}</div>`:''}${current&&!recent?`<span class="activity-current">${esc(current)}</span>`:''}${bar}</div><div class="activity-side">${when?`<time>${esc(age(when))}</time>`:''}${cancel}</div></div>`;
+    return `<div class="activity-row ${statusClass}"><div class="activity-row-head"><strong>${esc(taskTitle(item))}</strong><span class="activity-kind">${esc(kind)}</span></div>${text?`<div class="activity-detail">${esc(text)}</div>`:''}${current&&!recent?`<span class="activity-current">${esc(current)}</span>`:''}${bar}<div class="activity-side">${when?`<time>${esc(age(when))}</time>`:''}${cancel}</div></div>`;
+  }
+
+  function overview(model){
+    const active=model.active.length, queued=model.queued.length;
+    if(active){
+      const title=active===1?'1 task working':`${active} tasks working`;
+      return {className:'working',title,detail:queued?`${queued} ${queued===1?'task is':'tasks are'} waiting.`:'Mochimono is working in the background.'};
+    }
+    if(queued){
+      const idle=queued.some(item=>/idle/i.test(`${item.detail||''} ${item.phase||''}`));
+      return {className:'',title:'Waiting',detail:idle?`${queued===1?'This task will':'These tasks will'} start when your PC is idle.`:`${queued} ${queued===1?'task is':'tasks are'} waiting to start.`};
+    }
+    return {className:'',title:'All caught up',detail:'No background work right now.'};
   }
 
   function render(model){
@@ -251,19 +262,19 @@ if (host) {
     const errors=model.recent.filter(item=>item.status==='error'&&Date.now()-new Date(item.finishedAt).getTime()<86400000).length;
     button.classList.toggle('working',active>0);
     button.classList.toggle('issue',!active&&errors>0);
-    button.querySelector('.activity-count').innerHTML=`${active?`<i>▶</i><b>${active}</b>`:''}${queued?`<i>…</i><b>${queued}</b>`:''}`;
-    button.title=active||queued?`${active} working · ${queued} waiting`:'Activity';
+    button.querySelector('.activity-count').textContent=active||queued?String(active+queued):'';
+    button.title=active?`${active} working${queued?` · ${queued} waiting`:''}`:queued?`${queued} waiting`:'Activity';
     window.dispatchEvent(new CustomEvent('mochimono:background-state',{detail:{mode:model.state?.settings?.thumbnailMode||'idle',allowed:Boolean(model.state?.background?.allowed)}}));
     if(!dialog?.open||Date.now()<interactionUntil)return;
 
     const mode=model.state?.settings?.thumbnailMode||'idle';
-    const summary=active||queued?`<div class="activity-summary" data-visual="1">${active?`<span class="activity-stat working">▶ <b>${active}</b></span>`:''}${queued?`<span class="activity-stat waiting">… <b>${queued}</b></span>`:''}${mode==='idle'&&!model.state?.background?.allowed&&queued?'<span class="activity-stat waiting">◷</span>':''}</div>`:'';
+    const status=overview(model);
     const html=`
-      <div class="activity-mode"><div class="activity-mode-buttons" role="group" aria-label="Background work">${['off','idle','max'].map(value=>`<button type="button" data-mode="${value}" class="${mode===value?'active':''}">${esc(MODE_LABEL[value])}</button>`).join('')}</div></div>
-      ${summary}
-      ${active?`<section class="activity-section"><div class="activity-section-head">Now <b>${active}</b></div><div class="activity-list">${model.active.map(item=>row(item)).join('')}</div></section>`:''}
-      ${queued?`<section class="activity-section"><div class="activity-section-head">Next <b>${queued}</b></div><div class="activity-list">${model.queued.map(item=>row(item)).join('')}</div></section>`:''}
-      <section class="activity-section activity-recent ${recentOpen?'open':''}" data-visual="1"><div class="activity-section-head" data-recent-toggle aria-expanded="${recentOpen?'true':'false'}">Recently <b>${model.recent.length}</b></div>${model.recent.length?`<div class="activity-list">${model.recent.map(item=>row(item,true)).join('')}</div>`:'<div class="activity-empty">Nothing recent.</div>'}</section>`;
+      <div class="activity-overview ${status.className}"><strong>${esc(status.title)}</strong><span>${esc(status.detail)}</span></div>
+      <div class="activity-setting"><div class="activity-setting-copy"><strong>Thumbnails</strong><span>When Mochimono should generate missing image and video previews.</span></div><div class="activity-mode-buttons" role="group" aria-label="Thumbnail generation">${['off','idle','max'].map(value=>`<button type="button" data-mode="${value}" class="${mode===value?'active':''}">${esc(MODE_LABEL[value])}</button>`).join('')}</div></div>
+      ${active?`<section class="activity-section"><div class="activity-section-head">Working <b>${active}</b></div><div class="activity-list">${model.active.map(item=>row(item)).join('')}</div></section>`:''}
+      ${queued?`<section class="activity-section"><div class="activity-section-head">Waiting <b>${queued}</b></div><div class="activity-list">${model.queued.map(item=>row(item)).join('')}</div></section>`:''}
+      <section class="activity-section activity-recent ${recentOpen?'open':''}"><div class="activity-section-head" data-recent-toggle aria-expanded="${recentOpen?'true':'false'}">Recent <b>${model.recent.length}</b></div>${model.recent.length?`<div class="activity-list">${model.recent.map(item=>row(item,true)).join('')}</div>`:'<div class="activity-empty">Nothing recent.</div>'}</section>`;
     if(html===lastBodyHtml)return;
     const body=dialog.querySelector('[data-body]');
     const scrollTop=body.scrollTop;
