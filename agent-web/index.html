@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0d0c0e">
   <title>Mochimono</title>
+  <script>
+    if (!localStorage.getItem('mochimono:client-tab') && !new URL(location.href).searchParams.has('file')) {
+      localStorage.setItem('mochimono:client-tab', 'storage');
+    }
+  </script>
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/client-shell.css">
 </head>
@@ -44,10 +49,10 @@
           <button id="chooseImport" class="secondary">Choose</button>
         </div>
         <div class="folder-mode-options">
-          <button id="startBrowse" class="folder-mode-option" title="View and search this folder locally">
+          <button id="startBrowse" class="folder-mode-option" title="Local">
             <strong>Local</strong><span>Keep files where they are</span>
           </button>
-          <button id="startImport" class="folder-mode-option protect" title="Keep a Cloud copy too">
+          <button id="startImport" class="folder-mode-option protect" title="Cloud">
             <strong>Cloud</strong><span>Local + Cloud</span>
           </button>
         </div>
@@ -130,7 +135,6 @@
   <script type="module" src="/friend-storage-polish.js"></script>
   <script type="module" src="/usability.js"></script>
   <script type="module" src="/preview-progress-ui.js"></script>
-  <script type="module" src="/storage-workflow-ui.js"></script>
   <script type="module" src="/storage-locations-ui.js"></script>
   <script type="module" src="/storage-capacity-ui.js"></script>
   <script type="module" src="/backup-center.js"></script>
