@@ -188,9 +188,17 @@ if (folders) {
 
   function onSync(event) {
     const detail=event.detail||{},id=String(detail.id||'');if(!id)return;
-    if(detail.state==='running')liveSyncs.set(id,detail);else liveSyncs.delete(id);
+    const wasBusy=liveSyncs.has(id);
+    if(detail.state==='running'){
+      liveSyncs.set(id,detail);
+      relay('mochimono:browser-folder-sync',detail);
+      if(!wasBusy){renderedKey='';render(lastSources);}
+      return;
+    }
+    liveSyncs.delete(id);
     relay('mochimono:browser-folder-sync',detail);
-    schedule(detail.state==='running'?0:30,detail.state!=='running');
+    if(wasBusy){renderedKey='';render(lastSources);}
+    schedule(30,true);
   }
   function onThumbnail(event){relay('mochimono:browser-thumbnail-ready',event.detail||{});}
   function onChanged(event){relay('mochimono:browser-folders-changed',event.detail||{});schedule(0,true);}
