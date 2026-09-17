@@ -1,358 +1,246 @@
 const folders = document.querySelector('#folders');
 const frame = document.querySelector('#filesFrame');
 
-if (folders && frame) {
+if (folders) {
+  const DB_NAME = 'mochimono-browser-folders';
+  const DB_VERSION = 1;
+  const SOURCES = 'sources';
+  const FILES = 'files';
+  let refreshTimer = 0;
+  let enriching = false;
+  let renderedKey = '';
+  let apiPromise = null;
+  const detailCache = new Map();
+  const liveSyncs = new Map();
+
   const style = document.createElement('style');
   style.textContent = `
-    .browser-folder-item .browser-folder-warning{color:#c9977e}
-    .browser-folder-item .browser-folder-source{color:#817976;font-size:10px}
-    .browser-folder-item .browser-folder-meter{opacity:.35}
-    .browser-folder-item .item-actions .browser-folder-mode{min-width:52px}
-    .browser-folder-item .browser-sync-progress{display:grid;gap:6px}
-    .browser-folder-item .browser-sync-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
-    .browser-folder-item .browser-sync-head strong{color:#d8cfcb;font-size:10px;font-weight:720}
-    .browser-folder-item .browser-sync-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8d8582;font-size:9px}
-    .browser-folder-item .browser-sync-progress .progress-bar{margin:0}
+    .browser-folder-item .browser-folder-warning{position:absolute;right:13px;bottom:14px;width:7px;height:7px;border-radius:50%;background:#c28f76}
+    .browser-folder-item .storage-meta:empty{display:none!important}
   `;
   document.head.append(style);
 
-  let refreshTimer = 0;
-  let progressTimer = 0;
-  let rendering = false;
-  let writingRows = false;
-  let renderedKey = '';
-  let bridgeWindow = null;
-  let activeSyncId = '';
-  const liveProgress = new Map();
-  const sourceCache = new Map();
-  const livePreviewHashes = new Map();
-
-  const api = () => frame.contentWindow?.mochimonoBrowserFolders;
-  const relative = value => {
-    if (!value) return 'Never indexed';
-    const time = new Date(value).getTime();
-    if (!Number.isFinite(time)) return 'Never indexed';
-    const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000));
-    if (seconds < 60) return 'Just now';
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-    return `${Math.floor(seconds / 86400)}d ago`;
-  };
-
-  function escapeHtml(value) {
-    return String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
-  }
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char]));
+  const normalize = source => source ? { ...source, scope:source.scope === 'all' ? 'all' : 'media', cloud:source.cloud === true } : source;
 
   function bytes(number) {
-    const units = ['B','KB','MB','GB','TB'];
-    let value = Number(number) || 0;
-    let unit = 0;
-    while (value >= 1000 && unit < units.length - 1) { value /= 1000; unit++; }
-    return `${value < 10 && unit ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+    const units=['B','KB','MB','GB','TB'];
+    let value=Math.max(0,Number(number)||0), unit=0;
+    while(value>=1000&&unit<units.length-1){value/=1000;unit++;}
+    return `${value<10&&unit?value.toFixed(1):Math.round(value)} ${units[unit]}`;
+  }
+
+  function openDb() {
+    return new Promise((resolve,reject) => {
+      const request=indexedDB.open(DB_NAME,DB_VERSION);
+      request.onupgradeneeded=()=>{
+        const db=request.result;
+        if(!db.objectStoreNames.contains(SOURCES))db.createObjectStore(SOURCES,{keyPath:'id'});
+        if(!db.objectStoreNames.contains(FILES))db.createObjectStore(FILES,{keyPath:'key'});
+      };
+      request.onsuccess=()=>resolve(request.result);
+      request.onerror=()=>reject(request.error);
+    });
+  }
+
+  function getAll(store) {
+    return new Promise((resolve,reject) => {
+      const request=store.getAll();
+      request.onsuccess=()=>resolve(request.result||[]);
+      request.onerror=()=>reject(request.error);
+    });
+  }
+
+  async function readSources() {
+    const db=await openDb();
+    try { return (await getAll(db.transaction(SOURCES,'readonly').objectStore(SOURCES))).map(normalize); }
+    finally { db.close(); }
+  }
+
+  async function permission(handle) {
+    if(!handle)return 'denied';
+    if(!handle.queryPermission)return 'granted';
+    return handle.queryPermission({mode:'read'}).catch(()=> 'prompt');
+  }
+
+  async function readDetails(sources) {
+    const db=await openDb();
+    let rows=[];
+    try { rows=await getAll(db.transaction(FILES,'readonly').objectStore(FILES)); }
+    finally { db.close(); }
+    const groups=new Map(sources.map(source=>[String(source.id),[]]));
+    for(const row of rows){
+      const key=String(row?.key||''), split=key.indexOf('\u0000');
+      if(split<=0)continue;
+      groups.get(key.slice(0,split))?.push(row);
+    }
+    return Promise.all(sources.map(async source=>{
+      const manifest=groups.get(String(source.id))||[];
+      const previews=manifest
+        .filter(row=>row.hash&&(String(row.mime||'').startsWith('image/')||String(row.mime||'').startsWith('video/')))
+        .sort((a,b)=>Number(b.lastModified||0)-Number(a.lastModified||0))
+        .slice(0,3)
+        .map(row=>({hash:row.hash,filename:String(row.path||'').split('/').at(-1)||'',mime:row.mime}));
+      return {
+        ...source,
+        permission:await permission(source.handle),
+        files:manifest.length,
+        bytes:manifest.reduce((sum,row)=>sum+(Number(row.size)||0),0),
+        previews
+      };
+    }));
   }
 
   function pathParts(path) {
-    const clean = String(path || '').replace(/[\\/]+$/, '');
-    const index = Math.max(clean.lastIndexOf('\\'), clean.lastIndexOf('/'));
-    if (index < 0) return { parent:'', name:clean || path };
-    return { parent:clean.slice(0, index + 1), name:clean.slice(index + 1) || clean };
+    const clean=String(path||'').replace(/[\\/]+$/,'');
+    const index=Math.max(clean.lastIndexOf('\\'),clean.lastIndexOf('/'));
+    if(index<0)return {parent:'',name:clean||path};
+    return {parent:clean.slice(0,index+1),name:clean.slice(index+1)||clean};
   }
 
   function titleHtml(source) {
-    const shown = source.rootPath || source.name;
-    const { parent, name } = pathParts(shown);
-    return `${parent ? `<span class="storage-path-parent">${escapeHtml(parent)}</span>` : ''}<b class="storage-path-name">${escapeHtml(name)}</b>`;
+    const shown=source.rootPath||source.name;
+    const {parent,name}=pathParts(shown);
+    return `${parent?`<span class="storage-path-parent">${esc(parent)}</span>`:''}<b class="storage-path-name">${esc(name)}</b>`;
   }
 
-  function previewCell(file, index) {
-    if (!file) return `<span class="storage-folder-sample">${index === 0 ? '<span class="sample-glyph">▱</span>' : ''}</span>`;
-    const video = String(file.mime || '').startsWith('video/');
-    return `<span class="storage-folder-sample ${video ? 'video' : ''}" data-preview-hash="${escapeHtml(file.hash || '')}">
-      <span class="sample-glyph">${video ? '▶' : '▧'}</span>
-      <small class="sample-name">${escapeHtml(file.filename || '')}</small>
-      <img src="/api/thumbs/${encodeURIComponent(file.hash)}" alt="" loading="eager" decoding="async" onload="this.parentElement.classList.add('thumb-ready')">
-    </span>`;
-  }
-
-  function previews(source) {
-    const items = source.previews || [];
-    return `<a class="storage-folder-samples storage-source-link" href="#" title="View in Library">${[0,1,2].map(index => previewCell(items[index], index)).join('')}</a>`;
+  function previewCell(file,index) {
+    if(!file)return `<span class="storage-folder-sample">${index===0?'<span class="sample-glyph">▱</span>':''}</span>`;
+    const video=String(file.mime||'').startsWith('video/');
+    return `<span class="storage-folder-sample ${video?'video':''}" data-preview-hash="${esc(file.hash)}"><span class="sample-glyph">${video?'▶':'▧'}</span><img src="/api/thumbs/${encodeURIComponent(file.hash)}" alt="" loading="eager" decoding="async" onload="this.parentElement.classList.add('thumb-ready')"></span>`;
   }
 
   function card(source) {
-    const permission = source.permission || 'prompt';
-    const scope = source.scope === 'all' ? 'Everything' : 'Media';
-    const state = source.lastError || (permission === 'granted' ? relative(source.lastSynced) : 'Permission required');
-    const mode = source.cloud ? `Cloud · ${scope}` : scope;
-    const sourceLabel = source.rootPath && source.rootPath !== source.name ? 'Browser folder' : `Browser · ${source.name}`;
-    return `<article class="storage-item folder-item browser-folder-item" data-browser-folder="${escapeHtml(source.id)}">
-      ${previews(source)}
+    const detail=detailCache.get(String(source.id))||source;
+    const previews=detail.previews||[];
+    const hasStats=Number.isFinite(detail.files);
+    const meta=hasStats?`${Number(detail.files||0).toLocaleString()} files · ${bytes(detail.bytes)}`:'';
+    const permissionState=detail.permission||'';
+    const health=source.lastError?'bad':permissionState&&permissionState!=='granted'?'warn':permissionState==='granted'?'ok':'';
+    const busy=liveSyncs.has(String(source.id));
+    return `<article class="storage-item folder-item browser-folder-item${busy?' source-busy':''}" data-browser-folder="${esc(source.id)}" data-source-cloud="${source.cloud?'1':'0'}" data-source-scope="${esc(source.scope)}" data-source-health="${health}">
+      <a class="storage-folder-samples storage-source-link" href="#" title="Library">${[0,1,2].map(index=>previewCell(previews[index],index)).join('')}</a>
       <div class="storage-copy">
-        <div class="storage-title">
-          <strong title="${escapeHtml(source.rootPath || source.name)}">${titleHtml(source)}</strong>
-          <span class="storage-modes" title="${source.cloud ? 'Browser folder with a Cloud copy' : 'Browser folder · local only'}">${escapeHtml(mode)}</span>
-          <time class="item-state ${permission === 'granted' ? '' : 'browser-folder-warning'}">${escapeHtml(state)}</time>
-        </div>
-        <div class="storage-meta">
-          <span data-browser-files>${Number(source.files || 0).toLocaleString()} files</span><span>·</span><span data-browser-bytes>${bytes(source.bytes)}</span><span>·</span><span class="browser-folder-source">${escapeHtml(sourceLabel)}</span>
-        </div>
-        <div class="storage-meter browser-folder-meter"><i style="width:${source.files ? '2px' : '0'}"></i></div>
-        <div class="item-progress" hidden></div>
+        <div class="storage-title"><strong title="${esc(source.rootPath||source.name)}">${titleHtml(source)}</strong></div>
+        <div class="storage-meta">${meta?`<span>${esc(meta)}</span>`:''}</div>
       </div>
-      <div class="item-actions">
-        <button class="action-link browser-folder-mode" data-browser-scope title="Index ${scope === 'Media' ? 'all files' : 'photos and videos only'}">${escapeHtml(scope)}</button>
-        <button class="action-link" data-browser-path title="Set the full native folder path Mochimono should remember">Path</button>
-        <button class="action-link" data-browser-cloud title="${source.cloud ? 'Stop uploading future changes to Cloud; existing Cloud copies are kept' : 'Keep a Cloud copy'}">${source.cloud ? 'Local' : '+ Cloud'}</button>
-        <button class="action-link primary-action" data-browser-sync title="${source.cloud ? 'Sync browser folder and Cloud copy' : 'Re-index browser folder locally'}">${permission === 'granted' ? (source.cloud ? 'Sync' : 'Index') : 'Allow'}</button>
-        <button class="icon tiny" data-browser-remove aria-label="Remove browser folder" title="Remove browser folder">×</button>
-      </div>
+      <div class="item-actions"><button class="icon tiny" data-browser-remove aria-label="Remove" title="Remove">×</button></div>
     </article>`;
   }
 
-  function sourceRenderKey(source) {
-    const previewKey = (source.previews || []).slice(0, 3).map(file => [file?.hash || '', file?.filename || '', file?.mime || '']);
-    return [source.id || '', source.name || '', source.rootPath || '', source.permission || 'prompt', source.scope || 'media', Boolean(source.cloud), Number(source.files) || 0, Number(source.bytes) || 0, source.lastError || '', previewKey];
+  function sourceKey(source) {
+    const detail=detailCache.get(String(source.id));
+    return [source.id,source.name,source.rootPath,source.scope,Boolean(source.cloud),source.lastError||'',detail?.permission||'',detail?.files??null,detail?.bytes??null,(detail?.previews||[]).map(item=>item.hash),liveSyncs.has(String(source.id))];
   }
 
-  function progressTitle(source) {
-    if (source?.cloud) return 'Syncing';
-    return source?.lastSynced ? 'Checking folder' : 'Indexing folder';
-  }
-
-  function renderProgress(row, source, progress = liveProgress.get(String(source?.id || ''))) {
-    const container = row?.querySelector('.item-progress');
-    if (!container) return;
-    if (!progress || progress.state !== 'running') {
-      container.hidden = true;
-      container.replaceChildren();
-      delete container.dataset.key;
-      return;
+  function render(sources) {
+    const key=JSON.stringify(sources.map(sourceKey));
+    if(key===renderedKey)return;
+    renderedKey=key;
+    for(const row of folders.querySelectorAll(':scope > [data-browser-folder]'))row.remove();
+    if(sources.length){
+      const holder=document.createElement('div');
+      holder.innerHTML=sources.map(card).join('');
+      folders.append(...holder.children);
     }
-
-    const scanned = Math.max(0, Number(progress.scanned) || 0);
-    const transferred = Math.max(0, Number(progress.transferred) || 0);
-    const skipped = Math.max(0, Number(progress.skipped) || 0);
-    const title = progressTitle(source);
-    const details = [];
-    if (scanned) details.push(`${scanned.toLocaleString()} file${scanned === 1 ? '' : 's'} found`);
-    if (transferred) details.push(`${transferred.toLocaleString()} new/changed`);
-    if (skipped) details.push(`${skipped.toLocaleString()} unchanged`);
-    const summary = details.join(' · ') || 'Starting…';
-    const key = `${title}|${summary}`;
-    if (container.dataset.key !== key) {
-      container.dataset.key = key;
-      container.innerHTML = `<div class="browser-sync-progress">
-        <div class="browser-sync-head"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(summary)}</span></div>
-        <div class="progress-bar indeterminate"><i style="width:32%"></i></div>
-      </div>`;
-    }
-    container.hidden = false;
-
-    const filesNode = row.querySelector('[data-browser-files]');
-    const bytesNode = row.querySelector('[data-browser-bytes]');
-    if (filesNode) filesNode.textContent = `${scanned.toLocaleString()} file${scanned === 1 ? '' : 's'}`;
-    if (bytesNode && !Number(source?.bytes)) bytesNode.textContent = scanned ? 'Indexing…' : 'Starting…';
+    window.mochimonoSourceControls?.refresh?.();
   }
 
-  function updateRowState(source) {
-    const id = String(source.id || '');
-    const row = [...folders.querySelectorAll(':scope > [data-browser-folder]')].find(node => node.dataset.browserFolder === id);
-    if (!row) return false;
-    const permission = source.permission || 'prompt';
-    const state = source.lastError || (permission === 'granted' ? relative(source.lastSynced) : 'Permission required');
-    const node = row.querySelector('.item-state');
-    if (node) {
-      if (node.textContent !== state) node.textContent = state;
-      node.classList.toggle('browser-folder-warning', permission !== 'granted');
-    }
-    renderProgress(row, source);
-    return true;
+  async function ensureApi() {
+    if(window.mochimonoBrowserFolders)return window.mochimonoBrowserFolders;
+    apiPromise ||= import('/files/browser-folder-sync.js').then(()=>{
+      if(!window.mochimonoBrowserFolders)throw new Error('Browser folders unavailable');
+      exposeToFrame();
+      return window.mochimonoBrowserFolders;
+    });
+    return apiPromise;
   }
 
-  function replaceBrowserRows(sources) {
-    sourceCache.clear();
-    for (const source of sources || []) sourceCache.set(String(source.id || ''), source);
-    const nextKey = JSON.stringify((sources || []).map(sourceRenderKey));
-    if (renderedKey !== nextKey) {
-      renderedKey = nextKey;
-      writingRows = true;
-      for (const row of folders.querySelectorAll(':scope > [data-browser-folder]')) row.remove();
-      if (sources.length) {
-        const holder = document.createElement('div');
-        holder.innerHTML = sources.map(card).join('');
-        folders.append(...holder.children);
-      }
-      requestAnimationFrame(() => { writingRows = false; });
-    }
-    for (const source of sources || []) updateRowState(source);
+  function exposeToFrame() {
+    const child=frame?.contentWindow;
+    if(!child||!window.mochimonoBrowserFolders)return;
+    try { child.mochimonoBrowserFolders=window.mochimonoBrowserFolders; } catch {}
   }
 
-  async function refresh() {
-    if (rendering) return;
-    const bridge = api();
-    if (!bridge?.list) return;
-    rendering = true;
-    try { replaceBrowserRows(await bridge.list()); }
-    catch {} finally { rendering = false; }
+  function relay(name,detail) {
+    exposeToFrame();
+    try { frame?.contentWindow?.dispatchEvent(new CustomEvent(name,{detail})); } catch {}
   }
 
-  function schedule(delay = 80) {
-    clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(refresh, delay);
-  }
-
-  function flushProgress() {
-    progressTimer = 0;
-    for (const [id, progress] of liveProgress) {
-      const source = sourceCache.get(id);
-      const row = [...folders.querySelectorAll(':scope > [data-browser-folder]')].find(node => node.dataset.browserFolder === id);
-      if (!source || !row) continue;
-      renderProgress(row, source, progress);
-    }
-  }
-
-  function scheduleProgress() {
-    if (!progressTimer) progressTimer = setTimeout(flushProgress, 100);
-  }
-
-  function onBrowserSync(event) {
-    const detail = event.detail || {};
-    const id = String(detail.id || '');
-    if (!id) return;
-    if (detail.state === 'running') {
-      activeSyncId = id;
-      liveProgress.set(id, detail);
-      if (!sourceCache.has(id)) schedule(0);
-      scheduleProgress();
-      return;
-    }
-    if (activeSyncId === id) activeSyncId = '';
-    liveProgress.delete(id);
-    livePreviewHashes.delete(id);
-    schedule(0);
-  }
-
-  function onBrowserThumbnail(event) {
-    const hash = String(event.detail?.hash || '');
-    const id = activeSyncId;
-    if (!id || !/^[a-f0-9]{64}$/.test(hash)) return;
-    const row = [...folders.querySelectorAll(':scope > [data-browser-folder]')].find(node => node.dataset.browserFolder === id);
-    const strip = row?.querySelector('.storage-folder-samples');
-    if (!strip || strip.querySelector(`[data-preview-hash="${CSS.escape(hash)}"]`)) return;
-    const seen = livePreviewHashes.get(id) || new Set();
-    if (seen.has(hash)) return;
-    seen.add(hash);
-    livePreviewHashes.set(id, seen);
-
-    const holder = document.createElement('div');
-    holder.innerHTML = previewCell({ hash, filename:'', mime:'image/*' }, 0);
-    const cell = holder.firstElementChild;
-    if (!cell) return;
-    strip.prepend(cell);
-    while (strip.children.length > 3) strip.lastElementChild?.remove();
-  }
-
-  function onBrowserSourcesChanged() {
-    schedule(0);
-  }
-
-  function bindBridgeEvents() {
-    const child = frame.contentWindow;
-    if (!child || child === bridgeWindow) return;
-    if (bridgeWindow) {
-      try {
-        bridgeWindow.removeEventListener('mochimono:browser-folder-sync', onBrowserSync);
-        bridgeWindow.removeEventListener('mochimono:browser-thumbnail-ready', onBrowserThumbnail);
-        bridgeWindow.removeEventListener('mochimono:browser-folders-changed', onBrowserSourcesChanged);
-      } catch {}
-    }
-    bridgeWindow = child;
+  async function refresh(enrich=true) {
+    clearTimeout(refreshTimer);refreshTimer=0;
+    let sources=[];
+    try { sources=await readSources(); } catch { return; }
+    render(sources);
+    if(sources.length)ensureApi().catch(()=>{});
+    if(!enrich||enriching||!sources.length)return;
+    enriching=true;
     try {
-      child.addEventListener('mochimono:browser-folder-sync', onBrowserSync);
-      child.addEventListener('mochimono:browser-thumbnail-ready', onBrowserThumbnail);
-      child.addEventListener('mochimono:browser-folders-changed', onBrowserSourcesChanged);
+      const details=await readDetails(sources);
+      for(const detail of details)detailCache.set(String(detail.id),detail);
+      render(sources);
     } catch {}
+    finally { enriching=false; }
   }
 
-  folders.addEventListener('click', async event => {
-    const row = event.target.closest('[data-browser-folder]');
-    if (!row) return;
-    const bridge = api();
-    if (!bridge) return;
-    const id = row.dataset.browserFolder;
+  function schedule(delay=0,enrich=true) {
+    clearTimeout(refreshTimer);
+    refreshTimer=setTimeout(()=>refresh(enrich),Math.max(0,delay));
+  }
 
-    if (event.target.closest('[data-browser-sync]')) {
-      event.preventDefault(); event.stopImmediatePropagation();
-      const button = event.target.closest('[data-browser-sync]');
-      button.disabled = true; button.textContent = 'Working…';
-      try { await bridge.sync(id, { userGesture:true }); }
-      catch (error) { button.title = error.message || String(error); }
-      finally { schedule(0); }
-      return;
-    }
+  async function setCloud(id,enabled) {
+    const api=await ensureApi();
+    await api.setCloud(id,enabled);
+    schedule(0,false);
+    if(enabled)api.sync(id,{userGesture:true}).catch(()=>{});
+  }
+  async function setScope(id,scope) {
+    const api=await ensureApi();
+    await api.setScope(id,scope);
+    schedule(0,false);
+    api.sync(id,{userGesture:true}).catch(()=>{});
+  }
+  async function sync(id) {
+    const api=await ensureApi();
+    return api.sync(id,{userGesture:true});
+  }
 
-    if (event.target.closest('[data-browser-scope]')) {
-      event.preventDefault(); event.stopImmediatePropagation();
-      const sources = await bridge.list();
-      const source = sources.find(item => item.id === id);
-      if (!source) return;
-      const next = source.scope === 'all' ? 'media' : 'all';
-      await bridge.setScope(id, next);
-      await bridge.sync(id, { userGesture:true });
-      schedule(0); return;
-    }
+  function onSync(event) {
+    const detail=event.detail||{},id=String(detail.id||'');
+    if(!id)return;
+    if(detail.state==='running')liveSyncs.set(id,detail); else liveSyncs.delete(id);
+    relay('mochimono:browser-folder-sync',detail);
+    schedule(detail.state==='running'?0:30,detail.state!=='running');
+  }
+  function onThumbnail(event) {
+    relay('mochimono:browser-thumbnail-ready',event.detail||{});
+  }
+  function onChanged(event) {
+    relay('mochimono:browser-folders-changed',event.detail||{});
+    schedule(0,true);
+  }
+  function onReady(event) {
+    exposeToFrame();
+    relay('mochimono:browser-folders-ready',event.detail||{});
+  }
 
-    if (event.target.closest('[data-browser-cloud]')) {
-      event.preventDefault(); event.stopImmediatePropagation();
-      const sources = await bridge.list();
-      const source = sources.find(item => item.id === id);
-      if (!source) return;
-      if (source.cloud) {
-        if (!confirm('Stop uploading future changes from this browser folder to Cloud? Existing Cloud copies will stay in Mochimono.')) return;
-        await bridge.setCloud(id, false);
-      } else {
-        await bridge.setCloud(id, true);
-        await bridge.sync(id, { userGesture:true });
-      }
-      schedule(0); return;
-    }
+  window.addEventListener('mochimono:browser-folder-sync',onSync);
+  window.addEventListener('mochimono:browser-thumbnail-ready',onThumbnail);
+  window.addEventListener('mochimono:browser-folders-changed',onChanged);
+  window.addEventListener('mochimono:browser-folders-ready',onReady);
 
-    if (event.target.closest('[data-browser-path]')) {
-      event.preventDefault(); event.stopImmediatePropagation();
-      const sources = await bridge.list();
-      const source = sources.find(item => item.id === id);
-      if (!source) return;
-      const value = prompt('Full folder path', source.rootPath || source.name);
-      if (value == null) return;
-      await bridge.setRootPath(id, value);
-      schedule(0); return;
-    }
+  folders.addEventListener('click',async event=>{
+    const remove=event.target.closest('[data-browser-remove]');
+    if(!remove)return;
+    const row=remove.closest('[data-browser-folder]');
+    const id=row?.dataset.browserFolder;
+    if(!id)return;
+    remove.disabled=true;
+    try { await (await ensureApi()).remove(id); detailCache.delete(id); schedule(0,true); }
+    catch {} finally { remove.disabled=false; }
+  },true);
 
-    if (event.target.closest('[data-browser-remove]')) {
-      event.preventDefault(); event.stopImmediatePropagation();
-      await bridge.remove(id); schedule(0);
-    }
-  }, true);
-
-  frame.addEventListener('load', () => {
-    bindBridgeEvents();
-    schedule(0);
-  });
-  window.addEventListener('focus', () => {
-    bindBridgeEvents();
-    schedule();
-  });
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return;
-    bindBridgeEvents();
-    schedule();
-  });
-
-  new MutationObserver(records => {
-    if (writingRows) return;
-    if (records.some(record => record.addedNodes.length || record.removedNodes.length)) schedule(30);
-  }).observe(folders, { childList:true });
-
-  bindBridgeEvents();
-  schedule(1200);
+  frame?.addEventListener('load',()=>{exposeToFrame();});
+  window.mochimonoBrowserFolderShell={setCloud,setScope,sync};
+  schedule(0,true);
 }
