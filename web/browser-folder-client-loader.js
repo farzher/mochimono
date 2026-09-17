@@ -1,6 +1,19 @@
 if (document.documentElement.classList.contains('client-library')) {
   let parentApi = null;
-  try { if (parent !== window) parentApi = parent.mochimonoBrowserFolders || null; } catch {}
+  let hasParentShell = false;
+  try {
+    if (parent !== window) {
+      parentApi = parent.mochimonoBrowserFolders || null;
+      hasParentShell = Boolean(parent.mochimonoBrowserFolderShell);
+    }
+  } catch {}
+
+  if (!parentApi && hasParentShell) {
+    for (let attempt = 0; attempt < 40 && !parentApi; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      try { parentApi = parent.mochimonoBrowserFolders || null; } catch { break; }
+    }
+  }
 
   if (!parentApi) {
     await import('./browser-folder-sync.js').catch(error => console.warn('Browser folder sync unavailable', error));
