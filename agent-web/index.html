@@ -12,8 +12,15 @@
   </script>
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/client-shell.css">
+  <style>
+    /* Native source cards get their preview strip asynchronously. Reserve the
+       final geometry immediately so the Storage grid does not jump when it arrives. */
+    #storagePane .folder-item:not(:has(.storage-folder-samples))::before{
+      content:"";display:block;width:100%;aspect-ratio:16/9;flex:0 0 auto;background:#171518
+    }
+  </style>
 </head>
-<body class="client-library-active">
+<body>
   <header class="client-header">
     <div class="app-brand"><span class="mini" aria-hidden="true"></span><h1>Mochimono</h1></div>
     <div class="client-head-actions">
@@ -36,7 +43,7 @@
     </div>
   </header>
 
-  <main id="filesPane" class="files-pane">
+  <main id="filesPane" class="files-pane" hidden>
     <iframe id="filesFrame" title="Mochimono Library"></iframe>
   </main>
 
