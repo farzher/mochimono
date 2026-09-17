@@ -1,6 +1,7 @@
 const RECENT_OPEN_KEY = 'mochimono.activity.recent.open';
 const frame = document.querySelector('#filesFrame');
 let recentOpen = sessionStorage.getItem(RECENT_OPEN_KEY) === '1';
+let activityScrollTop = 0;
 let polishFrame = 0;
 
 const style = document.createElement('style');
@@ -48,6 +49,8 @@ style.textContent = `
   .activity-recent .activity-section-head:hover{color:#d3c9c5!important}
   .activity-recent .activity-section-head:after{font-size:18px!important;color:#8f8582!important;margin-left:auto!important}
   .activity-recent.open .activity-list,.activity-recent.open .activity-empty{margin-top:7px!important}
+  .activity-recent .activity-row:not(.error) .activity-detail{display:none!important}
+  .activity-recent .activity-row:not(.error){min-height:56px!important;align-items:center!important}
 
   /* Backup management follows the same type scale. */
   .backup-center-dialog .backup-settings-section h4{font-size:14px!important;font-weight:800!important}
@@ -94,6 +97,8 @@ function applyRecentState() {
     recent.classList.toggle('open', recentOpen);
     recent.querySelector('.activity-section-head')?.setAttribute('aria-expanded', recentOpen ? 'true' : 'false');
   }
+  const body = document.querySelector('.activity-dialog[open] .activity-body');
+  if (body && Math.abs(body.scrollTop - activityScrollTop) > 1) body.scrollTop = activityScrollTop;
 }
 
 function schedulePolish() {
@@ -101,7 +106,13 @@ function schedulePolish() {
   polishFrame = requestAnimationFrame(applyRecentState);
 }
 
+document.addEventListener('scroll', event => {
+  const body = event.target?.closest?.('.activity-body');
+  if (body) activityScrollTop = body.scrollTop;
+}, true);
+
 document.addEventListener('click', event => {
+  if (event.target.closest?.('.activity-button')) activityScrollTop = 0;
   const head = event.target.closest?.('.activity-recent .activity-section-head');
   if (!head) return;
   queueMicrotask(() => {
