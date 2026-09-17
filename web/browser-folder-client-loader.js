@@ -11,27 +11,29 @@ if (document.documentElement.classList.contains('client-library')) {
     return null;
   }
 
+  function retryIngest(delay = 150) {
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => void ingestParentCatalog(), delay);
+  }
+
+  async function readParentCatalog() {
+    if (parent !== window && typeof parent.mochimonoBrowserFolderCatalog === 'function') {
+      return parent.mochimonoBrowserFolderCatalog();
+    }
+    if (typeof parentApi?.catalog === 'function') return parentApi.catalog();
+    return null;
+  }
+
   async function ingestParentCatalog() {
     if (ingesting) return ingesting;
     ingesting = (async () => {
       let files;
-      try {
-        if (parent !== window && typeof parent.mochimonoBrowserFolderCatalog === 'function') {
-          files = await parent.mochimonoBrowserFolderCatalog();
-        } else if (typeof parentApi?.catalog === 'function') files = await parentApi.catalog();
-        else return null;
-      } catch {
-        clearTimeout(retryTimer);
-        retryTimer = setTimeout(() => void ingestParentCatalog(), 250);
-        return null;
-      }
+      try { files = await readParentCatalog(); }
+      catch { retryIngest(250); return null; }
+      if (!Array.isArray(files)) return null;
 
       const library = await libraryApi();
-      if (!library) {
-        clearTimeout(retryTimer);
-        retryTimer = setTimeout(() => void ingestParentCatalog(), 100);
-        return null;
-      }
+      if (!library) { retryIngest(100); return null; }
       if (files.length) library.upsertMany(files);
       dispatchEvent(new CustomEvent('mochimono:browser-catalog-ready', { detail:{ count:files.length } }));
       return files;
@@ -47,6 +49,7 @@ if (document.documentElement.classList.contains('client-library')) {
 
   if (!parentApi) {
     await import('./browser-folder-sync.js').catch(error => console.warn('Browser folder sync unavailable', error));
+    parentApi = window.mochimonoBrowserFolders || null;
   }
 
   await import('./browser-folder-catalog-reconcile.js')
@@ -57,10 +60,25 @@ if (document.documentElement.classList.contains('client-library')) {
     dispatchEvent(new CustomEvent('mochimono:browser-folders-ready'));
   }
 
+  await Promise.all([
+    import('./browser-folder-viewer.js'),
+    import('./browser-folder-thumbnail-repair.js')
+  ]).catch(error => console.warn('Browser folder media bridge unavailable', error));
+
   addEventListener('message', event => {
     if (event.source !== parent || event.origin !== location.origin) return;
     if (event.data?.type === 'mochimono-browser-catalog-changed') void ingestParentCatalog();
   });
+
+  // A normal Cloud refresh replaces the Library catalog wholesale. Browser
+  // folders live in browser IndexedDB, so merge them back immediately after
+  // every replacement instead of waiting for the next folder sync event.
+  addEventListener('mochimono:catalog-updated', () => retryIngest(0));
+  addEventListener('mochimono:browser-folders-changed', () => retryIngest(0));
+  addEventListener('mochimono:browser-folder-sync', event => {
+    if (event.detail?.state === 'done') retryIngest(0);
+  });
+
   addEventListener('beforeunload', () => clearTimeout(retryTimer), { once:true });
 
   await ingestParentCatalog();
