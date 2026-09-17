@@ -30,9 +30,14 @@ function driveSummary(row) {
   };
 }
 
+function destructivePassword(req) {
+  try { return decodeURIComponent(String(req.headers['x-mochimono-delete-password'] || '')); }
+  catch { return ''; }
+}
+
 export async function handleBackupPolicy(req, res, url) {
   if (await handleDeviceIdentity(req, res, url)) return true;
-  if (req.method === 'POST' && url.pathname === '/api/protection/purge' && !verifyServerPassword(req.headers['x-mochimono-delete-password'])) {
+  if (req.method === 'POST' && url.pathname === '/api/protection/purge' && !verifyServerPassword(destructivePassword(req))) {
     json(res, 401, { error:'Password required for permanent deletion' });
     return true;
   }
