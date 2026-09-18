@@ -306,13 +306,20 @@ if (storagePane && sourceSection) {
 
   async function toggleReliance(event) {
     const button=event.currentTarget,id=button.dataset.rely,relied=button.dataset.relied==='1';button.disabled=true;
-    try { await control('/api/client/protection/location',{method:'POST',body:{id,reliability:relied?'low':'normal'}});await refresh(true);await ensureStorageSnapshot();renderDialog(); }
-    catch(error){toast(error.message);}finally{button.disabled=false;}
+    try {
+      if(relied){
+        const impact=await server(`/api/protection/locations/${encodeURIComponent(id)}/impact`).catch(()=>null);
+        const affected=Number(impact?.newlyUnderProtected)||0;
+        if(affected&&!confirm(`Stop counting this storage toward protection?\n\n${affected.toLocaleString()} managed ${affected===1?'file will':'files will'} fall below the requested protection level. No copies are deleted.`))return;
+      }
+      await control('/api/client/protection/location',{method:'POST',body:{id,reliability:relied?'low':'normal'}});
+      await refresh(true);await ensureStorageSnapshot();renderDialog();
+    } catch(error){toast(error.message);}finally{button.disabled=false;}
   }
 
   async function updateRepresentation(event) {
     const select=event.currentTarget,next=select.value,locationId=select.dataset.locationId,mediaType=select.dataset.media,previous=modeMap(model?.storage)(locationId,mediaType);
-    if(next==='compact-only'&&!confirm(`Use Squished only on ${select.dataset.locationName}?`)){select.value=previous;return;}
+    if(next==='compact-only'&&!confirm(`Use Squished only on ${select.dataset.locationName}?\n\nAfter a Squished copy is verified, Mochimono may remove the Original from this storage location. Other copies are unchanged.`)){select.value=previous;return;}
     select.disabled=true;
     try {
       if(next==='compact-only'){
