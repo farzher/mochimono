@@ -100,21 +100,23 @@ if (storagePane && sourceSection) {
     const totalBytes=PLAN_ORDER.reduce((sum,level)=>sum+(Number(summary.levels?.[level]?.bytes)||0),0);
     const job=model.state.job?.status==='running'&&model.state.job?.type==='protection'?model.state.job:null;
     const progress=job?.progress||{};
-    const title=!total?'No protected files':needs?`${needs.toLocaleString()} need protection`:'Protected';
-    const sub=!total?'':`${protectedFiles.toLocaleString()} / ${total.toLocaleString()}${totalBytes?` · ${bytes(totalBytes)}`:''}`;
+    const title=!total?'No protected files':needs?`${needs.toLocaleString()} need backup`:'Protected';
+    const sub=!total?'':needs?`${protectedFiles.toLocaleString()} protected${totalBytes?` · ${bytes(totalBytes)}`:''}`:`${total.toLocaleString()} files${totalBytes?` · ${bytes(totalBytes)}`:''}`;
     const stateClass=!total?'empty':needs?'needs':'';
+    const copied=Number(progress.copied)||0;
+    const jobText=[progress.phase||'Protecting',copied?`${copied.toLocaleString()} copied`:'',progress.copiedBytes?bytes(progress.copiedBytes):''].filter(Boolean).join(' · ');
+    const jobPercent=Number(progress.totalBytes)>0?Math.min(100,Number(progress.copiedBytes||progress.doneBytes||0)/Number(progress.totalBytes)*100):null;
 
     body.innerHTML=`
       <div class="backup-health ${stateClass}">
+        <div class="backup-health-ring" style="--p:${Math.max(0,Math.min(100,percent))}"><b>${total?`${percent}%`:'—'}</b></div>
         <div class="backup-health-copy">
-          <div class="backup-health-title"><i class="backup-health-dot"></i>${esc(title)}</div>
+          <div class="backup-health-title">${esc(title)}</div>
           <div class="backup-health-sub">${esc(sub)}</div>
-          <div class="backup-progress"><i style="width:${Math.max(0,Math.min(100,percent))}%"></i></div>
+          ${job?`<div class="backup-job"><div class="backup-job-head"><span>${esc(jobText)}</span>${jobPercent!=null?`<span>${Math.round(jobPercent)}%</span>`:''}</div><div class="backup-progress ${jobPercent==null?'indeterminate':''}"><i style="width:${jobPercent==null?'34%':`${Math.max(1,jobPercent)}%`}"></i></div></div>`:''}
         </div>
-        <div class="backup-health-actions"><button class="secondary" type="button" data-protect-now ${job||!total?'disabled':''}>${job?'Protecting…':'Protect now'}</button></div>
-      </div>
-      ${job?`<div class="backup-job"><strong>${esc(progress.phase||'Protecting')}</strong>${progress.copied!=null?` · ${Number(progress.copied).toLocaleString()}`:''}${progress.copiedBytes?` · ${bytes(progress.copiedBytes)}`:''}</div>`:''}
-      ${total?`<div class="backup-plans">${PLAN_ORDER.map(level=>`<div class="backup-plan"><strong>${esc(PLANS[level].name)}</strong><b>${planCount(level).toLocaleString()}</b></div>`).join('')}</div>`:''}`;
+        <div class="backup-health-actions"><button class="secondary" type="button" data-protect-now ${job||!total?'disabled':''}>${job?'Working…':'Protect now'}</button></div>
+      </div>`;
     body.querySelector('[data-protect-now]')?.addEventListener('click',protectNow);
   }
 
