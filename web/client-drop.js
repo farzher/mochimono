@@ -70,7 +70,12 @@ if (location.pathname.startsWith('/files')) {
   }
 
   async function browserFoldersApi() {
-    for (let attempt = 0; attempt < 40; attempt++) {
+    if (window.mochimonoBrowserFolders?.addHandles) return window.mochimonoBrowserFolders;
+    try {
+      const parentApi = await window.parent?.mochimonoBrowserFolderShell?.activate?.();
+      if (parentApi?.addHandles) return parentApi;
+    } catch {}
+    for (let attempt = 0; attempt < 80; attempt++) {
       if (window.mochimonoBrowserFolders?.addHandles) return window.mochimonoBrowserFolders;
       await new Promise(resolve => setTimeout(resolve, 25));
     }
