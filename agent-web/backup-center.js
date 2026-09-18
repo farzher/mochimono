@@ -23,13 +23,18 @@ if (storagePane && sourceSection) {
     .backup-health-ring{--p:0%;position:relative;width:70px;height:70px;display:grid;place-items:center;border-radius:50%;background:conic-gradient(var(--ring) var(--p),#2b272b 0)}.backup-health-ring:after{content:'';position:absolute;inset:7px;border-radius:50%;background:#141214}.backup-health-ring b{position:relative;z-index:1;color:#eee6e2;font-size:16px;font-weight:820;font-variant-numeric:tabular-nums}.backup-health.empty .backup-health-ring b{color:#8c8380}
     .backup-health-copy{min-width:0}.backup-health-title{color:#f1e9e5;font-size:21px;font-weight:820;letter-spacing:-.028em}.backup-health-sub{margin-top:4px;color:#9b918d;font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums}.backup-health-sub:empty{display:none}.backup-health-actions{display:flex;align-items:center}.backup-health-actions button{min-width:104px;height:37px;padding:0 14px;border-radius:9px;white-space:nowrap;font-size:12px;font-weight:780}
     .backup-job{margin-top:11px}.backup-job-head{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#c9bfbb;font-size:11.5px;font-weight:700}.backup-job-head span:last-child{color:#8d8581;font-variant-numeric:tabular-nums}.backup-progress{height:6px;margin-top:7px;overflow:hidden;border-radius:999px;background:#2b272b}.backup-progress i{display:block;height:100%;border-radius:inherit;background:var(--ring);transition:width .25s ease}.backup-progress.indeterminate i{width:34%;animation:backup-slide 1.3s ease-in-out infinite}
-    dialog.backup-center-dialog{width:min(920px,calc(100vw - 32px));max-height:min(860px,calc(100dvh - 28px));padding:0;overflow:hidden}.backup-center-dialog .dialog-head{padding:19px 24px 16px;border-bottom:1px solid #292529}.backup-center-dialog .dialog-head h3{font-size:19px;font-weight:820;letter-spacing:-.025em}.backup-settings{max-height:calc(min(860px,100dvh - 28px) - 62px);overflow:auto;padding:24px 26px 28px;scrollbar-gutter:stable}.backup-settings-section{display:grid;gap:13px}.backup-settings-section h4{margin:0;color:#e8dfdb;font-size:15px;font-weight:800;letter-spacing:-.015em}.backup-settings-grid{display:grid;grid-template-columns:minmax(250px,.82fr) minmax(390px,1.35fr);gap:20px;margin-top:22px;align-items:start}.backup-settings-column{display:grid;gap:20px}.backup-settings-card{padding:18px;border-radius:16px;background:#111012;box-shadow:inset 0 0 0 1px #292529}
-    .backup-plan-list{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.backup-plan-row{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto;column-gap:11px;align-items:center;min-width:0;padding:14px 15px;border-radius:14px;background:#141214;box-shadow:inset 0 0 0 1px #2b272b}.backup-plan-row b{grid-row:1/-1;color:#f0e8e4;font-size:25px;font-weight:820;line-height:1;font-variant-numeric:tabular-nums}.backup-plan-row strong{color:#d4cbc7;font-size:12.5px;font-weight:780}.backup-plan-row small{margin-top:2px;color:#807875;font-size:10.5px;font-weight:650}
-    .backup-source-list,.backup-destination-list{display:grid;gap:9px}.backup-source-row,.backup-destination-row{display:grid;gap:11px;padding:14px 15px;border-radius:13px;background:#171518;box-shadow:inset 0 0 0 1px #292529}.backup-source-row{grid-template-columns:minmax(0,1fr);align-items:start}.backup-row-copy{min-width:0}.backup-row-copy strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e8dfdb;font-size:14px;font-weight:780}.backup-row-copy small{display:block;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8d8481;font-size:11px}
-    .backup-source-row select,.backup-destination-row select,.backup-background select{width:100%;min-width:0;height:38px;padding:0 10px;font-size:12px;border-radius:9px}.backup-destination-controls{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:9px;align-items:end}.backup-destination-controls label{display:grid;gap:5px;color:#8d8481;font-size:10px;font-weight:730}.backup-rely{height:38px;padding:0 12px;border:0;border-radius:9px;background:#302b30;color:#ded4d0;font-size:11px;font-weight:780;white-space:nowrap}.backup-rely.off{background:#1d1a1e;color:#827976}.backup-destination-row.primary{padding-top:15px;padding-bottom:15px}
-    .backup-background{display:grid;gap:9px;padding:14px 15px;border-radius:13px;background:#171518;box-shadow:inset 0 0 0 1px #292529}.backup-background strong{color:#e1d8d4;font-size:13.5px;font-weight:760}.backup-empty{padding:10px 2px;color:#817976;font-size:12px}
+
+    dialog.backup-center-dialog{width:min(760px,calc(100vw - 28px));max-height:min(860px,calc(100dvh - 28px));padding:0;overflow:hidden}.backup-center-dialog .dialog-head{padding:19px 24px 16px;border-bottom:1px solid #292529}.backup-center-dialog .dialog-head h3{font-size:19px;font-weight:820;letter-spacing:-.025em}.backup-settings{max-height:calc(min(860px,100dvh - 28px) - 62px);overflow:auto;padding:22px 24px 26px;scrollbar-gutter:stable}
+    .backup-dialog-summary{display:flex;align-items:center;gap:14px;padding:16px;border-radius:15px;background:#111012;box-shadow:inset 0 0 0 1px #292529}.backup-dialog-summary i{width:12px;height:12px;flex:0 0 auto;border-radius:50%;background:#7fbe90;box-shadow:0 0 0 7px rgba(127,190,144,.08)}.backup-dialog-summary.needs i{background:#d3a067;box-shadow:0 0 0 7px rgba(211,160,103,.08)}.backup-dialog-summary strong{display:block;color:#f0e8e4;font-size:17px;font-weight:810}.backup-dialog-summary span{display:block;margin-top:3px;color:#8f8783;font-size:12px;font-weight:620}
+    .backup-simple-section{margin-top:22px}.backup-simple-section>h4,.backup-advanced-section>h4{margin:0 0 10px;color:#e7deda;font-size:14px;font-weight:800;letter-spacing:-.01em}
+    .backup-location-list{display:grid;gap:8px}.backup-location-row{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:12px;align-items:center;min-height:58px;padding:12px 14px;border-radius:13px;background:#151316;box-shadow:inset 0 0 0 1px #292529}.backup-location-dot{width:8px;height:8px;border-radius:50%;background:#7fbe90}.backup-location-row.offline .backup-location-dot{background:#d3a067}.backup-location-copy{min-width:0}.backup-location-copy strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e8dfdb;font-size:13.5px;font-weight:780}.backup-location-copy small{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8e8582;font-size:11px}.backup-location-action{height:30px;padding:0 9px;border-radius:8px;background:transparent;color:#a19793;font-size:11px;font-weight:730}.backup-location-action:hover{background:#272327;color:#eee5e1}.backup-location-action.danger:hover{color:#efa09a}
+    .backup-auto-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:13px 14px;border-radius:13px;background:#151316;box-shadow:inset 0 0 0 1px #292529}.backup-auto-row div{min-width:0}.backup-auto-row strong{display:block;color:#dfd6d2;font-size:13.5px;font-weight:760}.backup-auto-row small{display:block;margin-top:3px;color:#847c79;font-size:10.5px}.backup-auto-row select{width:145px;height:36px;padding:0 9px;font-size:11.5px;border-radius:8px}
+    .backup-advanced{margin-top:22px;border-top:1px solid #292529}.backup-advanced>summary{display:flex;align-items:center;gap:8px;padding:18px 2px 4px;cursor:pointer;list-style:none;color:#a79e9a;font-size:12.5px;font-weight:760;user-select:none}.backup-advanced>summary::-webkit-details-marker{display:none}.backup-advanced>summary:after{content:'›';margin-left:auto;font-size:18px;transform:rotate(90deg);transition:transform .15s}.backup-advanced[open]>summary:after{transform:rotate(-90deg)}.backup-advanced-body{display:grid;gap:20px;padding-top:14px}.backup-advanced-section{padding:16px;border-radius:14px;background:#111012;box-shadow:inset 0 0 0 1px #292529}
+    .backup-plan-list{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.backup-plan-row{min-width:0;padding:12px;border-radius:11px;background:#171518}.backup-plan-row b{display:block;color:#eee6e2;font-size:20px;font-weight:820;line-height:1;font-variant-numeric:tabular-nums}.backup-plan-row strong{display:block;margin-top:7px;color:#c9bfbb;font-size:11.5px;font-weight:760}.backup-plan-row small{display:block;margin-top:2px;color:#7f7774;font-size:10px;font-weight:650}
+    .backup-source-list,.backup-destination-list{display:grid;gap:8px}.backup-source-row,.backup-destination-row{display:grid;gap:10px;padding:12px;border-radius:11px;background:#171518}.backup-source-row{grid-template-columns:minmax(0,1fr) 170px;align-items:center}.backup-row-copy{min-width:0}.backup-row-copy strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e2d9d5;font-size:13px;font-weight:760}.backup-row-copy small{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#817976;font-size:10.5px}
+    .backup-source-row select,.backup-destination-row select{width:100%;min-width:0;height:34px;padding:0 9px;font-size:11px;border-radius:8px}.backup-destination-controls{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:8px;align-items:end}.backup-destination-controls label{display:grid;gap:4px;color:#837b78;font-size:9.5px;font-weight:700}.backup-rely{height:34px;padding:0 10px;border:0;border-radius:8px;background:#2b272b;color:#d3c9c5;font-size:10.5px;font-weight:760;white-space:nowrap}.backup-rely.off{background:#171518;color:#756d6a}.backup-empty{padding:8px 2px;color:#817976;font-size:11.5px}
     @keyframes backup-slide{0%{transform:translateX(-115%)}50%{transform:translateX(105%)}100%{transform:translateX(315%)}}
-    @media(max-width:760px){dialog.backup-center-dialog{width:min(620px,calc(100vw - 20px))}.backup-health{grid-template-columns:66px minmax(0,1fr)}.backup-health-ring{width:60px;height:60px}.backup-health-actions{grid-column:1/-1}.backup-health-actions button{width:100%}.backup-settings{padding:18px}.backup-plan-list{grid-template-columns:repeat(2,minmax(0,1fr))}.backup-settings-grid{grid-template-columns:1fr;gap:16px;margin-top:18px}.backup-settings-column{gap:16px}.backup-destination-controls{grid-template-columns:repeat(2,minmax(0,1fr))}.backup-rely{grid-column:1/-1}}
+    @media(max-width:700px){dialog.backup-center-dialog{width:min(620px,calc(100vw - 20px))}.backup-health{grid-template-columns:66px minmax(0,1fr)}.backup-health-ring{width:60px;height:60px}.backup-health-actions{grid-column:1/-1}.backup-health-actions button{width:100%}.backup-settings{padding:17px}.backup-plan-list{grid-template-columns:repeat(2,minmax(0,1fr))}.backup-source-row{grid-template-columns:1fr}.backup-destination-controls{grid-template-columns:1fr}.backup-rely{width:100%}.backup-auto-row{align-items:stretch;flex-direction:column}.backup-auto-row select{width:100%}}
     @media(prefers-reduced-motion:reduce){.backup-progress i{animation:none!important;transition:none!important}}
   `;
   document.head.append(style);
@@ -135,35 +140,53 @@ if (storagePane && sourceSection) {
     };
   }
 
-  function destinationStatus(location) {
-    if(location.kind==='primary')return '';
-    const peer=peerFor(location.id),backup=backupFor(location.id),parts=[];
-    if(location.kind==='peer')parts.push(peer?.online?'Online':'Offline');
-    else if(location.kind==='backup')parts.push(backup?'Connected':'Offline');
-    if(!backup&&!peer?.online&&location.lastSeen)parts.push(age(location.lastSeen));
-    return parts.join(' · ');
+  function simpleDestinationRows() {
+    const attached=new Map((model?.state?.backups||[]).map(item=>[String(item.id),item]));
+    const peers=new Map((model?.state?.peers||[]).map(item=>[String(item.id),item]));
+    const locations=(model?.state?.locations||[]).filter(location=>['primary','backup','peer'].includes(location.kind));
+    if(!locations.length)return '<div class="backup-empty">No backup locations yet.</div>';
+    return locations.map(location=>{
+      if(location.kind==='primary'){
+        return '<div class="backup-location-row"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>Mochimono Cloud</strong><small>Available</small></div></div>';
+      }
+      if(location.kind==='backup'){
+        const backup=attached.get(String(location.id));
+        if(backup){
+          const details=[backup.path,backup.bytes?`${bytes(backup.bytes)} stored`:''].filter(Boolean).join(' · ');
+          return `<div class="backup-location-row"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>${esc(location.name)}</strong><small>Connected${details?` · ${esc(details)}`:''}</small></div></div>`;
+        }
+        const seen=location.lastSeen?age(location.lastSeen):'';
+        return `<div class="backup-location-row offline"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>${esc(location.name)}</strong><small>Disconnected · remembered backup${seen?` · last seen ${esc(seen)} ago`:''}</small></div><button class="backup-location-action danger" type="button" data-forget-backup="${esc(location.id)}" data-name="${esc(location.name)}">Forget</button></div>`;
+      }
+      const peer=peers.get(String(location.id));
+      const online=Boolean(peer?.online);
+      return `<div class="backup-location-row ${online?'':'offline'}"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>${esc(location.name)}</strong><small>${online?'Remote backup available':`Remote backup offline${location.lastSeen?` · last seen ${esc(age(location.lastSeen))} ago`:''}`}</small></div></div>`;
+    }).join('');
   }
 
   function representationSelect(location,mediaType,mode) {
     if(location.kind!=='backup')return '';
     const locationId=`backup:${location.id}`,current=mode(locationId,mediaType);
-    return `<label>${mediaType==='image'?'Images':'Video'}<select data-representation data-location-id="${esc(locationId)}" data-location-name="${esc(location.name)}" data-media="${mediaType}"><option value="original" ${current==='original'?'selected':''}>Original</option><option value="compact" ${current==='compact'?'selected':''}>+ Squished</option><option value="compact-only" ${current==='compact-only'?'selected':''}>Squished</option></select></label>`;
+    return `<label>${mediaType==='image'?'Images':'Video'}<select data-representation data-location-id="${esc(locationId)}" data-location-name="${esc(location.name)}" data-media="${mediaType}"><option value="original" ${current==='original'?'selected':''}>Original</option><option value="compact" ${current==='compact'?'selected':''}>Original + Squished</option><option value="compact-only" ${current==='compact-only'?'selected':''}>Squished only</option></select></label>`;
   }
 
-  function destinationRows() {
+  function advancedDestinationRows() {
     const mode=modeMap(model?.storage);
-    const locations=(model?.state?.locations||[]).filter(location=>['primary','backup','peer'].includes(location.kind));
-    if(!locations.length)return '<div class="backup-empty">None</div>';
+    const attached=new Set((model?.state?.backups||[]).map(item=>String(item.id)));
+    const locations=(model?.state?.locations||[]).filter(location=>
+      (location.kind==='backup'&&attached.has(String(location.id)))||location.kind==='peer'
+    );
+    if(!locations.length)return '';
     return locations.map(location=>{
       const relied=location.reliability!=='low';
-      const controls=location.kind==='primary'?'<span></span>':`<div class="backup-destination-controls">${representationSelect(location,'image',mode)}${representationSelect(location,'video',mode)}<button class="backup-rely ${relied?'':'off'}" type="button" data-rely="${esc(location.id)}" data-relied="${relied?'1':'0'}">${relied?'Counted':'Ignored'}</button></div>`;
-      return `<div class="backup-destination-row ${location.kind==='primary'?'primary':''}"><div class="backup-row-copy"><strong>${esc(location.kind==='primary'?'Cloud':location.name)}</strong>${destinationStatus(location)?`<small>${esc(destinationStatus(location))}</small>`:''}</div>${controls}</div>`;
+      const controls=`<div class="backup-destination-controls">${representationSelect(location,'image',mode)}${representationSelect(location,'video',mode)}<button class="backup-rely ${relied?'':'off'}" title="Whether this location counts toward protection targets" type="button" data-rely="${esc(location.id)}" data-relied="${relied?'1':'0'}">${relied?'Counts':'Ignored'}</button></div>`;
+      return `<div class="backup-destination-row"><div class="backup-row-copy"><strong>${esc(location.name)}</strong><small>${location.kind==='peer'?'Remote backup':'Connected backup drive'}</small></div>${controls}</div>`;
     }).join('');
   }
 
   function sourceRows() {
     const folders=(model?.state?.folders||[]).filter(folder=>folder.protected!==false&&Number(folder.importId)>0);
-    if(!folders.length)return '<div class="backup-empty">None</div>';
+    if(!folders.length)return '';
     return folders.map(folder=>`<div class="backup-source-row" data-import-id="${Number(folder.importId)}"><div class="backup-row-copy"><strong>${esc(baseName(folder.path)||folder.path)}</strong><small>${esc(folder.path||'')}</small></div><select data-folder-plan>${planOptions(ruleFor(folder.importId))}</select></div>`).join('');
   }
 
@@ -181,26 +204,53 @@ if (storagePane && sourceSection) {
 
   function renderDialog() {
     const box=ensureDialog();
-    const summary=model?.state?.summary;
+    const advancedOpen=Boolean(box.querySelector('.backup-advanced')?.open);
+    const summary=model?.state?.summary||{};
     const background=model?.state?.config?.background||'low';
+    const total=Number(summary.files)||0;
+    const needs=Number(summary.needsProtection)||0;
+    const levels=PLAN_ORDER.filter(level=>Number(summary.levels?.[level]?.files)>0);
+    const profile=levels.length===1?`${PLANS[levels[0]].name} protection`:levels.length>1?'Mixed protection':'No protected files';
+    const folders=sourceRows();
+    const storageRules=advancedDestinationRows();
     box.innerHTML=`
       <div class="dialog-head"><h3>Backup</h3><button class="icon" data-close>×</button></div>
       <div class="backup-settings">
-        <section class="backup-settings-section"><h4>Protection levels</h4><div class="backup-plan-list">${PLAN_ORDER.map(level=>`<div class="backup-plan-row"><b>${Number(summary?.levels?.[level]?.files||0).toLocaleString()}</b><strong>${esc(PLANS[level].name)}</strong><small>${esc(PLANS[level].short)}</small></div>`).join('')}</div></section>
-        <div class="backup-settings-grid">
-          <div class="backup-settings-column">
-            <section class="backup-settings-section backup-settings-card"><h4>Folders</h4><div class="backup-source-list">${sourceRows()}</div></section>
-            <section class="backup-settings-section backup-settings-card"><h4>Automatic</h4><div class="backup-background"><strong>Background backup</strong><select data-background><option value="low">Low impact</option><option value="normal">Normal</option><option value="paused">Off</option></select></div></section>
+        <div class="backup-dialog-summary ${needs?'needs':''}"><i></i><div><strong>${needs?`${needs.toLocaleString()} files need backup`:total?'Your files are protected':'Nothing to protect yet'}</strong><span>${total?`${total.toLocaleString()} files · ${profile}`:'Add files and Mochimono will protect them automatically.'}</span></div></div>
+
+        <section class="backup-simple-section"><h4>Backup locations</h4><div class="backup-location-list">${simpleDestinationRows()}</div></section>
+
+        <section class="backup-simple-section"><h4>Automatic backup</h4><div class="backup-auto-row"><div><strong>Background backup</strong><small>Mochimono keeps your copies up to date automatically.</small></div><select data-background><option value="low">Low impact</option><option value="normal">Normal</option><option value="paused">Off</option></select></div></section>
+
+        <details class="backup-advanced">
+          <summary>Advanced settings</summary>
+          <div class="backup-advanced-body">
+            <section class="backup-advanced-section"><h4>Protection policy</h4><div class="backup-plan-list">${PLAN_ORDER.map(level=>`<div class="backup-plan-row"><b>${Number(summary.levels?.[level]?.files||0).toLocaleString()}</b><strong>${esc(PLANS[level].name)}</strong><small>${esc(PLANS[level].short)}</small></div>`).join('')}</div></section>
+            ${folders?`<section class="backup-advanced-section"><h4>Folder overrides</h4><div class="backup-source-list">${folders}</div></section>`:''}
+            ${storageRules?`<section class="backup-advanced-section"><h4>Storage rules</h4><div class="backup-destination-list">${storageRules}</div></section>`:''}
           </div>
-          <section class="backup-settings-section backup-settings-card"><h4>Storage</h4><div class="backup-destination-list">${destinationRows()}</div></section>
-        </div>
+        </details>
       </div>`;
     box.querySelector('[data-background]').value=background;
+    if(advancedOpen)box.querySelector('.backup-advanced').open=true;
     box.querySelector('[data-close]').onclick=()=>box.close();
     box.querySelectorAll('[data-folder-plan]').forEach(select=>select.addEventListener('change',updateFolderPlan));
     box.querySelectorAll('[data-rely]').forEach(button=>button.addEventListener('click',toggleReliance));
     box.querySelectorAll('[data-representation]').forEach(select=>select.addEventListener('change',updateRepresentation));
+    box.querySelectorAll('[data-forget-backup]').forEach(button=>button.addEventListener('click',forgetBackup));
     box.querySelector('[data-background]').addEventListener('change',updateBackground);
+  }
+
+  async function forgetBackup(event) {
+    const button=event.currentTarget,id=button.dataset.forgetBackup,name=button.dataset.name||'this backup drive';
+    if(!confirm(`Forget ${name}? Mochimono will stop counting copies on this drive. Files on the drive are not erased.`))return;
+    button.disabled=true;
+    try{
+      await control('/api/client/protection/backup/forget',{method:'POST',body:{id}});
+      model.storageLoaded=false;
+      await refresh(true);
+      toast('Backup forgotten');
+    }catch(error){toast(error.message);button.disabled=false;}
   }
 
   async function updateFolderPlan(event) {

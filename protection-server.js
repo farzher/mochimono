@@ -82,6 +82,9 @@ const invalidate = () => { snapshot = null; snapshotAt = 0; };
 
 function locationJson(row) {
   if (!row) return null;
+  const lastSeen = row.kind === 'backup'
+    ? db.prepare('SELECT last_seen AS lastSeen FROM drives WHERE id=?').get(row.id)?.lastSeen || row.last_seen
+    : row.last_seen;
   return {
     id: row.id,
     name: row.name,
@@ -91,7 +94,7 @@ function locationJson(row) {
     reliability: row.reliability,
     remote: Boolean(row.remote),
     encrypted: Boolean(row.encrypted),
-    lastSeen: row.last_seen
+    lastSeen
   };
 }
 
