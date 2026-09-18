@@ -377,9 +377,11 @@ if (host) {
     detail=detail||{};
     const id=String(detail.id||'');
     if(!id)return;
+    const name=String(detail.name||'');
+    if(name)browserNames.set(id,name);
     if(detail.state==='running'||detail.state==='queued')browserSyncs.set(id,{...detail,id});
     else browserSyncs.delete(id);
-    loadBrowserNames(sourceWindow);
+    if(!name&&!browserNames.has(id))loadBrowserNames(sourceWindow);
     schedule(60);
   }
 
