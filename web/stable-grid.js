@@ -78,7 +78,6 @@ html.stable-grid-owned #files{position:relative!important;display:block!importan
 .stable-grid-row>.file-card{position:absolute!important;top:0!important;margin:0!important;min-width:0!important;max-width:none!important;flex:none!important}
 .stable-grid-row>.file-card>.thumb{height:100%!important}
 .stable-grid-row>.file-card:not(.media-card)>.card-copy{display:none}
-.stable-grid-row>.file-card{position:absolute!important}
 .stable-grid-heading{position:absolute;left:2px;right:0;margin:0!important;pointer-events:none}
 .stable-grid-heading>.timeline-group-select{pointer-events:auto}
 .stable-grid-heading.year-heading{height:31px;display:flex;align-items:center;color:#f1e9e5;font-size:19px;font-weight:760;letter-spacing:-.025em}
