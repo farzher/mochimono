@@ -21,6 +21,7 @@ if (folders) {
   const style = document.createElement('style');
   style.textContent = `
     .browser-folder-item .storage-meta:empty{display:none!important}
+    .browser-source-live{color:#d39a92;font-weight:720}.browser-folder-item.source-queued .browser-source-live{color:#9b918e}
     .storage-folders-section{position:relative}
     .storage-folders-section.source-drop-active:after{
       content:'Drop folder to add locally';position:absolute;inset:-8px;z-index:12;display:grid;place-items:center;
@@ -139,10 +140,13 @@ if (folders) {
     const meta=hasStats?`${Number(detail.files||0).toLocaleString()} files · ${bytes(detail.bytes)}`:'';
     const permissionState=detail.permission||'';
     const health=source.lastError?'bad':permissionState&&permissionState!=='granted'?'warn':permissionState==='granted'?'ok':'';
-    const busy=liveSyncs.has(String(source.id));
-    return `<article class="storage-item folder-item browser-folder-item${busy?' source-busy':''}" data-browser-folder="${esc(source.id)}" data-source-cloud="${source.cloud?'1':'0'}" data-source-scope="${esc(source.scope)}" data-source-health="${health}">
+    const live=liveSyncs.get(String(source.id));
+    const busy=live?.state==='running';
+    const queued=live?.state==='queued';
+    const liveText=busy?`Indexing · ${Number(live.scanned||0).toLocaleString()} files`:queued?'Waiting to index':'';
+    return `<article class="storage-item folder-item browser-folder-item${busy?' source-busy':''}${queued?' source-queued':''}" data-browser-folder="${esc(source.id)}" data-source-cloud="${source.cloud?'1':'0'}" data-source-scope="${esc(source.scope)}" data-source-health="${health}">
       <a class="storage-folder-samples storage-source-link" href="#" title="Library">${[0,1,2].map(index=>previewCell(previews[index],index)).join('')}</a>
-      <div class="storage-copy"><div class="storage-title"><strong title="${esc(source.rootPath||source.name)}">${titleHtml(source)}</strong></div><div class="storage-meta">${meta?`<span>${esc(meta)}</span>`:''}</div></div>
+      <div class="storage-copy"><div class="storage-title"><strong title="${esc(source.rootPath||source.name)}">${titleHtml(source)}</strong></div><div class="storage-meta">${meta?`<span data-browser-stats>${esc(meta)}</span>`:''}<span class="browser-source-live" data-browser-live${liveText?'':" hidden"}>${esc(liveText)}</span></div></div>
       <div class="item-actions"><button class="icon tiny" data-browser-remove aria-label="Remove" title="Remove">×</button></div>
     </article>`;
   }
@@ -214,23 +218,36 @@ if (folders) {
   }
   async function sync(id) { return (await ensureApi()).sync(id,{userGesture:true}); }
 
+  function updateLiveRow(id,detail) {
+    const row=folders.querySelector(`[data-browser-folder="${CSS.escape(String(id))}"]`);
+    if(!row)return;
+    const live=row.querySelector('[data-browser-live]');
+    const running=detail.state==='running';
+    const queued=detail.state==='queued';
+    row.classList.toggle('source-busy',running);
+    row.classList.toggle('source-queued',queued);
+    if(!live)return;
+    live.hidden=!(running||queued);
+    live.textContent=running?`Indexing · ${Number(detail.scanned||0).toLocaleString()} files`:queued?'Waiting to index':'';
+  }
+
   function onSync(event) {
     const detail=event.detail||{},id=String(detail.id||'');if(!id)return;
     const wasBusy=liveSyncs.has(id);
-    if(detail.state==='running'){
+    if(detail.state==='running'||detail.state==='queued'){
       liveSyncs.set(id,detail);
-      if(!wasBusy){
-        relay('mochimono:browser-folder-sync',detail);
-        renderedKey='';render(lastSources);
-      }
+      relay('mochimono:browser-folder-sync',detail);
+      if(!wasBusy){renderedKey='';render(lastSources);}
+      else updateLiveRow(id,detail);
       return;
     }
     liveSyncs.delete(id);
     relay('mochimono:browser-folder-sync',detail);
+    updateLiveRow(id,detail);
     if(wasBusy){renderedKey='';render(lastSources);}
-    schedule(30,true);
+    schedule(40,true);
   }
-  function onThumbnail(event){relay('mochimono:browser-thumbnail-ready',event.detail||{});}
+  function onThumbnail(event){relay('mochimono:browser-thumbnail-ready',event.detail||{});schedule(300,true);}
   function onChanged(event){relay('mochimono:browser-folders-changed',event.detail||{});schedule(0,true);}
   function onReady(event){exposeToFrame();relay('mochimono:browser-folders-ready',event.detail||{});}
 
@@ -273,7 +290,7 @@ if (folders) {
       await (await ensureApi()).addHandles(handles,'media',{sync:true});
       renderedKey='';schedule(0,true);
       window.dispatchEvent(new CustomEvent('mochimono:sources-changed'));
-      toast(handles.length===1?`${handles[0].name} added locally`:`${handles.length} folders added locally`);
+      toast(handles.length===1?`${handles[0].name} added · indexing`:`${handles.length} folders added · indexing`);
     }catch(error){toast(error.message||'Could not add folder');}
   });
 
