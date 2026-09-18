@@ -614,10 +614,18 @@ $('#initializeBackup').onclick = async () => {
 $('#removeBackup').onclick = async () => {
   if (!backupPath || !backupEditing) return;
   const name = $('#backupName').value.trim() || pathName(backupPath) || 'this backup';
-  if (!confirm(`Disconnect ${name}? Backup files on the drive will be kept.`)) return;
   const button = $('#removeBackup');
   button.disabled = true;
   try {
+    const backup=backupLocations.find(item=>samePath(item.path,backupPath));
+    const id=String(backup?.meta?.id||'');
+    const impact=id?await req(`/api/protection/locations/${encodeURIComponent(id)}/impact`).catch(()=>null):null;
+    const affected=Number(impact?.newlyUnderProtected)||0;
+    const copies=Number(impact?.files)||0;
+    const consequence=affected
+      ? `\n\n${affected.toLocaleString()} managed ${affected===1?'file will':'files will'} fall below the requested protection level.`
+      : copies ? `\n\n${copies.toLocaleString()} managed ${copies===1?'file has':'files have'} a copy there, but required protection remains satisfied without it.` : '';
+    if (!confirm(`Disconnect ${name}?${consequence}\n\nBackup files on the drive will be kept.`)) return;
     await req('/api/backup/disconnect', { method:'POST', body:JSON.stringify({ path:backupPath }) });
     backupDialog.close();
     backupEditing = false;
