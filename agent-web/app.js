@@ -632,10 +632,14 @@ if (storagePane) {
 
 window.addEventListener('mochimono:activity-model', event => {
   folderActivity.clear();
+  const priority = { Thumbnail:1, Sync:2, Index:3, Hash:4 };
   for (const item of event.detail?.active || []) {
     const path = String(item?.path || item?.progress?.path || '').replace(/[\\/]+$/, '');
-    if (!path || !['Hash','Index','Sync','Thumbnail'].includes(String(item.kind || ''))) continue;
-    folderActivity.set(path.toLowerCase(), item);
+    const kind = String(item.kind || '');
+    if (!path || !priority[kind]) continue;
+    const key = path.toLowerCase();
+    const previous = folderActivity.get(key);
+    if (!previous || priority[kind] > priority[String(previous.kind || '')]) folderActivity.set(key, item);
   }
   for (const row of $('#folders').querySelectorAll('[data-folder-path]')) {
     const path = String(row.dataset.folderPath || '').replace(/[\\/]+$/, '').toLowerCase();
