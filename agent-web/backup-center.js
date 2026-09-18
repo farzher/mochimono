@@ -140,35 +140,53 @@ if (storagePane && sourceSection) {
     };
   }
 
-  function destinationStatus(location) {
-    if(location.kind==='primary')return '';
-    const peer=peerFor(location.id),backup=backupFor(location.id),parts=[];
-    if(location.kind==='peer')parts.push(peer?.online?'Online':'Offline');
-    else if(location.kind==='backup')parts.push(backup?'Connected':'Offline');
-    if(!backup&&!peer?.online&&location.lastSeen)parts.push(age(location.lastSeen));
-    return parts.join(' · ');
+  function simpleDestinationRows() {
+    const attached=new Map((model?.state?.backups||[]).map(item=>[String(item.id),item]));
+    const peers=new Map((model?.state?.peers||[]).map(item=>[String(item.id),item]));
+    const locations=(model?.state?.locations||[]).filter(location=>['primary','backup','peer'].includes(location.kind));
+    if(!locations.length)return '<div class="backup-empty">No backup locations yet.</div>';
+    return locations.map(location=>{
+      if(location.kind==='primary'){
+        return '<div class="backup-location-row"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>Mochimono Cloud</strong><small>Available</small></div></div>';
+      }
+      if(location.kind==='backup'){
+        const backup=attached.get(String(location.id));
+        if(backup){
+          const details=[backup.path,backup.bytes?`${bytes(backup.bytes)} stored`:''].filter(Boolean).join(' · ');
+          return `<div class="backup-location-row"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>${esc(location.name)}</strong><small>Connected${details?` · ${esc(details)}`:''}</small></div></div>`;
+        }
+        const seen=location.lastSeen?age(location.lastSeen):'';
+        return `<div class="backup-location-row offline"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>${esc(location.name)}</strong><small>Disconnected${seen?` · last seen ${esc(seen)} ago`:''}</small></div><button class="backup-location-action danger" type="button" data-forget-backup="${esc(location.id)}" data-name="${esc(location.name)}">Forget</button></div>`;
+      }
+      const peer=peers.get(String(location.id));
+      const online=Boolean(peer?.online);
+      return `<div class="backup-location-row ${online?'':'offline'}"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>${esc(location.name)}</strong><small>${online?'Remote backup available':`Remote backup offline${location.lastSeen?` · last seen ${esc(age(location.lastSeen))} ago`:''}`}</small></div></div>`;
+    }).join('');
   }
 
   function representationSelect(location,mediaType,mode) {
     if(location.kind!=='backup')return '';
     const locationId=`backup:${location.id}`,current=mode(locationId,mediaType);
-    return `<label>${mediaType==='image'?'Images':'Video'}<select data-representation data-location-id="${esc(locationId)}" data-location-name="${esc(location.name)}" data-media="${mediaType}"><option value="original" ${current==='original'?'selected':''}>Original</option><option value="compact" ${current==='compact'?'selected':''}>+ Squished</option><option value="compact-only" ${current==='compact-only'?'selected':''}>Squished</option></select></label>`;
+    return `<label>${mediaType==='image'?'Images':'Video'}<select data-representation data-location-id="${esc(locationId)}" data-location-name="${esc(location.name)}" data-media="${mediaType}"><option value="original" ${current==='original'?'selected':''}>Original</option><option value="compact" ${current==='compact'?'selected':''}>Original + Squished</option><option value="compact-only" ${current==='compact-only'?'selected':''}>Squished only</option></select></label>`;
   }
 
-  function destinationRows() {
+  function advancedDestinationRows() {
     const mode=modeMap(model?.storage);
-    const locations=(model?.state?.locations||[]).filter(location=>['primary','backup','peer'].includes(location.kind));
-    if(!locations.length)return '<div class="backup-empty">None</div>';
+    const attached=new Set((model?.state?.backups||[]).map(item=>String(item.id)));
+    const locations=(model?.state?.locations||[]).filter(location=>
+      (location.kind==='backup'&&attached.has(String(location.id)))||location.kind==='peer'
+    );
+    if(!locations.length)return '';
     return locations.map(location=>{
       const relied=location.reliability!=='low';
-      const controls=location.kind==='primary'?'<span></span>':`<div class="backup-destination-controls">${representationSelect(location,'image',mode)}${representationSelect(location,'video',mode)}<button class="backup-rely ${relied?'':'off'}" type="button" data-rely="${esc(location.id)}" data-relied="${relied?'1':'0'}">${relied?'Counted':'Ignored'}</button></div>`;
-      return `<div class="backup-destination-row ${location.kind==='primary'?'primary':''}"><div class="backup-row-copy"><strong>${esc(location.kind==='primary'?'Cloud':location.name)}</strong>${destinationStatus(location)?`<small>${esc(destinationStatus(location))}</small>`:''}</div>${controls}</div>`;
+      const controls=`<div class="backup-destination-controls">${representationSelect(location,'image',mode)}${representationSelect(location,'video',mode)}<button class="backup-rely ${relied?'':'off'}" title="Whether this location counts toward protection targets" type="button" data-rely="${esc(location.id)}" data-relied="${relied?'1':'0'}">${relied?'Counts':'Ignored'}</button></div>`;
+      return `<div class="backup-destination-row"><div class="backup-row-copy"><strong>${esc(location.name)}</strong><small>${location.kind==='peer'?'Remote backup':'Connected backup drive'}</small></div>${controls}</div>`;
     }).join('');
   }
 
   function sourceRows() {
     const folders=(model?.state?.folders||[]).filter(folder=>folder.protected!==false&&Number(folder.importId)>0);
-    if(!folders.length)return '<div class="backup-empty">None</div>';
+    if(!folders.length)return '';
     return folders.map(folder=>`<div class="backup-source-row" data-import-id="${Number(folder.importId)}"><div class="backup-row-copy"><strong>${esc(baseName(folder.path)||folder.path)}</strong><small>${esc(folder.path||'')}</small></div><select data-folder-plan>${planOptions(ruleFor(folder.importId))}</select></div>`).join('');
   }
 
@@ -186,26 +204,51 @@ if (storagePane && sourceSection) {
 
   function renderDialog() {
     const box=ensureDialog();
-    const summary=model?.state?.summary;
+    const summary=model?.state?.summary||{};
     const background=model?.state?.config?.background||'low';
+    const total=Number(summary.files)||0;
+    const needs=Number(summary.needsProtection)||0;
+    const levels=PLAN_ORDER.filter(level=>Number(summary.levels?.[level]?.files)>0);
+    const profile=levels.length===1?`${PLANS[levels[0]].name} protection`:levels.length>1?'Mixed protection':'No protected files';
+    const folders=sourceRows();
+    const storageRules=advancedDestinationRows();
     box.innerHTML=`
       <div class="dialog-head"><h3>Backup</h3><button class="icon" data-close>×</button></div>
       <div class="backup-settings">
-        <section class="backup-settings-section"><h4>Protection levels</h4><div class="backup-plan-list">${PLAN_ORDER.map(level=>`<div class="backup-plan-row"><b>${Number(summary?.levels?.[level]?.files||0).toLocaleString()}</b><strong>${esc(PLANS[level].name)}</strong><small>${esc(PLANS[level].short)}</small></div>`).join('')}</div></section>
-        <div class="backup-settings-grid">
-          <div class="backup-settings-column">
-            <section class="backup-settings-section backup-settings-card"><h4>Folders</h4><div class="backup-source-list">${sourceRows()}</div></section>
-            <section class="backup-settings-section backup-settings-card"><h4>Automatic</h4><div class="backup-background"><strong>Background backup</strong><select data-background><option value="low">Low impact</option><option value="normal">Normal</option><option value="paused">Off</option></select></div></section>
+        <div class="backup-dialog-summary ${needs?'needs':''}"><i></i><div><strong>${needs?`${needs.toLocaleString()} files need backup`:total?'Your files are protected':'Nothing to protect yet'}</strong><span>${total?`${total.toLocaleString()} files · ${profile}`:'Add files and Mochimono will protect them automatically.'}</span></div></div>
+
+        <section class="backup-simple-section"><h4>Backup locations</h4><div class="backup-location-list">${simpleDestinationRows()}</div></section>
+
+        <section class="backup-simple-section"><h4>Automatic backup</h4><div class="backup-auto-row"><div><strong>Background backup</strong><small>Mochimono keeps your copies up to date automatically.</small></div><select data-background><option value="low">Low impact</option><option value="normal">Normal</option><option value="paused">Off</option></select></div></section>
+
+        <details class="backup-advanced">
+          <summary>Advanced settings</summary>
+          <div class="backup-advanced-body">
+            <section class="backup-advanced-section"><h4>Protection policy</h4><div class="backup-plan-list">${PLAN_ORDER.map(level=>`<div class="backup-plan-row"><b>${Number(summary.levels?.[level]?.files||0).toLocaleString()}</b><strong>${esc(PLANS[level].name)}</strong><small>${esc(PLANS[level].short)}</small></div>`).join('')}</div></section>
+            ${folders?`<section class="backup-advanced-section"><h4>Folder overrides</h4><div class="backup-source-list">${folders}</div></section>`:''}
+            ${storageRules?`<section class="backup-advanced-section"><h4>Storage rules</h4><div class="backup-destination-list">${storageRules}</div></section>`:''}
           </div>
-          <section class="backup-settings-section backup-settings-card"><h4>Storage</h4><div class="backup-destination-list">${destinationRows()}</div></section>
-        </div>
+        </details>
       </div>`;
     box.querySelector('[data-background]').value=background;
     box.querySelector('[data-close]').onclick=()=>box.close();
     box.querySelectorAll('[data-folder-plan]').forEach(select=>select.addEventListener('change',updateFolderPlan));
     box.querySelectorAll('[data-rely]').forEach(button=>button.addEventListener('click',toggleReliance));
     box.querySelectorAll('[data-representation]').forEach(select=>select.addEventListener('change',updateRepresentation));
+    box.querySelectorAll('[data-forget-backup]').forEach(button=>button.addEventListener('click',forgetBackup));
     box.querySelector('[data-background]').addEventListener('change',updateBackground);
+  }
+
+  async function forgetBackup(event) {
+    const button=event.currentTarget,id=button.dataset.forgetBackup,name=button.dataset.name||'this backup drive';
+    if(!confirm(`Forget ${name}? Mochimono will stop counting copies on this drive. Files on the drive are not erased.`))return;
+    button.disabled=true;
+    try{
+      await control('/api/client/protection/backup/forget',{method:'POST',body:{id}});
+      model.storageLoaded=false;
+      await refresh(true);
+      toast('Backup forgotten');
+    }catch(error){toast(error.message);button.disabled=false;}
   }
 
   async function updateFolderPlan(event) {
