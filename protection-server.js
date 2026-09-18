@@ -467,9 +467,21 @@ function protectionSnapshot(force = false) {
 
   const unlinked=objects.filter(object=>!currentHashes.has(object.hash)&&!remoteOnly.has(object.hash));
   const remote=objects.filter(object=>remoteOnly.has(object.hash)&&!currentHashes.has(object.hash));
+  for(const object of remote){
+    const size=Number(object.size)||0;
+    const state=states.get(object.hash);
+    const level=state?.level||'normal';
+    const bucket=levels[level]||levels.normal;
+    bucket.files++;bucket.bytes+=size;totalBytes+=size;storedFiles++;
+    if(state?.meets){
+      protectedFiles++;protectedBytes+=size;bucket.protectedFiles++;
+    }else{
+      needsProtection++;needsBytes+=size;bucket.needsProtection++;
+    }
+  }
   const trash=Number(db.prepare('SELECT COUNT(*) AS count FROM protection_trash').get().count)||0;
   const summary={
-    files:desired.size,bytes:totalBytes,storedFiles,protectedFiles,protectedBytes,
+    files:desired.size+remote.length,currentFiles:desired.size,bytes:totalBytes,storedFiles,protectedFiles,protectedBytes,
     needsProtection,needsBytes,pendingFiles,preparingFiles,
     unlinkedFiles:unlinked.length,unlinkedBytes:unlinked.reduce((sum,row)=>sum+(Number(row.size)||0),0),
     remoteOnlyFiles:remote.length,remoteOnlyBytes:remote.reduce((sum,row)=>sum+(Number(row.size)||0),0),
@@ -851,7 +863,7 @@ export async function handleProtectionServer(req, res, url) {
     for (const object of candidates) {
       inspected = object.hash;
       const state = protectionState(object.hash);
-      if (state && !state.meets && improvesWithTarget(state, target)) objects.push({ ...object, level: state.level });
+      if (state && state.lifecycle !== 'unlinked' && !state.meets && improvesWithTarget(state, target)) objects.push({ ...object, level: state.level });
       if (objects.length >= limit) { exhausted = false; break; }
     }
     const nextAfter = !candidates.length ? null : exhausted ? (candidates.length === scan ? candidates.at(-1).hash : null) : inspected;
