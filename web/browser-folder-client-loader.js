@@ -82,7 +82,4 @@ if (document.documentElement.classList.contains('client-library')) {
   addEventListener('beforeunload', () => clearTimeout(retryTimer), { once:true });
 
   await ingestParentCatalog();
-
-  await import('./browser-folder-drop.js')
-    .catch(error => console.warn('Browser folder drop unavailable', error));
 }
