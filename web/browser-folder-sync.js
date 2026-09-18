@@ -262,6 +262,7 @@ let previewQueuePromise=null;
 function queueSourcePreviews(rows) {
   const records=(rows||[])
     .filter(row=>/^[a-f0-9]{64}$/.test(String(row.hash||''))&&mediaFile(null,row.path))
+    .sort((a,b)=>Number(b.lastModified||0)-Number(a.lastModified||0))
     .slice(0,12)
     .map(row=>({
       hash:String(row.hash),
@@ -658,21 +659,31 @@ async function syncSource(id, { userGesture = false } = {}) {
     await flushSeen();
     const finished = await request(`/api/client/import/finish?session=${encodeURIComponent(started.session)}`, { method:'POST' });
     await replaceManifest(source.id, next);
-    source.lastSynced = new Date().toISOString();
-    source.lastError = '';
-    await saveSource(source);
-    await publishSource(source, next);
-    if(!source.cloud)queueSourcePreviews(next);
-    if (source.cloud) {
-      await publishProtectionIntents();
-      window.mochimonoLibrary?.refresh?.().catch?.(() => {});
+    const latest=await sourceById(source.id);
+    if(!latest){
+      await replaceManifest(source.id,[]);
+      emitSync({ id:source.id, name:source.name, state:'done', phase:'removed', scanned, transferred, skipped });
+      return { scanned, transferred, skipped, removed:Number(finished.removed) || 0, importId:source.importId, cloud:source.cloud };
     }
-    emitSync({ id:source.id, name:source.name, state:'done', phase:'indexed', scanned, transferred, skipped, removed:Number(finished.removed) || 0 });
+    latest.importId=source.importId;
+    latest.lastSynced=new Date().toISOString();
+    latest.lastError='';
+    await saveSource(latest);
+    await publishSource(latest,next);
+    if(!source.cloud)queueSourcePreviews(next);
+    if(source.cloud){
+      await publishProtectionIntents();
+      window.mochimonoLibrary?.refresh?.().catch?.(()=>{});
+    }
+    emitSync({ id:source.id, name:latest.name, state:'done', phase:'indexed', scanned, transferred, skipped, removed:Number(finished.removed) || 0 });
     return { scanned, transferred, skipped, removed:Number(finished.removed) || 0, importId:source.importId, cloud:source.cloud };
   } catch (error) {
-    source.lastError = error.message || String(error);
-    await saveSource(source).catch(() => {});
-    emitSync({ id:source.id, name:source.name, state:'error', error:source.lastError });
+    const latest=await sourceById(source.id).catch(()=>null);
+    if(latest){
+      latest.lastError=error.message||String(error);
+      await saveSource(latest).catch(()=>{});
+    }
+    emitSync({ id:source.id, name:latest?.name||source.name, state:'error', error:error.message||String(error) });
     throw error;
   } finally {
     activeSync = null;
