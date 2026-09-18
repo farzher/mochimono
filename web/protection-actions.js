@@ -83,7 +83,7 @@ function missingLabel(state) {
 
 function copyDescription(copy) {
   const parts = [
-    copy.kind === 'peer' ? 'Encrypted remote' : copy.kind === 'primary' ? 'Cloud' : copy.kind === 'source' ? 'Local source' : 'Backup',
+    copy.kind === 'peer' ? 'Encrypted remote' : copy.kind === 'primary' ? 'Mochimono storage' : copy.kind === 'source' ? 'Local source' : 'Backup',
     copy.representation === 'compact' ? 'Squished recovery' : 'Original'
   ];
   if (copy.site && copy.site !== copy.name) parts.push(copy.site);
@@ -99,20 +99,35 @@ function copyDescription(copy) {
 }
 
 function sectionHtml(state, hash) {
+  const lifecycle=String(state?.lifecycle||'current');
+  const pending=state?.protectionState==='pending'||state?.protectionState==='preparing';
+  const unlinked=lifecycle==='unlinked';
+  const remoteOnly=lifecycle==='remote-only';
   const selected = state.overrideLevel || 'inherit';
   const options = LEVELS.map(([value,label]) => {
-    const suffix = value === 'inherit' ? ` (${state.level})` : ` · ${LEVEL_HINTS[value] || ''}`;
+    const suffix = value === 'inherit' ? ` (${state.level||'normal'})` : ` · ${LEVEL_HINTS[value] || ''}`;
     return `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}${suffix}</option>`;
   }).join('');
   const copyCards = (state.copies || []).map(copy => `<div class="protection-copy-row">
     <span>${esc(copy.name || copy.deviceName || copy.kind)}</span>
     <small>${esc(copyDescription(copy))}</small>
   </div>`).join('');
+  const badge=unlinked?'Needs review':remoteOnly?'Remote only':pending?'Backing up':state.meets?'Protected':'Needs backup';
+  const badgeClass=unlinked||pending||(!remoteOnly&&!state.meets)?'warn':'good';
+
+  if(unlinked)return `<section class="viewer-info-section protection-detail" data-protection-section data-hash="${hash}">
+    <div class="viewer-section-head"><h3>Backup</h3><span class="protection-state warn">Needs review</span></div>
+    <div class="protection-detail-summary"><strong>No current source</strong><span>This file is still stored by Mochimono. Keep it as remote only or delete it normally.</span></div>
+    <div class="protection-copy-list">${copyCards || '<div class="viewer-info-empty">No known copy location.</div>'}</div>
+    <div class="protection-review-actions"><button type="button" data-keep-remote>Keep remote only</button></div>
+    <div class="protection-action-status" data-protection-status></div>
+  </section>`;
+
   return `<section class="viewer-info-section protection-detail" data-protection-section data-hash="${hash}">
-    <div class="viewer-section-head"><h3>Protection</h3><span class="protection-state ${state.meets ? 'good' : 'warn'}">${state.meets ? 'Protected' : 'Needs protection'}</span></div>
-    <div class="protection-detail-summary"><strong>${esc(protectionLabel(state))}</strong><span>${esc(missingLabel(state))}</span></div>
-    <label class="protection-level-field"><span>Protection</span><select data-file-protection>${options}</select></label>
-    <div class="protection-copy-list">${copyCards || '<div class="viewer-info-empty">No known copies.</div>'}</div>
+    <div class="viewer-section-head"><h3>Backup</h3><span class="protection-state ${badgeClass}">${badge}</span></div>
+    <div class="protection-detail-summary"><strong>${pending?'Waiting for Mochimono storage':esc(protectionLabel(state))}</strong><span>${remoteOnly?'No local source · '+missingLabel(state):pending?'Mochimono is preparing or uploading this file.':esc(missingLabel(state))}</span></div>
+    ${pending?'':`<label class="protection-level-field"><span>Protection</span><select data-file-protection>${options}</select></label>`}
+    <div class="protection-copy-list">${copyCards || '<div class="viewer-info-empty">No known copies yet.</div>'}</div>
     <div class="protection-action-status" data-protection-status></div>
   </section>`;
 }
@@ -130,7 +145,15 @@ async function decorateDetails() {
     const details = [...panel.querySelectorAll(':scope > .viewer-info-section')].find(section => section.querySelector('h3')?.textContent.trim() === 'Details');
     details?.insertAdjacentHTML('beforebegin', sectionHtml(state, hash));
     if (!details) panel.insertAdjacentHTML('beforeend', sectionHtml(state, hash));
-  } catch {}
+  } catch {
+    const file=window.mochimonoLibrary?.file?.(hash);
+    if(mine===generation&&hash===currentHash()&&!panel.hidden&&file?.backupIntent){
+      const state={ lifecycle:'current',protectionState:file.protectionState||'pending',level:file.protectionLevel||'normal',meets:false,copies:[],status:{},missing:{} };
+      const details=[...panel.querySelectorAll(':scope > .viewer-info-section')].find(section=>section.querySelector('h3')?.textContent.trim()==='Details');
+      details?.insertAdjacentHTML('beforebegin',sectionHtml(state,hash));
+      if(!details)panel.insertAdjacentHTML('beforeend',sectionHtml(state,hash));
+    }
+  }
   finally { decorating = false; }
 }
 
@@ -181,6 +204,29 @@ function interceptDelete(event) {
   const hashes = viewerDelete ? [currentHash()] : selectedHashes();
   trash(hashes, target.id === 'delete-ignore' || target.id === 'selectionIgnore', viewerDelete ? 'viewer' : 'selection');
 }
+
+async function keepRemote(button) {
+  const section=button.closest('[data-protection-section]');
+  const hash=section?.dataset.hash;
+  if(!hash)return;
+  button.disabled=true;
+  const status=section.querySelector('[data-protection-status]');
+  try{
+    await jsonRequest('/api/protection/lifecycle',{method:'POST',body:JSON.stringify({hashes:[hash],mode:'remote-only'})});
+    const state=await enrichManagedCopies(await jsonRequest(`/api/protection/objects/${hash}`),hash);
+    section.outerHTML=sectionHtml(state,hash);
+    await window.mochimonoLibrary?.refresh?.();
+    window.dispatchEvent(new CustomEvent('mochimono:protection-changed',{detail:{hash,state}}));
+  }catch(error){
+    button.disabled=false;
+    if(status)status.textContent=error.message;
+  }
+}
+
+panel?.addEventListener('click',event=>{
+  const button=event.target.closest('[data-keep-remote]');
+  if(button)keepRemote(button);
+});
 
 panel?.addEventListener('change', event => {
   const select = event.target.closest('[data-file-protection]');
