@@ -165,7 +165,12 @@ if (storagePane && sourceSection && backupSection) {
       details.push(row('Path', location.path || ''), row('Contains', 'Thumbnails · local metadata'), row('Status', location.online ? 'Online' : 'Offline'));
     } else if (location.type === 'backup') {
       const backup = location.backup || {};
-      details.push(row('Path', backup.path || location.path), row('Updated', backup.meta?.lastBackupAt ? age(backup.meta.lastBackupAt) : 'Never'), row('Verified', backup.meta?.lastVerifiedAt ? age(backup.meta.lastVerifiedAt) : 'Never'));
+      details.push(
+        row('Path', backup.path || location.path),
+        row('Limit', Number(backup.meta?.quotaBytes) ? bytes(backup.meta.quotaBytes) : 'Available space'),
+        row('Updated', backup.meta?.lastBackupAt ? age(backup.meta.lastBackupAt) : 'Never'),
+        row('Verified', backup.meta?.lastVerifiedAt ? age(backup.meta.lastVerifiedAt) : 'Never')
+      );
       const hasFiles = Number(backup.local?.count || 0) > 0;
       actions = `<button class="primary" data-action="backup-verify" ${hasFiles && location.online ? '' : 'disabled'}>Verify</button><button class="secondary" data-action="backup-restore" ${hasFiles ? '' : 'disabled'}>Restore</button><button class="secondary" data-action="backup-edit">Edit</button>`;
     } else if (location.type === 'friend') {
@@ -279,7 +284,8 @@ if (storagePane && sourceSection && backupSection) {
   async function refresh() {
     clearTimeout(timer);
     timer = 0;
-    if (busy || storagePane.hidden || document.hidden) return;
+    if (busy) return schedule(120);
+    if (storagePane.hidden || document.hidden) return;
     busy = true;
     let active = false;
     try {
