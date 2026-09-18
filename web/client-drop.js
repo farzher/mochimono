@@ -10,7 +10,7 @@ if (location.pathname.startsWith('/files')) {
 
   const target = document.createElement('div');
   target.className = 'client-drop-target';
-  target.innerHTML = '<div><strong>Add to Mochimono</strong><span>Files and folders are added once</span></div>';
+  target.innerHTML = '<div><strong>Drop into Mochimono</strong><span>Folders stay local · files add once</span></div>';
   document.body.append(target);
 
   const result = document.createElement('div');
@@ -28,56 +28,75 @@ if (location.pathname.startsWith('/files')) {
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const normalizePath = value => String(value || '').replaceAll('\\', '/').replace(/^\/+/, '');
 
-  async function entryFiles(entry, prefix = '') {
-    if (entry.isFile) {
-      const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
-      return [{ file, path: normalizePath(prefix ? `${prefix}/${file.name}` : file.name) }];
-    }
-    if (!entry.isDirectory) return [];
-    const reader = entry.createReader();
-    const children = [];
-    while (true) {
-      const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
-      if (!batch.length) break;
-      children.push(...batch);
-    }
-    const root = prefix ? `${prefix}/${entry.name}` : entry.name;
-    return (await Promise.all(children.map(child => entryFiles(child, root)))).flat();
-  }
-
-  async function handleFiles(handle, prefix = '') {
-    if (handle.kind === 'file') {
-      const file = await handle.getFile();
-      return [{ file, path: normalizePath(prefix ? `${prefix}/${file.name}` : file.name) }];
-    }
-    if (handle.kind !== 'directory') return [];
-    const root = prefix ? `${prefix}/${handle.name}` : handle.name;
+  async function droppedItems(dataTransfer) {
+    const folders = [];
     const files = [];
-    for await (const child of handle.values()) files.push(...await handleFiles(child, root));
-    return files;
-  }
-
-  async function droppedFiles(dataTransfer) {
+    let unsupportedFolder = false;
     const items = [...(dataTransfer.items || [])].filter(item => item.kind === 'file');
-    const gathered = [];
+
     for (const item of items) {
-      try {
-        if (item.getAsFileSystemHandle) {
+      let handled = false;
+      if (item.getAsFileSystemHandle) {
+        try {
           const handle = await item.getAsFileSystemHandle();
-          if (handle) { gathered.push(...await handleFiles(handle)); continue; }
-        }
-      } catch {}
+          if (handle?.kind === 'directory') folders.push(handle);
+          else if (handle?.kind === 'file') {
+            const file = await handle.getFile();
+            files.push({ file, path:file.name });
+          }
+          if (handle) handled = true;
+        } catch {}
+      }
+      if (handled) continue;
+
       try {
         const entry = item.webkitGetAsEntry?.();
-        if (entry) { gathered.push(...await entryFiles(entry)); continue; }
+        if (entry?.isDirectory) {
+          unsupportedFolder = true;
+          continue;
+        }
       } catch {}
       const file = item.getAsFile?.();
-      if (file) gathered.push({ file, path: file.webkitRelativePath || file.name });
+      if (file) files.push({ file, path:file.webkitRelativePath || file.name });
     }
-    if (!gathered.length) for (const file of dataTransfer.files || []) gathered.push({ file, path: file.webkitRelativePath || file.name });
+
+    if (!items.length) {
+      for (const file of dataTransfer.files || []) files.push({ file, path:file.webkitRelativePath || file.name });
+    }
+
     const unique = new Map();
-    for (const item of gathered) unique.set(`${normalizePath(item.path)}\0${item.file.size}\0${item.file.lastModified}`, item);
-    return [...unique.values()];
+    for (const item of files) unique.set(`${normalizePath(item.path)}\0${item.file.size}\0${item.file.lastModified}`, item);
+    return { folders, files:[...unique.values()], unsupportedFolder };
+  }
+
+  async function browserFoldersApi() {
+    if (window.mochimonoBrowserFolders?.addHandles) return window.mochimonoBrowserFolders;
+    try {
+      const parentApi = await window.parent?.mochimonoBrowserFolderShell?.activate?.();
+      if (parentApi?.addHandles) return parentApi;
+    } catch {}
+    for (let attempt = 0; attempt < 80; attempt++) {
+      if (window.mochimonoBrowserFolders?.addHandles) return window.mochimonoBrowserFolders;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    throw new Error('Local folder support is still loading.');
+  }
+
+  async function addDroppedFolders(handles) {
+    if (!handles.length) return;
+    result.hidden = false;
+    result.querySelector('[data-import-title]').textContent = handles.length === 1 ? 'Adding local folder' : 'Adding local folders';
+    result.querySelector('[data-import-bar]').style.width = '34%';
+    result.querySelector('[data-import-meta]').textContent = handles.map(handle => handle.name).join(' · ');
+    result.querySelector('[data-import-note]').textContent = 'Local · Media · not uploaded';
+    result.querySelector('[data-import-dupes]').replaceChildren();
+
+    const api = await browserFoldersApi();
+    const added = await api.addHandles(handles, 'media', { sync:true });
+    result.querySelector('[data-import-title]').textContent = added.length === 1 ? 'Local folder added' : `${added.length.toLocaleString()} local folders added`;
+    result.querySelector('[data-import-bar]').style.width = '100%';
+    result.querySelector('[data-import-meta]').textContent = added.map(source => source.name).join(' · ');
+    result.querySelector('[data-import-note]').textContent = 'Manage backup and file scope from Sources.';
   }
 
   async function request(path, options = {}) {
@@ -260,9 +279,12 @@ if (location.pathname.startsWith('/files')) {
     dragDepth = 0;
     target.classList.remove('show');
     try {
-      const files = await droppedFiles(event.dataTransfer);
-      if (!files.length) return;
-      await importDropped(files);
+      const dropped = await droppedItems(event.dataTransfer);
+      if (dropped.unsupportedFolder && !dropped.folders.length) {
+        throw new Error('This browser cannot keep a dropped folder local. Add it from Sources instead.');
+      }
+      if (dropped.folders.length) await addDroppedFolders(dropped.folders);
+      if (dropped.files.length) await importDropped(dropped.files);
     } catch (error) {
       flushLive();
       result.hidden = false;

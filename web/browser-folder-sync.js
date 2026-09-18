@@ -112,6 +112,56 @@ async function request(path, options = {}) {
   return data;
 }
 
+const BROWSER_PROTECTION_ID = 'mochimono:browser-protection-id';
+
+function browserProtectionDevice() {
+  let id = localStorage.getItem(BROWSER_PROTECTION_ID);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(BROWSER_PROTECTION_ID, id);
+  }
+  return `Browser:${id}`;
+}
+
+async function publishProtectionIntents() {
+  const scanId = crypto.randomUUID();
+  const device = browserProtectionDevice();
+  const sources = (await sourceList()).filter(source => source.cloud === true);
+  let batch = [];
+
+  const flush = async () => {
+    if (!batch.length) return;
+    const entries = batch;
+    batch = [];
+    await request(`/api/protection/intents/${encodeURIComponent(device)}`, {
+      method:'POST',
+      headers:{ 'content-type':'application/json' },
+      body:JSON.stringify({ scanId, entries })
+    });
+  };
+
+  for (const source of sources) {
+    for (const row of (await manifestFor(source.id)).values()) {
+      const hash = String(row.hash || '');
+      if (!/^[a-f0-9]{64}$/.test(hash)) continue;
+      batch.push({
+        rootPath:source.rootPath || source.name,
+        path:String(row.path || ''),
+        hash,
+        size:Number(row.size) || 0,
+        importId:Number(source.importId) || 0
+      });
+      if (batch.length >= 500) await flush();
+    }
+  }
+  await flush();
+  await request(`/api/protection/intents/${encodeURIComponent(device)}`, {
+    method:'POST',
+    headers:{ 'content-type':'application/json' },
+    body:JSON.stringify({ scanId, entries:[], final:true })
+  });
+}
+
 async function sourceList() {
   const db = await openDb();
   try {
@@ -543,7 +593,10 @@ async function syncSource(id, { userGesture = false } = {}) {
     source.lastError = '';
     await saveSource(source);
     await publishSource(source, next);
-    if (source.cloud) window.mochimonoLibrary?.refresh?.().catch?.(() => {});
+    if (source.cloud) {
+      await publishProtectionIntents();
+      window.mochimonoLibrary?.refresh?.().catch?.(() => {});
+    }
     dispatchEvent(new CustomEvent('mochimono:browser-folder-sync', { detail:{
       id:source.id, state:'done', scanned, transferred, skipped, removed:Number(finished.removed) || 0
     } }));
@@ -593,6 +646,7 @@ async function setCloud(id, enabled) {
   source.cloud = enabled === true;
   await saveSource(source);
   await publishSource(source);
+  await publishProtectionIntents();
   return source;
 }
 
@@ -601,6 +655,7 @@ async function removeSource(id) {
   if (!source) return false;
   await transaction([SOURCES], 'readwrite', ({ sources }) => sources.delete(String(id)));
   await replaceManifest(String(id), []);
+  if (source.cloud) await publishProtectionIntents();
   dispatchEvent(new CustomEvent('mochimono:browser-folders-changed'));
   window.mochimonoLibrary?.refresh?.().catch?.(() => {});
   return true;

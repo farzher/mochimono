@@ -11,14 +11,15 @@ Everything else is outside the normal protection denominator.
 
 ## Adding files
 
-Library drag-and-drop is deliberately simple:
+Drag-and-drop has two predictable meanings:
 
-- dropping files or folders into Library is always a **one-time add** of the dropped contents;
-- the original local files are not watched after the add;
-- successfully added files are intentional **Remote only** files unless they also belong to a current protected Source;
-- ongoing folders are added and managed only from **Storage → Sources**.
+- dropping a **folder** into Library or Sources adds it as a persistent **Local** Source;
+- dropped folders default to **Media** scope and are indexed locally without uploading their contents;
+- the same Source card can later enable backup or switch to All files;
+- dropping **loose files** into Library is a one-time managed add;
+- successfully added loose files are intentional **Remote only** files unless they also belong to a current protected Source.
 
-This keeps drag-and-drop predictable and keeps Sources reserved for persistent watched locations instead of mixing them with one-time imports.
+Sources therefore means folders Mochimono can continue reading from, whether they are Local-only or backed up. One-time loose files stay in Library rather than becoming fake Sources.
 
 ## File lifecycle
 
