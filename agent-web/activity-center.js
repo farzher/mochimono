@@ -184,19 +184,28 @@ if (host) {
       const name=baseName(folder.path)||folder.path||'Folder';
       const total=Number(folder.previewTotal)||0;
       const checking=String(folder.previewPhase||'generating')==='checking';
+      const backpressured=checking&&Boolean(folder.previewBackpressured);
       const ready=Math.min(total||Infinity,(Number(folder.previewReady)||0)+(Number(folder.previewGenerated)||0));
-      const done=checking?(Number(folder.previewProcessed)||0):ready;
+      const checked=Number(folder.previewProcessed)||0;
+      const done=checking?checked:ready;
       const activeCount=Number(folder.previewQueueActive)||0;
+      const queuedCount=Number(folder.previewQueueBackground)||0;
+      const generated=Number(folder.previewGenerated)||0;
       const waiting=Boolean(folder.previewWaiting);
+      const driveBlocked=Boolean(folder.previewDriveBlocked);
+      const generating=backpressured&&(activeCount||queuedCount);
       const detail=[];
       if(total)detail.push(`${Math.min(done,total).toLocaleString()} / ${total.toLocaleString()} ${checking?'checked':'ready'}`);
       else if(done)detail.push(`${done.toLocaleString()} ${checking?'checked':'ready'}`);
+      if(generated)detail.push(`${generated.toLocaleString()} generated`);
       if(activeCount)detail.push(`${activeCount} generating`);
-      if(folder.previewQueueBackground)detail.push(`${Number(folder.previewQueueBackground).toLocaleString()} queued`);
+      if(queuedCount)detail.push(`${queuedCount.toLocaleString()} queued`);
       if(folder.previewFailed)detail.push(`${Number(folder.previewFailed).toLocaleString()} failed`);
       if(waiting)detail.push('Waiting until your PC is idle');
-      const phase=checking?'Checking thumbnails':waiting?'Waiting until your PC is idle':'Generating thumbnails';
-      const item={id:`thumbs:${String(folder.path||'').toLowerCase()}`,source:'preview',kind:'Thumbnail',type:'thumbnail',title:name,label:`Thumbnails ${name}`,path:folder.path,status:activeCount?'running':'queued',cancelable:false,detail:detail.join(' · '),percent:total?done/total*100:null,phase,progress:{path:folder.path,phase,checked:done,total,indeterminate:!total}};
+      if(driveBlocked)detail.push('Waiting for this drive');
+      const phase=waiting?'Waiting until your PC is idle':driveBlocked?'Waiting for this drive':generating?'Generating thumbnails':checking?'Checking thumbnails':'Generating thumbnails';
+      const indeterminate=Boolean(generating||driveBlocked||!total);
+      const item={id:`thumbs:${String(folder.path||'').toLowerCase()}`,source:'preview',kind:'Thumbnail',type:'thumbnail',title:name,label:`Thumbnails ${name}`,path:folder.path,status:activeCount?'running':'queued',cancelable:false,detail:detail.join(' · '),percent:indeterminate?null:total?done/total*100:null,phase,progress:{path:folder.path,phase,checked:done,total,indeterminate}};
       (activeCount?active:queued).push(item);
     }
 
