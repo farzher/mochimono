@@ -429,7 +429,6 @@ function protectionSnapshot(force = false) {
   }
 
   let protectedFiles=0,protectedBytes=0,needsProtection=0,needsBytes=0,pendingFiles=0,preparingFiles=0,storedFiles=0,totalBytes=0;
-  const importSeen=new Map();
   for(const item of desired.values()){
     const size=Math.max(0,Number(item.size)||0);
     const bucket=levels[item.level]||levels.normal;
@@ -448,21 +447,23 @@ function protectionSnapshot(force = false) {
     if(state==='protected'){protectedFiles++;protectedBytes+=size;bucket.protectedFiles++;}
     else if(state!=='preparing'){needsProtection++;needsBytes+=size;bucket.needsProtection++;}
 
-    const importId=Number(item.importId)||0;
-    const importKey=`${importId}\0${item.hash||item.rootPath+'\0'+item.relativePath}`;
-    if(!importSeen.has(importKey)){
-      importSeen.set(importKey,true);
-      const group=imports.get(importId);
-      if(group){
-        group.files++;
-        if(state==='protected')group.protectedFiles++;
-        else if(state==='preparing')group.preparingFiles++;
-        else{
-          group.needsProtection++;
-          if(state==='pending')group.pendingFiles++;
-        }
-      }
-    }
+  }
+
+  const importSeen=new Set();
+  for(const intent of intents){
+    const importId=Number(intent.importId)||0;
+    const hash=validHash(intent.hash)?intent.hash:'';
+    const key=`${importId}\0${hash||intent.deviceName+'\0'+intent.rootPath+'\0'+intent.relativePath}`;
+    if(importSeen.has(key))continue;
+    importSeen.add(key);
+    const group=imports.get(importId);
+    if(!group)continue;
+    group.files++;
+    if(!hash){group.preparingFiles++;continue;}
+    const object=objectByHash.get(hash);
+    if(!object){group.needsProtection++;group.pendingFiles++;continue;}
+    if(states.get(hash)?.meets)group.protectedFiles++;
+    else group.needsProtection++;
   }
 
   const unlinked=objects.filter(object=>!currentHashes.has(object.hash)&&!remoteOnly.has(object.hash));
