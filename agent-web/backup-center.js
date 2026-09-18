@@ -269,13 +269,20 @@ if (storagePane && sourceSection) {
 
   function viewProtection(mode) {
     if(dialog?.open)dialog.close();
-    document.querySelector('[data-client-tab="library"]')?.click();
+    const shell=window.mochimonoNavigationShell;
+    if(shell?.open)shell.open({});
+    else if(!document.querySelector('#storagePane')?.hidden)document.querySelector('[data-client-tab="storage"]')?.click();
     const open=attempt=>{
-      const library=document.querySelector('#filesFrame')?.contentWindow?.mochimonoLibrary;
-      if(library?.showProtection)return library.showProtection(mode);
-      if(attempt<20)setTimeout(()=>open(attempt+1),50);
+      const child=document.querySelector('#filesFrame')?.contentWindow;
+      const library=child?.mochimonoLibrary;
+      if(library?.showProtection){
+        library.showProtection(mode);
+        child.focus();
+        return;
+      }
+      if(attempt<40)setTimeout(()=>open(attempt+1),50);
     };
-    open(0);
+    requestAnimationFrame(()=>open(0));
   }
 
   async function forgetBackup(event) {
