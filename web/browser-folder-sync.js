@@ -236,12 +236,12 @@ function emitSync(detail) {
   dispatchEvent(new CustomEvent('mochimono:browser-folder-sync', { detail }));
 }
 
-function queueSourceSync(id) {
+function queueSourceSync(id,name='') {
   id=String(id||'');
   if(!id||pendingSyncs.has(id))return;
   pendingSyncs.add(id);
   if(activeSync===id)return;
-  emitSync({ id, state:'queued' });
+  emitSync({ id, name:String(name||''), state:'queued' });
   clearTimeout(syncPumpTimer);
   syncPumpTimer=setTimeout(pumpSourceSyncs,0);
 }
@@ -330,7 +330,7 @@ async function addHandles(handles, scope = 'media', { sync = true } = {}) {
     }
     added.push(source);
   }
-  if(sync)for(const source of added)if(source.lastError!=='Permission required')queueSourceSync(source.id);
+  if(sync)for(const source of added)if(source.lastError!=='Permission required')queueSourceSync(source.id,source.name);
   return added;
 }
 
@@ -571,7 +571,7 @@ async function syncSource(id, { userGesture = false } = {}) {
     const now=performance.now();
     if(!force&&now-lastProgressAt<120)return;
     lastProgressAt=now;
-    emitSync({ id:source.id, state:'running', phase:'indexing', ...detail });
+    emitSync({ id:source.id, name:source.name, state:'running', phase:'indexing', ...detail });
   };
   progress({},true);
   try {
@@ -667,12 +667,12 @@ async function syncSource(id, { userGesture = false } = {}) {
       await publishProtectionIntents();
       window.mochimonoLibrary?.refresh?.().catch?.(() => {});
     }
-    emitSync({ id:source.id, state:'done', phase:'indexed', scanned, transferred, skipped, removed:Number(finished.removed) || 0 });
+    emitSync({ id:source.id, name:source.name, state:'done', phase:'indexed', scanned, transferred, skipped, removed:Number(finished.removed) || 0 });
     return { scanned, transferred, skipped, removed:Number(finished.removed) || 0, importId:source.importId, cloud:source.cloud };
   } catch (error) {
     source.lastError = error.message || String(error);
     await saveSource(source).catch(() => {});
-    emitSync({ id:source.id, state:'error', error:source.lastError });
+    emitSync({ id:source.id, name:source.name, state:'error', error:source.lastError });
     throw error;
   } finally {
     activeSync = null;
@@ -902,7 +902,7 @@ async function autoSync() {
     const last = source.lastSynced ? new Date(source.lastSynced).getTime() : 0;
     if (last && now - last < AUTO_SYNC_MS) continue;
     if (await permission(source.handle, false) !== 'granted') continue;
-    queueSourceSync(source.id);
+    queueSourceSync(source.id,source.name);
   }
 }
 
