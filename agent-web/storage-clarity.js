@@ -2,7 +2,7 @@ const folders = document.querySelector('#folders');
 const storagePane = document.querySelector('#storagePane');
 const toastNode = document.querySelector('#toast');
 const CACHE_STATS_PATH = '@mochimono:cache';
-const CACHE_STATS_TTL = 30_000;
+const CACHE_STATS_TTL = 60_000;
 
 let cacheStats = null;
 let cacheLoadedAt = 0;
