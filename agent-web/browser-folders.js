@@ -2,6 +2,7 @@ import './storage-source-controls.js';
 
 const folders = document.querySelector('#folders');
 const frame = document.querySelector('#filesFrame');
+const sourceSection = folders?.closest('.storage-folders-section');
 
 if (folders) {
   const DB_NAME = 'mochimono-browser-folders';
@@ -18,10 +19,37 @@ if (folders) {
   const liveSyncs = new Map();
 
   const style = document.createElement('style');
-  style.textContent = `.browser-folder-item .storage-meta:empty{display:none!important}`;
+  style.textContent = `
+    .browser-folder-item .storage-meta:empty{display:none!important}
+    .storage-folders-section{position:relative}
+    .storage-folders-section.source-drop-active:after{
+      content:'Drop folder to add locally';position:absolute;inset:-8px;z-index:12;display:grid;place-items:center;
+      border:2px dashed rgba(239,160,154,.55);border-radius:18px;background:rgba(13,12,14,.9);
+      color:#eee5e1;font-size:14px;font-weight:780;pointer-events:none
+    }
+  `;
   document.head.append(style);
 
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[char]));
+  function toast(text) {
+    const node=document.querySelector('#toast');
+    if(!node)return;
+    node.textContent=text;node.classList.add('show');
+    clearTimeout(node.timer);node.timer=setTimeout(()=>node.classList.remove('show'),2600);
+  }
+
+  async function directoryHandles(dataTransfer) {
+    const handles=[];
+    for(const item of dataTransfer?.items||[]){
+      if(item.kind!=='file'||!item.getAsFileSystemHandle)continue;
+      try{
+        const handle=await item.getAsFileSystemHandle();
+        if(handle?.kind==='directory')handles.push(handle);
+      }catch{}
+    }
+    return handles;
+  }
+
   const normalize = source => source ? { ...source, scope:source.scope === 'all' ? 'all' : 'media', cloud:source.cloud === true } : source;
 
   function bytes(number) {
@@ -222,6 +250,32 @@ if (folders) {
     if(writingRows||!lastSources.length)return;
     if(records.some(record=>record.addedNodes.length||record.removedNodes.length)&&!folders.querySelector(':scope > [data-browser-folder]')){renderedKey='';render(lastSources);}
   }).observe(folders,{childList:true});
+
+  let dropDepth=0;
+  sourceSection?.addEventListener('dragenter',event=>{
+    if(![...(event.dataTransfer?.types||[])].includes('Files'))return;
+    dropDepth++;sourceSection.classList.add('source-drop-active');event.preventDefault();
+  });
+  sourceSection?.addEventListener('dragover',event=>{
+    if(![...(event.dataTransfer?.types||[])].includes('Files'))return;
+    event.dataTransfer.dropEffect='copy';sourceSection.classList.add('source-drop-active');event.preventDefault();
+  });
+  sourceSection?.addEventListener('dragleave',()=>{
+    dropDepth=Math.max(0,dropDepth-1);
+    if(!dropDepth)sourceSection.classList.remove('source-drop-active');
+  });
+  sourceSection?.addEventListener('drop',async event=>{
+    if(!event.dataTransfer?.items?.length)return;
+    event.preventDefault();dropDepth=0;sourceSection.classList.remove('source-drop-active');
+    try{
+      const handles=await directoryHandles(event.dataTransfer);
+      if(!handles.length)throw new Error('Drop a folder here.');
+      await (await ensureApi()).addHandles(handles,'media',{sync:true});
+      renderedKey='';schedule(0,true);
+      window.dispatchEvent(new CustomEvent('mochimono:sources-changed'));
+      toast(handles.length===1?`${handles[0].name} added locally`:`${handles.length} folders added locally`);
+    }catch(error){toast(error.message||'Could not add folder');}
+  });
 
   frame?.addEventListener('load',()=>{exposeToFrame();});
   window.mochimonoBrowserFolderShell={setCloud,setScope,sync,refresh:()=>schedule(0,true),activate:ensureApi};
