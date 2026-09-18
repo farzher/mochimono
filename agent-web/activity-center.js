@@ -7,7 +7,7 @@ const frame = document.querySelector('#filesFrame');
 if (host) {
   const RECENT_KEY = 'mochimono.activity.recent';
   const RECENT_OPEN_KEY = 'mochimono.activity.recent.open';
-  const MODE_LABEL = { off:'On demand', idle:'When idle', max:'Always' };
+  const MODE_LABEL = { off:'When viewed', idle:'When idle', max:'Always' };
   let dialog = null;
   let button = null;
   let timer = 0;
@@ -86,12 +86,13 @@ if (host) {
 
   function operation(job){
     const label=String(job?.label||'');
-    if(/^Friend /.test(label))return {kind:'Friend Drive',title:label.replace(/^Friend (update|verify|restore) /,(_,verb)=>`${verb[0].toUpperCase()+verb.slice(1)} ${''}`.trim())};
+    if(/^Friend /.test(label))return {kind:'Friend Drive',title:label.replace(/^Friend (update|verify|restore) /,(_,verb)=>`${verb[0].toUpperCase()+verb.slice(1)} · `)};
     if(job?.type==='sync'){
       const index=/^(Check|Update) /.test(label);
       return {kind:index?'Index':'Sync',title:label.replace(/^(Sync|Check|Update) /,'')};
     }
-    if(job?.type==='backup'||job?.type==='protection')return {kind:'Backup',title:label.replace(/^Update /,'')};
+    if(job?.type==='protection')return {kind:'Backup',title:/^Automatic protection$/i.test(label)?'Protect files':label.replace(/^Update /,'')};
+    if(job?.type==='backup')return {kind:'Backup',title:label.replace(/^Update /,'')};
     if(job?.type==='verify')return {kind:'Verify',title:label.replace(/^Verify /,'')};
     if(job?.type==='restore')return {kind:'Restore',title:label.replace(/^Restore /,'')};
     return {kind:'Work',title:label||job?.type||'Background work'};
