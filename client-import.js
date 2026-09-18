@@ -97,10 +97,24 @@ async function importFile(req, res, url) {
   const mtime = String(url.searchParams.get('mtime') || '') || new Date().toISOString();
   const mime = mimeFor(relative, req.headers['x-mochimono-file-mime']);
 
-  await mkdir(TMP_DIR, { recursive: true });
-  const temp = join(TMP_DIR, `drop-${process.pid}-${Date.now()}-${randomUUID()}`);
   const digest = createHash('sha256');
   let size = 0;
+
+  if (session.localOnly) {
+    for await (const chunk of req) {
+      digest.update(chunk);
+      size += chunk.length;
+    }
+    const hash = digest.digest('hex');
+    session.seen.add(relative);
+    return json(res, 200, {
+      hash, name, path:relative, size, mime, mtime,
+      existing:false, ignored:false, previous:[], localOnly:true
+    });
+  }
+
+  await mkdir(TMP_DIR, { recursive: true });
+  const temp = join(TMP_DIR, `drop-${process.pid}-${Date.now()}-${randomUUID()}`);
   const meter = new Transform({
     transform(chunk, encoding, callback) {
       digest.update(chunk);
@@ -113,13 +127,6 @@ async function importFile(req, res, url) {
     await pipeline(req, meter, createWriteStream(temp, { flags: 'wx' }));
     const hash = digest.digest('hex');
     session.seen.add(relative);
-
-    if (session.localOnly) {
-      return json(res, 200, {
-        hash, name, path:relative, size, mime, mtime,
-        existing:false, ignored:false, previous:[], localOnly:true
-      });
-    }
 
     const checked = await api('/api/objects/check', { method: 'POST', body: { hashes: [hash] } });
     const missing = (checked.missing || []).includes(hash);
