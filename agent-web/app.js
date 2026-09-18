@@ -22,6 +22,7 @@ let backupLocations = [];
 let backupLoading = false;
 let lastBackupRefresh = 0;
 let currentJob = null;
+const folderActivity = new Map();
 let stateTimer = null;
 let statePolling = false;
 
@@ -147,7 +148,10 @@ function folderRow(folder) {
 }
 
 function jobOperation(job) {
-  if (job?.type === 'sync') return /^(?:Check|Update) /.test(String(job.label || '')) ? 'Index' : 'Sync';
+  const label = String(job?.label || '');
+  if (job?.type === 'hash' || job?.kind === 'Hash' || /^Hash\b/i.test(label)) return 'Hash';
+  if (job?.type === 'thumbnail' || job?.kind === 'Thumbnail') return 'Thumbnails';
+  if (job?.type === 'sync') return /^(?:Check|Update) /.test(label) ? 'Index' : 'Sync';
   if (job?.type === 'verify') return 'Verify';
   if (job?.type === 'restore') return 'Restore';
   return '';
@@ -157,12 +161,21 @@ function progressData(job) {
   if (!job || job.status !== 'running') return null;
   const p = job.progress || {};
   const totalBytes = Number(p.totalBytes) || 0;
-  const doneBytes = Math.min(totalBytes, Number(p.doneBytes) || 0);
-  const percent = totalBytes ? Math.max(0, Math.min(100, doneBytes / totalBytes * 100)) : 0;
+  const doneBytes = Math.min(totalBytes, Number(p.doneBytes) || Number(p.copiedBytes) || 0);
+  const total = Number(p.total) || 0;
+  const checked = Math.min(total || Infinity, Number(p.checked ?? p.hashed ?? p.scanned ?? p.processed) || 0);
+  const directPercent = job.percent == null ? null : Math.max(0, Math.min(100, Number(job.percent) || 0));
+  const percent = totalBytes
+    ? Math.max(0, Math.min(100, doneBytes / totalBytes * 100))
+    : total
+      ? Math.max(0, Math.min(100, checked / total * 100))
+      : directPercent;
+  const indeterminate = Boolean(p.indeterminate) || percent == null;
   const meta = [];
   if (totalBytes) meta.push(`${bytes(doneBytes)} / ${bytes(totalBytes)}`);
+  else if (total) meta.push(`${checked.toLocaleString()} / ${total.toLocaleString()} files`);
   else if (p.scanned != null) meta.push(`${Number(p.scanned).toLocaleString()} files`);
-  else if (p.total != null) meta.push(`${Number(p.checked || 0).toLocaleString()} / ${Number(p.total).toLocaleString()}`);
+  else if (job.detail) meta.push(String(job.detail));
   if (p.copied != null) meta.push(`${Number(p.copied).toLocaleString()} copied`);
   if (p.restored != null) meta.push(`${Number(p.restored).toLocaleString()} restored`);
   if (p.repaired) meta.push(`${Number(p.repaired).toLocaleString()} backup repaired`);
@@ -172,13 +185,14 @@ function progressData(job) {
   if (p.bad) meta.push(`${Number(p.bad).toLocaleString()} still damaged`);
   if (p.speedBps > 0) meta.push(`${bytes(p.speedBps)}/s`);
   if (p.etaSeconds > 0) meta.push(`${duration(p.etaSeconds)} left`);
-  const phase = job.cancelRequested ? 'Canceling…' : p.phase || 'Working…';
+  const phase = job.cancelRequested ? 'Canceling…' : p.phase || job.phase || 'Working…';
   const operation = jobOperation(job);
   const title = operation ? `${operation} · ${phase}` : phase;
+  const cancel = job.cancelable === false ? '' : `<button class="action-link" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>Cancel</button>`;
   return {
-    key:JSON.stringify([title, meta, p.current || '', percent, Boolean(p.indeterminate), job.cancelRequested]),
-    html:`<div class="inline-progress-head"><strong>${esc(title)}</strong><button class="action-link" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>Cancel</button></div>
-      <div class="progress-bar ${p.indeterminate || !totalBytes ? 'indeterminate' : ''}"><i style="width:${p.indeterminate || !totalBytes ? '32%' : `${percent}%`}"></i></div>
+    key:JSON.stringify([title, meta, p.current || '', percent, indeterminate, job.cancelRequested, job.cancelable]),
+    html:`<div class="inline-progress-head"><strong>${esc(title)}</strong>${cancel}</div>
+      <div class="progress-bar ${indeterminate ? 'indeterminate' : ''}"><i style="width:${indeterminate ? '32%' : `${Math.max(1, percent)}%`}"></i></div>
       <div class="inline-progress-meta"><span>${esc(meta.join(' · '))}</span><span title="${esc(p.current || '')}">${esc(p.current || '')}</span></div>`
   };
 }
@@ -201,10 +215,10 @@ function renderItemProgress(row, job) {
 }
 
 function folderJob(folder, job) {
-  if (!job || job.type !== 'sync' || job.status !== 'running') return null;
+  if (!job || !['sync','hash'].includes(job.type) || job.status !== 'running') return null;
   if (job.progress?.path && samePath(job.progress.path, folder.path)) return job;
   const name = pathName(folder.path) || folder.path;
-  return [`Sync ${name}`, `Check ${name}`, `Update ${name}`].includes(job.label) ? job : null;
+  return [`Sync ${name}`, `Check ${name}`, `Update ${name}`, `Hash ${name}`].includes(job.label) ? job : null;
 }
 
 function backupJob(location, job) {
@@ -222,7 +236,7 @@ function renderFolders(folders, job) {
     const folder = folders.find(item => samePath(item.path, row.dataset.folderPath));
     if (!folder) continue;
     setRelativeTime(row.querySelector('[data-folder-status]'), folder.lastSynced, folder.protected === false ? 'Not indexed yet' : 'Not synced yet');
-    renderItemProgress(row, folderJob(folder, job));
+    renderItemProgress(row, folderJob(folder, job) || folderActivity.get(String(folder.path || '').replace(/[\\/]+$/, '').toLowerCase()) || null);
   }
 }
 
@@ -237,6 +251,13 @@ async function refreshFolderStats() {
       row.querySelector('[data-folder-size]').textContent = bytes(item.bytes);
       row.querySelector('[data-folder-free]').textContent = `${bytes(item.freeBytes)} free`;
       if (item.protected === false) setRelativeTime(row.querySelector('[data-folder-status]'), item.lastIndexed, 'Not indexed yet');
+      const diagnostics = item.diagnostics || {};
+      const key = String(item.path || '').replace(/[\\/]+$/, '').toLowerCase();
+      const diagnosticJob = diagnostics.running && diagnostics.jobType === 'hash' ? {
+        type:'hash', kind:'Hash', label:`Hash ${pathName(item.path) || item.path}`, status:'running', cancelable:false,
+        progress:{ path:item.path, phase:'Hashing content', hashed:Number(diagnostics.hashProcessed) || 0, total:Number(diagnostics.hashTotal) || 0, indeterminate:!(Number(diagnostics.hashTotal) > 0) }
+      } : null;
+      renderItemProgress(row, diagnosticJob || folderActivity.get(key) || folderJob(item, currentJob));
       const ratio = item.capacityBytes ? Math.min(100, Number(item.bytes) / Number(item.capacityBytes) * 100) : 0;
       const meter = row.querySelector('[data-folder-meter]');
       meter.style.width = item.bytes ? `max(2px, ${ratio}%)` : '0';
@@ -608,6 +629,23 @@ if (storagePane) {
     backups();
   }).observe(storagePane, { attributes:true, attributeFilter:['hidden'] });
 }
+
+window.addEventListener('mochimono:activity-model', event => {
+  folderActivity.clear();
+  const priority = { Thumbnail:1, Sync:2, Index:3, Hash:4 };
+  for (const item of event.detail?.active || []) {
+    const path = String(item?.path || item?.progress?.path || '').replace(/[\\/]+$/, '');
+    const kind = String(item.kind || '');
+    if (!path || !priority[kind]) continue;
+    const key = path.toLowerCase();
+    const previous = folderActivity.get(key);
+    if (!previous || priority[kind] > priority[String(previous.kind || '')]) folderActivity.set(key, item);
+  }
+  for (const row of $('#folders').querySelectorAll('[data-folder-path]')) {
+    const path = String(row.dataset.folderPath || '').replace(/[\\/]+$/, '').toLowerCase();
+    renderItemProgress(row, folderActivity.get(path) || folderJob({ path:row.dataset.folderPath }, currentJob));
+  }
+});
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
