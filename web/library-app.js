@@ -230,7 +230,8 @@ function gridModel() {
       Number(file.width) || 0,
       Number(file.height) || 0,
       timelineMs(file),
-      Number(file.size) || 0
+      Number(file.size) || 0,
+      backupBadgeState(file)
     ])
   };
 }
@@ -268,14 +269,38 @@ function mediaRatio(file) {
   return file.width && file.height ? Math.max(.65, Math.min(2.1, file.width / file.height)) : 4 / 3;
 }
 
+function backupBadgeState(file) {
+  const lifecycle=String(file.lifecycle||'');
+  const state=String(file.protectionState||'');
+  if(lifecycle==='unlinked')return 'unlinked';
+  if(lifecycle==='remote-only')return file.protected===false?'needs-backup':'remote-only';
+  if(['preparing','pending'].includes(state))return 'backing-up';
+  if(state==='protected'||file.protected===true)return 'protected';
+  if(lifecycle==='current'||file.backupIntent===true)return 'needs-backup';
+  return '';
+}
+
+function backupBadgeMarkup(file) {
+  const state=backupBadgeState(file);
+  if(!state)return '';
+  const value={
+    protected:['✓','Protected'],
+    'backing-up':['↻','Backing up'],
+    'needs-backup':['!','Needs backup'],
+    'remote-only':['☁','Remote only'],
+    unlinked:['?','Needs review']
+  }[state];
+  return `<span class="file-backup-badge ${state}" title="${value[1]}" aria-label="${value[1]}">${value[0]}</span>`;
+}
+
 function gridCard(file) {
   const media = ['image','video'].includes(kind(file));
   const ratio = media ? mediaRatio(file) : 0;
-  return `<button class="file-card ${media ? 'media-card' : ''} ${kind(file) === 'video' ? 'video-card' : ''}" data-hash="${file.hash}" data-filename="${escapeHtml(file.filename)}" data-day="${dayKey(file)}" data-day-label="${escapeHtml(dayLabel(file))}"${media ? ` data-width="${file.width || 0}" data-height="${file.height || 0}" style="--ratio:${ratio}"` : ''} title="${escapeHtml(file.filename)}"><div class="thumb ${media ? 'media-thumb' : ''}">${preview(file)}</div>${media ? '' : `<div class="card-copy"><strong>${escapeHtml(file.filename)}</strong><span>${formatBytes(file.size)}</span></div>`}</button>`;
+  return `<button class="file-card ${media ? 'media-card' : ''} ${kind(file) === 'video' ? 'video-card' : ''}" data-hash="${file.hash}" data-filename="${escapeHtml(file.filename)}" data-day="${dayKey(file)}" data-day-label="${escapeHtml(dayLabel(file))}"${media ? ` data-width="${file.width || 0}" data-height="${file.height || 0}" style="--ratio:${ratio}"` : ''} title="${escapeHtml(file.filename)}"><div class="thumb ${media ? 'media-thumb' : ''}">${preview(file)}</div>${backupBadgeMarkup(file)}${media ? '' : `<div class="card-copy"><strong>${escapeHtml(file.filename)}</strong><span>${formatBytes(file.size)}</span></div>`}</button>`;
 }
 
 function listRow(file) {
-  return `<button class="file-row" data-hash="${file.hash}" data-filename="${escapeHtml(file.filename)}" data-day="${dayKey(file)}" data-day-label="${escapeHtml(dayLabel(file))}"><span class="type">${escapeHtml(typeLabel(file))}</span><div class="file-main"><strong>${escapeHtml(file.filename)}</strong><span>${escapeHtml(file.originalPath || '')}</span></div><span class="refs">${escapeHtml(shortDate(file))}</span><span class="size">${formatBytes(file.size)}</span></button>`;
+  return `<button class="file-row" data-hash="${file.hash}" data-filename="${escapeHtml(file.filename)}" data-day="${dayKey(file)}" data-day-label="${escapeHtml(dayLabel(file))}"><span class="type">${escapeHtml(typeLabel(file))}</span><div class="file-main"><strong>${escapeHtml(file.filename)}</strong><span>${escapeHtml(file.originalPath || '')}</span></div>${backupBadgeMarkup(file)}<span class="refs">${escapeHtml(shortDate(file))}</span><span class="size">${formatBytes(file.size)}</span></button>`;
 }
 
 const cardsHtml = items => items.map(file => view === 'grid' ? gridCard(file) : listRow(file)).join('');
