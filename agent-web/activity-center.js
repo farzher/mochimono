@@ -87,6 +87,7 @@ if (host) {
   function operation(job){
     const label=String(job?.label||'');
     if(/^Friend /.test(label))return {kind:'Friend Drive',title:label.replace(/^Friend (update|verify|restore) /,(_,verb)=>`${verb[0].toUpperCase()+verb.slice(1)} · `)};
+    if(job?.type==='hash')return {kind:'Hash',title:label.replace(/^Hash /,'')};
     if(job?.type==='sync'){
       const index=/^(Check|Update) /.test(label);
       return {kind:index?'Index':'Sync',title:label.replace(/^(Sync|Check|Update) /,'')};
