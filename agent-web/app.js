@@ -172,10 +172,13 @@ function progressData(job) {
       ? Math.max(0, Math.min(100, checked / total * 100))
       : directPercent;
   const indeterminate = Boolean(p.indeterminate) || percent == null;
+  const operation = jobOperation(job);
   const meta = [];
   if (totalBytes) meta.push(`${bytes(doneBytes)} / ${bytes(totalBytes)}`);
-  else if (total) meta.push(`${checked.toLocaleString()} / ${total.toLocaleString()} files`);
-  else if (p.scanned != null) meta.push(`${Number(p.scanned).toLocaleString()} files`);
+  else if (total) {
+    const unit = operation === 'Thumbnails' && p.unit ? String(p.unit) : 'files';
+    meta.push(`${checked.toLocaleString()} / ${total.toLocaleString()} ${unit}`);
+  } else if (p.scanned != null) meta.push(`${Number(p.scanned).toLocaleString()} files`);
   else if (job.detail) meta.push(String(job.detail));
   if (p.copied != null) meta.push(`${Number(p.copied).toLocaleString()} copied`);
   if (p.restored != null) meta.push(`${Number(p.restored).toLocaleString()} restored`);
@@ -187,12 +190,12 @@ function progressData(job) {
   if (p.speedBps > 0) meta.push(`${bytes(p.speedBps)}/s`);
   if (p.etaSeconds > 0) meta.push(`${duration(p.etaSeconds)} left`);
   const phase = job.cancelRequested ? 'Canceling…' : p.phase || job.phase || 'Working…';
-  const operation = jobOperation(job);
   const title = operation ? `${operation} · ${phase}` : phase;
   const cancel = job.cancelable === false ? '' : `<button class="action-link" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>Cancel</button>`;
+  const side = cancel || (!indeterminate ? `<span class="inline-progress-percent">${Math.round(percent)}%</span>` : '');
   return {
     key:JSON.stringify([title, meta, p.current || '', percent, indeterminate, job.cancelRequested, job.cancelable]),
-    html:`<div class="inline-progress-head"><strong>${esc(title)}</strong>${cancel}</div>
+    html:`<div class="inline-progress-head"><strong>${esc(title)}</strong>${side}</div>
       <div class="progress-bar ${indeterminate ? 'indeterminate' : ''}"><i style="width:${indeterminate ? '32%' : `${Math.max(1, percent)}%`}"></i></div>
       <div class="inline-progress-meta"><span>${esc(meta.join(' · '))}</span><span title="${esc(p.current || '')}">${esc(p.current || '')}</span></div>`
   };
