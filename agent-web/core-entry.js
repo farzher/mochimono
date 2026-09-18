@@ -1,5 +1,6 @@
 import './fetch-coalescer.js';
 import './dialog-behavior.js';
+import './client-shell.js';
 import './app.js';
 import './lan-access.js';
 import './protection-guards.js';
@@ -8,7 +9,6 @@ import './multi-folder-pick.js';
 import './browser-folders.js';
 import './browser-folder-bridge.js';
 import './browser-preview-repair.js';
-import './client-shell.js';
 import './friend-storage.js';
 import './storage-locations-ui.js';
 import './navigation-shell.js';

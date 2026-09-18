@@ -263,7 +263,6 @@ if (storagePane && sourceSection) {
       model={state:next,storage:model?.storage||{policies:[],retention:[]},storageLoaded:Boolean(model?.storageLoaded)};
       renderMain();
       if(dialog?.open){await ensureStorageSnapshot();renderDialog();}
-      placeSection();
     } catch(error) { section.querySelector('[data-backup-body]').innerHTML=`<div class="backup-empty">${esc(error.message)}</div>`; }
     finally { busy=false;schedule(5000); }
   }

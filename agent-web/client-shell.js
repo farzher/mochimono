@@ -97,7 +97,8 @@ addEventListener('keyup', event => {
 }, true);
 
 const savedTab = localStorage.getItem(TAB_KEY);
-showTab(initialFileHash ? 'files' : savedTab === 'storage' ? 'storage' : 'files');
+const initialPage = new URL(location.href).searchParams.get('page');
+showTab(initialFileHash ? 'files' : initialPage === 'storage' || savedTab === 'storage' ? 'storage' : 'files');
 addEventListener('resize', syncHeaderScroll, { passive: true });
 
 async function json(path, options = {}) {

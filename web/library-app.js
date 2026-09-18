@@ -1040,6 +1040,11 @@ async function restoreLocalCatalog() {
   return true;
 }
 
+function finishBoot() {
+  document.documentElement.classList.remove('mochimono-library-booting');
+  if (!catalog.length && view === 'grid') publishGridModel();
+}
+
 async function boot() {
   const generation = ++bootGeneration;
   const mediaSize = Math.max(96, Math.min(420, Number(localStorage.getItem('mochimono-media-size')) || 170));
@@ -1054,6 +1059,7 @@ async function boot() {
       login.hidden = true;
       app.hidden = false;
       logout.hidden = false;
+      finishBoot();
     }
   } else restored = Boolean(catalog.length);
 
@@ -1074,21 +1080,39 @@ async function boot() {
     loadDrives().catch(() => {});
 
     const fresh = syncCatalog(false);
-    if (!restored) await fresh;
-    else fresh.catch(error => console.warn('Mochimono server refresh failed; using the local catalog.', error));
+    if (!restored) {
+      await fresh;
+      finishBoot();
+    } else fresh.catch(error => console.warn('Mochimono server refresh failed; using the local catalog.', error));
   } catch (error) {
     if (error.unauthorized) {
+      finishBoot();
       login.hidden = false;
       app.hidden = true;
       logout.hidden = true;
       return;
     }
     if (catalog.length) {
+      finishBoot();
       console.warn('Mochimono is offline; using the local catalog.', error);
       login.hidden = true;
       app.hidden = false;
       return;
     }
+    if (CLIENT && window.mochimonoOfflineCatalogReady) {
+      const offline = await Promise.resolve(window.mochimonoOfflineCatalogReady).catch(() => null);
+      if (generation !== bootGeneration) return;
+      if (offline?.files?.length) {
+        installSnapshot({ version:offline.version, imports:offline.imports, files:offline.files }, false);
+        login.hidden = true;
+        app.hidden = false;
+        logout.hidden = false;
+        finishBoot();
+        console.warn('Mochimono is offline; using the local catalog.', error);
+        return;
+      }
+    }
+    finishBoot();
     throw error;
   }
 }

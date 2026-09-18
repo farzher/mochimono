@@ -8,6 +8,7 @@ const runtime = {
   localHashes:new Set(),
   fingerprint:'',
   hydrating:null,
+  offlineReady:false,
   offlineSnapshot:{ version:'agent-local-v1', files:[], imports:[] },
   cloudOnline:null
 };
@@ -181,13 +182,18 @@ async function prepareOfflineCatalog() {
   ]);
   const merged = mergeSnapshot(cached, local);
   runtime.offlineSnapshot = merged.snapshot;
-  if (local.files.length || cached?.files?.length) {
-    if (merged.changed || merged.snapshot.imports.length !== Number(cached?.imports?.length || 0)) {
-      await cache.save(merged.snapshot.files, {
-        version:merged.snapshot.version,
-        imports:merged.snapshot.imports
-      }).catch(() => {});
-    }
+  runtime.offlineReady = true;
+
+  // The Library is already allowed to paint from its quick IndexedDB snapshot.
+  // Reconcile local-only rows behind that first paint instead of blocking module
+  // startup on a full local catalog walk and IndexedDB rewrite.
+  if (local.files.length) window.mochimonoLibrary?.upsertMany?.(local.files);
+  if ((local.files.length || cached?.files?.length) &&
+      (merged.changed || merged.snapshot.imports.length !== Number(cached?.imports?.length || 0))) {
+    cache.save(merged.snapshot.files, {
+      version:merged.snapshot.version,
+      imports:merged.snapshot.imports
+    }).catch(() => {});
   }
   return runtime.offlineSnapshot;
 }
@@ -224,15 +230,16 @@ function installOfflineCatalogFallback() {
   if (!CLIENT) return;
   window.fetch = async (input, options) => {
     const url = catalogUrl(input);
-    if (url && runtime.cloudOnline === false) return offlineCatalogResponse(url);
+    if (url && runtime.cloudOnline === false && runtime.offlineReady) return offlineCatalogResponse(url);
     try {
       const response = await nativeFetch(input, options);
       if (!url || response.ok || response.status < 500) return response;
       runtime.cloudOnline = false;
-      return offlineCatalogResponse(url) || response;
+      return runtime.offlineReady ? offlineCatalogResponse(url) || response : response;
     } catch (error) {
       if (!url) throw error;
       runtime.cloudOnline = false;
+      if (!runtime.offlineReady) throw error;
       return offlineCatalogResponse(url);
     }
   };
@@ -287,9 +294,7 @@ function applyLiveFiles(files) {
 }
 
 if (CLIENT) {
-  await prepareOfflineCatalog().catch(error => console.warn('Local catalog bootstrap failed.', error));
   installOfflineCatalogFallback();
-
   window.addEventListener('mochimono:catalog-updated', () => {
     // A Cloud refresh replaces the in-memory catalog. Re-merge local-only files
     // so files indexed while disconnected do not disappear before upload.
@@ -297,9 +302,17 @@ if (CLIENT) {
   });
 }
 
+// Let library-app own the first cache.load() so its quick preview can paint.
+// Reconciliation starts immediately after module evaluation and joins that same
+// cache load without delaying the first grid.
 await import('./library-app.js');
 
 if (CLIENT) {
+  window.mochimonoOfflineCatalogReady = prepareOfflineCatalog().catch(error => {
+    console.warn('Local catalog bootstrap failed.', error);
+    return runtime.offlineSnapshot;
+  });
+
   let timer = null;
   let polling = false;
   let events = null;
