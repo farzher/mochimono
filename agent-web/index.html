@@ -89,8 +89,8 @@
 
   <dialog id="backupDialog" class="small-dialog">
     <div class="dialog-head"><div><h3>Backup</h3><div id="backupPathLabel" class="picker-path"></div></div><button class="icon" data-close>×</button></div>
-    <div class="field-stack"><input id="backupName" placeholder="Backup name"></div>
-    <div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="initializeBackup" class="primary">Save</button></div>
+    <div class="field-stack"><input id="backupName" placeholder="Backup name"><input id="backupQuota" type="number" min="0" step="1" inputmode="decimal" placeholder="Limit in GB · 0 = available space"></div>
+    <div class="dialog-actions"><button id="removeBackup" class="secondary" hidden>Disconnect</button><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="initializeBackup" class="primary">Save</button></div>
   </dialog>
 
   <dialog id="restoreDialog">
