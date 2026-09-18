@@ -107,6 +107,8 @@ function sameLocalShape(a, b) {
     String(a?.originalPath || '') === String(b?.originalPath || '') &&
     String(a?.fileDate || '') === String(b?.fileDate || '') &&
     Boolean(a?.localAvailable) === Boolean(b?.localAvailable) &&
+    Boolean(a?.backupIntent) === Boolean(b?.backupIntent) &&
+    Boolean(a?.contentHashReady) === Boolean(b?.contentHashReady) &&
     String(a?.searchText || '') === String(b?.searchText || '');
 }
 
@@ -134,6 +136,8 @@ function mergeSnapshot(cached, local) {
     const old = previous.get(hash);
     const cloudBacked = old ? isCloudRecord(old) : false;
     const searchText = [old?.searchText, localFile.searchText].filter(Boolean).join(' ').trim();
+    const currentIntent=localFile.backupIntent===true;
+    const serverCurrent=old?.lifecycle==='current';
     const merged = old
       ? {
           ...localFile,
@@ -143,6 +147,12 @@ function mergeSnapshot(cached, local) {
           localAvailable:localFile.localAvailable,
           localManaged:true,
           cloudBacked,
+          backupIntent:currentIntent,
+          lifecycle:currentIntent?'current':old.lifecycle||localFile.lifecycle,
+          protectionState:currentIntent
+            ? (serverCurrent?old.protectionState:localFile.protectionState)
+            : old.protectionState||localFile.protectionState,
+          contentHashReady:localFile.contentHashReady,
           searchText,
           importIds:[...new Set([...(old.importIds || []), ...(localFile.importIds || [])])],
           exactImportIds:[...new Set([...(old.exactImportIds || []), ...(localFile.exactImportIds || [])])]
