@@ -547,8 +547,9 @@ function installEmpty() {
   files.className = 'files grid stable-grid-files';
   files.style.height = '1px';
   const empty = document.createElement('div');
-  empty.className = 'empty';
-  empty.textContent = 'No files.';
+  const loading = document.documentElement.classList.contains('mochimono-library-booting');
+  empty.className = `empty${loading ? ' loading' : ''}`;
+  empty.textContent = loading ? 'Loading…' : 'No files.';
   files.replaceChildren(empty);
   railKey = '';
   rail?.replaceChildren();
