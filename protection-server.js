@@ -736,6 +736,29 @@ export async function handleProtectionServer(req, res, url) {
     return true;
   }
 
+  const locationImpact = /^\/api\/protection\/locations\/([^/]+)\/impact$/.exec(url.pathname);
+  if(locationImpact&&req.method==='GET'){
+    const id=decodeURIComponent(locationImpact[1]);
+    const snap=protectionSnapshot();
+    let files=0,bytes=0,newlyUnderProtected=0,newlyUnderProtectedBytes=0;
+    for(const [hash,brief] of snap.states){
+      if(brief.lifecycle==='unlinked')continue;
+      const state=protectionState(hash);
+      if(!state)continue;
+      const uses=state.copies.some(copy=>copy.id===id);
+      if(!uses)continue;
+      files++;
+      bytes+=Number(state.object?.size)||0;
+      const after=evaluate(state.level,state.copies.filter(copy=>copy.id!==id));
+      if(state.meets&&!after.meets){
+        newlyUnderProtected++;
+        newlyUnderProtectedBytes+=Number(state.object?.size)||0;
+      }
+    }
+    json(res,200,{id,files,bytes,newlyUnderProtected,newlyUnderProtectedBytes});
+    return true;
+  }
+
   const locationRoute = /^\/api\/protection\/locations\/([^/]+)$/.exec(url.pathname);
   if (locationRoute && req.method === 'POST') {
     json(res, 200, saveLocation(decodeURIComponent(locationRoute[1]), await readJson(req)));
