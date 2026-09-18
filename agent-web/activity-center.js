@@ -191,6 +191,7 @@ if (host) {
       const generated=Number(folder.previewGenerated)||0;
       const waiting=Boolean(folder.previewWaiting);
       const driveBlocked=Boolean(folder.previewDriveBlocked);
+      const generationBound=checking&&Boolean(folder.previewBackpressured)&&(activeCount||queuedCount);
       let done=0,progressTotal=0,unit='';
       if(checking){
         done=checked;
@@ -205,7 +206,7 @@ if (host) {
         done=Math.min(progressTotal||Infinity,generated);
         unit='generated';
       }
-      const phase=waiting?'Waiting for idle':driveBlocked?'Waiting for drive':checking?'Checking':'Generating';
+      const phase=waiting?'Waiting for idle':driveBlocked?'Waiting for drive':generationBound?'Generating':checking?'Checking':'Generating';
       const detail=[phase];
       if(progressTotal)detail.push(`${Math.min(done,progressTotal).toLocaleString()} / ${progressTotal.toLocaleString()} ${unit}`);
       else if(done)detail.push(`${done.toLocaleString()} ${unit}`);
