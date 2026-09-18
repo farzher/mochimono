@@ -429,7 +429,7 @@ async function handleLocalApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/backup/status') {
     const path = url.searchParams.get('path');
     if (!path) json(res, 400, { error:'Backup folder required' });
-    else json(res, 200, await backupStatus(path));
+    else json(res, 200, await backupStatus(path, false));
     return true;
   }
 
