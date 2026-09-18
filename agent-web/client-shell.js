@@ -77,6 +77,15 @@ brand?.addEventListener('keydown', event => {
   event.preventDefault();
   showTab('files');
 });
+
+// The header lives outside the Library iframe. Clicking non-control header chrome
+// would otherwise leave keyboard focus in the shell, so native PageUp/PageDown,
+// Home/End, and other browser scrolling keys never reach the Library.
+header?.addEventListener('click', event => {
+  if (filesPane.hidden || connection?.open) return;
+  if (event.target?.closest?.('button,a,input,select,textarea,summary,details,[contenteditable="true"]')) return;
+  queueMicrotask(() => frame?.contentWindow?.focus());
+});
 clientMenu?.addEventListener('click', event => {
   if (event.target.closest('button') && !event.target.closest('[data-client-tab]')) queueMicrotask(() => clientMenu.removeAttribute('open'));
 });
