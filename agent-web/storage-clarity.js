@@ -2,6 +2,7 @@ const folders = document.querySelector('#folders');
 const storagePane = document.querySelector('#storagePane');
 const toastNode = document.querySelector('#toast');
 const CACHE_STATS_PATH = '@mochimono:cache';
+const CACHE_STATS_TTL = 60_000;
 
 let cacheStats = null;
 let cacheLoadedAt = 0;
@@ -117,7 +118,7 @@ function decorateSources() {
 
 async function loadCacheStats(force = false) {
   const measured = cacheStats?.measuredAt && !cacheStats?.scanning;
-  if (!force && measured && Date.now() - cacheLoadedAt < 5 * 60_000) return cacheStats;
+  if (!force && measured && Date.now() - cacheLoadedAt < CACHE_STATS_TTL) return cacheStats;
   if (cacheLoading) return cacheLoading;
   cacheLoading = request(`/api/client/local-catalog?limit=1&path=${encodeURIComponent(CACHE_STATS_PATH)}`)
     .then(data => {
@@ -138,7 +139,10 @@ function decorateCacheCard() {
   setText(meta, `${indexed.toLocaleString()} files indexed${path ? ` · ${path}` : ''}`);
   if (meta) meta.title = path;
   const used = card.querySelector('.managed-storage-space > span:first-child');
-  setText(used, cacheStats.scanning && !cacheStats.measuredAt ? 'Measuring…' : `${bytes(cacheStats.bytes)} cache`);
+  const cacheFiles = Math.max(0, Number(cacheStats.cacheFiles) || 0);
+  setText(used, cacheStats.scanning && !cacheStats.measuredAt
+    ? 'Measuring…'
+    : `${bytes(cacheStats.bytes)}${cacheFiles ? ` · ${cacheFiles.toLocaleString()} previews` : ` previews`}`);
   const free = card.querySelector('.managed-storage-space .free');
   if (free && Number(cacheStats.freeBytes) > 0) setText(free, `${bytes(cacheStats.freeBytes)} free`);
   card.title = path ? `Open ${path} in Explorer` : 'Open Local cache in Explorer';
@@ -158,7 +162,7 @@ async function refreshCache(force = false) {
   try {
     const stats = await loadCacheStats(force);
     decorateCacheCard();
-    if (stats?.scanning) cacheRefreshTimer = setTimeout(() => refreshCache(true).catch(() => {}), 700);
+    cacheRefreshTimer = setTimeout(() => refreshCache(Boolean(stats?.scanning)).catch(() => {}), stats?.scanning ? 700 : CACHE_STATS_TTL);
   } catch {}
 }
 
