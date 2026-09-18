@@ -191,7 +191,7 @@ function progressData(job) {
   const cancel = job.cancelable === false ? '' : `<button class="action-link" data-cancel-job ${job.cancelRequested ? 'disabled' : ''}>Cancel</button>`;
   return {
     key:JSON.stringify([title, meta, p.current || '', percent, indeterminate, job.cancelRequested, job.cancelable]),
-    html:`<div class="inline-progress-head"><strong>${esc(title)} </strong>${cancel}</div>
+    html:`<div class="inline-progress-head"><strong>${esc(title)}</strong>${cancel}</div>
       <div class="progress-bar ${indeterminate ? 'indeterminate' : ''}"><i style="width:${indeterminate ? '32%' : `${Math.max(1, percent)}%`}"></i></div>
       <div class="inline-progress-meta"><span>${esc(meta.join(' · '))}</span><span title="${esc(p.current || '')}">${esc(p.current || '')}</span></div>`
   };
