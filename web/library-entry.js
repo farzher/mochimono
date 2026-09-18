@@ -293,8 +293,14 @@ function applyLiveFiles(files) {
   window.dispatchEvent(new CustomEvent('mochimono:local-catalog-event', { detail:{ files:incoming } }));
 }
 
+let offlinePreparation = Promise.resolve(runtime.offlineSnapshot);
 if (CLIENT) {
   installOfflineCatalogFallback();
+  offlinePreparation = prepareOfflineCatalog().catch(error => {
+    console.warn('Local catalog bootstrap failed.', error);
+    return runtime.offlineSnapshot;
+  });
+  window.mochimonoOfflineCatalogReady = offlinePreparation;
   window.addEventListener('mochimono:catalog-updated', () => {
     // A Cloud refresh replaces the in-memory catalog. Re-merge local-only files
     // so files indexed while disconnected do not disappear before upload.
@@ -302,13 +308,11 @@ if (CLIENT) {
   });
 }
 
-// Import the Library immediately. catalog-cache.js can now restore its quick
-// snapshot and build the first grid while local reconciliation runs in parallel.
+// Import the Library immediately. catalog-cache.js can restore its quick snapshot
+// while local reconciliation continues in parallel.
 await import('./library-app.js');
 
 if (CLIENT) {
-  prepareOfflineCatalog().catch(error => console.warn('Local catalog bootstrap failed.', error));
-
   let timer = null;
   let polling = false;
   let events = null;
