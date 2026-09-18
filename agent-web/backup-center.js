@@ -21,11 +21,11 @@ if (storagePane && sourceSection) {
     .backup-center-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:13px}.backup-center-head h2{margin:0;color:#f0e8e4;font-size:21px;font-weight:800;letter-spacing:-.03em}.backup-center-manage{height:32px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:#9e9490;font-size:12px;font-weight:760}.backup-center-manage:hover{background:#211e22;color:#eee6e2}
     .backup-health{--ring:#7fbe90;display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:18px;align-items:center;padding:18px 19px;border-radius:18px;background:#141214;box-shadow:inset 0 0 0 1px #2b272b}.backup-health.needs{--ring:#d3a067}.backup-health.empty{--ring:#686164}
     .backup-health-ring{--p:0%;position:relative;width:70px;height:70px;display:grid;place-items:center;border-radius:50%;background:conic-gradient(var(--ring) var(--p),#2b272b 0)}.backup-health-ring:after{content:'';position:absolute;inset:7px;border-radius:50%;background:#141214}.backup-health-ring b{position:relative;z-index:1;color:#eee6e2;font-size:16px;font-weight:820;font-variant-numeric:tabular-nums}.backup-health.empty .backup-health-ring b{color:#8c8380}
-    .backup-health-copy{min-width:0}.backup-health-title{color:#f1e9e5;font-size:21px;font-weight:820;letter-spacing:-.028em}.backup-health-sub{margin-top:4px;color:#9b918d;font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums}.backup-health-sub:empty{display:none}.backup-health-actions{display:flex;align-items:center}.backup-health-actions button{min-width:104px;height:37px;padding:0 14px;border-radius:9px;white-space:nowrap;font-size:12px;font-weight:780}
+    .backup-health-copy{min-width:0}.backup-health-title{color:#f1e9e5;font-size:21px;font-weight:820;letter-spacing:-.028em}.backup-health-sub{margin-top:4px;color:#9b918d;font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums}.backup-health-sub:empty{display:none}.backup-health-actions{display:flex;align-items:center;gap:8px}.backup-health-actions button{min-width:104px;height:37px;padding:0 14px;border-radius:9px;white-space:nowrap;font-size:12px;font-weight:780}
     .backup-job{margin-top:11px}.backup-job-head{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#c9bfbb;font-size:11.5px;font-weight:700}.backup-job-head span:last-child{color:#8d8581;font-variant-numeric:tabular-nums}.backup-progress{height:6px;margin-top:7px;overflow:hidden;border-radius:999px;background:#2b272b}.backup-progress i{display:block;height:100%;border-radius:inherit;background:var(--ring);transition:width .25s ease}.backup-progress.indeterminate i{width:34%;animation:backup-slide 1.3s ease-in-out infinite}
 
     dialog.backup-center-dialog{width:min(760px,calc(100vw - 28px));max-height:min(860px,calc(100dvh - 28px));padding:0;overflow:hidden}.backup-center-dialog .dialog-head{padding:19px 24px 16px;border-bottom:1px solid #292529}.backup-center-dialog .dialog-head h3{font-size:19px;font-weight:820;letter-spacing:-.025em}.backup-settings{max-height:calc(min(860px,100dvh - 28px) - 62px);overflow:auto;padding:22px 24px 26px;scrollbar-gutter:stable}
-    .backup-dialog-summary{display:flex;align-items:center;gap:14px;padding:16px;border-radius:15px;background:#111012;box-shadow:inset 0 0 0 1px #292529}.backup-dialog-summary i{width:12px;height:12px;flex:0 0 auto;border-radius:50%;background:#7fbe90;box-shadow:0 0 0 7px rgba(127,190,144,.08)}.backup-dialog-summary.needs i{background:#d3a067;box-shadow:0 0 0 7px rgba(211,160,103,.08)}.backup-dialog-summary strong{display:block;color:#f0e8e4;font-size:17px;font-weight:810}.backup-dialog-summary span{display:block;margin-top:3px;color:#8f8783;font-size:12px;font-weight:620}
+    .backup-dialog-summary{display:flex;align-items:center;gap:14px;padding:16px;border-radius:15px;background:#111012;box-shadow:inset 0 0 0 1px #292529}.backup-dialog-summary i{width:12px;height:12px;flex:0 0 auto;border-radius:50%;background:#7fbe90;box-shadow:0 0 0 7px rgba(127,190,144,.08)}.backup-dialog-summary.needs i{background:#d3a067;box-shadow:0 0 0 7px rgba(211,160,103,.08)}.backup-dialog-summary strong{display:block;color:#f0e8e4;font-size:17px;font-weight:810}.backup-dialog-summary span{display:block;margin-top:3px;color:#8f8783;font-size:12px;font-weight:620}.backup-summary-view{margin-left:auto;height:32px;padding:0 10px;border:0;border-radius:8px;background:#211e22;color:#cfc5c1;font-size:11px;font-weight:760;white-space:nowrap}.backup-summary-view:hover{background:#2b272c;color:#f0e8e4}
     .backup-simple-section{margin-top:22px}.backup-simple-section>h4,.backup-advanced-section>h4{margin:0 0 10px;color:#e7deda;font-size:14px;font-weight:800;letter-spacing:-.01em}
     .backup-location-list{display:grid;gap:8px}.backup-location-row{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:12px;align-items:center;min-height:58px;padding:12px 14px;border-radius:13px;background:#151316;box-shadow:inset 0 0 0 1px #292529}.backup-location-dot{width:8px;height:8px;border-radius:50%;background:#7fbe90}.backup-location-row.offline .backup-location-dot{background:#d3a067}.backup-location-copy{min-width:0}.backup-location-copy strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e8dfdb;font-size:13.5px;font-weight:780}.backup-location-copy small{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8e8582;font-size:11px}.backup-location-action{height:30px;padding:0 9px;border-radius:8px;background:transparent;color:#a19793;font-size:11px;font-weight:730}.backup-location-action:hover{background:#272327;color:#eee5e1}.backup-location-action.danger:hover{color:#efa09a}
     .backup-auto-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:13px 14px;border-radius:13px;background:#151316;box-shadow:inset 0 0 0 1px #292529}.backup-auto-row div{min-width:0}.backup-auto-row strong{display:block;color:#dfd6d2;font-size:13.5px;font-weight:760}.backup-auto-row small{display:block;margin-top:3px;color:#847c79;font-size:10.5px}.backup-auto-row select{width:145px;height:36px;padding:0 9px;font-size:11.5px;border-radius:8px}
@@ -70,6 +70,13 @@ if (storagePane && sourceSection) {
     return `${Math.floor(h/24)}d`;
   }
 
+  function primaryStorageStatus() {
+    try {
+      const host=new URL(model?.state?.server||'').hostname.toLowerCase();
+      return ['127.0.0.1','localhost','::1'].includes(host)?'Primary storage · This PC':'Primary storage';
+    } catch { return 'Primary storage'; }
+  }
+
   async function request(base,path,options={}) {
     const response=await fetch(`${base}${path}`,{
       cache:'no-store',...options,
@@ -101,8 +108,10 @@ if (storagePane && sourceSection) {
     const totalBytes=PLAN_ORDER.reduce((sum,level)=>sum+(Number(summary.levels?.[level]?.bytes)||0),0);
     const job=model.state.job?.status==='running'&&model.state.job?.type==='protection'?model.state.job:null;
     const progress=job?.progress||{};
-    const title=!total?'No protected files':needs?`${needs.toLocaleString()} need backup`:'Protected';
-    const sub=!total?'':needs?`${protectedFiles.toLocaleString()} protected${totalBytes?` · ${bytes(totalBytes)}`:''}`:`${total.toLocaleString()} files${totalBytes?` · ${bytes(totalBytes)}`:''}`;
+    const title=!total?'No stored files':`${total.toLocaleString()} stored ${total===1?'file':'files'}`;
+    const sub=!total?'':needs
+      ? `${needs.toLocaleString()} need another copy · ${protectedFiles.toLocaleString()} protected${totalBytes?` · ${bytes(totalBytes)}`:''}`
+      : `All have required copies${totalBytes?` · ${bytes(totalBytes)}`:''}`;
     const stateClass=!total?'empty':needs?'needs':'';
     const copied=Number(progress.copied)||0;
     const jobText=[progress.phase||'Protecting',copied?`${copied.toLocaleString()} copied`:'',progress.copiedBytes?bytes(progress.copiedBytes):''].filter(Boolean).join(' · ');
@@ -116,8 +125,12 @@ if (storagePane && sourceSection) {
           <div class="backup-health-sub">${esc(sub)}</div>
           ${job?`<div class="backup-job"><div class="backup-job-head"><span>${esc(jobText)}</span>${jobPercent!=null?`<span>${Math.round(jobPercent)}%</span>`:''}</div><div class="backup-progress ${jobPercent==null?'indeterminate':''}"><i style="width:${jobPercent==null?'34%':`${Math.max(1,jobPercent)}%`}"></i></div></div>`:''}
         </div>
-        <div class="backup-health-actions"><button class="secondary" type="button" data-protect-now ${job||!total?'disabled':''}>${job?'Working…':'Protect now'}</button></div>
+        <div class="backup-health-actions">
+          ${total?`<button class="secondary" type="button" data-view-managed>View files</button>`:''}
+          ${job?`<button class="secondary" type="button" disabled>Working…</button>`:needs?`<button class="secondary" type="button" data-protect-now>Protect now</button>`:''}
+        </div>
       </div>`;
+    body.querySelector('[data-view-managed]')?.addEventListener('click',viewManagedFiles);
     body.querySelector('[data-protect-now]')?.addEventListener('click',protectNow);
   }
 
@@ -147,7 +160,7 @@ if (storagePane && sourceSection) {
     if(!locations.length)return '<div class="backup-empty">No backup locations yet.</div>';
     return locations.map(location=>{
       if(location.kind==='primary'){
-        return '<div class="backup-location-row"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>Mochimono Cloud</strong><small>Available</small></div></div>';
+        return `<div class="backup-location-row"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>Mochimono storage</strong><small>${esc(primaryStorageStatus())}</small></div></div>`;
       }
       if(location.kind==='backup'){
         const backup=attached.get(String(location.id));
@@ -216,7 +229,7 @@ if (storagePane && sourceSection) {
     box.innerHTML=`
       <div class="dialog-head"><h3>Backup</h3><button class="icon" data-close>×</button></div>
       <div class="backup-settings">
-        <div class="backup-dialog-summary ${needs?'needs':''}"><i></i><div><strong>${needs?`${needs.toLocaleString()} files need backup`:total?'Your files are protected':'Nothing to protect yet'}</strong><span>${total?`${total.toLocaleString()} files · ${profile}`:'Add files and Mochimono will protect them automatically.'}</span></div></div>
+        <div class="backup-dialog-summary ${needs?'needs':''}"><i></i><div><strong>${total?`${total.toLocaleString()} stored ${total===1?'file':'files'}`:'No stored files'}</strong><span>${total?(needs?`${needs.toLocaleString()} need another copy · ${profile}`:`All have required copies · ${profile}`):'Files appear here after Mochimono stores them.'}</span></div>${total?'<button class="backup-summary-view" type="button" data-view-managed>View files</button>':''}</div>
 
         <section class="backup-simple-section"><h4>Backup locations</h4><div class="backup-location-list">${simpleDestinationRows()}</div></section>
 
@@ -238,7 +251,16 @@ if (storagePane && sourceSection) {
     box.querySelectorAll('[data-rely]').forEach(button=>button.addEventListener('click',toggleReliance));
     box.querySelectorAll('[data-representation]').forEach(select=>select.addEventListener('change',updateRepresentation));
     box.querySelectorAll('[data-forget-backup]').forEach(button=>button.addEventListener('click',forgetBackup));
+    box.querySelectorAll('[data-view-managed]').forEach(button=>button.addEventListener('click',viewManagedFiles));
     box.querySelector('[data-background]').addEventListener('change',updateBackground);
+  }
+
+  function viewManagedFiles() {
+    if(dialog?.open)dialog.close();
+    const shell=window.mochimonoNavigationShell;
+    if(shell?.open)shell.open({ where:'server' });
+    else document.querySelector('[data-client-tab="library"]')?.click();
+    requestAnimationFrame(()=>document.querySelector('#filesFrame')?.contentWindow?.mochimonoLibrary?.setLocationFilter?.('server'));
   }
 
   async function forgetBackup(event) {

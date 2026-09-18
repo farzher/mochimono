@@ -117,13 +117,19 @@ if (storagePane && sourceSection && backupSection) {
   for (const node of addDialog.querySelectorAll('[data-icon]')) node.innerHTML = icon(node.dataset.icon).replace(/^<span[^>]*>|<\/span>$/g, '');
 
   function title(location) {
-    if (location.type === 'cloud') return 'Cloud';
+    if (location.type === 'cloud') return 'Mochimono storage';
     if (location.type === 'local') return location.name || 'Local cache';
     return location.name || (location.type === 'friend' ? 'Friend drive' : 'Backup');
   }
   function secondary(location) {
     if (!location.online) return 'Offline';
-    if (location.type === 'cloud') { try { return new URL(location.server || '').host || 'Connected'; } catch { return 'Connected'; } }
+    if (location.type === 'cloud') {
+      try {
+        const url=new URL(location.server || '');
+        const local=['127.0.0.1','localhost','::1'].includes(url.hostname.toLowerCase());
+        return local ? `This PC · ${url.host}` : url.host || 'Connected';
+      } catch { return 'Connected'; }
+    }
     if (location.type === 'local' || location.type === 'backup') return location.path || 'This device';
     if (location.type === 'friend') return [location.peerName || 'Friend', location.connection === 'relayed' ? 'Relayed' : location.connection === 'direct' ? 'Direct' : ''].filter(Boolean).join(' · ');
     return '';
