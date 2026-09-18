@@ -70,7 +70,11 @@ export async function handleBackupPolicy(req, res, url) {
 
   if (drive && req.method === 'DELETE') {
     const id = decodeURIComponent(drive[1]);
+    const locationId = `backup:${id}`;
     db.prepare('DELETE FROM replicas WHERE drive_id=?').run(id);
+    db.prepare('DELETE FROM representation_presence WHERE location_id=?').run(locationId);
+    db.prepare('DELETE FROM representation_policies WHERE location_id=?').run(locationId);
+    db.prepare('DELETE FROM representation_retention WHERE location_id=?').run(locationId);
     removeProtectionStorage(id);
     db.prepare('DELETE FROM drives WHERE id=?').run(id);
     json(res, 200, { ok:true, id });
