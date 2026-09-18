@@ -416,6 +416,7 @@ function protectionSnapshot(force = false) {
 
   const levels=Object.fromEntries(LEVELS.map(level=>[level,{files:0,bytes:0,needsProtection:0,protectedFiles:0}]));
   const imports=new Map();
+  const sources=new Map();
   const desired=new Map();
   for(const intent of intents){
     const hash=validHash(intent.hash)?intent.hash:'';
@@ -426,6 +427,8 @@ function protectionSnapshot(force = false) {
     const importKey=Number(intent.importId)||0;
     let group=imports.get(importKey);
     if(!group)imports.set(importKey,group={importId:importKey,files:0,protectedFiles:0,needsProtection:0,pendingFiles:0,preparingFiles:0});
+    const sourceKey=`${intent.deviceName}\0${intent.rootPath}`;
+    if(!sources.has(sourceKey))sources.set(sourceKey,{deviceName:intent.deviceName,rootPath:intent.rootPath,files:0,protectedFiles:0,needsProtection:0,pendingFiles:0,preparingFiles:0});
   }
 
   let protectedFiles=0,protectedBytes=0,needsProtection=0,needsBytes=0,pendingFiles=0,preparingFiles=0,storedFiles=0,totalBytes=0;
@@ -466,6 +469,23 @@ function protectionSnapshot(force = false) {
     else group.needsProtection++;
   }
 
+  const sourceSeen=new Set();
+  for(const intent of intents){
+    const hash=validHash(intent.hash)?intent.hash:'';
+    const sourceKey=`${intent.deviceName}\0${intent.rootPath}`;
+    const itemKey=`${sourceKey}\0${hash||intent.relativePath}`;
+    if(sourceSeen.has(itemKey))continue;
+    sourceSeen.add(itemKey);
+    const group=sources.get(sourceKey);
+    if(!group)continue;
+    group.files++;
+    if(!hash){group.preparingFiles++;continue;}
+    const object=objectByHash.get(hash);
+    if(!object){group.needsProtection++;group.pendingFiles++;continue;}
+    if(states.get(hash)?.meets)group.protectedFiles++;
+    else group.needsProtection++;
+  }
+
   const unlinked=objects.filter(object=>!currentHashes.has(object.hash)&&!remoteOnly.has(object.hash));
   const remote=objects.filter(object=>remoteOnly.has(object.hash)&&!currentHashes.has(object.hash));
   for(const object of remote){
@@ -486,7 +506,7 @@ function protectionSnapshot(force = false) {
     needsProtection,needsBytes,pendingFiles,preparingFiles,
     unlinkedFiles:unlinked.length,unlinkedBytes:unlinked.reduce((sum,row)=>sum+(Number(row.size)||0),0),
     remoteOnlyFiles:remote.length,remoteOnlyBytes:remote.reduce((sum,row)=>sum+(Number(row.size)||0),0),
-    levels,imports:[...imports.values()].filter(item=>item.importId||item.files),trash,generatedAt:now()
+    levels,imports:[...imports.values()].filter(item=>item.importId||item.files),sources:[...sources.values()],trash,generatedAt:now()
   };
   snapshot={summary,states};
   snapshotAt=Date.now();
