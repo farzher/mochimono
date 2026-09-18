@@ -217,7 +217,7 @@ if (host) {
       const waiting=item.state==='queued';
       const entry={
         id:`browser:${item.id}`,source:'browser',kind:'Index',title:browserNames.get(item.id)||'Local folder',status:waiting?'queued':'running',
-        detail:waiting?'Waiting to index':[`${Number(item.scanned||0).toLocaleString()} files indexed`,item.transferred?`${Number(item.transferred).toLocaleString()} new or changed`:'',item.skipped?`${Number(item.skipped).toLocaleString()} unchanged`:'' ].filter(Boolean).join(' · '),
+        detail:waiting?'Waiting to index':[`${Number(item.scanned||0).toLocaleString()} files processed`,item.current?String(item.current).split('/').at(-1):'',item.transferred?`${Number(item.transferred).toLocaleString()} new or changed`:'',item.skipped?`${Number(item.skipped).toLocaleString()} unchanged`:'' ].filter(Boolean).join(' · '),
         phase:waiting?'Waiting to index':'Indexing local files'
       };
       (waiting?queued:active).push(entry);
@@ -366,7 +366,9 @@ if (host) {
   }
 
   function loadBrowserNames(child){
-    Promise.resolve(child?.mochimonoBrowserFolders?.list?.()).then(items=>{
+    const api=child?.mochimonoBrowserFolders;
+    const loader=api?.names?.bind(api)||api?.list?.bind(api);
+    Promise.resolve(loader?.()).then(items=>{
       let changed=false;
       for(const item of items||[]){const id=String(item.id),name=String(item.name||'Browser folder');if(browserNames.get(id)!==name){browserNames.set(id,name);changed=true;}}
       if(changed)schedule(0);
