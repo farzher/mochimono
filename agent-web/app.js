@@ -22,6 +22,7 @@ let backupLocations = [];
 let backupLoading = false;
 let lastBackupRefresh = 0;
 let currentJob = null;
+let protectionSummary = null;
 const folderActivity = new Map();
 let stateTimer = null;
 let statePolling = false;
@@ -136,7 +137,7 @@ function toggleInline(element, button) {
 }
 
 function folderRow(folder) {
-  return `<article class="storage-item folder-item" data-folder-path="${esc(folder.path)}">
+  return `<article class="storage-item folder-item" data-folder-path="${esc(folder.path)}" data-folder-protected="${folder.protected!==false?'1':'0'}">
     <div class="storage-copy">
       <div class="storage-title"><strong title="${esc(folder.path)}">${esc(folder.path)}</strong><time class="item-state" data-folder-status>—</time></div>
       <div class="storage-meta"><span data-folder-files>— files</span><span>·</span><span data-folder-size>—</span><span>·</span><span data-folder-free>— free</span></div>
@@ -235,8 +236,49 @@ function renderFolders(folders, job) {
   for (const row of $('#folders').querySelectorAll('[data-folder-path]')) {
     const folder = folders.find(item => samePath(item.path, row.dataset.folderPath));
     if (!folder) continue;
-    setRelativeTime(row.querySelector('[data-folder-status]'), folder.lastSynced, folder.protected === false ? 'Not indexed yet' : 'Not synced yet');
+    if(folder.protected===false)setRelativeTime(row.querySelector('[data-folder-status]'), folder.lastIndexed||folder.lastSynced, 'Not indexed yet');
+    else{
+      const status=row.querySelector('[data-folder-status]');
+      status.textContent='Checking backup…';
+      status.className='item-state';
+    }
     renderItemProgress(row, folderJob(folder, job) || folderActivity.get(String(folder.path || '').replace(/[\\/]+$/, '').toLowerCase()) || null);
+  }
+  renderFolderProtection(protectionSummary);
+}
+
+function renderFolderProtection(summary) {
+  protectionSummary=summary||protectionSummary;
+  if(!protectionSummary)return;
+  const sources=Array.isArray(protectionSummary.sources)?protectionSummary.sources:[];
+  for(const row of $('#folders').querySelectorAll('[data-folder-path][data-folder-protected="1"]')){
+    const source=sources.find(item=>samePath(item.rootPath,row.dataset.folderPath));
+    const status=row.querySelector('[data-folder-status]');
+    if(!status)continue;
+    status.className='item-state';
+    if(!source){
+      status.textContent='Preparing…';
+      status.classList.add('working');
+      continue;
+    }
+    const files=Number(source.files)||0;
+    const protectedFiles=Number(source.protectedFiles)||0;
+    const preparing=Number(source.preparingFiles)||0;
+    const needs=Number(source.needsProtection)||0;
+    const remaining=Math.max(0,files-protectedFiles);
+    if(!files){
+      status.textContent='No files';
+    }else if(preparing||Number(source.pendingFiles)||folderActivity.get(String(row.dataset.folderPath||'').replace(/[\\/]+$/,'').toLowerCase())){
+      status.textContent='Backing up';
+      status.classList.add('working');
+    }else if(needs||remaining){
+      status.textContent='Needs backup';
+      status.classList.add('warning');
+    }else{
+      status.textContent='Protected';
+      status.classList.add('good');
+    }
+    status.title=`${protectedFiles.toLocaleString()} of ${files.toLocaleString()} protected`;
   }
 }
 
@@ -251,6 +293,7 @@ async function refreshFolderStats() {
       row.querySelector('[data-folder-size]').textContent = bytes(item.bytes);
       row.querySelector('[data-folder-free]').textContent = `${bytes(item.freeBytes)} free`;
       if (item.protected === false) setRelativeTime(row.querySelector('[data-folder-status]'), item.lastIndexed, 'Not indexed yet');
+      else renderFolderProtection(protectionSummary);
       const diagnostics = item.diagnostics || {};
       const key = String(item.path || '').replace(/[\\/]+$/, '').toLowerCase();
       const diagnosticJob = diagnostics.running && diagnostics.jobType === 'hash' ? {
@@ -629,6 +672,8 @@ if (storagePane) {
     backups();
   }).observe(storagePane, { attributes:true, attributeFilter:['hidden'] });
 }
+
+window.addEventListener('mochimono:protection-summary',event=>renderFolderProtection(event.detail||{}));
 
 window.addEventListener('mochimono:activity-model', event => {
   folderActivity.clear();
