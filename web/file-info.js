@@ -139,7 +139,7 @@ function renderCopies(data, local) {
       full
     ));
   }
-  if (data.serverStored !== false) cards.push(copyCard('Cloud', 'Cloud copy'));
+  if (data.serverStored !== false) cards.push(copyCard('Mochimono storage', 'Stored copy'));
   for (const backup of data.backups || []) cards.push(copyCard(
     backup.name || 'Local backup',
     'Local backup',
