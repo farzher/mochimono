@@ -24,8 +24,8 @@ if (host) {
 
   const style = document.createElement('style');
   style.textContent = `
-    .activity-button{height:32px;display:flex;align-items:center;gap:7px;padding:0 10px;border:1px solid transparent;border-radius:9px;background:transparent;color:#958c89;font-size:12px;font-weight:760;white-space:nowrap}
-    .activity-button:hover,.activity-button.active{border-color:#322d31;background:#211e22;color:#f0e9e5}.activity-dot{width:7px;height:7px;border-radius:50%;background:#6d6668}.activity-button.working .activity-dot{background:#e99b95;animation:activity-pulse .9s ease-in-out infinite}.activity-button.issue .activity-dot{background:#d3a067}.activity-count{min-width:15px;color:#cfc3bf;font-size:11px;font-variant-numeric:tabular-nums}
+    .activity-button{--activity-progress:0%;height:32px;display:flex;align-items:center;gap:7px;padding:0 10px;border:1px solid transparent;border-radius:9px;background:transparent;color:#958c89;font-size:12px;font-weight:760;white-space:nowrap}
+    .activity-button:hover,.activity-button.active{border-color:#322d31;background:#211e22;color:#f0e9e5}.activity-gauge{position:relative;width:17px;height:17px;flex:0 0 auto;border-radius:50%;background:#3a3538}.activity-gauge:after{content:'';position:absolute;inset:3px;border-radius:50%;background:#111012}.activity-button.working .activity-gauge{background:conic-gradient(#e99b95 var(--activity-progress),#3a3538 0)}.activity-button.working .activity-gauge.indeterminate{background:conic-gradient(#e99b95 0 24%,#3a3538 24% 100%);animation:activity-spin .9s linear infinite}.activity-button.issue .activity-gauge{background:#d3a067}.activity-button:not(.working):not(.issue) .activity-gauge{width:8px;height:8px;background:#6d6668}.activity-button:not(.working):not(.issue) .activity-gauge:after{display:none}.activity-count{min-width:15px;color:#cfc3bf;font-size:11px;font-variant-numeric:tabular-nums}
     .activity-dialog{width:min(680px,calc(100vw - 24px));max-height:min(820px,calc(100dvh - 24px));padding:0;overflow:hidden}.activity-dialog .dialog-head{padding:17px 20px 14px;border-bottom:1px solid #292529}.activity-dialog .dialog-head h3{font-size:18px;font-weight:820;letter-spacing:-.02em}.activity-body{max-height:calc(min(820px,100dvh - 24px) - 60px);overflow:auto;overscroll-behavior:contain;padding:20px;scrollbar-gutter:stable}
     .activity-overview{display:grid;grid-template-columns:54px minmax(0,1fr);gap:14px;align-items:center;padding:16px 17px;border-radius:16px;background:#151316;box-shadow:inset 0 0 0 1px #2b272b}.activity-orb{width:50px;height:50px;display:grid;place-items:center;border-radius:15px;background:#211e22}.activity-orb i{width:15px;height:15px;border:3px solid #777073;border-radius:50%}.activity-overview.working .activity-orb{background:#281d20}.activity-overview.working .activity-orb i{border-color:#e99b95;border-right-color:transparent;animation:activity-spin 1s linear infinite}.activity-overview.waiting .activity-orb i{border:0;width:12px;height:12px;background:#b08c68;box-shadow:0 0 0 7px rgba(176,140,104,.1)}.activity-overview strong{display:block;color:#f1e9e5;font-size:22px;font-weight:820;letter-spacing:-.03em}.activity-overview span{display:block;margin-top:3px;color:#988f8b;font-size:13px;font-weight:620}
     .activity-setting{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:12px;padding:10px 12px 10px 15px;border-radius:13px;background:#111012}.activity-setting>strong{color:#d8cfcb;font-size:13px;font-weight:760}.activity-mode-buttons{display:flex;gap:4px;padding:3px;border-radius:10px;background:#1d1a1e}.activity-mode-buttons button{height:34px;min-width:72px;padding:0 11px;border:0;border-radius:7px;background:transparent;color:#8d8581;font-size:11.5px;font-weight:760;white-space:nowrap}.activity-mode-buttons button:hover{color:#e2d9d5}.activity-mode-buttons button.active{background:#373136;color:#f3ebe7;box-shadow:0 1px 4px rgba(0,0,0,.22)}
@@ -34,7 +34,7 @@ if (host) {
     .activity-recent{margin-top:20px;padding-top:4px;border-top:1px solid #292529}.activity-recent .activity-list,.activity-recent .activity-empty{display:none}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{display:grid}.activity-recent .activity-section-head{margin:0;padding:12px 2px 2px;cursor:pointer;user-select:none}.activity-recent .activity-section-head:hover{color:#eee5e1}.activity-recent .activity-section-head:after{content:'›';margin-left:auto;font-size:19px;color:#8f8582;transform:rotate(90deg);transition:transform .15s}.activity-recent.open .activity-section-head:after{transform:rotate(-90deg)}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{margin-top:8px}.activity-recent .activity-row{grid-template-columns:34px minmax(0,1fr) auto;padding:9px 11px;border-radius:11px;background:#111012}.activity-recent .activity-task-icon{width:32px;height:32px;border-radius:9px}.activity-recent .activity-task-icon svg{width:18px;height:18px}.activity-recent .activity-row-head strong{font-size:13px}.activity-recent .activity-detail,.activity-recent .activity-progress{display:none}
     @keyframes activity-pulse{0%,100%{transform:scale(.72);opacity:.55}50%{transform:scale(1.2);opacity:1}}@keyframes activity-spin{to{transform:rotate(360deg)}}@keyframes activity-slide{0%{transform:translateX(-115%)}50%{transform:translateX(105%)}100%{transform:translateX(315%)}}
     @media(max-width:700px){.activity-button{padding:0 7px}.activity-button .activity-label{display:none}.activity-body{padding:14px}.activity-setting{align-items:stretch;flex-direction:column}.activity-mode-buttons{display:grid;grid-template-columns:repeat(3,1fr)}.activity-mode-buttons button{min-width:0}.activity-row{grid-template-columns:38px minmax(0,1fr) auto;padding:11px}.activity-task-icon{width:36px;height:36px}}
-    @media(prefers-reduced-motion:reduce){.activity-dot,.activity-progress i,.activity-orb i{animation:none!important;transition:none!important}}
+    @media(prefers-reduced-motion:reduce){.activity-gauge,.activity-progress i,.activity-orb i{animation:none!important;transition:none!important}}
   `;
   document.head.append(style);
   document.querySelector('.preview-mode-row')?.remove();
@@ -42,7 +42,7 @@ if (host) {
   button = document.createElement('button');
   button.type = 'button';
   button.className = 'activity-button';
-  button.innerHTML = '<i class="activity-dot"></i><span class="activity-label">Activity</span><span class="activity-count"></span>';
+  button.innerHTML = '<i class="activity-gauge"></i><span class="activity-label">Activity</span><span class="activity-count"></span>';
   const menu = host.querySelector('.client-menu');
   menu?.before(button);
   if (!menu) host.append(button);
@@ -160,7 +160,13 @@ if (host) {
         const hashing=diagnostics.jobType==='hash'||folder.hashing;
         const done=Number(diagnostics.hashProcessed)||0;
         const total=Number(diagnostics.hashTotal)||0;
-        active.push({id:`folder:${key}`,source:'folder',kind:hashing?'Hash':'Index',title:name,status:'running',detail:total?`${done.toLocaleString()} / ${total.toLocaleString()} files`:`${Number(folder.files||0).toLocaleString()} files found`,percent:total?done/total*100:null,phase:hashing?'Hashing files':'Indexing files'});
+        active.push({
+          id:`folder:${key}`,source:'folder',kind:hashing?'Hash':'Index',type:hashing?'hash':'sync',title:name,
+          label:`${hashing?'Hash':'Index'} ${name}`,path,status:'running',cancelable:false,
+          detail:total?`${done.toLocaleString()} / ${total.toLocaleString()} files`:`${Number(folder.files||0).toLocaleString()} files found`,
+          percent:total?done/total*100:null,phase:hashing?'Hashing content':'Indexing files',
+          progress:{path,phase:hashing?'Hashing content':'Indexing files',hashed:hashing?done:undefined,checked:hashing?undefined:done,total,indeterminate:!total}
+        });
       } else if(folder.pending&&!globalHere){
         queued.push({id:`folder:${key}`,source:'folder',kind:folder.protected===false?'Index':'Sync',title:name,status:'queued',detail:folder.waitingForIdle?'Waiting until your PC is idle':'Waiting to start'});
       }
@@ -188,7 +194,8 @@ if (host) {
       if(folder.previewQueueBackground)detail.push(`${Number(folder.previewQueueBackground).toLocaleString()} queued`);
       if(folder.previewFailed)detail.push(`${Number(folder.previewFailed).toLocaleString()} failed`);
       if(waiting)detail.push('Waiting until your PC is idle');
-      const item={id:`thumbs:${String(folder.path||'').toLowerCase()}`,source:'preview',kind:'Thumbnail',title:name,status:activeCount?'running':'queued',detail:detail.join(' · '),percent:total?done/total*100:null,phase:checking?'Checking thumbnails':waiting?'Waiting until your PC is idle':'Generating thumbnails'};
+      const phase=checking?'Checking thumbnails':waiting?'Waiting until your PC is idle':'Generating thumbnails';
+      const item={id:`thumbs:${String(folder.path||'').toLowerCase()}`,source:'preview',kind:'Thumbnail',type:'thumbnail',title:name,label:`Thumbnails ${name}`,path:folder.path,status:activeCount?'running':'queued',cancelable:false,detail:detail.join(' · '),percent:total?done/total*100:null,phase,progress:{path:folder.path,phase,checked:done,total,indeterminate:!total}};
       (activeCount?active:queued).push(item);
     }
 
@@ -273,14 +280,33 @@ if (host) {
     return {className:'',title:'Caught up',detail:'Nothing running'};
   }
 
+  function buttonProgress(model){
+    if(model.active.length!==1)return null;
+    const item=model.active[0];
+    if(item.percent!=null)return {percent:pct(item.percent),indeterminate:false};
+    if(item.progress){
+      const value=progress(item);
+      if(value.percent!=null&&!value.indeterminate)return {percent:pct(value.percent),indeterminate:false};
+    }
+    return {percent:0,indeterminate:true};
+  }
+
   function render(model){
     lastModel=model;
     const active=model.active.length, queued=model.queued.length;
     const errors=model.recent.filter(item=>item.status==='error'&&Date.now()-new Date(item.finishedAt).getTime()<86400000).length;
+    const compact=buttonProgress(model);
+    const gauge=button.querySelector('.activity-gauge');
     button.classList.toggle('working',active>0);
     button.classList.toggle('issue',!active&&errors>0);
+    gauge?.classList.toggle('indeterminate',Boolean(active&&compact?.indeterminate));
+    button.style.setProperty('--activity-progress',`${compact?.percent||0}%`);
     button.querySelector('.activity-count').textContent=active||queued?String(active+queued):'';
-    button.title=active?`${active} working${queued?` · ${queued} waiting`:''}`:queued?`${queued} waiting`:'Activity';
+    const primary=active===1?taskTitle(model.active[0]):'';
+    button.title=active===1&&compact&&!compact.indeterminate
+      ? `${primary} · ${Math.round(compact.percent)}%`
+      : active?`${active} working${queued?` · ${queued} waiting`:''}`:queued?`${queued} waiting`:'Activity';
+    window.dispatchEvent(new CustomEvent('mochimono:activity-model',{detail:model}));
     window.dispatchEvent(new CustomEvent('mochimono:background-state',{detail:{mode:model.state?.settings?.thumbnailMode||'idle',allowed:Boolean(model.state?.background?.allowed)}}));
     if(!dialog?.open||Date.now()<interactionUntil)return;
 
