@@ -703,6 +703,75 @@ export async function handleProtectionServer(req, res, url) {
     return true;
   }
 
+  const intentRoute = /^\/api\/protection\/intents\/([^/]+)$/.exec(url.pathname);
+  if (intentRoute && req.method === 'POST') {
+    const device=decodeURIComponent(intentRoute[1]).trim().slice(0,120);
+    const body=await readJson(req,4*1024*1024);
+    const scanId=String(body.scanId||'').slice(0,100);
+    const entries=Array.isArray(body.entries)?body.entries:[];
+    if(!device||!scanId)return void json(res,400,{error:'device and scanId are required'});
+    if(entries.length>2000)return void json(res,400,{error:'entries must contain at most 2000 files'});
+    const save=db.prepare(`
+      INSERT INTO protection_intents(device_name,root_path,relative_path,object_hash,size,import_id,scan_id,updated_at)
+      VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(device_name,root_path,relative_path) DO UPDATE SET
+        object_hash=excluded.object_hash,size=excluded.size,import_id=excluded.import_id,
+        scan_id=excluded.scan_id,updated_at=excluded.updated_at
+    `);
+    const stamp=now();
+    try{
+      db.exec('BEGIN IMMEDIATE');
+      for(const entry of entries){
+        const hash=String(entry.hash||'');
+        if(hash&&!validHash(hash))continue;
+        save.run(
+          device,String(entry.rootPath||'').slice(0,2000),String(entry.path||'').slice(0,4000),
+          hash,Math.max(0,Number(entry.size)||0),Math.max(0,Number(entry.importId)||0),scanId,stamp
+        );
+      }
+      if(body.final===true)db.prepare('DELETE FROM protection_intents WHERE lower(device_name)=lower(?) AND scan_id<>?').run(device,scanId);
+      db.exec('COMMIT');
+    }catch(error){
+      try{db.exec('ROLLBACK');}catch{}
+      throw error;
+    }
+    if(body.final===true)bumpCatalog();
+    invalidate();
+    json(res,200,{ok:true,accepted:entries.length,final:body.final===true});
+    return true;
+  }
+
+  if(req.method==='POST'&&url.pathname==='/api/protection/lifecycle'){
+    const body=await readJson(req,2*1024*1024);
+    const hashes=[...new Set((body.hashes||[]).map(String).filter(validHash))];
+    if(hashes.length>5000)return void json(res,400,{error:'hashes must contain at most 5000 files'});
+    const mode=String(body.mode||'');
+    if(mode&&mode!=='remote-only')return void json(res,400,{error:'Invalid lifecycle'});
+    const save=db.prepare(`
+      INSERT INTO object_lifecycle(object_hash,mode,updated_at) VALUES(?,'remote-only',?)
+      ON CONFLICT(object_hash) DO UPDATE SET mode='remote-only',updated_at=excluded.updated_at
+    `);
+    const remove=db.prepare('DELETE FROM object_lifecycle WHERE object_hash=?');
+    const active=db.prepare("SELECT 1 FROM objects WHERE hash=? AND state='active'");
+    const stamp=now();
+    try{
+      db.exec('BEGIN IMMEDIATE');
+      for(const hash of hashes){
+        if(!active.get(hash))continue;
+        if(mode==='remote-only')save.run(hash,stamp);
+        else remove.run(hash);
+      }
+      db.exec('COMMIT');
+    }catch(error){
+      try{db.exec('ROLLBACK');}catch{}
+      throw error;
+    }
+    bumpCatalog();
+    invalidate();
+    json(res,200,{ok:true,count:hashes.length,mode:mode||'unlinked'});
+    return true;
+  }
+
   const sourceReplicas = /^\/api\/protection\/source-replicas\/([^/]+)$/.exec(url.pathname);
   if (sourceReplicas && req.method === 'POST') {
     const device = decodeURIComponent(sourceReplicas[1]).trim().slice(0, 120);
