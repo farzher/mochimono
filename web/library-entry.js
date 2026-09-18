@@ -1,4 +1,5 @@
 const CLIENT = document.documentElement.classList.contains('client-library');
+const FIRST_PAGE = 720;
 const PAGE = 5000;
 const ACTIVE_POLL_MS = 2_000;
 const IDLE_POLL_MS = 5 * 60_000;
@@ -21,13 +22,13 @@ async function fetchJson(path) {
 
 const pathName = value => String(value || '').replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).at(-1) || String(value || '');
 
-async function localPage(path, offset) {
-  const params = new URLSearchParams({ limit:String(PAGE), offset:String(offset) });
+async function localPage(path, offset, limit = PAGE) {
+  const params = new URLSearchParams({ limit:String(limit), offset:String(offset) });
   if (path) params.set('path', path);
   return fetchJson(`/api/client/local-catalog?${params}`);
 }
 
-async function localSnapshot() {
+async function localSnapshot({ onPage = null } = {}) {
   let state = null;
   try { state = await fetchJson('/api/state'); } catch {}
   if (state?.server) runtime.cloudOnline = Boolean(state.server.online);
@@ -46,31 +47,44 @@ async function localSnapshot() {
   // when that source drive is unplugged. That preserves offline metadata and any
   // already-generated thumbnails instead of making the library appear empty.
   const paths = sources.length ? sources : [{ path:'', importId:0, protected:false }];
+
+  const consume = async (source, offset, limit) => {
+    const data = await localPage(source.path, offset, limit);
+    const page = [];
+    for (const raw of data.files || []) {
+      const hash = String(raw?.hash || '');
+      if (!hash) continue;
+      const previous = seenLocations.get(hash);
+      const searchText = [previous?.searchText, raw.searchText, source.path].filter(Boolean).join(' ').trim();
+      const importIds = source.importId
+        ? [...new Set([...(previous?.importIds || []), source.importId])]
+        : previous?.importIds || [];
+      const next = {
+        ...(previous || {}),
+        ...raw,
+        searchText,
+        importIds,
+        exactImportIds:importIds,
+        localManaged:true,
+        localAvailable:Boolean(raw.localAvailable)
+      };
+      seenLocations.set(hash, next);
+      page.push(next);
+    }
+    if (page.length) onPage?.(page);
+    return data.nextOffset == null ? null : Number(data.nextOffset);
+  };
+
+  // Give every Source a small first-paint page before a huge Source is allowed
+  // to monopolize the rest of startup.
+  const offsets = new Map();
+  for (const source of paths) offsets.set(source, await consume(source, 0, FIRST_PAGE));
+
+  // Throughput pass: once something useful is visible, finish each Source with
+  // large pages in the background.
   for (const source of paths) {
-    let offset = 0;
-    do {
-      const data = await localPage(source.path, offset);
-      for (const raw of data.files || []) {
-        const hash = String(raw?.hash || '');
-        if (!hash) continue;
-        const previous = seenLocations.get(hash);
-        const searchText = [previous?.searchText, raw.searchText, source.path].filter(Boolean).join(' ').trim();
-        const importIds = source.importId
-          ? [...new Set([...(previous?.importIds || []), source.importId])]
-          : previous?.importIds || [];
-        const next = {
-          ...(previous || {}),
-          ...raw,
-          searchText,
-          importIds,
-          exactImportIds:importIds,
-          localManaged:true,
-          localAvailable:Boolean(raw.localAvailable)
-        };
-        seenLocations.set(hash, next);
-      }
-      offset = data.nextOffset == null ? null : Number(data.nextOffset);
-    } while (offset != null);
+    let offset = offsets.get(source);
+    while (offset != null) offset = await consume(source, offset, PAGE);
 
     if (source.importId) imports.set(source.importId, {
       id:source.importId,
@@ -186,26 +200,34 @@ async function prepareOfflineCatalog() {
   if (!CLIENT) return runtime.offlineSnapshot;
   const cache = window.mochimonoCatalogCache;
   if (!cache?.load || !cache?.save) return runtime.offlineSnapshot;
-  const [cached, local] = await Promise.all([
-    cache.load().catch(() => null),
-    localSnapshot().catch(() => ({ files:[], imports:[] }))
-  ]);
-  const merged = mergeSnapshot(cached, local);
-  runtime.offlineSnapshot = merged.snapshot;
-  runtime.offlineReady = true;
 
-  // The Library is already allowed to paint from its quick IndexedDB snapshot.
-  // Reconcile local-only rows behind that first paint instead of blocking module
-  // startup on a full local catalog walk and IndexedDB rewrite.
-  if (local.files.length) window.mochimonoLibrary?.upsertMany?.(local.files);
-  if ((local.files.length || cached?.files?.length) &&
-      (merged.changed || merged.snapshot.imports.length !== Number(cached?.imports?.length || 0))) {
-    cache.save(merged.snapshot.files, {
-      version:merged.snapshot.version,
-      imports:merged.snapshot.imports
-    }).catch(() => {});
+  window.mochimonoLocalCatalogLoading = true;
+  dispatchEvent(new CustomEvent('mochimono:local-catalog-loading'));
+  try {
+    const cached = await cache.load().catch(() => null);
+    const local = await localSnapshot({
+      onPage:files => window.mochimonoLibrary?.upsertMany?.(files)
+    }).catch(() => ({ files:[], imports:[] }));
+    const merged = mergeSnapshot(cached, local);
+    runtime.offlineSnapshot = merged.snapshot;
+    runtime.offlineReady = true;
+
+    // Pages were already merged into the live Library as they arrived. Persist
+    // the completed snapshot in the background without replaying all local rows.
+    if ((local.files.length || cached?.files?.length) &&
+        (merged.changed || merged.snapshot.imports.length !== Number(cached?.imports?.length || 0))) {
+      cache.save(merged.snapshot.files, {
+        version:merged.snapshot.version,
+        imports:merged.snapshot.imports
+      }).catch(() => {});
+    }
+    return runtime.offlineSnapshot;
+  } finally {
+    window.mochimonoLocalCatalogLoading = false;
+    dispatchEvent(new CustomEvent('mochimono:local-catalog-ready', {
+      detail:{ count:runtime.offlineSnapshot.files.length }
+    }));
   }
-  return runtime.offlineSnapshot;
 }
 
 function jsonResponse(data) {
