@@ -22,6 +22,7 @@ if (storagePane && sourceSection) {
     .backup-health{--ring:#7fbe90;display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:18px;align-items:center;padding:18px 19px;border-radius:18px;background:#141214;box-shadow:inset 0 0 0 1px #2b272b}.backup-health.needs{--ring:#d3a067}.backup-health.empty{--ring:#686164}
     .backup-health-ring{--p:0%;position:relative;width:70px;height:70px;display:grid;place-items:center;border-radius:50%;background:conic-gradient(var(--ring) var(--p),#2b272b 0)}.backup-health-ring:after{content:'';position:absolute;inset:7px;border-radius:50%;background:#141214}.backup-health-ring b{position:relative;z-index:1;color:#eee6e2;font-size:16px;font-weight:820;font-variant-numeric:tabular-nums}.backup-health.empty .backup-health-ring b{color:#8c8380}
     .backup-health-copy{min-width:0}.backup-health-title{color:#f1e9e5;font-size:21px;font-weight:820;letter-spacing:-.028em}.backup-health-sub{margin-top:4px;color:#9b918d;font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums}.backup-health-sub:empty{display:none}.backup-health-actions{display:flex;align-items:center;gap:8px}.backup-health-actions button{min-width:104px;height:37px;padding:0 14px;border-radius:9px;white-space:nowrap;font-size:12px;font-weight:780}
+    .backup-review{display:flex;align-items:center;gap:12px;margin-top:10px;padding:11px 14px;border-radius:12px;background:#171417;box-shadow:inset 0 0 0 1px #32292b}.backup-review i{width:8px;height:8px;flex:0 0 auto;border-radius:50%;background:#d3a067}.backup-review div{min-width:0;flex:1}.backup-review strong{display:block;color:#dfd6d2;font-size:12.5px;font-weight:780}.backup-review small{display:block;margin-top:2px;color:#8d8480;font-size:10.5px}.backup-review button{height:30px;padding:0 10px;border-radius:8px;font-size:10.5px;font-weight:760}
     .backup-job{margin-top:11px}.backup-job-head{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#c9bfbb;font-size:11.5px;font-weight:700}.backup-job-head span:last-child{color:#8d8581;font-variant-numeric:tabular-nums}.backup-progress{height:6px;margin-top:7px;overflow:hidden;border-radius:999px;background:#2b272b}.backup-progress i{display:block;height:100%;border-radius:inherit;background:var(--ring);transition:width .25s ease}.backup-progress.indeterminate i{width:34%;animation:backup-slide 1.3s ease-in-out infinite}
 
     dialog.backup-center-dialog{width:min(760px,calc(100vw - 28px));max-height:min(860px,calc(100dvh - 28px));padding:0;overflow:hidden}.backup-center-dialog .dialog-head{padding:19px 24px 16px;border-bottom:1px solid #292529}.backup-center-dialog .dialog-head h3{font-size:19px;font-weight:820;letter-spacing:-.025em}.backup-settings{max-height:calc(min(860px,100dvh - 28px) - 62px);overflow:auto;padding:22px 24px 26px;scrollbar-gutter:stable}
@@ -104,15 +105,21 @@ if (storagePane && sourceSection) {
     const total=Number(summary.files)||0;
     const protectedFiles=Number(summary.protectedFiles)||0;
     const needs=Number(summary.needsProtection)||0;
+    const preparing=Number(summary.preparingFiles)||0;
+    const remaining=Math.max(0,total-protectedFiles);
+    const unlinked=Number(summary.unlinkedFiles)||0;
+    const remoteOnly=Number(summary.remoteOnlyFiles)||0;
     const percent=total?Math.round(protectedFiles/total*100):0;
-    const totalBytes=PLAN_ORDER.reduce((sum,level)=>sum+(Number(summary.levels?.[level]?.bytes)||0),0);
+    const totalBytes=Number(summary.bytes)||0;
     const job=model.state.job?.status==='running'&&model.state.job?.type==='protection'?model.state.job:null;
     const progress=job?.progress||{};
-    const title=!total?'No stored files':`${total.toLocaleString()} stored ${total===1?'file':'files'}`;
-    const sub=!total?'':needs
-      ? `${needs.toLocaleString()} need another copy · ${protectedFiles.toLocaleString()} protected${totalBytes?` · ${bytes(totalBytes)}`:''}`
-      : `All have required copies${totalBytes?` · ${bytes(totalBytes)}`:''}`;
-    const stateClass=!total?'empty':needs?'needs':'';
+    const title=!total?'Nothing selected for backup':remaining?job?'Backing up':`${remaining.toLocaleString()} need backup`:'Everything is protected';
+    const parts=[];
+    if(total)parts.push(`${protectedFiles.toLocaleString()} of ${total.toLocaleString()} protected`);
+    if(preparing)parts.push(`${preparing.toLocaleString()} preparing`);
+    if(remoteOnly)parts.push(`${remoteOnly.toLocaleString()} remote only`);
+    if(totalBytes)parts.push(bytes(totalBytes));
+    const stateClass=!total?'empty':remaining?'needs':'';
     const copied=Number(progress.copied)||0;
     const jobText=[progress.phase||'Protecting',copied?`${copied.toLocaleString()} copied`:'',progress.copiedBytes?bytes(progress.copiedBytes):''].filter(Boolean).join(' · ');
     const jobPercent=Number(progress.totalBytes)>0?Math.min(100,Number(progress.copiedBytes||progress.doneBytes||0)/Number(progress.totalBytes)*100):null;
@@ -122,15 +129,16 @@ if (storagePane && sourceSection) {
         <div class="backup-health-ring" style="--p:${Math.max(0,Math.min(100,percent))}%"><b>${total?`${percent}%`:'—'}</b></div>
         <div class="backup-health-copy">
           <div class="backup-health-title">${esc(title)}</div>
-          <div class="backup-health-sub">${esc(sub)}</div>
+          <div class="backup-health-sub">${esc(parts.join(' · '))}</div>
           ${job?`<div class="backup-job"><div class="backup-job-head"><span>${esc(jobText)}</span>${jobPercent!=null?`<span>${Math.round(jobPercent)}%</span>`:''}</div><div class="backup-progress ${jobPercent==null?'indeterminate':''}"><i style="width:${jobPercent==null?'34%':`${Math.max(1,jobPercent)}%`}"></i></div></div>`:''}
         </div>
         <div class="backup-health-actions">
-          ${total?`<button class="secondary" type="button" data-view-managed>View files</button>`:''}
-          ${job?`<button class="secondary" type="button" disabled>Working…</button>`:needs?`<button class="secondary" type="button" data-protect-now>Protect now</button>`:''}
+          ${total?`<button class="secondary" type="button" data-view-protection="managed">View files</button>`:''}
+          ${job?`<button class="secondary" type="button" disabled>Working…</button>`:remaining?`<button class="secondary" type="button" data-protect-now>Protect now</button>`:''}
         </div>
-      </div>`;
-    body.querySelector('[data-view-managed]')?.addEventListener('click',viewManagedFiles);
+      </div>
+      ${unlinked?`<div class="backup-review"><i></i><div><strong>${unlinked.toLocaleString()} ${unlinked===1?'file needs':'files need'} review</strong><small>No longer linked to a current source.</small></div><button class="secondary" type="button" data-view-protection="unlinked">Review</button></div>`:''}`;
+    body.querySelectorAll('[data-view-protection]').forEach(button=>button.addEventListener('click',()=>viewProtection(button.dataset.viewProtection)));
     body.querySelector('[data-protect-now]')?.addEventListener('click',protectNow);
   }
 
@@ -221,7 +229,10 @@ if (storagePane && sourceSection) {
     const summary=model?.state?.summary||{};
     const background=model?.state?.config?.background||'low';
     const total=Number(summary.files)||0;
-    const needs=Number(summary.needsProtection)||0;
+    const protectedFiles=Number(summary.protectedFiles)||0;
+    const remaining=Math.max(0,total-protectedFiles);
+    const unlinked=Number(summary.unlinkedFiles)||0;
+    const remoteOnly=Number(summary.remoteOnlyFiles)||0;
     const levels=PLAN_ORDER.filter(level=>Number(summary.levels?.[level]?.files)>0);
     const profile=levels.length===1?`${PLANS[levels[0]].name} protection`:levels.length>1?'Mixed protection':'No protected files';
     const folders=sourceRows();
@@ -229,7 +240,8 @@ if (storagePane && sourceSection) {
     box.innerHTML=`
       <div class="dialog-head"><h3>Backup</h3><button class="icon" data-close>×</button></div>
       <div class="backup-settings">
-        <div class="backup-dialog-summary ${needs?'needs':''}"><i></i><div><strong>${total?`${total.toLocaleString()} stored ${total===1?'file':'files'}`:'No stored files'}</strong><span>${total?(needs?`${needs.toLocaleString()} need another copy · ${profile}`:`All have required copies · ${profile}`):'Files appear here after Mochimono stores them.'}</span></div>${total?'<button class="backup-summary-view" type="button" data-view-managed>View files</button>':''}</div>
+        <div class="backup-dialog-summary ${remaining?'needs':''}"><i></i><div><strong>${!total?'Nothing selected for backup':remaining?`${protectedFiles.toLocaleString()} of ${total.toLocaleString()} protected`:'Everything is protected'}</strong><span>${total?`${profile}${remoteOnly?` · ${remoteOnly.toLocaleString()} remote only`:''}`:'Add or protect a source folder to start.'}</span></div>${total?'<button class="backup-summary-view" type="button" data-view-protection="managed">View files</button>':''}</div>
+        ${unlinked?`<div class="backup-review"><i></i><div><strong>${unlinked.toLocaleString()} ${unlinked===1?'file needs':'files need'} review</strong><small>Stored by Mochimono but no longer linked to a current source.</small></div><button class="secondary" type="button" data-view-protection="unlinked">Review</button></div>`:''}
 
         <section class="backup-simple-section"><h4>Backup locations</h4><div class="backup-location-list">${simpleDestinationRows()}</div></section>
 
@@ -251,16 +263,19 @@ if (storagePane && sourceSection) {
     box.querySelectorAll('[data-rely]').forEach(button=>button.addEventListener('click',toggleReliance));
     box.querySelectorAll('[data-representation]').forEach(select=>select.addEventListener('change',updateRepresentation));
     box.querySelectorAll('[data-forget-backup]').forEach(button=>button.addEventListener('click',forgetBackup));
-    box.querySelectorAll('[data-view-managed]').forEach(button=>button.addEventListener('click',viewManagedFiles));
+    box.querySelectorAll('[data-view-protection]').forEach(button=>button.addEventListener('click',()=>viewProtection(button.dataset.viewProtection)));
     box.querySelector('[data-background]').addEventListener('change',updateBackground);
   }
 
-  function viewManagedFiles() {
+  function viewProtection(mode) {
     if(dialog?.open)dialog.close();
-    const shell=window.mochimonoNavigationShell;
-    if(shell?.open)shell.open({ where:'server' });
-    else document.querySelector('[data-client-tab="library"]')?.click();
-    requestAnimationFrame(()=>document.querySelector('#filesFrame')?.contentWindow?.mochimonoLibrary?.setLocationFilter?.('server'));
+    document.querySelector('[data-client-tab="library"]')?.click();
+    const open=attempt=>{
+      const library=document.querySelector('#filesFrame')?.contentWindow?.mochimonoLibrary;
+      if(library?.showProtection)return library.showProtection(mode);
+      if(attempt<20)setTimeout(()=>open(attempt+1),50);
+    };
+    open(0);
   }
 
   async function forgetBackup(event) {
@@ -331,6 +346,7 @@ if (storagePane && sourceSection) {
       const next=await control('/api/client/protection/state');
       model={state:next,storage:model?.storage||{policies:[],retention:[]},storageLoaded:Boolean(model?.storageLoaded)};
       renderMain();
+      window.dispatchEvent(new CustomEvent('mochimono:protection-summary',{detail:next.summary||{}}));
       if(dialog?.open){await ensureStorageSnapshot();renderDialog();}
     } catch(error) { section.querySelector('[data-backup-body]').innerHTML=`<div class="backup-empty">${esc(error.message)}</div>`; }
     finally { busy=false;schedule(5000); }
