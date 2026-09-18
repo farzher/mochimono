@@ -293,7 +293,6 @@ async function refreshFolderStats() {
       row.querySelector('[data-folder-size]').textContent = bytes(item.bytes);
       row.querySelector('[data-folder-free]').textContent = `${bytes(item.freeBytes)} free`;
       if (item.protected === false) setRelativeTime(row.querySelector('[data-folder-status]'), item.lastIndexed, 'Not indexed yet');
-      else renderFolderProtection(protectionSummary);
       const diagnostics = item.diagnostics || {};
       const key = String(item.path || '').replace(/[\\/]+$/, '').toLowerCase();
       const diagnosticJob = diagnostics.running && diagnostics.jobType === 'hash' ? {
@@ -306,6 +305,7 @@ async function refreshFolderStats() {
       meter.style.width = item.bytes ? `max(2px, ${ratio}%)` : '0';
       meter.parentElement.title = `${bytes(item.bytes)} of ${bytes(item.capacityBytes)}`;
     }
+    renderFolderProtection(protectionSummary);
   } catch {}
 }
 
