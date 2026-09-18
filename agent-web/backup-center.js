@@ -17,25 +17,20 @@ if (storagePane && sourceSection) {
 
   const style = document.createElement('style');
   style.textContent = `
-    .backup-center{margin-top:20px;padding-top:27px;border-top:1px solid #211e21}
-    .backup-center-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
-    .backup-center-head h2{margin:0;color:#eee6e2;font-size:19px;font-weight:760;letter-spacing:-.025em}
-    .backup-center-manage{border:0;background:transparent;color:#9d9490;font-size:12px;font-weight:700;padding:6px 2px}.backup-center-manage:hover{color:#eee6e2}
-    .backup-health{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;padding:15px 16px;border:1px solid #2b282b;border-radius:15px;background:#121013}
-    .backup-health-copy{min-width:0}.backup-health-title{display:flex;align-items:center;gap:9px;color:#eee6e2;font-size:17px;font-weight:760;letter-spacing:-.02em}.backup-health-dot{width:9px;height:9px;border-radius:50%;background:#7fbe90;box-shadow:0 0 0 3px rgba(127,190,144,.08)}.backup-health.needs .backup-health-dot{background:#d8a36c}.backup-health.empty .backup-health-dot{background:#676164;box-shadow:none}
-    .backup-health-sub{margin-top:5px;color:#918985;font-size:11px;font-variant-numeric:tabular-nums}.backup-health-sub:empty{display:none}
-    .backup-health-actions{display:flex;align-items:center;gap:7px}.backup-health-actions button{white-space:nowrap}
-    .backup-progress{height:4px;margin-top:10px;overflow:hidden;border-radius:99px;background:#292529}.backup-progress i{display:block;height:100%;border-radius:inherit;background:#83bb91;transition:width .2s ease}.backup-health.needs .backup-progress i{background:#cfa06f}.backup-health.empty .backup-progress{display:none}
-    .backup-job{margin-top:8px;padding:8px 10px;border:1px solid #282429;border-radius:9px;background:#0f0e10;color:#9b928f;font-size:10px}.backup-job strong{color:#d8cfcb}
-    .backup-plans{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:8px}.backup-plan{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;padding:8px 9px;border:1px solid #272428;border-radius:9px;background:#100f11}.backup-plan strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cfc6c2;font-size:10px}.backup-plan b{color:#aaa19d;font-size:10px;font-weight:730;font-variant-numeric:tabular-nums}
-    .backup-center-dialog{width:min(780px,calc(100vw - 28px));max-height:min(820px,calc(100dvh - 28px));overflow:auto}.backup-center-dialog .dialog-head{position:sticky;top:0;z-index:4;background:#151315}
-    .backup-settings{display:grid;gap:20px}.backup-settings-section{display:grid;gap:7px}.backup-settings-section h4{margin:0;color:#dcd3cf;font-size:12px}
-    .backup-plan-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.backup-plan-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;border:1px solid #292529;border-radius:9px;background:#111012}.backup-plan-row strong{color:#d2c9c5;font-size:10px}.backup-plan-row b{color:#8d8581;font-size:10px;font-weight:680}
-    .backup-source-list,.backup-destination-list{display:grid;gap:6px}.backup-source-row,.backup-destination-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:9px 10px;border:1px solid #292529;border-radius:9px;background:#111012}.backup-row-copy{min-width:0}.backup-row-copy strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#d6cdca;font-size:11px}.backup-row-copy small{display:block;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#77706e;font-size:9px}.backup-source-row select,.backup-destination-row select,.backup-background select{width:auto;min-width:118px;padding:6px 8px;font-size:10px}
-    .backup-destination-controls{display:flex;align-items:center;justify-content:flex-end;gap:5px;flex-wrap:wrap}.backup-destination-controls label{display:flex;align-items:center;gap:4px;color:#817976;font-size:9px}.backup-destination-controls select{min-width:108px}.backup-rely{border:0;border-radius:6px;background:#242125;color:#c3b9b5;font-size:9px;font-weight:700;padding:6px 7px}.backup-rely.off{background:transparent;color:#726a68}
-    .backup-background{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 10px;border:1px solid #292529;border-radius:9px;background:#111012}.backup-background strong{color:#d6cdca;font-size:11px}
-    .backup-empty{padding:8px 2px;color:#807875;font-size:10px}
-    @media(max-width:760px){.backup-health{grid-template-columns:1fr}.backup-plans{grid-template-columns:repeat(2,minmax(0,1fr))}.backup-plan-list{grid-template-columns:1fr}.backup-source-row,.backup-destination-row{grid-template-columns:1fr}.backup-destination-controls{justify-content:flex-start}}
+    .backup-center{margin-top:24px;padding-top:30px;border-top:1px solid #211e21}
+    .backup-center-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:13px}.backup-center-head h2{margin:0;color:#f0e8e4;font-size:21px;font-weight:800;letter-spacing:-.03em}.backup-center-manage{height:32px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:#9e9490;font-size:12px;font-weight:760}.backup-center-manage:hover{background:#211e22;color:#eee6e2}
+    .backup-health{--ring:#7fbe90;display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:18px;align-items:center;padding:18px 19px;border-radius:18px;background:#141214;box-shadow:inset 0 0 0 1px #2b272b}.backup-health.needs{--ring:#d3a067}.backup-health.empty{--ring:#686164}
+    .backup-health-ring{--p:0%;position:relative;width:70px;height:70px;display:grid;place-items:center;border-radius:50%;background:conic-gradient(var(--ring) var(--p),#2b272b 0)}.backup-health-ring:after{content:'';position:absolute;inset:7px;border-radius:50%;background:#141214}.backup-health-ring b{position:relative;z-index:1;color:#eee6e2;font-size:16px;font-weight:820;font-variant-numeric:tabular-nums}.backup-health.empty .backup-health-ring b{color:#8c8380}
+    .backup-health-copy{min-width:0}.backup-health-title{color:#f1e9e5;font-size:21px;font-weight:820;letter-spacing:-.028em}.backup-health-sub{margin-top:4px;color:#9b918d;font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums}.backup-health-sub:empty{display:none}.backup-health-actions{display:flex;align-items:center}.backup-health-actions button{min-width:104px;height:37px;padding:0 14px;border-radius:9px;white-space:nowrap;font-size:12px;font-weight:780}
+    .backup-job{margin-top:11px}.backup-job-head{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#c9bfbb;font-size:11.5px;font-weight:700}.backup-job-head span:last-child{color:#8d8581;font-variant-numeric:tabular-nums}.backup-progress{height:6px;margin-top:7px;overflow:hidden;border-radius:999px;background:#2b272b}.backup-progress i{display:block;height:100%;border-radius:inherit;background:var(--ring);transition:width .25s ease}.backup-progress.indeterminate i{width:34%;animation:backup-slide 1.3s ease-in-out infinite}
+    .backup-center-dialog{width:min(860px,calc(100vw - 28px));max-height:min(850px,calc(100dvh - 28px));padding:0;overflow:hidden}.backup-center-dialog .dialog-head{padding:17px 20px 14px;border-bottom:1px solid #292529}.backup-center-dialog .dialog-head h3{font-size:18px;font-weight:820;letter-spacing:-.02em}.backup-settings{max-height:calc(min(850px,100dvh - 28px) - 60px);overflow:auto;display:grid;padding:20px 22px 24px}.backup-settings-section{display:grid;gap:11px;padding:22px 0;border-top:1px solid #282428}.backup-settings-section:first-child{padding-top:0;border-top:0}.backup-settings-section h4{margin:0;color:#e6ddd9;font-size:15px;font-weight:800;letter-spacing:-.015em}
+    .backup-plan-list{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.backup-plan-row{min-width:0;padding:14px;border-radius:13px;background:#141214;box-shadow:inset 0 0 0 1px #292529}.backup-plan-row b{display:block;color:#eee6e2;font-size:22px;font-weight:820;line-height:1;font-variant-numeric:tabular-nums}.backup-plan-row strong{display:block;margin-top:8px;color:#c9bfbb;font-size:12px;font-weight:760}.backup-plan-row small{display:block;margin-top:2px;color:#7f7774;font-size:10.5px;font-weight:650}
+    .backup-source-list,.backup-destination-list{display:grid}.backup-source-row,.backup-destination-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center;min-height:58px;padding:11px 4px;border-top:1px solid #252225}.backup-source-row:first-child,.backup-destination-row:first-child{border-top:0}.backup-row-copy{min-width:0}.backup-row-copy strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e2d9d5;font-size:14px;font-weight:760}.backup-row-copy small{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#817976;font-size:10.5px}
+    .backup-source-row select,.backup-destination-row select,.backup-background select{width:auto;min-width:138px;height:34px;padding:0 9px;font-size:11.5px;border-radius:8px}.backup-destination-controls{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}.backup-destination-controls label{display:grid;gap:3px;color:#837b78;font-size:9.5px;font-weight:700}.backup-destination-controls select{min-width:112px}.backup-rely{height:34px;padding:0 10px;border:0;border-radius:8px;background:#2b272b;color:#d3c9c5;font-size:10.5px;font-weight:760}.backup-rely.off{background:#171518;color:#756d6a}
+    .backup-background{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:52px;padding:0 4px}.backup-background strong{color:#dfd6d2;font-size:14px;font-weight:760}.backup-empty{padding:13px 2px;color:#817976;font-size:12px}
+    @keyframes backup-slide{0%{transform:translateX(-115%)}50%{transform:translateX(105%)}100%{transform:translateX(315%)}}
+    @media(max-width:760px){.backup-health{grid-template-columns:66px minmax(0,1fr)}.backup-health-ring{width:60px;height:60px}.backup-health-actions{grid-column:1/-1}.backup-health-actions button{width:100%}.backup-plan-list{grid-template-columns:repeat(2,minmax(0,1fr))}.backup-source-row,.backup-destination-row{grid-template-columns:1fr}.backup-destination-controls{justify-content:flex-start}.backup-settings{padding:17px}}
+    @media(prefers-reduced-motion:reduce){.backup-progress i{animation:none!important;transition:none!important}}
   `;
   document.head.append(style);
 
@@ -89,10 +84,6 @@ if (storagePane && sourceSection) {
     node.timer=setTimeout(()=>node.classList.remove('show'),2400);
   }
 
-  function planCount(level) {
-    return Number(model?.state?.summary?.levels?.[level]?.files)||0;
-  }
-
   function renderMain() {
     const body=section.querySelector('[data-backup-body]');
     const summary=model?.state?.summary;
@@ -105,21 +96,23 @@ if (storagePane && sourceSection) {
     const totalBytes=PLAN_ORDER.reduce((sum,level)=>sum+(Number(summary.levels?.[level]?.bytes)||0),0);
     const job=model.state.job?.status==='running'&&model.state.job?.type==='protection'?model.state.job:null;
     const progress=job?.progress||{};
-    const title=!total?'No protected files':needs?`${needs.toLocaleString()} need protection`:'Protected';
-    const sub=!total?'':`${protectedFiles.toLocaleString()} / ${total.toLocaleString()}${totalBytes?` · ${bytes(totalBytes)}`:''}`;
+    const title=!total?'No protected files':needs?`${needs.toLocaleString()} need backup`:'Protected';
+    const sub=!total?'':needs?`${protectedFiles.toLocaleString()} protected${totalBytes?` · ${bytes(totalBytes)}`:''}`:`${total.toLocaleString()} files${totalBytes?` · ${bytes(totalBytes)}`:''}`;
     const stateClass=!total?'empty':needs?'needs':'';
+    const copied=Number(progress.copied)||0;
+    const jobText=[progress.phase||'Protecting',copied?`${copied.toLocaleString()} copied`:'',progress.copiedBytes?bytes(progress.copiedBytes):''].filter(Boolean).join(' · ');
+    const jobPercent=Number(progress.totalBytes)>0?Math.min(100,Number(progress.copiedBytes||progress.doneBytes||0)/Number(progress.totalBytes)*100):null;
 
     body.innerHTML=`
       <div class="backup-health ${stateClass}">
+        <div class="backup-health-ring" style="--p:${Math.max(0,Math.min(100,percent))}%"><b>${total?`${percent}%`:'—'}</b></div>
         <div class="backup-health-copy">
-          <div class="backup-health-title"><i class="backup-health-dot"></i>${esc(title)}</div>
+          <div class="backup-health-title">${esc(title)}</div>
           <div class="backup-health-sub">${esc(sub)}</div>
-          <div class="backup-progress"><i style="width:${Math.max(0,Math.min(100,percent))}%"></i></div>
+          ${job?`<div class="backup-job"><div class="backup-job-head"><span>${esc(jobText)}</span>${jobPercent!=null?`<span>${Math.round(jobPercent)}%</span>`:''}</div><div class="backup-progress ${jobPercent==null?'indeterminate':''}"><i style="width:${jobPercent==null?'34%':`${Math.max(1,jobPercent)}%`}"></i></div></div>`:''}
         </div>
-        <div class="backup-health-actions"><button class="secondary" type="button" data-protect-now ${job||!total?'disabled':''}>${job?'Protecting…':'Protect now'}</button></div>
-      </div>
-      ${job?`<div class="backup-job"><strong>${esc(progress.phase||'Protecting')}</strong>${progress.copied!=null?` · ${Number(progress.copied).toLocaleString()}`:''}${progress.copiedBytes?` · ${bytes(progress.copiedBytes)}`:''}</div>`:''}
-      ${total?`<div class="backup-plans">${PLAN_ORDER.map(level=>`<div class="backup-plan"><strong>${esc(PLANS[level].name)}</strong><b>${planCount(level).toLocaleString()}</b></div>`).join('')}</div>`:''}`;
+        <div class="backup-health-actions"><button class="secondary" type="button" data-protect-now ${job||!total?'disabled':''}>${job?'Working…':'Protect now'}</button></div>
+      </div>`;
     body.querySelector('[data-protect-now]')?.addEventListener('click',protectNow);
   }
 
@@ -193,10 +186,10 @@ if (storagePane && sourceSection) {
     box.innerHTML=`
       <div class="dialog-head"><h3>Backup</h3><button class="icon" data-close>×</button></div>
       <div class="backup-settings">
-        <section class="backup-settings-section"><h4>Protection</h4><div class="backup-plan-list">${PLAN_ORDER.map(level=>`<div class="backup-plan-row"><strong>${esc(PLANS[level].name)}</strong><b>${Number(summary?.levels?.[level]?.files||0).toLocaleString()}</b></div>`).join('')}</div></section>
+        <section class="backup-settings-section"><h4>Protection levels</h4><div class="backup-plan-list">${PLAN_ORDER.map(level=>`<div class="backup-plan-row"><b>${Number(summary?.levels?.[level]?.files||0).toLocaleString()}</b><strong>${esc(PLANS[level].name)}</strong><small>${esc(PLANS[level].short)}</small></div>`).join('')}</div></section>
         <section class="backup-settings-section"><h4>Folders</h4><div class="backup-source-list">${sourceRows()}</div></section>
-        <section class="backup-settings-section"><h4>Destinations</h4><div class="backup-destination-list">${destinationRows()}</div></section>
-        <section class="backup-settings-section"><h4>Automatic</h4><div class="backup-background"><strong>Protection</strong><select data-background><option value="low">Low</option><option value="normal">Normal</option><option value="paused">Off</option></select></div></section>
+        <section class="backup-settings-section"><h4>Storage</h4><div class="backup-destination-list">${destinationRows()}</div></section>
+        <section class="backup-settings-section"><h4>Automatic</h4><div class="backup-background"><strong>Background backup</strong><select data-background><option value="low">Low impact</option><option value="normal">Normal</option><option value="paused">Off</option></select></div></section>
       </div>`;
     box.querySelector('[data-background]').value=background;
     box.querySelector('[data-close]').onclick=()=>box.close();
