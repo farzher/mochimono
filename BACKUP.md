@@ -1,12 +1,64 @@
 # Backup model
 
-Mochimono should answer one question first: **is my stuff safe?**
+Mochimono should answer one question first: **is the stuff I chose to protect safe?**
 
-The normal workflow is intent-based. Set how much protection a file deserves and which storage Mochimono may rely on. Mochimono chooses where missing recovery copies go. Exact placement stays inspectable, but it is not the default backup workflow.
+Backup is intent-based. The protected universe is not "everything that happens to exist on the server." It is the union of:
 
-## Four separate concepts
+- files currently belonging to protected source folders;
+- files deliberately kept **Remote only**.
 
-### Protection
+Everything else is outside the normal protection denominator.
+
+## File lifecycle
+
+Every stored object has one backup lifecycle state.
+
+### Current
+
+The file belongs to a protected source folder now.
+
+Current files participate in normal backup health and automatic protection.
+
+Before the content hash exists or the primary Mochimono copy has finished uploading, the UI may show **Preparing** or **Backing up**. Once the file is stored, its protection target is evaluated normally.
+
+### Remote only
+
+The file no longer has a current local source, but the user explicitly chose to keep it in Mochimono.
+
+Remote-only files remain part of backup health and automatic protection. Removing a local source does not itself mean the file should be forgotten.
+
+### Unlinked
+
+The file is still stored by Mochimono but no current protected source refers to it, and the user has not chosen Remote only.
+
+Unlinked files are a review queue, not healthy current backup. They:
+
+- do not count in the normal protection denominator;
+- are not automatically replicated as if they were still wanted;
+- remain visible in Library;
+- can be kept deliberately by choosing **Keep remote only**;
+- can be removed through the normal delete/trash workflow.
+
+This prevents historical server objects from silently inflating backup health.
+
+## Protection intent
+
+Each Agent publishes the current files in its protected source folders as protection intent.
+
+Intent includes enough information to describe files before and after hashing:
+
+- device;
+- source root;
+- relative path;
+- size;
+- content hash when known;
+- source import identity when known.
+
+Protection intent is the authoritative desired set for current source-backed files.
+
+Source replica inventory is separate. It describes physical local copies that can satisfy protection; intent describes what the user currently wants protected.
+
+## Protection
 
 Protection is durability: how many independent recoverable copies must exist.
 
@@ -21,13 +73,7 @@ Standard is the default. Folders set inherited protection; individual files may 
 
 A destination marked **Do not rely on** stays visible but does not satisfy protection.
 
-### Availability
-
-Availability is where the convenient working copy lives, for example Local + Cloud or Cloud-only.
-
-Cloud-only is not a weaker protection level. Removing a local source is allowed only when the copies that remain satisfy the file's protection target using destinations reachable for that operation.
-
-### Representation
+## Representation
 
 Representation is fidelity/storage cost.
 
@@ -46,7 +92,7 @@ Before removing an Original from a Squished-only backup, Mochimono creates and v
 
 File details disclose whether a known recovery copy is Original or Squished.
 
-### Destination eligibility
+## Destination eligibility
 
 Eligibility answers whether Mochimono may use a destination to satisfy a protection target.
 
@@ -55,12 +101,13 @@ The simple control is:
 - **Counts toward protection**
 - **Do not rely on**
 
-Power-user constraints can later add preferred destinations, include/exclude rules, capacity reserves, or rules such as “keep Important files here.” These belong in the same Protection planner rather than a second placement system.
+Power-user constraints can later add preferred destinations, include/exclude rules, capacity reserves, or rules such as "keep Important files here." These belong in the same Protection planner rather than a second placement system.
 
 ## Canonical recovery picture
 
-Protection summary, file details, automatic placement, and destructive local cleanup agree on the same core rules:
+Backup summary, Library, file details, automatic placement, source cards, and destructive operations must agree on the same state:
 
+- lifecycle: Current, Remote only, or Unlinked;
 - protection target;
 - whether the target is met;
 - each known physical copy;
@@ -72,20 +119,76 @@ Protection summary, file details, automatic placement, and destructive local cle
 
 Two representations on one physical drive are one independent recovery destination.
 
+## Backup health
+
+The main Backup percentage is:
+
+`protected managed files / managed files`
+
+Managed files are Current + Remote only.
+
+Unlinked files are shown separately as **Needs review** and never make the percentage look healthier.
+
+Files that are still preparing/uploading remain in the managed denominator. They therefore show honestly as not yet protected instead of disappearing until upload completes.
+
+Per-source health is derived from the same intent/protection model. A protected source should be able to say **Protected**, **Backing up**, or **Needs backup** without inventing a second set of counts.
+
 ## Automatic behavior
 
-Background Protection:
+**Protect now** is one workflow:
 
-1. inventories sources and destinations;
-2. evaluates active files against inherited or overridden protection targets;
-3. chooses an allowed destination that improves the missing copy/device/place/remote requirements;
-4. copies and verifies the data;
-5. records the recovery copy;
-6. repeats until all satisfiable targets are met.
+1. sync/hash/upload the protected source folders;
+2. publish the fresh protection intent and local source-copy inventory;
+3. evaluate Current + Remote-only files against their inherited or overridden protection targets;
+4. choose allowed destinations that improve missing copy/device/place/remote requirements;
+5. copy and verify data;
+6. record the recovery copy;
+7. repeat until all satisfiable targets are met.
+
+Background Protection uses the same planner after refreshing source inventory.
 
 For Squished-only backup destinations, normal Protection may first place an Original. Representation reconciliation then creates and verifies the Squished version and removes that drive's Original only when another Original exists elsewhere. The verified Squished copy continues to satisfy that physical recovery slot, so Protection does not immediately recreate the Original.
 
-Offline destinations remain remembered. Destructive actions such as freeing a local source use a stricter reachable-copy check and require a reachable verified Original.
+Offline destinations remain remembered. Destructive operations use stricter reachable-copy checks when required.
+
+## Safe management
+
+Potentially destructive or protection-reducing actions explain their consequences before committing.
+
+Examples:
+
+- Removing a protected source explains that its files stop being Current and that existing Mochimono copies are not automatically erased. Source-less stored objects move to Unlinked review unless they were already deliberately Remote only.
+- Disconnecting or forgetting a backup destination reports how many managed files would fall below their requested protection level.
+- Marking a destination **Do not rely on** reports the same protection impact.
+- Enabling **Squished only** states that a verified Squished copy may replace the Original on that destination once the safety conditions are met.
+- Freeing a local source requires the remaining reachable copies to satisfy the protection target and requires a reachable verified Original.
+
+## Storage UI
+
+Actual recovery destinations belong together:
+
+- Mochimono storage;
+- backup drives;
+- Friend Drives / remote peers.
+
+Local cache is app housekeeping for previews/index metadata. It is **App storage**, not a backup destination and not a recovery copy.
+
+## Library
+
+Library is the file-level source of truth rather than a separate backup browser.
+
+Every file can carry the same lifecycle/protection state used by Backup. Library exposes filters for:
+
+- In backup;
+- Current sources;
+- Protected;
+- Needs backup;
+- Remote only;
+- Unlinked.
+
+Backup aggregate rows open those exact Library views.
+
+File cards may show a compact status for Protected, Backing up, Needs backup, Remote only, or Needs review.
 
 ## Placement policy
 
@@ -101,36 +204,13 @@ The replacement is destination eligibility inside Protection. Future placement r
 - Never count Original + Squished on one physical device as two independent copies.
 - Never count a destination marked Do not rely on.
 - Never call an unverified copy protected.
+- Never treat Unlinked historical storage as current protection intent.
+- Never automatically replicate Unlinked files.
 - Never free a local source merely because an offline copy exists.
 - Trash/deletion propagates deliberately; replication must not resurrect intentionally deleted objects.
-
-## UI
-
-### Storage
-
-The Backup section leads with one health statement:
-
-- `Everything is protected`
-- `183 files need another safe copy`
-
-It then shows protection-level counts and **Protect now**.
-
-### Backup → Manage
-
-The screen has four groups:
-
-1. **Protection** — concrete targets and file counts.
-2. **Folders** — inherited protection per protected source folder.
-3. **Destinations** — Cloud, backup drives, and friend storage; representation and whether Mochimono may rely on each.
-4. **Automatic work** — background mode.
-
-### File details
-
-File details show the inherited/overridden protection level, concrete target, and every known recovery copy with its Original/Squished representation.
 
 ## Remaining work
 
 1. Retire the legacy per-drive collection scope completely and move any useful advanced placement rules into Protection.
-2. Make availability (`Keep local`, `Cloud-only`, later `Automatic`) an explicit first-class control layered on top of protection.
-3. Add destination capacity/preference rules for power users without making manual placement the default.
-4. Add recovery-impact views such as what survives if this PC, drive, or site disappears.
+2. Add destination capacity/preference rules for power users without making manual placement the default.
+3. Add recovery-impact views such as what survives if this PC, drive, or site disappears.
