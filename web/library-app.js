@@ -1099,6 +1099,19 @@ async function boot() {
       app.hidden = false;
       return;
     }
+    if (CLIENT && window.mochimonoOfflineCatalogReady) {
+      const offline = await Promise.resolve(window.mochimonoOfflineCatalogReady).catch(() => null);
+      if (generation !== bootGeneration) return;
+      if (offline?.files?.length) {
+        installSnapshot({ version:offline.version, imports:offline.imports, files:offline.files }, false);
+        login.hidden = true;
+        app.hidden = false;
+        logout.hidden = false;
+        finishBoot();
+        console.warn('Mochimono is offline; using the local catalog.', error);
+        return;
+      }
+    }
     finishBoot();
     throw error;
   }
