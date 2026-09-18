@@ -84,10 +84,6 @@ if (storagePane && sourceSection) {
     node.timer=setTimeout(()=>node.classList.remove('show'),2400);
   }
 
-  function planCount(level) {
-    return Number(model?.state?.summary?.levels?.[level]?.files)||0;
-  }
-
   function renderMain() {
     const body=section.querySelector('[data-backup-body]');
     const summary=model?.state?.summary;
@@ -193,7 +189,7 @@ if (storagePane && sourceSection) {
         <section class="backup-settings-section"><h4>Protection levels</h4><div class="backup-plan-list">${PLAN_ORDER.map(level=>`<div class="backup-plan-row"><b>${Number(summary?.levels?.[level]?.files||0).toLocaleString()}</b><strong>${esc(PLANS[level].name)}</strong><small>${esc(PLANS[level].short)}</small></div>`).join('')}</div></section>
         <section class="backup-settings-section"><h4>Folders</h4><div class="backup-source-list">${sourceRows()}</div></section>
         <section class="backup-settings-section"><h4>Storage</h4><div class="backup-destination-list">${destinationRows()}</div></section>
-        <section class="backup-settings-section"><h4>Automatic</h4><div class="backup-background"><strong>Background backup</strong><select data-background><option value="low">Low</option><option value="normal">Normal</option><option value="paused">Off</option></select></div></section>
+        <section class="backup-settings-section"><h4>Automatic</h4><div class="backup-background"><strong>Background backup</strong><select data-background><option value="low">Low impact</option><option value="normal">Normal</option><option value="paused">Off</option></select></div></section>
       </div>`;
     box.querySelector('[data-background]').value=background;
     box.querySelector('[data-close]').onclick=()=>box.close();
