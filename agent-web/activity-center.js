@@ -35,7 +35,7 @@ if (host) {
     @keyframes activity-pulse{0%,100%{transform:scale(.72);opacity:.55}50%{transform:scale(1.2);opacity:1}}@keyframes activity-spin{to{transform:rotate(360deg)}}@keyframes activity-slide{0%{transform:translateX(-115%)}50%{transform:translateX(105%)}100%{transform:translateX(315%)}}
     @media(max-width:700px){.activity-button{padding:0 7px}.activity-button .activity-label{display:none}.activity-body{padding:14px}.activity-setting{align-items:stretch;flex-direction:column}.activity-mode-buttons{display:grid;grid-template-columns:repeat(3,1fr)}.activity-mode-buttons button{min-width:0}.activity-row{grid-template-columns:38px minmax(0,1fr) auto;padding:11px}.activity-task-icon{width:36px;height:36px}}
     @media(prefers-reduced-motion:reduce){.activity-dot,.activity-progress i,.activity-orb i{animation:none!important;transition:none!important}}
-  `
+  `;
   document.head.append(style);
   document.querySelector('.preview-mode-row')?.remove();
 
