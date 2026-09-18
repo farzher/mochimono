@@ -212,11 +212,17 @@ if (host) {
   }
 
   function browserItems(){
-    return [...browserSyncs.values()].map(item=>({
-      id:`browser:${item.id}`,source:'browser',kind:'Index',title:browserNames.get(item.id)||'Browser folder',status:'running',
-      detail:[`${Number(item.scanned||0).toLocaleString()} files processed`,item.transferred?`${Number(item.transferred).toLocaleString()} new or changed`:'',item.skipped?`${Number(item.skipped).toLocaleString()} unchanged`:'' ].filter(Boolean).join(' · '),
-      phase:'Indexing and generating thumbnails'
-    }));
+    const active=[],queued=[];
+    for(const item of browserSyncs.values()){
+      const waiting=item.state==='queued';
+      const entry={
+        id:`browser:${item.id}`,source:'browser',kind:'Index',title:browserNames.get(item.id)||'Local folder',status:waiting?'queued':'running',
+        detail:waiting?'Waiting to index':[`${Number(item.scanned||0).toLocaleString()} files indexed`,item.transferred?`${Number(item.transferred).toLocaleString()} new or changed`:'',item.skipped?`${Number(item.skipped).toLocaleString()} unchanged`:'' ].filter(Boolean).join(' · '),
+        phase:waiting?'Waiting to index':'Indexing local files'
+      };
+      (waiting?queued:active).push(entry);
+    }
+    return {active,queued};
   }
 
   function squishItems(work){
@@ -233,9 +239,9 @@ if (host) {
     const active=[],queued=[],recent=[];
     if(state?.job?.status==='running')active.push(jobItem(state.job,'agent',true));
     for(const item of state?.job?.queue||[])queued.push(jobItem(item,'agent-queue'));
-    const folders=folderItems(state,stats), thumbs=thumbnailItems(state,stats), squish=squishItems(work);
-    active.push(...folders.active,...thumbs.active,...browserItems(),...squish.active);
-    queued.push(...folders.queued,...thumbs.queued,...squish.queued);
+    const folders=folderItems(state,stats), thumbs=thumbnailItems(state,stats), browser=browserItems(), squish=squishItems(work);
+    active.push(...folders.active,...thumbs.active,...browser.active,...squish.active);
+    queued.push(...folders.queued,...thumbs.queued,...browser.queued,...squish.queued);
     recent.push(...(state?.job?.recent||[]).map(item=>jobItem(item,'history')),...savedRecent().map(item=>jobItem(item,'history')),...folders.recent,...squish.recent);
     const unique=[...new Map(recent.filter(item=>item.finishedAt).sort((a,b)=>new Date(b.finishedAt)-new Date(a.finishedAt)).map(item=>[item.id,item])).values()].slice(0,24);
     return {state,active,queued,recent:unique};
@@ -367,19 +373,26 @@ if (host) {
     }).catch(()=>{});
   }
 
+  function ingestBrowserSync(detail,sourceWindow=window){
+    detail=detail||{};
+    const id=String(detail.id||'');
+    if(!id)return;
+    if(detail.state==='running'||detail.state==='queued')browserSyncs.set(id,{...detail,id});
+    else browserSyncs.delete(id);
+    loadBrowserNames(sourceWindow);
+    schedule(60);
+  }
+
   function attachBrowserFolderEvents(){
     const child=frame?.contentWindow;
     if(!child||attachedGeneration===frameGeneration)return;
     attachedGeneration=frameGeneration;
-    child.addEventListener('mochimono:browser-folder-sync',event=>{
-      const detail=event.detail||{}, id=String(detail.id||''); if(!id)return;
-      if(detail.state==='running')browserSyncs.set(id,{...detail,id}); else browserSyncs.delete(id);
-      loadBrowserNames(child);
-      schedule(80);
-    });
+    child.addEventListener('mochimono:browser-folder-sync',event=>ingestBrowserSync(event.detail,child));
     child.addEventListener('mochimono:browser-folders-ready',()=>loadBrowserNames(child),{once:true});
     loadBrowserNames(child);
   }
+
+  window.addEventListener('mochimono:browser-folder-sync',event=>ingestBrowserSync(event.detail,window));
   frame?.addEventListener('load',()=>{frameGeneration++;attachedGeneration=-1;setTimeout(attachBrowserFolderEvents,50);});
   attachBrowserFolderEvents();
 
