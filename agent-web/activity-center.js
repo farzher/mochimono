@@ -7,7 +7,7 @@ const frame = document.querySelector('#filesFrame');
 if (host) {
   const RECENT_KEY = 'mochimono.activity.recent';
   const RECENT_OPEN_KEY = 'mochimono.activity.recent.open';
-  const MODE_LABEL = { off:'When viewed', idle:'When idle', max:'Always' };
+  const MODE_LABEL = { off:'On view', idle:'Idle', max:'Always' };
   let dialog = null;
   let button = null;
   let timer = 0;
@@ -24,18 +24,18 @@ if (host) {
 
   const style = document.createElement('style');
   style.textContent = `
-    .activity-button{height:31px;display:flex;align-items:center;gap:7px;padding:0 9px;border:1px solid transparent;border-radius:8px;background:transparent;color:#8d8584;font-size:12px;font-weight:760;white-space:nowrap}
-    .activity-button:hover,.activity-button.active{border-color:#2d292d;background:#211e22;color:#eee7e3}.activity-dot{width:6px;height:6px;border-radius:50%;background:#696164}.activity-button.working .activity-dot{background:#e99b95;animation:activity-pulse .9s ease-in-out infinite}.activity-button.issue .activity-dot{background:#d3a067}.activity-count{color:#bdb3af;font-size:11px;font-variant-numeric:tabular-nums}
-    .activity-dialog{width:min(590px,calc(100vw - 24px));max-height:min(780px,calc(100dvh - 24px));padding:0;overflow:hidden}.activity-dialog .dialog-head{padding:16px 18px 13px;border-bottom:1px solid #292529}.activity-dialog .dialog-head h3{font-size:16px;font-weight:800;letter-spacing:-.015em}.activity-body{max-height:calc(min(780px,100dvh - 24px) - 58px);overflow:auto;overscroll-behavior:contain;padding:16px 18px 18px;scrollbar-gutter:stable}
-    .activity-overview{padding:2px 1px 15px}.activity-overview strong{display:block;color:#eee6e2;font-size:17px;font-weight:780;letter-spacing:-.018em}.activity-overview span{display:block;margin-top:4px;color:#918884;font-size:12px;line-height:1.4}.activity-overview.working strong{color:#f0d1cd}.activity-overview.issue strong{color:#dfb27d}
-    .activity-setting{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;margin-bottom:17px;padding:11px 12px;border:1px solid #292529;border-radius:11px;background:#111012}.activity-setting-copy strong{display:block;color:#d8cfcb;font-size:12px}.activity-setting-copy span{display:block;margin-top:2px;color:#756e6c;font-size:10px;line-height:1.35}.activity-mode-buttons{display:flex;gap:3px;padding:3px;border-radius:9px;background:#1d1a1e}.activity-mode-buttons button{height:30px;padding:0 9px;border:0;border-radius:6px;background:transparent;color:#817977;font-size:10.5px;font-weight:740;white-space:nowrap}.activity-mode-buttons button:hover{color:#ddd4d0}.activity-mode-buttons button.active{background:#302b30;color:#f0e8e4}
-    .activity-section{margin-top:15px}.activity-section-head{display:flex;align-items:center;gap:7px;margin:0 0 8px;color:#9b918e;font-size:11px;font-weight:780}.activity-section-head b{color:#706967;font-size:10px;font-weight:700}.activity-list{display:grid;gap:6px}
-    .activity-row{position:relative;padding:11px 12px;border:1px solid #292529;border-radius:11px;background:#111012}.activity-row.running{border-color:#3b3032;background:#151113}.activity-row.error{border-color:#442d31}.activity-row-head{display:flex;align-items:baseline;gap:8px;min-width:0;padding-right:58px}.activity-row-head strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e4dbd7;font-size:12.5px;font-weight:760}.activity-kind{flex:0 0 auto;color:#766e6c;font-size:9.5px;font-weight:760;text-transform:uppercase;letter-spacing:.035em}.activity-detail{margin-top:5px;color:#948b88;font-size:10.5px;line-height:1.4;font-variant-numeric:tabular-nums}.activity-current{display:block;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#696260;font-size:9.5px}.activity-progress{height:4px;margin-top:9px;overflow:hidden;border-radius:99px;background:#292529}.activity-progress i{display:block;height:100%;min-width:2px;border-radius:inherit;background:#e99b95;transition:width .3s ease}.activity-progress.indeterminate i{width:30%;animation:activity-slide 1.3s ease-in-out infinite}.activity-side{position:absolute;right:9px;top:8px;display:flex;align-items:center;gap:4px;color:#746c6a;font-size:9.5px;white-space:nowrap}.activity-cancel{width:26px;height:26px;border:0;border-radius:6px;background:transparent;color:#918784;padding:0;font-size:0}.activity-cancel:hover{background:#252126;color:#eee6e2}.activity-cancel:after{content:'×';font-size:14px}.activity-empty{padding:12px 1px;color:#77706e;font-size:11px}
-    .activity-recent{margin-top:18px;padding-top:2px;border-top:1px solid #292529}.activity-recent .activity-list,.activity-recent .activity-empty{display:none}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{display:grid}.activity-recent .activity-section-head{margin:0;padding:12px 2px 4px;cursor:pointer;user-select:none}.activity-recent .activity-section-head:hover{color:#d3c9c5}.activity-recent .activity-section-head:after{content:'›';margin-left:auto;font-size:17px;color:#8f8582;transform:rotate(90deg);transition:transform .15s}.activity-recent.open .activity-section-head:after{transform:rotate(-90deg)}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{margin-top:5px}.activity-recent .activity-row:not(.error){padding-top:10px;padding-bottom:10px}.activity-recent .activity-row:not(.error) .activity-detail,.activity-recent .activity-row:not(.error) .activity-current{display:none}
-    @keyframes activity-pulse{0%,100%{transform:scale(.72);opacity:.55}50%{transform:scale(1.2);opacity:1}}@keyframes activity-slide{0%{transform:translateX(-115%)}50%{transform:translateX(105%)}100%{transform:translateX(315%)}}
-    @media(max-width:700px){.activity-button{padding:0 7px}.activity-button .activity-label{display:none}.activity-body{padding:14px}.activity-setting{grid-template-columns:1fr}.activity-mode-buttons{display:grid;grid-template-columns:repeat(3,1fr)}.activity-row-head{padding-right:48px}}
-    @media(prefers-reduced-motion:reduce){.activity-dot,.activity-progress i{animation:none!important;transition:none!important}}
-  `;
+    .activity-button{height:32px;display:flex;align-items:center;gap:7px;padding:0 10px;border:1px solid transparent;border-radius:9px;background:transparent;color:#958c89;font-size:12px;font-weight:760;white-space:nowrap}
+    .activity-button:hover,.activity-button.active{border-color:#322d31;background:#211e22;color:#f0e9e5}.activity-dot{width:7px;height:7px;border-radius:50%;background:#6d6668}.activity-button.working .activity-dot{background:#e99b95;animation:activity-pulse .9s ease-in-out infinite}.activity-button.issue .activity-dot{background:#d3a067}.activity-count{min-width:15px;color:#cfc3bf;font-size:11px;font-variant-numeric:tabular-nums}
+    .activity-dialog{width:min(680px,calc(100vw - 24px));max-height:min(820px,calc(100dvh - 24px));padding:0;overflow:hidden}.activity-dialog .dialog-head{padding:17px 20px 14px;border-bottom:1px solid #292529}.activity-dialog .dialog-head h3{font-size:18px;font-weight:820;letter-spacing:-.02em}.activity-body{max-height:calc(min(820px,100dvh - 24px) - 60px);overflow:auto;overscroll-behavior:contain;padding:20px;scrollbar-gutter:stable}
+    .activity-overview{display:grid;grid-template-columns:54px minmax(0,1fr);gap:14px;align-items:center;padding:16px 17px;border-radius:16px;background:#151316;box-shadow:inset 0 0 0 1px #2b272b}.activity-orb{width:50px;height:50px;display:grid;place-items:center;border-radius:15px;background:#211e22}.activity-orb i{width:15px;height:15px;border:3px solid #777073;border-radius:50%}.activity-overview.working .activity-orb{background:#281d20}.activity-overview.working .activity-orb i{border-color:#e99b95;border-right-color:transparent;animation:activity-spin 1s linear infinite}.activity-overview.waiting .activity-orb i{border:0;width:12px;height:12px;background:#b08c68;box-shadow:0 0 0 7px rgba(176,140,104,.1)}.activity-overview strong{display:block;color:#f1e9e5;font-size:22px;font-weight:820;letter-spacing:-.03em}.activity-overview span{display:block;margin-top:3px;color:#988f8b;font-size:13px;font-weight:620}
+    .activity-setting{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:12px;padding:10px 12px 10px 15px;border-radius:13px;background:#111012}.activity-setting>strong{color:#d8cfcb;font-size:13px;font-weight:760}.activity-mode-buttons{display:flex;gap:4px;padding:3px;border-radius:10px;background:#1d1a1e}.activity-mode-buttons button{height:34px;min-width:72px;padding:0 11px;border:0;border-radius:7px;background:transparent;color:#8d8581;font-size:11.5px;font-weight:760;white-space:nowrap}.activity-mode-buttons button:hover{color:#e2d9d5}.activity-mode-buttons button.active{background:#373136;color:#f3ebe7;box-shadow:0 1px 4px rgba(0,0,0,.22)}
+    .activity-section{margin-top:22px}.activity-section-head{display:flex;align-items:center;gap:8px;margin:0 2px 9px;color:#c7beba;font-size:13px;font-weight:800}.activity-section-head b{min-width:22px;padding:2px 6px;border-radius:999px;background:#211e22;color:#8f8783;font-size:10px;font-weight:760;text-align:center}.activity-list{display:grid;gap:8px}
+    .activity-row{display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:12px;align-items:center;min-width:0;padding:12px 13px;border:0;border-radius:14px;background:#141214;box-shadow:inset 0 0 0 1px #272327}.activity-row.running{background:#181315;box-shadow:inset 3px 0 0 #d98f89,inset 0 0 0 1px #30272a}.activity-row.error{box-shadow:inset 3px 0 0 #bc6e76,inset 0 0 0 1px #38272b}.activity-task-icon{width:40px;height:40px;display:grid;place-items:center;border-radius:11px;background:#211e22;color:#b8afab}.activity-row.running .activity-task-icon{background:#2a2023;color:#e3aaa5}.activity-task-icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.activity-row-main{min-width:0}.activity-row-head{min-width:0}.activity-row-head strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e9e0dc;font-size:14.5px;font-weight:790;letter-spacing:-.012em}.activity-detail{margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#958c88;font-size:11.5px;font-weight:560;font-variant-numeric:tabular-nums}.activity-progress{height:7px;margin-top:10px;overflow:hidden;border-radius:99px;background:#2a262a}.activity-progress i{display:block;height:100%;min-width:3px;border-radius:inherit;background:#df938d;transition:width .3s ease}.activity-progress.indeterminate i{width:34%;animation:activity-slide 1.25s ease-in-out infinite}.activity-side{display:flex;align-items:center;gap:7px;color:#8a817e;font-size:11px;font-weight:700;white-space:nowrap}.activity-percent{color:#cfc4c0;font-variant-numeric:tabular-nums}.activity-cancel{width:30px;height:30px;border:0;border-radius:8px;background:#211e22;color:#9c918d;padding:0;font-size:0}.activity-cancel:hover{background:#302b30;color:#f0e7e3}.activity-cancel:after{content:'×';font-size:17px}.activity-empty{padding:14px 2px;color:#827a77;font-size:12px}
+    .activity-recent{margin-top:20px;padding-top:4px;border-top:1px solid #292529}.activity-recent .activity-list,.activity-recent .activity-empty{display:none}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{display:grid}.activity-recent .activity-section-head{margin:0;padding:12px 2px 2px;cursor:pointer;user-select:none}.activity-recent .activity-section-head:hover{color:#eee5e1}.activity-recent .activity-section-head:after{content:'›';margin-left:auto;font-size:19px;color:#8f8582;transform:rotate(90deg);transition:transform .15s}.activity-recent.open .activity-section-head:after{transform:rotate(-90deg)}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{margin-top:8px}.activity-recent .activity-row{grid-template-columns:34px minmax(0,1fr) auto;padding:9px 11px;border-radius:11px;background:#111012}.activity-recent .activity-task-icon{width:32px;height:32px;border-radius:9px}.activity-recent .activity-task-icon svg{width:18px;height:18px}.activity-recent .activity-row-head strong{font-size:13px}.activity-recent .activity-detail,.activity-recent .activity-progress{display:none}
+    @keyframes activity-pulse{0%,100%{transform:scale(.72);opacity:.55}50%{transform:scale(1.2);opacity:1}}@keyframes activity-spin{to{transform:rotate(360deg)}}@keyframes activity-slide{0%{transform:translateX(-115%)}50%{transform:translateX(105%)}100%{transform:translateX(315%)}}
+    @media(max-width:700px){.activity-button{padding:0 7px}.activity-button .activity-label{display:none}.activity-body{padding:14px}.activity-setting{align-items:stretch;flex-direction:column}.activity-mode-buttons{display:grid;grid-template-columns:repeat(3,1fr)}.activity-mode-buttons button{min-width:0}.activity-row{grid-template-columns:38px minmax(0,1fr) auto;padding:11px}.activity-task-icon{width:36px;height:36px}}
+    @media(prefers-reduced-motion:reduce){.activity-dot,.activity-progress i,.activity-orb i{animation:none!important;transition:none!important}}
+  `
   document.head.append(style);
   document.querySelector('.preview-mode-row')?.remove();
 
@@ -107,6 +107,26 @@ if (host) {
     if(kind==='Friend Drive')return title;
     if(kind==='Work')return title;
     return new RegExp(`^${kind}\\b`,'i').test(title)?title:`${kind} ${title}`;
+  }
+
+  function taskIcon(kind){
+    if(kind==='Thumbnail')return '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>';
+    if(kind==='Backup'||kind==='Friend Drive')return '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M6 14h12M7 9h10"/><circle cx="8" cy="14" r=".8"/></svg>';
+    if(kind==='Verify')return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.6 2.6L16.5 9"/></svg>';
+    if(kind==='Restore')return '<svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M5 20h14"/></svg>';
+    if(kind==='Squish')return '<svg viewBox="0 0 24 24"><path d="M8 3v5H3m13-5v5h5M8 21v-5H3m13 5v-5h5"/><path d="m8 8-4-4m12 4 4-4M8 16l-4 4m12-4 4 4"/></svg>';
+    if(kind==='Index'||kind==='Sync'||kind==='Hash')return '<svg viewBox="0 0 24 24"><path d="M5 7h10M5 12h14M5 17h8"/><path d="m17 5 2 2-2 2"/></svg>';
+    return '<svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18" cy="12" r="1"/></svg>';
+  }
+
+  function compactDetail(item, detail){
+    const text=String(item?.error||detail||'').trim();
+    if(!text)return '';
+    if(/waiting until your pc is idle/i.test(text))return 'Waiting for idle';
+    const parts=text.split(' · ').map(part=>part.trim()).filter(Boolean);
+    const phase=parts.find(part=>!/^\d/.test(part)&&!/\d+\s*(?:files?|ready|checked|copied|queued|waiting|left|\/s|[KMGTP]?B)/i.test(part));
+    const metric=parts.find(part=>/\d/.test(part)&&/(?:files?|ready|checked|copied|queued|waiting|left|\/s|[KMGTP]?B)/i.test(part));
+    return [phase,metric].filter(Boolean).slice(0,2).join(' · ')||parts[0]||text;
   }
 
   function progress(job){
@@ -232,29 +252,25 @@ if (host) {
   }
 
   function row(item,recent=false){
-    let percent=item.percent??null, detail=item.detail||'', current='', indeterminate=percent==null;
-    if(item.progress){const p=progress(item);percent=item.percent??p.percent;detail=item.detail||p.detail;current=p.current;indeterminate=p.indeterminate;}
+    let percent=item.percent??null, detail=item.detail||'', indeterminate=percent==null;
+    if(item.progress){const p=progress(item);percent=item.percent??p.percent;detail=item.detail||p.detail;indeterminate=p.indeterminate;}
     if(item.phase&&!detail)detail=item.phase;
     const when=item.status==='running'?item.startedAt:item.status==='queued'?item.queuedAt:item.finishedAt;
     const statusClass=item.status==='error'?'error':item.status==='running'?'running':'';
     const cancel=item.cancelable&&!recent?`<button class="activity-cancel" data-cancel="${esc(item.id)}" aria-label="Cancel"></button>`:'';
-    const bar=!recent&&item.status==='running'?`<div class="activity-progress ${indeterminate?'indeterminate':''}"><i style="width:${indeterminate?'30%':`${Math.max(1,pct(percent))}%`}"></i></div>`:'';
-    const text=[detail,item.error].filter(Boolean).join(' · ');
+    const bar=!recent&&item.status==='running'?`<div class="activity-progress ${indeterminate?'indeterminate':''}"><i style="width:${indeterminate?'34%':`${Math.max(1,pct(percent))}%`}"></i></div>`:'';
+    const concise=compactDetail(item,detail);
+    const sidePercent=!recent&&item.status==='running'&&!indeterminate?`<span class="activity-percent">${Math.round(pct(percent))}%</span>`:'';
+    const sideTime=recent&&when?`<time>${esc(age(when))}</time>`:'';
     const kind=item.kind||'Work';
-    return `<div class="activity-row ${statusClass}"><div class="activity-row-head"><strong>${esc(taskTitle(item))}</strong><span class="activity-kind">${esc(kind)}</span></div>${text?`<div class="activity-detail">${esc(text)}</div>`:''}${current&&!recent?`<span class="activity-current">${esc(current)}</span>`:''}${bar}<div class="activity-side">${when?`<time>${esc(age(when))}</time>`:''}${cancel}</div></div>`;
+    return `<div class="activity-row ${statusClass}"><div class="activity-task-icon" aria-hidden="true">${taskIcon(kind)}</div><div class="activity-row-main"><div class="activity-row-head"><strong>${esc(taskTitle(item))}</strong></div>${concise?`<div class="activity-detail">${esc(concise)}</div>`:''}${bar}</div><div class="activity-side">${sidePercent}${sideTime}${cancel}</div></div>`;
   }
 
   function overview(model){
     const active=model.active.length, queued=model.queued.length;
-    if(active){
-      const title=active===1?'1 task working':`${active} tasks working`;
-      return {className:'working',title,detail:queued?`${queued} ${queued===1?'task is':'tasks are'} waiting.`:'Mochimono is working in the background.'};
-    }
-    if(queued){
-      const idle=queued.some(item=>/idle/i.test(`${item.detail||''} ${item.phase||''}`));
-      return {className:'',title:'Waiting',detail:idle?`${queued===1?'This task will':'These tasks will'} start when your PC is idle.`:`${queued} ${queued===1?'task is':'tasks are'} waiting to start.`};
-    }
-    return {className:'',title:'All caught up',detail:'No background work right now.'};
+    if(active)return {className:'working',title:'Working',detail:`${active} active${queued?` · ${queued} waiting`:''}`};
+    if(queued)return {className:'waiting',title:'Waiting',detail:`${queued} queued`};
+    return {className:'',title:'Caught up',detail:'Nothing running'};
   }
 
   function render(model){
@@ -271,11 +287,11 @@ if (host) {
     const mode=model.state?.settings?.thumbnailMode||'idle';
     const status=overview(model);
     const html=`
-      <div class="activity-overview ${status.className}"><strong>${esc(status.title)}</strong><span>${esc(status.detail)}</span></div>
-      <div class="activity-setting"><div class="activity-setting-copy"><strong>Thumbnails</strong><span>When Mochimono should generate missing image and video previews.</span></div><div class="activity-mode-buttons" role="group" aria-label="Thumbnail generation">${['off','idle','max'].map(value=>`<button type="button" data-mode="${value}" class="${mode===value?'active':''}">${esc(MODE_LABEL[value])}</button>`).join('')}</div></div>
-      ${active?`<section class="activity-section"><div class="activity-section-head">Working <b>${active}</b></div><div class="activity-list">${model.active.map(item=>row(item)).join('')}</div></section>`:''}
+      <div class="activity-overview ${status.className}"><div class="activity-orb" aria-hidden="true"><i></i></div><div><strong>${esc(status.title)}</strong><span>${esc(status.detail)}</span></div></div>
+      <div class="activity-setting"><strong>Thumbnails</strong><div class="activity-mode-buttons" role="group" aria-label="Thumbnail generation">${['off','idle','max'].map(value=>`<button type="button" data-mode="${value}" class="${mode===value?'active':''}">${esc(MODE_LABEL[value])}</button>`).join('')}</div></div>
+      ${active?`<section class="activity-section"><div class="activity-section-head">Now <b>${active}</b></div><div class="activity-list">${model.active.map(item=>row(item)).join('')}</div></section>`:''}
       ${queued?`<section class="activity-section"><div class="activity-section-head">Waiting <b>${queued}</b></div><div class="activity-list">${model.queued.map(item=>row(item)).join('')}</div></section>`:''}
-      <section class="activity-section activity-recent ${recentOpen?'open':''}"><div class="activity-section-head" data-recent-toggle aria-expanded="${recentOpen?'true':'false'}">Recent <b>${model.recent.length}</b></div>${model.recent.length?`<div class="activity-list">${model.recent.map(item=>row(item,true)).join('')}</div>`:'<div class="activity-empty">Nothing recent.</div>'}</section>`;
+      <section class="activity-section activity-recent ${recentOpen?'open':''}"><div class="activity-section-head" data-recent-toggle aria-expanded="${recentOpen?'true':'false'}">Recent <b>${model.recent.length}</b></div>${model.recent.length?`<div class="activity-list">${model.recent.map(item=>row(item,true)).join('')}</div>`:'<div class="activity-empty">Nothing recent</div>'}</section>`;
     if(html===lastBodyHtml)return;
     const body=dialog.querySelector('[data-body]');
     const scrollTop=body.scrollTop;
