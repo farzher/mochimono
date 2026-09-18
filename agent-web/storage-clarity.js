@@ -7,6 +7,7 @@ let cacheStats = null;
 let cacheLoadedAt = 0;
 let cacheLoading = null;
 let decorateTimer = 0;
+let cacheRefreshTimer = 0;
 
 const style = document.createElement('style');
 style.textContent = `
@@ -115,7 +116,8 @@ function decorateSources() {
 }
 
 async function loadCacheStats(force = false) {
-  if (!force && cacheStats && Date.now() - cacheLoadedAt < 5 * 60_000) return cacheStats;
+  const measured = cacheStats?.measuredAt && !cacheStats?.scanning;
+  if (!force && measured && Date.now() - cacheLoadedAt < 5 * 60_000) return cacheStats;
   if (cacheLoading) return cacheLoading;
   cacheLoading = request(`/api/client/local-catalog?limit=1&path=${encodeURIComponent(CACHE_STATS_PATH)}`)
     .then(data => {
@@ -136,7 +138,7 @@ function decorateCacheCard() {
   setText(meta, `${indexed.toLocaleString()} files indexed${path ? ` · ${path}` : ''}`);
   if (meta) meta.title = path;
   const used = card.querySelector('.managed-storage-space > span:first-child');
-  setText(used, `${bytes(cacheStats.bytes)} cache`);
+  setText(used, cacheStats.scanning && !cacheStats.measuredAt ? 'Measuring…' : `${bytes(cacheStats.bytes)} cache`);
   const free = card.querySelector('.managed-storage-space .free');
   if (free && Number(cacheStats.freeBytes) > 0) setText(free, `${bytes(cacheStats.freeBytes)} free`);
   card.title = path ? `Open ${path} in Explorer` : 'Open Local cache in Explorer';
@@ -152,9 +154,11 @@ function scheduleDecorate() {
 
 async function refreshCache(force = false) {
   if (!storagePane || storagePane.hidden) return;
+  clearTimeout(cacheRefreshTimer);
   try {
-    await loadCacheStats(force);
+    const stats = await loadCacheStats(force);
     decorateCacheCard();
+    if (stats?.scanning) cacheRefreshTimer = setTimeout(() => refreshCache(true).catch(() => {}), 700);
   } catch {}
 }
 
@@ -190,3 +194,5 @@ document.addEventListener('visibilitychange', () => {
 
 scheduleDecorate();
 setTimeout(() => refreshCache().catch(() => {}), 250);
+
+addEventListener('beforeunload', () => clearTimeout(cacheRefreshTimer), { once:true });
