@@ -217,6 +217,19 @@ function formatBytes(bytes) {
   return `${value < 10 && unit ? value.toFixed(2) : value.toFixed(unit ? 1 : 0)} ${units[unit]}`;
 }
 
+function backupBadge(item) {
+  const state=String(item?.[7]||'');
+  if(!state)return '';
+  const value={
+    protected:['✓','Protected'],
+    'backing-up':['↻','Backing up'],
+    'needs-backup':['!','Needs backup'],
+    'remote-only':['☁','Remote only'],
+    unlinked:['?','Needs review']
+  }[state];
+  return value?`<span class="file-backup-badge ${state}" title="${value[1]}" aria-label="${value[1]}">${value[0]}</span>`:'';
+}
+
 function dayInfo(ms) {
   const date = new Date(Number(ms) || 0);
   return {
@@ -240,9 +253,9 @@ function cardMarkup(index, rowHeight) {
   const common = `data-hash="${escapeHtml(hash)}" data-filename="${escapeHtml(filename)}" data-day="${day.key}" data-day-label="${escapeHtml(day.label)}" style="left:${x.toFixed(2)}px;width:${width.toFixed(2)}px;height:${Number(rowHeight).toFixed(2)}px;flex-basis:${width.toFixed(2)}px;--ratio:${ratio}" title="${escapeHtml(filename)}"`;
 
   if (media) {
-    return `<button class="file-card media-card ${video ? 'video-card' : ''}" ${common} data-width="${dataWidth}" data-height="${dataHeight}"><div class="thumb media-thumb"><span class="video-thumb-pending" data-video-thumb="${escapeHtml(hash)}"></span>${video ? '<span class="play-badge">▶</span>' : ''}</div></button>`;
+    return `<button class="file-card media-card ${video ? 'video-card' : ''}" ${common} data-width="${dataWidth}" data-height="${dataHeight}"><div class="thumb media-thumb"><span class="video-thumb-pending" data-video-thumb="${escapeHtml(hash)}"></span>${video ? '<span class="play-badge">▶</span>' : ''}</div>${backupBadge(item)}</button>`;
   }
-  return `<button class="file-card" ${common}><div class="thumb"><div class="file-icon ${escapeHtml(itemType(item))}">${iconFor(itemType(item))}</div></div></button>`;
+  return `<button class="file-card" ${common}><div class="thumb"><div class="file-icon ${escapeHtml(itemType(item))}">${iconFor(itemType(item))}</div></div>${backupBadge(item)}</button>`;
 }
 
 function createRow(rowId) {
@@ -659,6 +672,22 @@ function sameGeometrySequence(previous, next) {
   return true;
 }
 
+function syncRenderedMetadata() {
+  if(!layout||!model)return;
+  for(const [rowId,row] of renderedRows){
+    const start=Number(layout.rowStarts[rowId]);
+    const count=Number(layout.rowCounts[rowId]);
+    for(let offset=0;offset<count;offset++){
+      const item=model.items[start+offset];
+      const card=row.children[offset];
+      if(!item||!card)continue;
+      card.querySelector('.file-backup-badge')?.remove();
+      const html=backupBadge(item);
+      if(html)card.insertAdjacentHTML('beforeend',html);
+    }
+  }
+}
+
 function setModel(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.items)) {
     release();
@@ -666,6 +695,7 @@ function setModel(snapshot) {
   }
   if (owned && layout && sameGeometrySequence(model, snapshot)) {
     model = snapshot;
+    syncRenderedMetadata();
     if (!snapshot.items.length && !layout.count) {
       const empty = files?.querySelector(':scope > .empty');
       if (empty) {

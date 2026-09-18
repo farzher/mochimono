@@ -2,6 +2,12 @@ import { db, json, now, readJson, catalogVersion } from './lib/server-context.js
 import { validHash } from './lib/store.js';
 import { handleFolderTreeServer } from './folder-tree-server.js';
 import { handleTags } from './tags-server.js';
+import { protectionCatalogStates } from './protection-server.js';
+
+function withProtection(rows) {
+  const byHash=new Map(protectionCatalogStates(rows.map(row=>row.hash)).map(item=>[item.hash,item]));
+  return rows.map(row=>({ ...row, ...(byHash.get(row.hash)||{}) }));
+}
 
 function catalogPage(url) {
   const after = String(url.searchParams.get('after') || '');
@@ -39,7 +45,7 @@ function catalogPage(url) {
     LIMIT ?
   `).all(after, limit);
   return {
-    files: rows,
+    files: withProtection(rows),
     nextAfter: rows.length === limit ? rows.at(-1).hash : null,
     version: catalogVersion()
   };
@@ -68,7 +74,7 @@ function importSources(url, importId) {
     LIMIT ?
   `).all(importId, after, limit);
   return {
-    sources: rows,
+    sources: withProtection(rows),
     nextAfter: rows.length === limit ? Number(rows.at(-1).id) : null
   };
 }

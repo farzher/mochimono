@@ -7,6 +7,7 @@ if (storagePane && sourceSection && backupSection) {
   const host = location.hostname.includes(':') ? `[${location.hostname}]` : location.hostname;
   const friendOrigin = `http://${host}:8644`;
   let locations = [];
+  let localCache = null;
   let backups = [];
   let friendBackups = [];
   let shares = [];
@@ -29,6 +30,7 @@ if (storagePane && sourceSection && backupSection) {
     .managed-storage-copy{padding:13px 14px 14px}.managed-storage-title{display:flex;align-items:center;gap:8px;min-width:0}.managed-storage-title strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#f0e8e4;font-size:16px;font-weight:760}.managed-storage-dot{width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:#78b98a}.offline .managed-storage-dot{background:#71696a}
     .managed-storage-meta{display:block;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8b8380;font-size:12px;font-weight:560}.managed-storage-space{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:11px;color:#a89f9b;font-size:12px;font-weight:680}.managed-storage-space .free{color:#d4cbc7}.managed-storage-meter{display:block;height:5px;margin-top:7px;overflow:hidden;border-radius:999px;background:#292529}.managed-storage-meter i{display:block;height:100%;border-radius:inherit;background:#d99892}.managed-storage-card[data-location-type="friend"] .managed-storage-meter i{background:#9184c5}
     .managed-storage-add{border-style:dashed;background:#100f11}.managed-storage-add-mark{width:48px;height:48px;display:grid;place-items:center;border:1px dashed #4a4347;border-radius:13px;color:#777073;font-size:29px;font-weight:250}.managed-storage-add:hover .managed-storage-add-mark{border-color:#665b61;color:#b8aeaa}.managed-storage-add .managed-storage-copy{min-height:62px;display:flex;align-items:center}
+    .managed-app-storage{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:17px;padding-top:15px;border-top:1px solid #211e21}.managed-app-storage[hidden]{display:none!important}.managed-app-storage>span{color:#756d6a;font-size:11px;font-weight:730}.managed-app-cache{min-width:0;display:flex;align-items:center;gap:9px;padding:6px 8px;border:0;border-radius:8px;background:transparent;color:#918885;text-align:left}.managed-app-cache:hover{background:#171518;color:#d7ceca}.managed-app-cache strong{color:#b8afab;font-size:11.5px;font-weight:760}.managed-app-cache .managed-storage-meta{display:inline;margin:0;max-width:420px;font-size:10.5px}.managed-app-cache .managed-storage-space{display:flex;margin:0;font-size:10.5px}.managed-app-cache .managed-storage-space .free{display:none}
     .managed-storage-shares{margin-top:20px;padding-top:17px;border-top:1px solid #211e21}.managed-storage-shares[hidden]{display:none!important}.managed-storage-shares h3{margin:0 0 9px;color:#c9bfbb;font-size:14px;font-weight:740}.managed-storage-share-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}.managed-storage-share{display:flex;align-items:center;gap:9px;min-width:0;padding:11px 12px;border:1px solid #292529;border-radius:11px;background:#111012;color:#968d89;font-size:12px}.managed-storage-share strong{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#ddd4d0;font-size:13px}
     .storage-location-dialog{width:min(540px,calc(100vw - 28px))}.storage-location-inspect{display:grid;gap:14px}.storage-location-inspect-head{display:grid;grid-template-columns:46px minmax(0,1fr);gap:12px;align-items:center}.storage-location-inspect-icon{width:46px;height:46px;display:grid;place-items:center;border-radius:11px;background:#19171a;color:#aaa19e}.storage-location-inspect-icon.mochimono{background:transparent}.storage-location-inspect-icon.mochimono .mini{transform:scale(1.3)}.storage-location-inspect-icon svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}.storage-location-inspect-head strong{display:block;color:#ebe3df;font-size:15px}.storage-location-inspect-head span{display:block;margin-top:2px;color:#8c8380;font-size:12px}
     .storage-location-capacity{display:grid;gap:7px}.storage-location-capacity-head{display:flex;justify-content:space-between;gap:12px;color:#9a918e;font-size:12px}.storage-location-capacity-head strong{color:#d9d0cc;font-size:13px}.storage-location-capacity-track{height:6px;overflow:hidden;border-radius:999px;background:#292529}.storage-location-capacity-track i{display:block;height:100%;border-radius:inherit;background:#dc9690}.storage-location-detail-list{display:grid;margin:0}.storage-location-detail{display:grid;grid-template-columns:90px minmax(0,1fr);gap:12px;padding:9px 0;border-top:1px solid #242124;font-size:13px}.storage-location-detail:first-child{border-top:0}.storage-location-detail dt{color:#817976}.storage-location-detail dd{margin:0;min-width:0;overflow-wrap:anywhere;color:#c9c0bc}.storage-location-actions{display:flex;gap:7px;flex-wrap:wrap}
@@ -44,11 +46,12 @@ if (storagePane && sourceSection && backupSection) {
 
   const section = document.createElement('section');
   section.className = 'managed-storage-section';
-  section.innerHTML = '<div class="storage-section-heading"><h2>Storage</h2></div><div class="managed-storage-grid" data-storage-grid></div><div class="managed-storage-shares" data-storage-shares hidden><h3>Shared</h3><div class="managed-storage-share-list" data-share-list></div></div>';
+  section.innerHTML = '<div class="storage-section-heading"><h2>Storage</h2></div><div class="managed-storage-grid" data-storage-grid></div><div class="managed-storage-shares" data-storage-shares hidden><h3>Shared</h3><div class="managed-storage-share-list" data-share-list></div></div><div class="managed-app-storage" data-app-storage hidden><span>App storage</span><button class="managed-app-cache" type="button" data-location-id="local-cache"><strong>Local cache</strong><span class="managed-storage-meta"></span><span class="managed-storage-space"><span>Measuring…</span><span class="free"></span></span></button></div>';
   sourceSection.after(section);
   const grid = section.querySelector('[data-storage-grid]');
   const sharesBlock = section.querySelector('[data-storage-shares]');
   const shareList = section.querySelector('[data-share-list]');
+  const appStorage = section.querySelector('[data-app-storage]');
 
   const inspectDialog = document.createElement('dialog');
   inspectDialog.className = 'small-dialog storage-location-dialog';
@@ -148,6 +151,7 @@ if (storagePane && sourceSection && backupSection) {
   }
   function render() {
     grid.innerHTML = locations.map(card).join('') + '<button class="managed-storage-card managed-storage-add" type="button" data-add-storage><div class="managed-storage-visual"><span class="managed-storage-add-mark">＋</span></div><div class="managed-storage-copy"><div class="managed-storage-title"><strong>Add storage</strong></div></div></button>';
+    appStorage.hidden=!localCache;
     sharesBlock.hidden = !shares.length;
     shareList.innerHTML = shares.map(share => `<button class="managed-storage-share" type="button" data-share-id="${esc(share.id)}"><strong>${esc(share.name || 'Shared space')}</strong><span>${esc(share.paired ? share.peerName || 'Friend' : 'Not paired')}${Number(share.storage?.usedBytes) ? ` · ${bytes(share.storage.usedBytes)}` : ''}</span></button>`).join('');
   }
@@ -257,7 +261,7 @@ if (storagePane && sourceSection && backupSection) {
     const cloud = raw.find(item => item.type === 'cloud');
     const stats = state?.server?.online ? state.server.stats : null;
     output.push(cloud ? { ...cloud, server:state?.settings?.server || '' } : stats ? { id:'cloud', type:'cloud', name:'Cloud', online:true, server:state?.settings?.server || '', capacityBytes:Number(stats.capacityBytes) || 0, freeBytes:Number(stats.freeBytes) || 0, mochimonoBytes:Number(stats.bytes) || 0 } : { id:'cloud', type:'cloud', name:'Cloud', online:false, server:state?.settings?.server || '' });
-    output.push(...raw.filter(item => item.type === 'local').map(item => ({ ...item, name:item.name || 'Local cache' })));
+    localCache=raw.find(item=>item.type==='local')||null;
     for (let index = 0; index < backups.length; index++) {
       const backup = backups[index];
       const rawBackup = raw.find(item => item.type === 'backup' && pathKey(item.path) === pathKey(backup.path));
@@ -284,7 +288,7 @@ if (storagePane && sourceSection && backupSection) {
       const target = friendBackups.find(item => String(item.id) === targetId);
       output.push({ ...rawFriend, targetId, target, peerName:target?.peerName || '', name:target?.name || rawFriend.name || 'Friend drive' });
     }
-    return output.sort((a, b) => ({ cloud:0, local:1, backup:2, friend:3 }[a.type] ?? 9) - ({ cloud:0, local:1, backup:2, friend:3 }[b.type] ?? 9) || title(a).localeCompare(title(b)));
+    return output.sort((a, b) => ({ cloud:0, backup:1, friend:2 }[a.type] ?? 9) - ({ cloud:0, backup:1, friend:2 }[b.type] ?? 9) || title(a).localeCompare(title(b)));
   }
 
   async function refresh() {

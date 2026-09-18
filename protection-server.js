@@ -50,6 +50,24 @@ db.exec(`
     PRIMARY KEY(object_hash, device_name)
   ) STRICT;
 
+  CREATE TABLE IF NOT EXISTS protection_intents (
+    device_name TEXT NOT NULL,
+    root_path TEXT NOT NULL,
+    relative_path TEXT NOT NULL,
+    object_hash TEXT NOT NULL DEFAULT '',
+    size INTEGER NOT NULL DEFAULT 0,
+    import_id INTEGER NOT NULL DEFAULT 0,
+    scan_id TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(device_name, root_path, relative_path)
+  ) STRICT;
+
+  CREATE TABLE IF NOT EXISTS object_lifecycle (
+    object_hash TEXT PRIMARY KEY REFERENCES objects(hash) ON DELETE CASCADE,
+    mode TEXT NOT NULL CHECK (mode IN ('remote-only')),
+    updated_at TEXT NOT NULL
+  ) STRICT;
+
   CREATE TABLE IF NOT EXISTS protection_trash (
     object_hash TEXT PRIMARY KEY REFERENCES objects(hash) ON DELETE CASCADE,
     trashed_at TEXT NOT NULL,
@@ -72,6 +90,8 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS protection_rules_scope ON protection_rules(scope_type, scope_id);
   CREATE INDEX IF NOT EXISTS source_replicas_device ON source_replicas(device_name, object_hash);
+  CREATE INDEX IF NOT EXISTS protection_intents_hash ON protection_intents(object_hash) WHERE object_hash <> '';
+  CREATE INDEX IF NOT EXISTS protection_intents_device ON protection_intents(device_name, root_path);
   CREATE INDEX IF NOT EXISTS replica_deletions_drive ON replica_deletions(drive_id, requested_at);
   CREATE INDEX IF NOT EXISTS source_deletions_device ON source_deletions(device_name, requested_at);
 `);
@@ -79,6 +99,7 @@ db.exec(`
 let snapshot = null;
 let snapshotAt = 0;
 const invalidate = () => { snapshot = null; snapshotAt = 0; };
+const bumpCatalog = () => db.prepare('UPDATE catalog_revision SET revision = revision + 1 WHERE singleton = 1').run();
 
 function locationJson(row) {
   if (!row) return null;
@@ -141,6 +162,11 @@ function primaryLocation() {
     row = db.prepare("SELECT * FROM storage_locations WHERE id='primary'").get();
   }
   return locationJson(row);
+}
+
+function levelForImport(importId) {
+  if (!Number(importId)) return 'normal';
+  return db.prepare("SELECT level FROM protection_rules WHERE scope_type='import' AND scope_id=?").get(String(importId))?.level || 'normal';
 }
 
 function inheritedLevel(hash) {
@@ -277,17 +303,32 @@ function protectionState(hash, { excludeSourceDevice = '' } = {}) {
   for (const source of sourceCopies(hash)) {
     if (!excludeSourceDevice || source.deviceName.toLowerCase() !== excludeSourceDevice.toLowerCase()) copies.push(source);
   }
-  return { object: { ...object, size: Number(object.size) || 0 }, level, overrideLevel, ...evaluate(level, copies), copies };
+  const intended = Boolean(db.prepare("SELECT 1 FROM protection_intents WHERE object_hash=? LIMIT 1").get(hash));
+  const remoteOnly = Boolean(db.prepare("SELECT 1 FROM object_lifecycle WHERE object_hash=? AND mode='remote-only'").get(hash));
+  const evaluated = evaluate(level, copies);
+  const lifecycle = intended ? 'current' : remoteOnly ? 'remote-only' : 'unlinked';
+  const protectionState = lifecycle === 'current' ? (evaluated.meets ? 'protected' : 'needs-backup') : lifecycle;
+  return { object: { ...object, size: Number(object.size) || 0 }, level, overrideLevel, lifecycle, protectionState, ...evaluated, copies };
 }
 
-function protectionSummary(force = false) {
+function protectionSnapshot(force = false) {
   if (!force && snapshot && Date.now() - snapshotAt < 10_000) return snapshot;
+
   const objects = db.prepare("SELECT hash,size FROM objects WHERE state='active' ORDER BY hash").all();
+  const objectByHash = new Map(objects.map(row => [row.hash,row]));
+  const intents = db.prepare(`
+    SELECT device_name AS deviceName,root_path AS rootPath,relative_path AS relativePath,
+           object_hash AS hash,size,import_id AS importId
+    FROM protection_intents
+    ORDER BY device_name,root_path,relative_path
+  `).all();
+  const remoteOnly = new Set(db.prepare("SELECT object_hash AS hash FROM object_lifecycle WHERE mode='remote-only'").all().map(row=>row.hash));
+
   const levelsByHash = new Map(objects.map(row => [row.hash, 'normal']));
   const overridden = new Set();
   for (const row of db.prepare('SELECT object_hash AS hash,level FROM object_protection').all()) {
     overridden.add(row.hash);
-    levelsByHash.set(row.hash, row.level);
+    levelsByHash.set(row.hash,row.level);
   }
 
   const inherited = new Map();
@@ -296,42 +337,51 @@ function protectionSummary(force = false) {
     FROM sources s
     LEFT JOIN protection_rules pr ON pr.scope_type='import' AND pr.scope_id=CAST(s.import_id AS TEXT)
   `).all()) {
-    const current = inherited.get(row.hash);
-    if (!current || rank(row.level) > rank(current)) inherited.set(row.hash, row.level);
+    const current=inherited.get(row.hash);
+    if(!current||rank(row.level)>rank(current))inherited.set(row.hash,row.level);
   }
-  for (const [hash, level] of inherited) if (!overridden.has(hash)) levelsByHash.set(hash, level);
+  for(const [hash,level] of inherited)if(!overridden.has(hash))levelsByHash.set(hash,level);
 
-  const copiesByHash = new Map();
-  const addCopy = (hash, copy) => {
-    let copies = copiesByHash.get(hash);
-    if (!copies) copiesByHash.set(hash, copies = []);
-    if (!copies.some(existing => existing.id === copy.id)) copies.push(copy);
+  const intentLevelByHash=new Map();
+  for(const intent of intents){
+    if(!validHash(intent.hash))continue;
+    const level=levelForImport(intent.importId);
+    const current=intentLevelByHash.get(intent.hash);
+    if(!current||rank(level)>rank(current))intentLevelByHash.set(intent.hash,level);
+  }
+  for(const [hash,level] of intentLevelByHash)if(!overridden.has(hash))levelsByHash.set(hash,level);
+
+  const copiesByHash=new Map();
+  const addCopy=(hash,copy)=>{
+    let copies=copiesByHash.get(hash);
+    if(!copies)copiesByHash.set(hash,copies=[]);
+    if(!copies.some(existing=>existing.id===copy.id))copies.push(copy);
   };
-  const primary = primaryLocation();
-  const bad = new Set(db.prepare("SELECT hash FROM object_integrity WHERE status!='healthy'").all().map(row => row.hash));
-  for (const object of objects) if (!bad.has(object.hash)) addCopy(object.hash, { ...primary, verified: true, representation: 'original' });
+  const primary=primaryLocation();
+  const bad=new Set(db.prepare("SELECT hash FROM object_integrity WHERE status!='healthy'").all().map(row=>row.hash));
+  for(const object of objects)if(!bad.has(object.hash))addCopy(object.hash,{...primary,verified:true,representation:'original'});
 
-  for (const row of db.prepare(`
+  for(const row of db.prepare(`
     SELECT sr.object_hash AS hash,sr.device_name AS deviceName,sr.site,sr.reliability,sr.verified_at AS verifiedAt,
            sl.name,sl.remote,sl.encrypted
     FROM source_replicas sr LEFT JOIN storage_locations sl ON sl.id=('source:' || sr.device_name)
-  `).all()) addCopy(row.hash, {
-    id: `source:${row.deviceName}`, kind: 'source', name: row.name || row.deviceName,
-    deviceName: row.deviceName, site: row.site || row.deviceName, reliability: row.reliability || 'normal',
-    remote: Boolean(row.remote), encrypted: Boolean(row.encrypted), verified: Boolean(row.verifiedAt), representation: 'original'
+  `).all())addCopy(row.hash,{
+    id:`source:${row.deviceName}`,kind:'source',name:row.name||row.deviceName,
+    deviceName:row.deviceName,site:row.site||row.deviceName,reliability:row.reliability||'normal',
+    remote:Boolean(row.remote),encrypted:Boolean(row.encrypted),verified:Boolean(row.verifiedAt),representation:'original'
   });
 
-  for (const row of db.prepare(`
+  for(const row of db.prepare(`
     SELECT r.object_hash AS hash,r.drive_id AS id,r.verified_at AS verifiedAt,d.name,
            sl.kind,sl.device_name AS deviceName,sl.site,sl.reliability,sl.remote,sl.encrypted
     FROM replicas r JOIN drives d ON d.id=r.drive_id LEFT JOIN storage_locations sl ON sl.id=r.drive_id
-  `).all()) addCopy(row.hash, {
-    id: row.id, kind: row.kind || 'backup', name: row.name, deviceName: row.deviceName || row.name,
-    site: row.site || row.deviceName || row.name, reliability: row.reliability || 'normal',
-    remote: Boolean(row.remote), encrypted: Boolean(row.encrypted), verified: Boolean(row.verifiedAt), representation: 'original'
+  `).all())addCopy(row.hash,{
+    id:row.id,kind:row.kind||'backup',name:row.name,deviceName:row.deviceName||row.name,
+    site:row.site||row.deviceName||row.name,reliability:row.reliability||'normal',
+    remote:Boolean(row.remote),encrypted:Boolean(row.encrypted),verified:Boolean(row.verifiedAt),representation:'original'
   });
 
-  for (const row of db.prepare(`
+  for(const row of db.prepare(`
     SELECT rp.original_hash AS hash,substr(rp.location_id,8) AS id,rp.verified_at AS verifiedAt,d.name,
            sl.kind,sl.device_name AS deviceName,sl.site,sl.reliability,sl.remote,sl.encrypted
     FROM representation_presence rp
@@ -344,38 +394,138 @@ function protectionSummary(force = false) {
     LEFT JOIN storage_locations sl ON sl.id=d.id
     LEFT JOIN replicas existing ON existing.object_hash=rp.original_hash AND existing.drive_id=d.id
     WHERE rp.representation='compact' AND rp.verified_at IS NOT NULL AND existing.object_hash IS NULL
-  `).all()) addCopy(row.hash, {
-    id: row.id, kind: row.kind || 'backup', name: row.name, deviceName: row.deviceName || row.name,
-    site: row.site || row.deviceName || row.name, reliability: row.reliability || 'normal',
-    remote: Boolean(row.remote), encrypted: Boolean(row.encrypted), verified: true, verifiedAt: row.verifiedAt,
-    representation: 'compact', reducedFidelity: true
+  `).all())addCopy(row.hash,{
+    id:row.id,kind:row.kind||'backup',name:row.name,deviceName:row.deviceName||row.name,
+    site:row.site||row.deviceName||row.name,reliability:row.reliability||'normal',
+    remote:Boolean(row.remote),encrypted:Boolean(row.encrypted),verified:true,verifiedAt:row.verifiedAt,
+    representation:'compact',reducedFidelity:true
   });
 
-  const levels = Object.fromEntries(LEVELS.map(level => [level, { files: 0, bytes: 0, needsProtection: 0 }]));
-  let protectedFiles = 0;
-  let protectedBytes = 0;
-  let needsProtection = 0;
-  let needsBytes = 0;
-  for (const object of objects) {
-    const level = levelsByHash.get(object.hash) || 'normal';
-    const state = evaluate(level, copiesByHash.get(object.hash) || []);
-    const bucket = levels[level];
-    const size = Number(object.size) || 0;
-    bucket.files++;
-    bucket.bytes += size;
-    if (state.meets) {
-      protectedFiles++;
-      protectedBytes += size;
-    } else {
-      bucket.needsProtection++;
-      needsProtection++;
-      needsBytes += size;
+  const currentHashes=new Set(intents.map(item=>item.hash).filter(validHash));
+  const states=new Map();
+  for(const object of objects){
+    const level=levelsByHash.get(object.hash)||'normal';
+    const evaluated=evaluate(level,copiesByHash.get(object.hash)||[]);
+    const lifecycle=currentHashes.has(object.hash)?'current':remoteOnly.has(object.hash)?'remote-only':'unlinked';
+    states.set(object.hash,{
+      hash:object.hash, lifecycle,
+      protectionState:lifecycle==='current'?(evaluated.meets?'protected':'needs-backup'):lifecycle,
+      level, meets:evaluated.meets, status:evaluated.status, missing:evaluated.missing
+    });
+  }
+
+  const levels=Object.fromEntries(LEVELS.map(level=>[level,{files:0,bytes:0,needsProtection:0,protectedFiles:0}]));
+  const imports=new Map();
+  const sources=new Map();
+  const desired=new Map();
+  for(const intent of intents){
+    const hash=validHash(intent.hash)?intent.hash:'';
+    const key=hash||`${intent.deviceName}\0${intent.rootPath}\0${intent.relativePath}`;
+    const level=hash?(levelsByHash.get(hash)||levelForImport(intent.importId)):levelForImport(intent.importId);
+    const previous=desired.get(key);
+    if(!previous||rank(level)>rank(previous.level))desired.set(key,{...intent,hash,level});
+    const importKey=Number(intent.importId)||0;
+    let group=imports.get(importKey);
+    if(!group)imports.set(importKey,group={importId:importKey,files:0,protectedFiles:0,needsProtection:0,pendingFiles:0,preparingFiles:0});
+    const sourceKey=`${intent.deviceName}\0${intent.rootPath}`;
+    if(!sources.has(sourceKey))sources.set(sourceKey,{deviceName:intent.deviceName,rootPath:intent.rootPath,files:0,protectedFiles:0,needsProtection:0,pendingFiles:0,preparingFiles:0});
+  }
+
+  let protectedFiles=0,protectedBytes=0,needsProtection=0,needsBytes=0,pendingFiles=0,preparingFiles=0,storedFiles=0,totalBytes=0;
+  for(const item of desired.values()){
+    const size=Math.max(0,Number(item.size)||0);
+    const bucket=levels[item.level]||levels.normal;
+    bucket.files++;bucket.bytes+=size;totalBytes+=size;
+    let state='preparing';
+    if(validHash(item.hash)){
+      const object=objectByHash.get(item.hash);
+      if(!object){state='pending';pendingFiles++;}
+      else{
+        storedFiles++;
+        const evaluated=states.get(item.hash);
+        state=evaluated?.meets?'protected':'needs-backup';
+      }
+    }else preparingFiles++;
+
+    if(state==='protected'){protectedFiles++;protectedBytes+=size;bucket.protectedFiles++;}
+    else if(state!=='preparing'){needsProtection++;needsBytes+=size;bucket.needsProtection++;}
+
+  }
+
+  const importSeen=new Set();
+  for(const intent of intents){
+    const importId=Number(intent.importId)||0;
+    const hash=validHash(intent.hash)?intent.hash:'';
+    const key=`${importId}\0${hash||intent.deviceName+'\0'+intent.rootPath+'\0'+intent.relativePath}`;
+    if(importSeen.has(key))continue;
+    importSeen.add(key);
+    const group=imports.get(importId);
+    if(!group)continue;
+    group.files++;
+    if(!hash){group.preparingFiles++;continue;}
+    const object=objectByHash.get(hash);
+    if(!object){group.needsProtection++;group.pendingFiles++;continue;}
+    if(states.get(hash)?.meets)group.protectedFiles++;
+    else group.needsProtection++;
+  }
+
+  const sourceSeen=new Set();
+  for(const intent of intents){
+    const hash=validHash(intent.hash)?intent.hash:'';
+    const sourceKey=`${intent.deviceName}\0${intent.rootPath}`;
+    const itemKey=`${sourceKey}\0${hash||intent.relativePath}`;
+    if(sourceSeen.has(itemKey))continue;
+    sourceSeen.add(itemKey);
+    const group=sources.get(sourceKey);
+    if(!group)continue;
+    group.files++;
+    if(!hash){group.preparingFiles++;continue;}
+    const object=objectByHash.get(hash);
+    if(!object){group.needsProtection++;group.pendingFiles++;continue;}
+    if(states.get(hash)?.meets)group.protectedFiles++;
+    else group.needsProtection++;
+  }
+
+  const unlinked=objects.filter(object=>!currentHashes.has(object.hash)&&!remoteOnly.has(object.hash));
+  const remote=objects.filter(object=>remoteOnly.has(object.hash)&&!currentHashes.has(object.hash));
+  for(const object of remote){
+    const size=Number(object.size)||0;
+    const state=states.get(object.hash);
+    const level=state?.level||'normal';
+    const bucket=levels[level]||levels.normal;
+    bucket.files++;bucket.bytes+=size;totalBytes+=size;storedFiles++;
+    if(state?.meets){
+      protectedFiles++;protectedBytes+=size;bucket.protectedFiles++;
+    }else{
+      needsProtection++;needsBytes+=size;bucket.needsProtection++;
     }
   }
-  const trash = Number(db.prepare('SELECT COUNT(*) AS count FROM protection_trash').get().count) || 0;
-  snapshot = { files: objects.length, protectedFiles, protectedBytes, needsProtection, needsBytes, levels, trash, generatedAt: now() };
-  snapshotAt = Date.now();
+  const trash=Number(db.prepare('SELECT COUNT(*) AS count FROM protection_trash').get().count)||0;
+  const summary={
+    files:desired.size+remote.length,currentFiles:desired.size,bytes:totalBytes,storedFiles,protectedFiles,protectedBytes,
+    needsProtection,needsBytes,pendingFiles,preparingFiles,
+    unlinkedFiles:unlinked.length,unlinkedBytes:unlinked.reduce((sum,row)=>sum+(Number(row.size)||0),0),
+    remoteOnlyFiles:remote.length,remoteOnlyBytes:remote.reduce((sum,row)=>sum+(Number(row.size)||0),0),
+    levels,imports:[...imports.values()].filter(item=>item.importId||item.files),sources:[...sources.values()],trash,generatedAt:now()
+  };
+  snapshot={summary,states};
+  snapshotAt=Date.now();
   return snapshot;
+}
+
+function protectionSummary(force=false){
+  return protectionSnapshot(force).summary;
+}
+
+export function protectionCatalogStates(hashes=[]){
+  const states=protectionSnapshot().states;
+  return (hashes||[]).map(hash=>{
+    const state=states.get(String(hash));
+    return state?{
+      hash:state.hash,lifecycle:state.lifecycle,protectionState:state.protectionState,
+      protectionLevel:state.level,protected:state.meets
+    }:null;
+  }).filter(Boolean);
 }
 
 function improvesWithTarget(state, target) {
@@ -586,9 +736,109 @@ export async function handleProtectionServer(req, res, url) {
     return true;
   }
 
+  const locationImpact = /^\/api\/protection\/locations\/([^/]+)\/impact$/.exec(url.pathname);
+  if(locationImpact&&req.method==='GET'){
+    const id=decodeURIComponent(locationImpact[1]);
+    const snap=protectionSnapshot();
+    let files=0,bytes=0,newlyUnderProtected=0,newlyUnderProtectedBytes=0;
+    for(const [hash,brief] of snap.states){
+      if(brief.lifecycle==='unlinked')continue;
+      const state=protectionState(hash);
+      if(!state)continue;
+      const uses=state.copies.some(copy=>copy.id===id);
+      if(!uses)continue;
+      files++;
+      bytes+=Number(state.object?.size)||0;
+      const after=evaluate(state.level,state.copies.filter(copy=>copy.id!==id));
+      if(state.meets&&!after.meets){
+        newlyUnderProtected++;
+        newlyUnderProtectedBytes+=Number(state.object?.size)||0;
+      }
+    }
+    json(res,200,{id,files,bytes,newlyUnderProtected,newlyUnderProtectedBytes});
+    return true;
+  }
+
   const locationRoute = /^\/api\/protection\/locations\/([^/]+)$/.exec(url.pathname);
   if (locationRoute && req.method === 'POST') {
     json(res, 200, saveLocation(decodeURIComponent(locationRoute[1]), await readJson(req)));
+    return true;
+  }
+
+  const intentRoute = /^\/api\/protection\/intents\/([^/]+)$/.exec(url.pathname);
+  if (intentRoute && req.method === 'POST') {
+    const device=decodeURIComponent(intentRoute[1]).trim().slice(0,120);
+    const body=await readJson(req,4*1024*1024);
+    const scanId=String(body.scanId||'').slice(0,100);
+    const entries=Array.isArray(body.entries)?body.entries:[];
+    if(!device||!scanId)return void json(res,400,{error:'device and scanId are required'});
+    if(entries.length>2000)return void json(res,400,{error:'entries must contain at most 2000 files'});
+    const current=db.prepare('SELECT object_hash AS hash,size,import_id AS importId FROM protection_intents WHERE device_name=? AND root_path=? AND relative_path=?');
+    const save=db.prepare(`
+      INSERT INTO protection_intents(device_name,root_path,relative_path,object_hash,size,import_id,scan_id,updated_at)
+      VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(device_name,root_path,relative_path) DO UPDATE SET
+        object_hash=excluded.object_hash,size=excluded.size,import_id=excluded.import_id,
+        scan_id=excluded.scan_id,updated_at=excluded.updated_at
+    `);
+    const stamp=now();
+    let materialChange=false;
+    try{
+      db.exec('BEGIN IMMEDIATE');
+      for(const entry of entries){
+        const hash=String(entry.hash||'');
+        if(hash&&!validHash(hash))continue;
+        const rootPath=String(entry.rootPath||'').slice(0,2000);
+        const relativePath=String(entry.path||'').slice(0,4000);
+        const size=Math.max(0,Number(entry.size)||0);
+        const importId=Math.max(0,Number(entry.importId)||0);
+        const previous=current.get(device,rootPath,relativePath);
+        if(!previous||previous.hash!==hash||Number(previous.size)!==size||Number(previous.importId)!==importId)materialChange=true;
+        save.run(device,rootPath,relativePath,hash,size,importId,scanId,stamp);
+      }
+      if(body.final===true){
+        const removed=db.prepare('DELETE FROM protection_intents WHERE lower(device_name)=lower(?) AND scan_id<>?').run(device,scanId);
+        if(Number(removed?.changes)||0)materialChange=true;
+      }
+      db.exec('COMMIT');
+    }catch(error){
+      try{db.exec('ROLLBACK');}catch{}
+      throw error;
+    }
+    if(materialChange)bumpCatalog();
+    invalidate();
+    json(res,200,{ok:true,accepted:entries.length,final:body.final===true});
+    return true;
+  }
+
+  if(req.method==='POST'&&url.pathname==='/api/protection/lifecycle'){
+    const body=await readJson(req,2*1024*1024);
+    const hashes=[...new Set((body.hashes||[]).map(String).filter(validHash))];
+    if(hashes.length>5000)return void json(res,400,{error:'hashes must contain at most 5000 files'});
+    const mode=String(body.mode||'');
+    if(mode&&mode!=='remote-only')return void json(res,400,{error:'Invalid lifecycle'});
+    const save=db.prepare(`
+      INSERT INTO object_lifecycle(object_hash,mode,updated_at) VALUES(?,'remote-only',?)
+      ON CONFLICT(object_hash) DO UPDATE SET mode='remote-only',updated_at=excluded.updated_at
+    `);
+    const remove=db.prepare('DELETE FROM object_lifecycle WHERE object_hash=?');
+    const active=db.prepare("SELECT 1 FROM objects WHERE hash=? AND state='active'");
+    const stamp=now();
+    try{
+      db.exec('BEGIN IMMEDIATE');
+      for(const hash of hashes){
+        if(!active.get(hash))continue;
+        if(mode==='remote-only')save.run(hash,stamp);
+        else remove.run(hash);
+      }
+      db.exec('COMMIT');
+    }catch(error){
+      try{db.exec('ROLLBACK');}catch{}
+      throw error;
+    }
+    bumpCatalog();
+    invalidate();
+    json(res,200,{ok:true,count:hashes.length,mode:mode||'unlinked'});
     return true;
   }
 
@@ -665,7 +915,7 @@ export async function handleProtectionServer(req, res, url) {
     for (const object of candidates) {
       inspected = object.hash;
       const state = protectionState(object.hash);
-      if (state && !state.meets && improvesWithTarget(state, target)) objects.push({ ...object, level: state.level });
+      if (state && state.lifecycle !== 'unlinked' && !state.meets && improvesWithTarget(state, target)) objects.push({ ...object, level: state.level });
       if (objects.length >= limit) { exhausted = false; break; }
     }
     const nextAfter = !candidates.length ? null : exhausted ? (candidates.length === scan ? candidates.at(-1).hash : null) : inspected;

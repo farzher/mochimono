@@ -30,6 +30,7 @@ let importId = '';
 let collectionHashes = null;
 let locationFilter = '';
 let locationHashes = null;
+let protectionFilter = '';
 let view = 'grid';
 let sort = 'date-desc';
 let selected = null;
@@ -102,6 +103,19 @@ function matchesLocation(file) {
   if (locationFilter === 'backup') return file.backupCount > 0;
   if (locationFilter === 'unbacked') return file.backupCount === 0;
   return Boolean(locationHashes?.has(file.hash));
+}
+
+function matchesProtection(file) {
+  if (!protectionFilter) return true;
+  const state=String(file.protectionState||'');
+  const lifecycle=String(file.lifecycle||'');
+  if(protectionFilter==='managed')return lifecycle==='current'||lifecycle==='remote-only'||file.backupIntent===true;
+  if(protectionFilter==='current')return lifecycle==='current'||file.backupIntent===true;
+  if(protectionFilter==='protected')return lifecycle!=='unlinked'&&(state==='protected'||file.protected===true);
+  if(protectionFilter==='needs-backup')return lifecycle!=='unlinked'&&(['needs-backup','pending','preparing'].includes(state)||(lifecycle==='remote-only'&&file.protected===false));
+  if(protectionFilter==='remote-only')return lifecycle==='remote-only';
+  if(protectionFilter==='unlinked')return lifecycle==='unlinked';
+  return true;
 }
 
 window.mochimonoSearch = {
@@ -216,7 +230,8 @@ function gridModel() {
       Number(file.width) || 0,
       Number(file.height) || 0,
       timelineMs(file),
-      Number(file.size) || 0
+      Number(file.size) || 0,
+      backupBadgeState(file)
     ])
   };
 }
@@ -254,14 +269,38 @@ function mediaRatio(file) {
   return file.width && file.height ? Math.max(.65, Math.min(2.1, file.width / file.height)) : 4 / 3;
 }
 
+function backupBadgeState(file) {
+  const lifecycle=String(file.lifecycle||'');
+  const state=String(file.protectionState||'');
+  if(lifecycle==='unlinked')return 'unlinked';
+  if(lifecycle==='remote-only')return file.protected===false?'needs-backup':'remote-only';
+  if(['preparing','pending'].includes(state))return 'backing-up';
+  if(state==='protected'||file.protected===true)return 'protected';
+  if(lifecycle==='current'||file.backupIntent===true)return 'needs-backup';
+  return '';
+}
+
+function backupBadgeMarkup(file) {
+  const state=backupBadgeState(file);
+  if(!state)return '';
+  const value={
+    protected:['✓','Protected'],
+    'backing-up':['↻','Backing up'],
+    'needs-backup':['!','Needs backup'],
+    'remote-only':['☁','Remote only'],
+    unlinked:['?','Needs review']
+  }[state];
+  return `<span class="file-backup-badge ${state}" title="${value[1]}" aria-label="${value[1]}">${value[0]}</span>`;
+}
+
 function gridCard(file) {
   const media = ['image','video'].includes(kind(file));
   const ratio = media ? mediaRatio(file) : 0;
-  return `<button class="file-card ${media ? 'media-card' : ''} ${kind(file) === 'video' ? 'video-card' : ''}" data-hash="${file.hash}" data-filename="${escapeHtml(file.filename)}" data-day="${dayKey(file)}" data-day-label="${escapeHtml(dayLabel(file))}"${media ? ` data-width="${file.width || 0}" data-height="${file.height || 0}" style="--ratio:${ratio}"` : ''} title="${escapeHtml(file.filename)}"><div class="thumb ${media ? 'media-thumb' : ''}">${preview(file)}</div>${media ? '' : `<div class="card-copy"><strong>${escapeHtml(file.filename)}</strong><span>${formatBytes(file.size)}</span></div>`}</button>`;
+  return `<button class="file-card ${media ? 'media-card' : ''} ${kind(file) === 'video' ? 'video-card' : ''}" data-hash="${file.hash}" data-filename="${escapeHtml(file.filename)}" data-day="${dayKey(file)}" data-day-label="${escapeHtml(dayLabel(file))}"${media ? ` data-width="${file.width || 0}" data-height="${file.height || 0}" style="--ratio:${ratio}"` : ''} title="${escapeHtml(file.filename)}"><div class="thumb ${media ? 'media-thumb' : ''}">${preview(file)}</div>${backupBadgeMarkup(file)}${media ? '' : `<div class="card-copy"><strong>${escapeHtml(file.filename)}</strong><span>${formatBytes(file.size)}</span></div>`}</button>`;
 }
 
 function listRow(file) {
-  return `<button class="file-row" data-hash="${file.hash}" data-filename="${escapeHtml(file.filename)}" data-day="${dayKey(file)}" data-day-label="${escapeHtml(dayLabel(file))}"><span class="type">${escapeHtml(typeLabel(file))}</span><div class="file-main"><strong>${escapeHtml(file.filename)}</strong><span>${escapeHtml(file.originalPath || '')}</span></div><span class="refs">${escapeHtml(shortDate(file))}</span><span class="size">${formatBytes(file.size)}</span></button>`;
+  return `<button class="file-row" data-hash="${file.hash}" data-filename="${escapeHtml(file.filename)}" data-day="${dayKey(file)}" data-day-label="${escapeHtml(dayLabel(file))}"><span class="type">${escapeHtml(typeLabel(file))}</span><div class="file-main"><strong>${escapeHtml(file.filename)}</strong><span>${escapeHtml(file.originalPath || '')}</span></div>${backupBadgeMarkup(file)}<span class="refs">${escapeHtml(shortDate(file))}</span><span class="size">${formatBytes(file.size)}</span></button>`;
 }
 
 const cardsHtml = items => items.map(file => view === 'grid' ? gridCard(file) : listRow(file)).join('');
@@ -445,7 +484,7 @@ function applyFilters(reset = true, preserve = false, keepHash = '') {
   const sourceId = Number(importId) || 0;
   const folderHashes = folderImportId && folderPath && folderData ? new Set(folderData.files.map(file => file.hash)) : null;
   filtered = sortFiles(catalog.filter(file => {
-    if (!matchesType(file) || !matchesLocation(file) || (collectionHashes && !collectionHashes.has(file.hash))) return false;
+    if (!matchesType(file) || !matchesLocation(file) || !matchesProtection(file) || (collectionHashes && !collectionHashes.has(file.hash))) return false;
     if (sourceId && !file.importIds.includes(sourceId)) return false;
     if (folderHashes && !folderHashes.has(file.hash)) return false;
     return !terms.length || terms.every(term => (searchIndex.get(file.hash) || '').includes(term));
@@ -964,6 +1003,23 @@ window.mochimonoLibrary = {
     locationHashes = hashes instanceof Set ? hashes : hashes ? new Set(hashes) : null;
     applyFilters(true);
   },
+  setProtectionFilter(mode) {
+    protectionFilter=String(mode||'');
+    const select=$('#protectionFilter');
+    if(select)select.value=protectionFilter;
+    applyFilters(true);
+  },
+  showProtection(mode) {
+    protectionFilter=String(mode||'');
+    const protection=$('#protectionFilter');if(protection)protection.value=protectionFilter;
+    $('#search').value='';
+    importId='';$('#source').value='';
+    type='';$('#typeFilter').value='';
+    locationFilter='';locationHashes=null;$('#locationFilter').value='';
+    collectionHashes=null;$('#collectionFilter').value='';
+    if(view==='folders')setView('grid');
+    applyFilters(true);
+  },
   setLocationSearch(entries) {
     locationSearch = entries instanceof Map ? entries : new Map(entries || []);
     searchIndexDirty = true;
@@ -983,7 +1039,14 @@ window.mochimonoLibrary = {
       const index = catalogIndex.get(hash);
       if (Number.isInteger(index)) {
         const current = catalog[index];
-        catalog[index] = normalizeFile({ ...current, ...raw, searchText: [current.searchText, raw.searchText].filter(Boolean).join(' ') });
+        const incoming={...raw};
+        if(incoming.backupIntent===true&&current.lifecycle==='current'){
+          incoming.lifecycle='current';
+          incoming.protectionState=current.protectionState;
+          incoming.protectionLevel=current.protectionLevel;
+          incoming.protected=current.protected;
+        }
+        catalog[index] = normalizeFile({ ...current, ...incoming, searchText: [current.searchText, incoming.searchText].filter(Boolean).join(' ') });
       } else catalog.push(normalizeFile(raw));
       changed = true;
     }
@@ -996,6 +1059,7 @@ window.mochimonoLibrary = {
   refresh: () => syncCatalog(true),
   ensureIndex: ensureIndexRendered,
   filteredHashes: () => filtered.map(file => file.hash),
+  file: hash => catalogFile(hash),
   gridModel,
   sources: () => imports.map(item => ({ ...item })),
   folderState,
@@ -1021,6 +1085,7 @@ window.mochimonoLibrary = {
     view,
     sort,
     locationFilter,
+    protectionFilter,
     version: catalogVersion,
     searchIndexed:!searchIndexDirty,
     stableGrid:view === 'grid'
@@ -1145,6 +1210,7 @@ $('#source').addEventListener('change', event => {
   applyFilters(true);
 });
 $('#typeFilter').addEventListener('change', event => { type = event.target.value; applyFilters(true); });
+$('#protectionFilter')?.addEventListener('change', event => { protectionFilter=event.target.value; applyFilters(true); });
 $('#sort').addEventListener('change', event => { sort = event.target.value; applyFilters(true); });
 $('#mediaSize').addEventListener('input', event => {
   const size = Number(event.target.value);
