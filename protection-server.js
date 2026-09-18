@@ -181,7 +181,7 @@ function sourceCopies(hash) {
 
 function backupCopies(hash) {
   return db.prepare(`
-    SELECT r.drive_id AS id,r.verified_at AS verifiedAt,d.name,d.last_seen AS lastSeen,
+    SELECT r.drive_id AS id,r.verified_at AS verifiedAt,d.name AS name,d.last_seen AS lastSeen,
            sl.kind,sl.device_name AS deviceName,sl.site,sl.reliability,sl.remote,sl.encrypted,
            'original' AS representation
     FROM replicas r JOIN drives d ON d.id=r.drive_id
@@ -190,7 +190,7 @@ function backupCopies(hash) {
 
     UNION ALL
 
-    SELECT substr(rp.location_id,8) AS id,rp.verified_at AS verifiedAt,d.name,d.last_seen AS lastSeen,
+    SELECT substr(rp.location_id,8) AS id,rp.verified_at AS verifiedAt,d.name AS name,d.last_seen AS lastSeen,
            sl.kind,sl.device_name AS deviceName,sl.site,sl.reliability,sl.remote,sl.encrypted,
            'compact' AS representation
     FROM representation_presence rp
