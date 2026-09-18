@@ -17,7 +17,7 @@ if (location.pathname.startsWith('/files')) {
   result.className = 'client-import-result';
   result.hidden = true;
   result.innerHTML = `
-    <div class="client-import-head"><strong data-import-title>Copying to Mochimono</strong><button class="client-import-close" aria-label="Close">×</button></div>
+    <div class="client-import-head"><strong data-import-title>Adding to Mochimono</strong><button class="client-import-close" aria-label="Close">×</button></div>
     <div class="client-import-progress"><i data-import-bar></i></div>
     <div class="client-import-meta" data-import-meta></div>
     <div class="client-import-note" data-import-note></div>
@@ -184,10 +184,10 @@ if (location.pathname.startsWith('/files')) {
   async function importDropped(files) {
     if (!files.length) return;
     result.hidden = false;
-    result.querySelector('[data-import-title]').textContent = 'Copying to Mochimono';
+    result.querySelector('[data-import-title]').textContent = 'Adding to Mochimono';
     result.querySelector('[data-import-bar]').style.width = '0%';
     result.querySelector('[data-import-meta]').textContent = `${files.length.toLocaleString()} file${files.length === 1 ? '' : 's'}`;
-    result.querySelector('[data-import-note]').textContent = 'Uploading a separate copy. Local originals are not changed.';
+    result.querySelector('[data-import-note]').textContent = 'Adding once. Originals stay where they are.';
     result.querySelector('[data-import-dupes]').replaceChildren();
     showDroppedFiles(files);
 
@@ -222,11 +222,11 @@ if (location.pathname.startsWith('/files')) {
     flushLive();
     try { await window.mochimonoLibrary?.refresh?.(); } catch {}
     const handled = added + existing + ignored;
-    result.querySelector('[data-import-title]').textContent = 'Copied to Mochimono';
+    result.querySelector('[data-import-title]').textContent = 'Added to Mochimono';
     const parts = [`${handled.toLocaleString()} / ${files.length.toLocaleString()}`, `${added.toLocaleString()} new`];
     if (ignored) parts.push(`${ignored.toLocaleString()} ignored`);
     result.querySelector('[data-import-meta]').textContent = parts.join(' · ');
-    result.querySelector('[data-import-note]').textContent = 'Local originals unchanged · one-time copy · not watched.';
+    result.querySelector('[data-import-note]').textContent = 'Added once · not watched.';
 
     const duplicateBox = result.querySelector('[data-import-dupes]');
     duplicateBox.innerHTML = duplicates.length ? `
