@@ -20,7 +20,7 @@ if (storagePane && sourceSection) {
     .backup-center{margin-top:24px;padding-top:30px;border-top:1px solid #211e21}
     .backup-center-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:13px}.backup-center-head h2{margin:0;color:#f0e8e4;font-size:21px;font-weight:800;letter-spacing:-.03em}.backup-center-manage{height:32px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:#9e9490;font-size:12px;font-weight:760}.backup-center-manage:hover{background:#211e22;color:#eee6e2}
     .backup-health{--ring:#7fbe90;display:grid;grid-template-columns:76px minmax(0,1fr) auto;gap:18px;align-items:center;padding:18px 19px;border-radius:18px;background:#141214;box-shadow:inset 0 0 0 1px #2b272b}.backup-health.needs{--ring:#d3a067}.backup-health.empty{--ring:#686164}
-    .backup-health-ring{--p:0;position:relative;width:70px;height:70px;display:grid;place-items:center;border-radius:50%;background:conic-gradient(var(--ring) calc(var(--p)*1%),#2b272b 0)}.backup-health-ring:after{content:'';position:absolute;inset:7px;border-radius:50%;background:#141214}.backup-health-ring b{position:relative;z-index:1;color:#eee6e2;font-size:16px;font-weight:820;font-variant-numeric:tabular-nums}.backup-health.empty .backup-health-ring b{color:#8c8380}
+    .backup-health-ring{--p:0%;position:relative;width:70px;height:70px;display:grid;place-items:center;border-radius:50%;background:conic-gradient(var(--ring) var(--p),#2b272b 0)}.backup-health-ring:after{content:'';position:absolute;inset:7px;border-radius:50%;background:#141214}.backup-health-ring b{position:relative;z-index:1;color:#eee6e2;font-size:16px;font-weight:820;font-variant-numeric:tabular-nums}.backup-health.empty .backup-health-ring b{color:#8c8380}
     .backup-health-copy{min-width:0}.backup-health-title{color:#f1e9e5;font-size:21px;font-weight:820;letter-spacing:-.028em}.backup-health-sub{margin-top:4px;color:#9b918d;font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums}.backup-health-sub:empty{display:none}.backup-health-actions{display:flex;align-items:center}.backup-health-actions button{min-width:104px;height:37px;padding:0 14px;border-radius:9px;white-space:nowrap;font-size:12px;font-weight:780}
     .backup-job{margin-top:11px}.backup-job-head{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#c9bfbb;font-size:11.5px;font-weight:700}.backup-job-head span:last-child{color:#8d8581;font-variant-numeric:tabular-nums}.backup-progress{height:6px;margin-top:7px;overflow:hidden;border-radius:999px;background:#2b272b}.backup-progress i{display:block;height:100%;border-radius:inherit;background:var(--ring);transition:width .25s ease}.backup-progress.indeterminate i{width:34%;animation:backup-slide 1.3s ease-in-out infinite}
     .backup-center-dialog{width:min(860px,calc(100vw - 28px));max-height:min(850px,calc(100dvh - 28px));padding:0;overflow:hidden}.backup-center-dialog .dialog-head{padding:17px 20px 14px;border-bottom:1px solid #292529}.backup-center-dialog .dialog-head h3{font-size:18px;font-weight:820;letter-spacing:-.02em}.backup-settings{max-height:calc(min(850px,100dvh - 28px) - 60px);overflow:auto;display:grid;padding:20px 22px 24px}.backup-settings-section{display:grid;gap:11px;padding:22px 0;border-top:1px solid #282428}.backup-settings-section:first-child{padding-top:0;border-top:0}.backup-settings-section h4{margin:0;color:#e6ddd9;font-size:15px;font-weight:800;letter-spacing:-.015em}
@@ -31,7 +31,7 @@ if (storagePane && sourceSection) {
     @keyframes backup-slide{0%{transform:translateX(-115%)}50%{transform:translateX(105%)}100%{transform:translateX(315%)}}
     @media(max-width:760px){.backup-health{grid-template-columns:66px minmax(0,1fr)}.backup-health-ring{width:60px;height:60px}.backup-health-actions{grid-column:1/-1}.backup-health-actions button{width:100%}.backup-plan-list{grid-template-columns:repeat(2,minmax(0,1fr))}.backup-source-row,.backup-destination-row{grid-template-columns:1fr}.backup-destination-controls{justify-content:flex-start}.backup-settings{padding:17px}}
     @media(prefers-reduced-motion:reduce){.backup-progress i{animation:none!important;transition:none!important}}
-  `
+  `;
   document.head.append(style);
 
   const section = document.createElement('section');
@@ -109,7 +109,7 @@ if (storagePane && sourceSection) {
 
     body.innerHTML=`
       <div class="backup-health ${stateClass}">
-        <div class="backup-health-ring" style="--p:${Math.max(0,Math.min(100,percent))}"><b>${total?`${percent}%`:'—'}</b></div>
+        <div class="backup-health-ring" style="--p:${Math.max(0,Math.min(100,percent))}%"><b>${total?`${percent}%`:'—'}</b></div>
         <div class="backup-health-copy">
           <div class="backup-health-title">${esc(title)}</div>
           <div class="backup-health-sub">${esc(sub)}</div>
