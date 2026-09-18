@@ -328,6 +328,9 @@ async function addHandles(handles, scope = 'media', { sync = true } = {}) {
     if(access!=='granted'){
       source.lastError='Permission required';
       await saveSource(source);
+    }else if(source.lastError==='Permission required'){
+      source.lastError='';
+      await saveSource(source);
     }
     added.push(source);
   }
@@ -612,6 +615,7 @@ async function syncSource(id, { userGesture = false } = {}) {
       scanned++;
       const path = cleanRelative(item.path);
       const old = previous.get(path);
+      if(scanned===1||performance.now()-lastProgressAt>=120)progress({ scanned, transferred, skipped, current:path },true);
       const same = old && old.hash && Number(old.size) === Number(file.size) && Number(old.lastModified) === Number(file.lastModified);
       const canSkip = same && (!source.cloud || old.cloudSynced === true);
 
@@ -938,6 +942,7 @@ installViewerBridge();
 window.mochimonoBrowserFolders = {
   addHandles,
   list:describeSources,
+  names:async ()=> (await sourceList()).map(source=>({id:source.id,name:source.name})),
   sync:async (id,options={})=>{
     if(activeSync){queueSourceSync(id);return {queued:true};}
     return syncSource(id,options);
