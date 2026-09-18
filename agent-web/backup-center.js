@@ -280,14 +280,21 @@ if (storagePane && sourceSection) {
 
   async function forgetBackup(event) {
     const button=event.currentTarget,id=button.dataset.forgetBackup,name=button.dataset.name||'this backup drive';
-    if(!confirm(`Forget ${name}? Mochimono will stop counting copies on this drive. Files on the drive are not erased.`))return;
     button.disabled=true;
     try{
+      const impact=await server(`/api/protection/locations/${encodeURIComponent(id)}/impact`).catch(()=>null);
+      const affected=Number(impact?.newlyUnderProtected)||0;
+      const copies=Number(impact?.files)||0;
+      const consequence=affected
+        ? `\n\n${affected.toLocaleString()} managed ${affected===1?'file will':'files will'} fall below the requested protection level.`
+        : copies ? `\n\n${copies.toLocaleString()} managed ${copies===1?'file has':'files have'} a copy there, but required protection remains satisfied without it.` : '';
+      if(!confirm(`Forget ${name}?${consequence}\n\nFiles on the physical drive are not erased.`))return;
       await control('/api/client/protection/backup/forget',{method:'POST',body:{id}});
       model.storageLoaded=false;
       await refresh(true);
       toast('Backup forgotten');
-    }catch(error){toast(error.message);button.disabled=false;}
+    }catch(error){toast(error.message);}
+    finally{button.disabled=false;}
   }
 
   async function updateFolderPlan(event) {
