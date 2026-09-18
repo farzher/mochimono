@@ -228,7 +228,7 @@ async function permission(handle, ask = false) {
 }
 
 function yieldUi() {
-  if (globalThis.scheduler?.yield) return scheduler.yield();
+  if (globalThis.scheduler?.yield) return globalThis.scheduler.yield();
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
@@ -238,8 +238,9 @@ function emitSync(detail) {
 
 function queueSourceSync(id) {
   id=String(id||'');
-  if(!id||activeSync===id||pendingSyncs.has(id))return;
+  if(!id||pendingSyncs.has(id))return;
   pendingSyncs.add(id);
+  if(activeSync===id)return;
   emitSync({ id, state:'queued' });
   clearTimeout(syncPumpTimer);
   syncPumpTimer=setTimeout(pumpSourceSyncs,0);
@@ -556,7 +557,7 @@ async function publishSource(source, rows = null) {
 async function syncSource(id, { userGesture = false } = {}) {
   const source = await sourceById(id);
   if (!source) throw new Error('Browser folder not found');
-  if (activeSync && activeSync !== source.id) throw new Error('Another browser folder is syncing');
+  if (activeSync) throw new Error(activeSync===source.id?'This folder is already indexing':'Another browser folder is indexing');
   if (await permission(source.handle, userGesture) !== 'granted') {
     source.lastError = 'Permission required';
     await saveSource(source);
@@ -894,14 +895,14 @@ async function restoreBrowserFiles() {
 }
 
 async function autoSync() {
-  if (document.visibilityState !== 'visible' || activeSync) return;
+  if (document.visibilityState !== 'visible') return;
   const sources = await sourceList().catch(() => []);
   const now = Date.now();
   for (const source of sources) {
     const last = source.lastSynced ? new Date(source.lastSynced).getTime() : 0;
     if (last && now - last < AUTO_SYNC_MS) continue;
     if (await permission(source.handle, false) !== 'granted') continue;
-    await syncSource(source.id).catch(() => {});
+    queueSourceSync(source.id);
   }
 }
 
@@ -927,7 +928,7 @@ window.mochimonoBrowserFolders = {
   addHandles,
   list:describeSources,
   sync:async (id,options={})=>{
-    if(activeSync&&activeSync!==String(id)){queueSourceSync(id);return {queued:true};}
+    if(activeSync){queueSourceSync(id);return {queued:true};}
     return syncSource(id,options);
   },
   setRootPath,
