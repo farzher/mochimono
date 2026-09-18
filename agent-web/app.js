@@ -252,12 +252,12 @@ async function refreshFolderStats() {
       row.querySelector('[data-folder-free]').textContent = `${bytes(item.freeBytes)} free`;
       if (item.protected === false) setRelativeTime(row.querySelector('[data-folder-status]'), item.lastIndexed, 'Not indexed yet');
       const diagnostics = item.diagnostics || {};
-      if (diagnostics.running && diagnostics.jobType === 'hash') {
-        renderItemProgress(row, {
-          type:'hash', kind:'Hash', label:`Hash ${pathName(item.path) || item.path}`, status:'running', cancelable:false,
-          progress:{ path:item.path, phase:'Hashing content', hashed:Number(diagnostics.hashProcessed) || 0, total:Number(diagnostics.hashTotal) || 0, indeterminate:!(Number(diagnostics.hashTotal) > 0) }
-        });
-      }
+      const key = String(item.path || '').replace(/[\\/]+$/, '').toLowerCase();
+      const diagnosticJob = diagnostics.running && diagnostics.jobType === 'hash' ? {
+        type:'hash', kind:'Hash', label:`Hash ${pathName(item.path) || item.path}`, status:'running', cancelable:false,
+        progress:{ path:item.path, phase:'Hashing content', hashed:Number(diagnostics.hashProcessed) || 0, total:Number(diagnostics.hashTotal) || 0, indeterminate:!(Number(diagnostics.hashTotal) > 0) }
+      } : null;
+      renderItemProgress(row, diagnosticJob || folderActivity.get(key) || folderJob(item, currentJob));
       const ratio = item.capacityBytes ? Math.min(100, Number(item.bytes) / Number(item.capacityBytes) * 100) : 0;
       const meter = row.querySelector('[data-folder-meter]');
       meter.style.width = item.bytes ? `max(2px, ${ratio}%)` : '0';
