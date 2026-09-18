@@ -47,36 +47,44 @@ async function localSnapshot({ onPage = null } = {}) {
   // when that source drive is unplugged. That preserves offline metadata and any
   // already-generated thumbnails instead of making the library appear empty.
   const paths = sources.length ? sources : [{ path:'', importId:0, protected:false }];
+
+  const consume = async (source, offset, limit) => {
+    const data = await localPage(source.path, offset, limit);
+    const page = [];
+    for (const raw of data.files || []) {
+      const hash = String(raw?.hash || '');
+      if (!hash) continue;
+      const previous = seenLocations.get(hash);
+      const searchText = [previous?.searchText, raw.searchText, source.path].filter(Boolean).join(' ').trim();
+      const importIds = source.importId
+        ? [...new Set([...(previous?.importIds || []), source.importId])]
+        : previous?.importIds || [];
+      const next = {
+        ...(previous || {}),
+        ...raw,
+        searchText,
+        importIds,
+        exactImportIds:importIds,
+        localManaged:true,
+        localAvailable:Boolean(raw.localAvailable)
+      };
+      seenLocations.set(hash, next);
+      page.push(next);
+    }
+    if (page.length) onPage?.(page);
+    return data.nextOffset == null ? null : Number(data.nextOffset);
+  };
+
+  // Give every Source a small first-paint page before a huge Source is allowed
+  // to monopolize the rest of startup.
+  const offsets = new Map();
+  for (const source of paths) offsets.set(source, await consume(source, 0, FIRST_PAGE));
+
+  // Throughput pass: once something useful is visible, finish each Source with
+  // large pages in the background.
   for (const source of paths) {
-    let offset = 0;
-    let first = true;
-    do {
-      const data = await localPage(source.path, offset, first ? FIRST_PAGE : PAGE);
-      const page = [];
-      for (const raw of data.files || []) {
-        const hash = String(raw?.hash || '');
-        if (!hash) continue;
-        const previous = seenLocations.get(hash);
-        const searchText = [previous?.searchText, raw.searchText, source.path].filter(Boolean).join(' ').trim();
-        const importIds = source.importId
-          ? [...new Set([...(previous?.importIds || []), source.importId])]
-          : previous?.importIds || [];
-        const next = {
-          ...(previous || {}),
-          ...raw,
-          searchText,
-          importIds,
-          exactImportIds:importIds,
-          localManaged:true,
-          localAvailable:Boolean(raw.localAvailable)
-        };
-        seenLocations.set(hash, next);
-        page.push(next);
-      }
-      if (page.length) onPage?.(page);
-      offset = data.nextOffset == null ? null : Number(data.nextOffset);
-      first = false;
-    } while (offset != null);
+    let offset = offsets.get(source);
+    while (offset != null) offset = await consume(source, offset, PAGE);
 
     if (source.importId) imports.set(source.importId, {
       id:source.importId,
@@ -196,12 +204,10 @@ async function prepareOfflineCatalog() {
   window.mochimonoLocalCatalogLoading = true;
   dispatchEvent(new CustomEvent('mochimono:local-catalog-loading'));
   try {
-    const [cached, local] = await Promise.all([
-      cache.load().catch(() => null),
-      localSnapshot({
-        onPage:files => window.mochimonoLibrary?.upsertMany?.(files)
-      }).catch(() => ({ files:[], imports:[] }))
-    ]);
+    const cached = await cache.load().catch(() => null);
+    const local = await localSnapshot({
+      onPage:files => window.mochimonoLibrary?.upsertMany?.(files)
+    }).catch(() => ({ files:[], imports:[] }));
     const merged = mergeSnapshot(cached, local);
     runtime.offlineSnapshot = merged.snapshot;
     runtime.offlineReady = true;
