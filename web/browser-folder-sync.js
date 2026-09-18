@@ -11,6 +11,8 @@ const MEDIA_EXTENSIONS = new Set([
 ]);
 
 let activeSync = null;
+const pendingSyncs = new Set();
+let syncPumpTimer = 0;
 let autoTimer = 0;
 let viewerBlobUrl = '';
 let viewerBlobHash = '';
@@ -225,6 +227,55 @@ async function permission(handle, ask = false) {
   return state;
 }
 
+function yieldUi() {
+  if (globalThis.scheduler?.yield) return scheduler.yield();
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+function emitSync(detail) {
+  dispatchEvent(new CustomEvent('mochimono:browser-folder-sync', { detail }));
+}
+
+function queueSourceSync(id) {
+  id=String(id||'');
+  if(!id||activeSync===id||pendingSyncs.has(id))return;
+  pendingSyncs.add(id);
+  emitSync({ id, state:'queued' });
+  clearTimeout(syncPumpTimer);
+  syncPumpTimer=setTimeout(pumpSourceSyncs,0);
+}
+
+async function pumpSourceSyncs() {
+  syncPumpTimer=0;
+  if(activeSync||!pendingSyncs.size){
+    if(pendingSyncs.size)syncPumpTimer=setTimeout(pumpSourceSyncs,100);
+    return;
+  }
+  const id=pendingSyncs.values().next().value;
+  pendingSyncs.delete(id);
+  try{await syncSource(id);}catch{}
+  if(pendingSyncs.size)syncPumpTimer=setTimeout(pumpSourceSyncs,0);
+}
+
+let previewQueuePromise=null;
+function queueSourcePreviews(rows) {
+  const records=(rows||[])
+    .filter(row=>/^[a-f0-9]{64}$/.test(String(row.hash||''))&&mediaFile(null,row.path))
+    .slice(0,12)
+    .map(row=>({
+      hash:String(row.hash),
+      filename:String(row.path||'').split('/').at(-1)||row.path,
+      mime:row.mime||'application/octet-stream',
+      kind:String(row.mime||'').startsWith('video/')?'video':'image',
+      urgent:true
+    }));
+  if(!records.length)return;
+  previewQueuePromise ||= import('./browser-thumbnail-fallback.js');
+  previewQueuePromise.then(module=>{
+    for(const record of records)module.queueBrowserThumbnail(record);
+  }).catch(()=>{ previewQueuePromise=null; });
+}
+
 async function* filesUnder(handle, prefix = '') {
   for await (const [name, child] of handle.entries()) {
     const path = cleanRelative(prefix ? `${prefix}/${name}` : name);
@@ -270,10 +321,15 @@ async function addHandles(handles, scope = 'media', { sync = true } = {}) {
   const added = [];
   for (const handle of handles || []) {
     if (handle?.kind !== 'directory') continue;
-    const source = await addHandle(handle, scope);
+    const access=await permission(handle,true);
+    const source=await addHandle(handle,scope);
+    if(access!=='granted'){
+      source.lastError='Permission required';
+      await saveSource(source);
+    }
     added.push(source);
-    if (sync) await syncSource(source.id, { userGesture:true });
   }
+  if(sync)for(const source of added)if(source.lastError!=='Permission required')queueSourceSync(source.id);
   return added;
 }
 
@@ -508,7 +564,15 @@ async function syncSource(id, { userGesture = false } = {}) {
   }
 
   activeSync = source.id;
-  dispatchEvent(new CustomEvent('mochimono:browser-folder-sync', { detail:{ id:source.id, state:'running' } }));
+  let lastProgressAt=0;
+  let sliceStarted=performance.now();
+  const progress=(detail={},force=false)=>{
+    const now=performance.now();
+    if(!force&&now-lastProgressAt<120)return;
+    lastProgressAt=now;
+    emitSync({ id:source.id, state:'running', phase:'indexing', ...detail });
+  };
+  progress({},true);
   try {
     const previous = await manifestFor(source.id);
     const started = await request('/api/client/import/start', {
@@ -550,7 +614,7 @@ async function syncSource(id, { userGesture = false } = {}) {
       const canSkip = same && (!source.cloud || old.cloudSynced === true);
 
       if (canSkip) {
-        const dimensions = await ensureThumbnail(old.hash, file, path, old);
+        const dimensions = source.cloud ? await ensureThumbnail(old.hash, file, path, old) : old;
         next.push({ ...old, ...dimensions, path, size:file.size, lastModified:file.lastModified, mime:old.mime || mimeFor(file, path) });
         seenBatch.push(path);
         skipped++;
@@ -568,8 +632,8 @@ async function syncSource(id, { userGesture = false } = {}) {
           body:file
         });
         const prior = old?.hash === data.hash ? old : null;
-        const dimensions = await ensureThumbnail(data.hash, file, path, prior);
-        await publishGeometry(data.hash, dimensions, source.cloud === true && data.ignored !== true);
+        const dimensions = source.cloud ? await ensureThumbnail(data.hash, file, path, prior) : (prior || {});
+        if(source.cloud)await publishGeometry(data.hash, dimensions, data.ignored !== true);
         next.push({
           path,
           size:file.size,
@@ -584,7 +648,11 @@ async function syncSource(id, { userGesture = false } = {}) {
         });
         transferred++;
       }
-      dispatchEvent(new CustomEvent('mochimono:browser-folder-sync', { detail:{ id:source.id, state:'running', scanned, transferred, skipped } }));
+      progress({ scanned, transferred, skipped });
+      if(performance.now()-sliceStarted>14){
+        await yieldUi();
+        sliceStarted=performance.now();
+      }
     }
     await flushSeen();
     const finished = await request(`/api/client/import/finish?session=${encodeURIComponent(started.session)}`, { method:'POST' });
@@ -593,21 +661,21 @@ async function syncSource(id, { userGesture = false } = {}) {
     source.lastError = '';
     await saveSource(source);
     await publishSource(source, next);
+    if(!source.cloud)queueSourcePreviews(next);
     if (source.cloud) {
       await publishProtectionIntents();
       window.mochimonoLibrary?.refresh?.().catch?.(() => {});
     }
-    dispatchEvent(new CustomEvent('mochimono:browser-folder-sync', { detail:{
-      id:source.id, state:'done', scanned, transferred, skipped, removed:Number(finished.removed) || 0
-    } }));
+    emitSync({ id:source.id, state:'done', phase:'indexed', scanned, transferred, skipped, removed:Number(finished.removed) || 0 });
     return { scanned, transferred, skipped, removed:Number(finished.removed) || 0, importId:source.importId, cloud:source.cloud };
   } catch (error) {
     source.lastError = error.message || String(error);
     await saveSource(source).catch(() => {});
-    dispatchEvent(new CustomEvent('mochimono:browser-folder-sync', { detail:{ id:source.id, state:'error', error:source.lastError } }));
+    emitSync({ id:source.id, state:'error', error:source.lastError });
     throw error;
   } finally {
     activeSync = null;
+    if(pendingSyncs.size&&!syncPumpTimer)syncPumpTimer=setTimeout(pumpSourceSyncs,0);
   }
 }
 
@@ -858,7 +926,10 @@ installViewerBridge();
 window.mochimonoBrowserFolders = {
   addHandles,
   list:describeSources,
-  sync:syncSource,
+  sync:async (id,options={})=>{
+    if(activeSync&&activeSync!==String(id)){queueSourceSync(id);return {queued:true};}
+    return syncSource(id,options);
+  },
   setRootPath,
   setScope,
   setCloud,
