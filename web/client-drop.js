@@ -96,7 +96,7 @@ if (location.pathname.startsWith('/files')) {
     result.querySelector('[data-import-title]').textContent = added.length === 1 ? 'Local folder added' : `${added.length.toLocaleString()} local folders added`;
     result.querySelector('[data-import-bar]').style.width = '100%';
     result.querySelector('[data-import-meta]').textContent = added.map(source => source.name).join(' · ');
-    result.querySelector('[data-import-note]').textContent = 'Manage backup and file scope from Sources.';
+    result.querySelector('[data-import-note]').textContent = 'Indexing in background · manage it from Sources.';
   }
 
   async function request(path, options = {}) {
