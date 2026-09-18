@@ -30,6 +30,7 @@ let importId = '';
 let collectionHashes = null;
 let locationFilter = '';
 let locationHashes = null;
+let protectionFilter = '';
 let view = 'grid';
 let sort = 'date-desc';
 let selected = null;
@@ -102,6 +103,18 @@ function matchesLocation(file) {
   if (locationFilter === 'backup') return file.backupCount > 0;
   if (locationFilter === 'unbacked') return file.backupCount === 0;
   return Boolean(locationHashes?.has(file.hash));
+}
+
+function matchesProtection(file) {
+  if (!protectionFilter) return true;
+  const state=String(file.protectionState||'');
+  const lifecycle=String(file.lifecycle||'');
+  if(protectionFilter==='current')return lifecycle==='current'||file.backupIntent===true;
+  if(protectionFilter==='protected')return state==='protected';
+  if(protectionFilter==='needs-backup')return ['needs-backup','pending','preparing'].includes(state);
+  if(protectionFilter==='remote-only')return lifecycle==='remote-only';
+  if(protectionFilter==='unlinked')return lifecycle==='unlinked';
+  return true;
 }
 
 window.mochimonoSearch = {
@@ -445,7 +458,7 @@ function applyFilters(reset = true, preserve = false, keepHash = '') {
   const sourceId = Number(importId) || 0;
   const folderHashes = folderImportId && folderPath && folderData ? new Set(folderData.files.map(file => file.hash)) : null;
   filtered = sortFiles(catalog.filter(file => {
-    if (!matchesType(file) || !matchesLocation(file) || (collectionHashes && !collectionHashes.has(file.hash))) return false;
+    if (!matchesType(file) || !matchesLocation(file) || !matchesProtection(file) || (collectionHashes && !collectionHashes.has(file.hash))) return false;
     if (sourceId && !file.importIds.includes(sourceId)) return false;
     if (folderHashes && !folderHashes.has(file.hash)) return false;
     return !terms.length || terms.every(term => (searchIndex.get(file.hash) || '').includes(term));
@@ -964,6 +977,23 @@ window.mochimonoLibrary = {
     locationHashes = hashes instanceof Set ? hashes : hashes ? new Set(hashes) : null;
     applyFilters(true);
   },
+  setProtectionFilter(mode) {
+    protectionFilter=String(mode||'');
+    const select=$('#protectionFilter');
+    if(select)select.value=protectionFilter;
+    applyFilters(true);
+  },
+  showProtection(mode) {
+    protectionFilter=String(mode||'');
+    const protection=$('#protectionFilter');if(protection)protection.value=protectionFilter;
+    $('#search').value='';
+    importId='';$('#source').value='';
+    type='';$('#typeFilter').value='';
+    locationFilter='';locationHashes=null;$('#locationFilter').value='';
+    collectionHashes=null;$('#collectionFilter').value='';
+    if(view==='folders')setView('grid');
+    applyFilters(true);
+  },
   setLocationSearch(entries) {
     locationSearch = entries instanceof Map ? entries : new Map(entries || []);
     searchIndexDirty = true;
@@ -983,7 +1013,14 @@ window.mochimonoLibrary = {
       const index = catalogIndex.get(hash);
       if (Number.isInteger(index)) {
         const current = catalog[index];
-        catalog[index] = normalizeFile({ ...current, ...raw, searchText: [current.searchText, raw.searchText].filter(Boolean).join(' ') });
+        const incoming={...raw};
+        if(incoming.backupIntent===true&&current.lifecycle==='current'){
+          incoming.lifecycle='current';
+          incoming.protectionState=current.protectionState;
+          incoming.protectionLevel=current.protectionLevel;
+          incoming.protected=current.protected;
+        }
+        catalog[index] = normalizeFile({ ...current, ...incoming, searchText: [current.searchText, incoming.searchText].filter(Boolean).join(' ') });
       } else catalog.push(normalizeFile(raw));
       changed = true;
     }
@@ -1021,6 +1058,7 @@ window.mochimonoLibrary = {
     view,
     sort,
     locationFilter,
+    protectionFilter,
     version: catalogVersion,
     searchIndexed:!searchIndexDirty,
     stableGrid:view === 'grid'
@@ -1145,6 +1183,7 @@ $('#source').addEventListener('change', event => {
   applyFilters(true);
 });
 $('#typeFilter').addEventListener('change', event => { type = event.target.value; applyFilters(true); });
+$('#protectionFilter')?.addEventListener('change', event => { protectionFilter=event.target.value; applyFilters(true); });
 $('#sort').addEventListener('change', event => { sort = event.target.value; applyFilters(true); });
 $('#mediaSize').addEventListener('input', event => {
   const size = Number(event.target.value);
