@@ -111,8 +111,8 @@ function matchesProtection(file) {
   const lifecycle=String(file.lifecycle||'');
   if(protectionFilter==='managed')return lifecycle==='current'||lifecycle==='remote-only'||file.backupIntent===true;
   if(protectionFilter==='current')return lifecycle==='current'||file.backupIntent===true;
-  if(protectionFilter==='protected')return state==='protected';
-  if(protectionFilter==='needs-backup')return ['needs-backup','pending','preparing'].includes(state);
+  if(protectionFilter==='protected')return lifecycle!=='unlinked'&&(state==='protected'||file.protected===true);
+  if(protectionFilter==='needs-backup')return lifecycle!=='unlinked'&&(['needs-backup','pending','preparing'].includes(state)||(lifecycle==='remote-only'&&file.protected===false));
   if(protectionFilter==='remote-only')return lifecycle==='remote-only';
   if(protectionFilter==='unlinked')return lifecycle==='unlinked';
   return true;
