@@ -486,7 +486,13 @@ function protectionSummary(force=false){
 
 export function protectionCatalogStates(hashes=[]){
   const states=protectionSnapshot().states;
-  return (hashes||[]).map(hash=>states.get(String(hash))).filter(Boolean);
+  return (hashes||[]).map(hash=>{
+    const state=states.get(String(hash));
+    return state?{
+      hash:state.hash,lifecycle:state.lifecycle,protectionState:state.protectionState,
+      protectionLevel:state.level,protected:state.meets
+    }:null;
+  }).filter(Boolean);
 }
 
 function improvesWithTarget(state, target) {
