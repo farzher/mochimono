@@ -537,7 +537,16 @@ $('#folders').addEventListener('click', async event => {
   const remove = event.target.closest('[data-remove-folder]');
   try {
     if (sync) await req('/api/folders/sync', { method:'POST', body:JSON.stringify({ path:sync.dataset.syncFolder }) });
-    if (remove) await req('/api/folders/remove', { method:'POST', body:JSON.stringify({ path:remove.dataset.removeFolder }) });
+    if (remove) {
+      const path=remove.dataset.removeFolder;
+      const source=(protectionSummary?.sources||[]).find(item=>samePath(item.rootPath,path));
+      const files=Number(source?.files)||0;
+      const message=files
+        ? `Stop backing up this folder?\n\n${files.toLocaleString()} files will stop being current backup items. Existing Mochimono copies are not deleted; source-less stored files will appear in Review.`
+        : 'Stop backing up this folder?\n\nExisting Mochimono copies are not deleted.';
+      if(!confirm(message))return;
+      await req('/api/folders/remove', { method:'POST', body:JSON.stringify({ path }) });
+    }
     await wakeState();
     refreshFolderStats();
   } catch (error) { toast(error.message); }
