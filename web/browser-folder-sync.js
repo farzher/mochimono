@@ -112,19 +112,20 @@ async function request(path, options = {}) {
   return data;
 }
 
-let protectionDevice = '';
+const BROWSER_PROTECTION_ID = 'mochimono:browser-protection-id';
 
-async function browserProtectionDevice() {
-  if (protectionDevice) return protectionDevice;
-  const state = await request('/api/state').catch(() => ({}));
-  const device = String(state?.settings?.device || 'Mochimono').trim() || 'Mochimono';
-  protectionDevice = `Browser:${device}`;
-  return protectionDevice;
+function browserProtectionDevice() {
+  let id = localStorage.getItem(BROWSER_PROTECTION_ID);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(BROWSER_PROTECTION_ID, id);
+  }
+  return `Browser:${id}`;
 }
 
 async function publishProtectionIntents() {
   const scanId = crypto.randomUUID();
-  const device = await browserProtectionDevice();
+  const device = browserProtectionDevice();
   const sources = (await sourceList()).filter(source => source.cloud === true);
   let batch = [];
 
