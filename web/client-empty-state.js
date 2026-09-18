@@ -29,16 +29,23 @@ if (document.documentElement.classList.contains('client-library')) {
   function render() {
     const state = window.mochimonoLibrary?.state?.();
     if (!state) return;
+    const loading = window.mochimonoLocalCatalogLoading === true;
     const globallyEmpty = Number(state.total) === 0;
-    root.classList.toggle('library-empty-global', settled && globallyEmpty);
-    empty.hidden = !(settled && globallyEmpty);
+    root.classList.toggle('library-empty-starting', loading || !settled);
+    root.classList.toggle('library-empty-global', !loading && settled && globallyEmpty);
+    empty.hidden = loading || !(settled && globallyEmpty);
   }
 
   function settleSoon(delay = 350) {
     clearTimeout(timer);
+    if (window.mochimonoLocalCatalogLoading === true) {
+      settled = false;
+      render();
+      return;
+    }
     timer = setTimeout(() => {
+      if (window.mochimonoLocalCatalogLoading === true) return settleSoon();
       settled = true;
-      root.classList.remove('library-empty-starting');
       render();
     }, delay);
   }
@@ -46,6 +53,14 @@ if (document.documentElement.classList.contains('client-library')) {
   for (const event of ['mochimono:browser-catalog-ready','mochimono:catalog-updated','mochimono:local-catalog-event']) {
     addEventListener(event, () => { render(); settleSoon(); });
   }
+  addEventListener('mochimono:local-catalog-loading', () => {
+    settled = false;
+    render();
+  });
+  addEventListener('mochimono:local-catalog-ready', () => {
+    render();
+    settleSoon(0);
+  });
   addEventListener('mochimono:browser-folder-sync', event => {
     if (event.detail?.state === 'running') {
       settled = false;
