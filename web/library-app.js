@@ -109,6 +109,7 @@ function matchesProtection(file) {
   if (!protectionFilter) return true;
   const state=String(file.protectionState||'');
   const lifecycle=String(file.lifecycle||'');
+  if(protectionFilter==='managed')return lifecycle==='current'||lifecycle==='remote-only'||file.backupIntent===true;
   if(protectionFilter==='current')return lifecycle==='current'||file.backupIntent===true;
   if(protectionFilter==='protected')return state==='protected';
   if(protectionFilter==='needs-backup')return ['needs-backup','pending','preparing'].includes(state);
