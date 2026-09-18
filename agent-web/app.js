@@ -346,7 +346,10 @@ function backupCard(location, index) {
   const localCount = Number(location.local?.count) || 0;
   const localBytes = Number(location.local?.bytes) || 0;
   const totalBytes = Number(location.totalBytes) || 0;
-  const ratio = totalBytes ? Math.min(100, localBytes / totalBytes * 100) : 0;
+  const quotaBytes = Math.max(0, Number(location.meta?.quotaBytes) || 0);
+  const capacityBytes = quotaBytes || totalBytes;
+  const freeBytes = quotaBytes ? Math.min(Number(location.freeBytes) || 0, Math.max(0, quotaBytes - localBytes)) : Number(location.freeBytes) || 0;
+  const ratio = capacityBytes ? Math.min(100, localBytes / capacityBytes * 100) : 0;
   const state = backupState(location);
   const verification = backupVerification(location);
   const verificationTitle = verification.catalogBad && location.meta?.lastVerifyCatalogError
@@ -360,8 +363,8 @@ function backupCard(location, index) {
     <div class="storage-copy">
       <div class="storage-title"><strong>${esc(location.meta?.name || pathName(location.path))}</strong><span class="item-state ${state.className}">${esc(state.label)}</span></div>
       <div class="storage-path" title="${esc(location.path)}">${esc(location.path)}</div>
-      <div class="storage-meta"><span>${localCount.toLocaleString()} files</span><span>·</span><span>${bytes(localBytes)}</span><span>·</span><span>${bytes(location.freeBytes)} free</span><span>·</span><span title="${esc(verificationTitle)}"${verificationTime}>${esc(verification.label)}</span></div>
-      <div class="storage-meter backup-meter" title="${bytes(localBytes)} stored on ${bytes(totalBytes)} drive"><i style="width:${localBytes ? `max(2px, ${ratio}%)` : '0'}"></i></div>
+      <div class="storage-meta"><span>${localCount.toLocaleString()} files</span><span>·</span><span>${bytes(localBytes)}</span><span>·</span><span>${bytes(freeBytes)} free</span><span>·</span><span title="${esc(verificationTitle)}"${verificationTime}>${esc(verification.label)}</span></div>
+      <div class="storage-meter backup-meter" title="${bytes(localBytes)} stored · ${quotaBytes ? `${bytes(quotaBytes)} limit` : `${bytes(totalBytes)} drive`}"><i style="width:${localBytes ? `max(2px, ${ratio}%)` : '0'}"></i></div>
       <div class="item-progress" data-item-progress hidden></div>
     </div>
     <div class="item-actions backup-actions">
@@ -399,7 +402,7 @@ async function backups(force = false) {
       location.meta?.lastVerifyBad, location.meta?.lastVerifyRepaired,
       location.meta?.lastVerifyPrimaryRepaired, location.meta?.lastVerifyCatalogHealthy,
       location.meta?.lastVerifyCatalogRepaired, location.meta?.lastVerifyCatalogError,
-      location.local, location.totalBytes, location.freeBytes, location.remote
+      location.meta?.quotaBytes, location.local, location.totalBytes, location.freeBytes, location.remote
     ]));
     if (key !== backupsRenderKey) {
       backupsRenderKey = key;
@@ -417,6 +420,8 @@ function openBackupDialog(path, meta = null) {
   backupEditing = Boolean(meta);
   $('#backupPathLabel').textContent = path;
   $('#backupName').value = meta?.name || pathName(path) || '';
+  $('#backupQuota').value = Number(meta?.quotaBytes) > 0 ? String(Number(meta.quotaBytes) / 1_000_000_000) : '';
+  $('#removeBackup').hidden = !backupEditing;
   backupDialog.showModal();
 }
 
@@ -508,10 +513,16 @@ $('#addBackup').onclick = async () => {
 
 $('#initializeBackup').onclick = async () => {
   const path = backupPath;
+  const quotaGb = Math.max(0, Number($('#backupQuota').value) || 0);
   try {
     const result = await req('/api/backup/init', {
       method:'POST',
-      body:JSON.stringify({ path, name:$('#backupName').value.trim(), configure:backupEditing })
+      body:JSON.stringify({
+        path,
+        name:$('#backupName').value.trim(),
+        configure:backupEditing,
+        quotaBytes:Math.round(quotaGb * 1_000_000_000)
+      })
     });
     backupDialog.close();
     $('#backupLocation').value = '';
@@ -519,11 +530,31 @@ $('#initializeBackup').onclick = async () => {
     $('#showBackupAdd').classList.remove('active');
     backupsRenderKey = '';
     await backups(true);
+    window.dispatchEvent(new CustomEvent('mochimono:storage-changed'));
     if (!backupEditing && !result.existing) {
       await req('/api/client/protection/run', { method:'POST', body:'{}' }).catch(() => {});
       toast('Added');
     } else toast('Saved');
   } catch (error) { toast(error.message); }
+};
+
+$('#removeBackup').onclick = async () => {
+  if (!backupPath || !backupEditing) return;
+  const name = $('#backupName').value.trim() || pathName(backupPath) || 'this backup';
+  if (!confirm(`Disconnect ${name}? Backup files on the drive will be kept.`)) return;
+  const button = $('#removeBackup');
+  button.disabled = true;
+  try {
+    await req('/api/backup/disconnect', { method:'POST', body:JSON.stringify({ path:backupPath }) });
+    backupDialog.close();
+    backupEditing = false;
+    backupsRenderKey = '';
+    await backups(true);
+    window.dispatchEvent(new CustomEvent('mochimono:storage-changed'));
+    wakeState();
+    toast('Disconnected');
+  } catch (error) { toast(error.message); }
+  finally { button.disabled = false; }
 };
 
 $('#startRestore').onclick = async () => {
