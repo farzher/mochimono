@@ -70,6 +70,13 @@ if (storagePane && sourceSection) {
     return `${Math.floor(h/24)}d`;
   }
 
+  function primaryStorageStatus() {
+    try {
+      const host=new URL(model?.state?.server||'').hostname.toLowerCase();
+      return ['127.0.0.1','localhost','::1'].includes(host)?'Primary storage · This PC':'Primary storage';
+    } catch { return 'Primary storage'; }
+  }
+
   async function request(base,path,options={}) {
     const response=await fetch(`${base}${path}`,{
       cache:'no-store',...options,
@@ -153,7 +160,7 @@ if (storagePane && sourceSection) {
     if(!locations.length)return '<div class="backup-empty">No backup locations yet.</div>';
     return locations.map(location=>{
       if(location.kind==='primary'){
-        return '<div class="backup-location-row"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>Mochimono storage</strong><small>Primary storage</small></div></div>';
+        return `<div class="backup-location-row"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>Mochimono storage</strong><small>${esc(primaryStorageStatus())}</small></div></div>`;
       }
       if(location.kind==='backup'){
         const backup=attached.get(String(location.id));
