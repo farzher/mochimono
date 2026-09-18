@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0d0c0e">
   <title>Mochimono</title>
-  <script>if(new URL(location.href).searchParams.has('file'))document.documentElement.classList.add('viewer-restore-pending')</script>
+  <script>document.documentElement.classList.add('mochimono-library-booting');if(new URL(location.href).searchParams.has('file'))document.documentElement.classList.add('viewer-restore-pending')</script>
   <style>html.viewer-restore-pending,html.viewer-restore-pending body{background:#050505}html.viewer-restore-pending .shell{visibility:hidden}</style>
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/folders.css">
@@ -80,7 +80,7 @@
         </div>
         <div id="folderbar" class="folderbar" hidden></div>
         <section id="gridFolderStrip" class="grid-folder-strip" hidden></section>
-        <div id="files" class="files grid"></div>
+        <div id="files" class="files grid"><div class="empty loading">Loading…</div></div>
         <div id="scroll-sentinel" style="height:1px" hidden></div>
         <nav id="dateRail" class="date-rail" aria-label="Browse library" hidden></nav>
       </section>
