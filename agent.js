@@ -8,7 +8,7 @@ import http from 'node:http';
 import { api, cancelJob, currentJob, DEVICE, json, pathKey, persistSettings, preemptBackgroundJob, readJson, serverState, settings, startJob } from './lib/agent-context.js';
 import { backgroundWorkStatus } from './lib/background-work.js';
 import { addFolder, folderFor, folderStats, queueFolderSync, removeFolder, startSyncService } from './lib/agent-sync.js';
-import { backupContents, backupInit, backupLocations, backupRestore, backupStatus, backupVerify } from './lib/agent-backups.js';
+import { backupContents, backupDisconnect, backupInit, backupLocations, backupRestore, backupStatus, backupVerify } from './lib/agent-backups.js';
 import { invalidateClientProviders } from './lib/client-provider-cache.js';
 import { pickFolder } from './lib/folder-picker.js';
 import { handleSourceExclusions } from './lib/source-exclusion-routes.js';
@@ -429,7 +429,7 @@ async function handleLocalApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/backup/status') {
     const path = url.searchParams.get('path');
     if (!path) json(res, 400, { error:'Backup folder required' });
-    else json(res, 200, await backupStatus(path));
+    else json(res, 200, await backupStatus(path, false));
     return true;
   }
 
@@ -444,7 +444,18 @@ async function handleLocalApi(req, res, url) {
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error:'Choose a backup folder' });
     else {
-      const result = await backupInit(body.path, body.name, body.configure === true);
+      const result = await backupInit(body.path, body.name, body.configure === true, body.quotaBytes);
+      invalidateClientProviders();
+      json(res, 200, result);
+    }
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/backup/disconnect') {
+    const body = await readJson(req);
+    if (!body.path) json(res, 400, { error:'Choose a backup location' });
+    else {
+      const result = await backupDisconnect(body.path);
       invalidateClientProviders();
       json(res, 200, result);
     }

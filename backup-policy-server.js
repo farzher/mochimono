@@ -1,6 +1,6 @@
 import { db, json, now, readJson } from './lib/server-context.js';
 import { handleDeviceIdentity } from './device-identity-server.js';
-import { handleProtectionServer, registerProtectionStorage } from './protection-server.js';
+import { handleProtectionServer, registerProtectionStorage, removeProtectionStorage } from './protection-server.js';
 import { verifyServerPassword } from './server-auth.js';
 
 export function getDrive(id) {
@@ -43,9 +43,10 @@ export async function handleBackupPolicy(req, res, url) {
   }
   if (await handleProtectionServer(req, res, url)) return true;
 
+  const drive = /^\/api\/drives\/([^/]+)$/.exec(url.pathname);
   const files = /^\/api\/drives\/([^/]+)\/files$/.exec(url.pathname);
   const file = /^\/api\/drives\/([^/]+)\/files\/([a-f0-9]{64})$/.exec(url.pathname);
-  const driveRoute = url.pathname === '/api/drives/register' || url.pathname === '/api/drives' || Boolean(files) || Boolean(file);
+  const driveRoute = url.pathname === '/api/drives/register' || url.pathname === '/api/drives' || Boolean(drive) || Boolean(files) || Boolean(file);
   if (!driveRoute) return false;
 
   if (req.method === 'POST' && url.pathname === '/api/drives/register') {
@@ -64,6 +65,15 @@ export async function handleBackupPolicy(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/api/drives') {
     json(res, 200, { drives:db.prepare('SELECT * FROM drives ORDER BY name').all().map(driveSummary) });
+    return true;
+  }
+
+  if (drive && req.method === 'DELETE') {
+    const id = decodeURIComponent(drive[1]);
+    db.prepare('DELETE FROM replicas WHERE drive_id=?').run(id);
+    removeProtectionStorage(id);
+    db.prepare('DELETE FROM drives WHERE id=?').run(id);
+    json(res, 200, { ok:true, id });
     return true;
   }
 

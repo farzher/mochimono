@@ -442,6 +442,11 @@ export function registerProtectionStorage(id, input) {
   return saveLocation(String(id), input);
 }
 
+export function removeProtectionStorage(id) {
+  db.prepare('DELETE FROM storage_locations WHERE id=?').run(String(id));
+  invalidate();
+}
+
 export async function handleProtectionServer(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/objects/check') {
     const body = await readJson(req);

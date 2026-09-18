@@ -165,7 +165,12 @@ if (storagePane && sourceSection && backupSection) {
       details.push(row('Path', location.path || ''), row('Contains', 'Thumbnails · local metadata'), row('Status', location.online ? 'Online' : 'Offline'));
     } else if (location.type === 'backup') {
       const backup = location.backup || {};
-      details.push(row('Path', backup.path || location.path), row('Updated', backup.meta?.lastBackupAt ? age(backup.meta.lastBackupAt) : 'Never'), row('Verified', backup.meta?.lastVerifiedAt ? age(backup.meta.lastVerifiedAt) : 'Never'));
+      details.push(
+        row('Path', backup.path || location.path),
+        row('Limit', Number(backup.meta?.quotaBytes) ? bytes(backup.meta.quotaBytes) : 'Available space'),
+        row('Updated', backup.meta?.lastBackupAt ? age(backup.meta.lastBackupAt) : 'Never'),
+        row('Verified', backup.meta?.lastVerifiedAt ? age(backup.meta.lastVerifiedAt) : 'Never')
+      );
       const hasFiles = Number(backup.local?.count || 0) > 0;
       actions = `<button class="primary" data-action="backup-verify" ${hasFiles && location.online ? '' : 'disabled'}>Verify</button><button class="secondary" data-action="backup-restore" ${hasFiles ? '' : 'disabled'}>Restore</button><button class="secondary" data-action="backup-edit">Edit</button>`;
     } else if (location.type === 'friend') {
@@ -250,7 +255,23 @@ if (storagePane && sourceSection && backupSection) {
     for (let index = 0; index < backups.length; index++) {
       const backup = backups[index];
       const rawBackup = raw.find(item => item.type === 'backup' && pathKey(item.path) === pathKey(backup.path));
-      output.push({ ...(rawBackup || {}), id:`backup:${index}:${pathKey(backup.path)}`, type:'backup', name:backup.meta?.name || pathName(backup.path) || 'Backup', path:backup.path, online:rawBackup ? rawBackup.online : Number(backup.totalBytes) > 0, capacityBytes:Number(rawBackup?.capacityBytes) || Number(backup.totalBytes) || 0, freeBytes:Number(rawBackup?.freeBytes) || Number(backup.freeBytes) || 0, mochimonoBytes:Number(backup.local?.bytes) || 0, backupIndex:index, backup });
+      const usedBytes = Number(backup.local?.bytes) || 0;
+      const quotaBytes = Math.max(0, Number(backup.meta?.quotaBytes) || 0);
+      const diskFreeBytes = Number(rawBackup?.freeBytes) || Number(backup.freeBytes) || 0;
+      output.push({
+        ...(rawBackup || {}),
+        id:`backup:${index}:${pathKey(backup.path)}`,
+        type:'backup',
+        name:backup.meta?.name || pathName(backup.path) || 'Backup',
+        path:backup.path,
+        online:rawBackup ? rawBackup.online : Number(backup.totalBytes) > 0,
+        capacityBytes:quotaBytes || Number(rawBackup?.capacityBytes) || Number(backup.totalBytes) || 0,
+        freeBytes:quotaBytes ? Math.min(diskFreeBytes, Math.max(0, quotaBytes - usedBytes)) : diskFreeBytes,
+        mochimonoBytes:usedBytes,
+        quotaBytes,
+        backupIndex:index,
+        backup
+      });
     }
     for (const rawFriend of raw.filter(item => item.type === 'friend')) {
       const targetId = String(rawFriend.id || '').replace(/^friend:/, '');
@@ -263,7 +284,8 @@ if (storagePane && sourceSection && backupSection) {
   async function refresh() {
     clearTimeout(timer);
     timer = 0;
-    if (busy || storagePane.hidden || document.hidden) return;
+    if (busy) return schedule(120);
+    if (storagePane.hidden || document.hidden) return;
     busy = true;
     let active = false;
     try {
@@ -314,6 +336,7 @@ if (storagePane && sourceSection && backupSection) {
 
   new MutationObserver(() => { if (!storagePane.hidden) schedule(0); }).observe(storagePane, { attributes:true, attributeFilter:['hidden'] });
   window.addEventListener('mochimono:friend-storage-changed', () => { if (!storagePane.hidden) schedule(100); });
+  window.addEventListener('mochimono:storage-changed', () => { if (!storagePane.hidden) schedule(0); });
   window.addEventListener('focus', () => { if (!storagePane.hidden) schedule(0); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && !storagePane.hidden) schedule(0); });
   if (!storagePane.hidden) schedule(40);
