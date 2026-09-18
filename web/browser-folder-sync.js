@@ -151,7 +151,7 @@ async function publishProtectionIntents() {
         size:Number(row.size) || 0,
         importId:Number(source.importId) || 0
       });
-      if (batch.length >= 1500) await flush();
+      if (batch.length >= 500) await flush();
     }
   }
   await flush();
