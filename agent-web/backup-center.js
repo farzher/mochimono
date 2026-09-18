@@ -36,7 +36,7 @@ if (storagePane && sourceSection) {
     @keyframes backup-slide{0%{transform:translateX(-115%)}50%{transform:translateX(105%)}100%{transform:translateX(315%)}}
     @media(max-width:700px){dialog.backup-center-dialog{width:min(620px,calc(100vw - 20px))}.backup-health{grid-template-columns:66px minmax(0,1fr)}.backup-health-ring{width:60px;height:60px}.backup-health-actions{grid-column:1/-1}.backup-health-actions button{width:100%}.backup-settings{padding:17px}.backup-plan-list{grid-template-columns:repeat(2,minmax(0,1fr))}.backup-source-row{grid-template-columns:1fr}.backup-destination-controls{grid-template-columns:1fr}.backup-rely{width:100%}.backup-auto-row{align-items:stretch;flex-direction:column}.backup-auto-row select{width:100%}}
     @media(prefers-reduced-motion:reduce){.backup-progress i{animation:none!important;transition:none!important}}
-  `
+  `;
   document.head.append(style);
 
   const section = document.createElement('section');
@@ -156,7 +156,7 @@ if (storagePane && sourceSection) {
           return `<div class="backup-location-row"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>${esc(location.name)}</strong><small>Connected${details?` · ${esc(details)}`:''}</small></div></div>`;
         }
         const seen=location.lastSeen?age(location.lastSeen):'';
-        return `<div class="backup-location-row offline"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>${esc(location.name)}</strong><small>Disconnected${seen?` · last seen ${esc(seen)} ago`:''}</small></div><button class="backup-location-action danger" type="button" data-forget-backup="${esc(location.id)}" data-name="${esc(location.name)}">Forget</button></div>`;
+        return `<div class="backup-location-row offline"><i class="backup-location-dot"></i><div class="backup-location-copy"><strong>${esc(location.name)}</strong><small>Disconnected · remembered backup${seen?` · last seen ${esc(seen)} ago`:''}</small></div><button class="backup-location-action danger" type="button" data-forget-backup="${esc(location.id)}" data-name="${esc(location.name)}">Forget</button></div>`;
       }
       const peer=peers.get(String(location.id));
       const online=Boolean(peer?.online);
@@ -204,6 +204,7 @@ if (storagePane && sourceSection) {
 
   function renderDialog() {
     const box=ensureDialog();
+    const advancedOpen=Boolean(box.querySelector('.backup-advanced')?.open);
     const summary=model?.state?.summary||{};
     const background=model?.state?.config?.background||'low';
     const total=Number(summary.files)||0;
@@ -231,6 +232,7 @@ if (storagePane && sourceSection) {
         </details>
       </div>`;
     box.querySelector('[data-background]').value=background;
+    if(advancedOpen)box.querySelector('.backup-advanced').open=true;
     box.querySelector('[data-close]').onclick=()=>box.close();
     box.querySelectorAll('[data-folder-plan]').forEach(select=>select.addEventListener('change',updateFolderPlan));
     box.querySelectorAll('[data-rely]').forEach(button=>button.addEventListener('click',toggleReliance));
