@@ -1034,6 +1034,7 @@ window.mochimonoLibrary = {
   refresh: () => syncCatalog(true),
   ensureIndex: ensureIndexRendered,
   filteredHashes: () => filtered.map(file => file.hash),
+  file: hash => catalogFile(hash),
   gridModel,
   sources: () => imports.map(item => ({ ...item })),
   folderState,
