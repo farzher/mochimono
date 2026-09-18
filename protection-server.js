@@ -773,6 +773,7 @@ export async function handleProtectionServer(req, res, url) {
     const entries=Array.isArray(body.entries)?body.entries:[];
     if(!device||!scanId)return void json(res,400,{error:'device and scanId are required'});
     if(entries.length>2000)return void json(res,400,{error:'entries must contain at most 2000 files'});
+    const current=db.prepare('SELECT object_hash AS hash,size,import_id AS importId FROM protection_intents WHERE device_name=? AND root_path=? AND relative_path=?');
     const save=db.prepare(`
       INSERT INTO protection_intents(device_name,root_path,relative_path,object_hash,size,import_id,scan_id,updated_at)
       VALUES(?,?,?,?,?,?,?,?)
@@ -781,23 +782,30 @@ export async function handleProtectionServer(req, res, url) {
         scan_id=excluded.scan_id,updated_at=excluded.updated_at
     `);
     const stamp=now();
+    let materialChange=false;
     try{
       db.exec('BEGIN IMMEDIATE');
       for(const entry of entries){
         const hash=String(entry.hash||'');
         if(hash&&!validHash(hash))continue;
-        save.run(
-          device,String(entry.rootPath||'').slice(0,2000),String(entry.path||'').slice(0,4000),
-          hash,Math.max(0,Number(entry.size)||0),Math.max(0,Number(entry.importId)||0),scanId,stamp
-        );
+        const rootPath=String(entry.rootPath||'').slice(0,2000);
+        const relativePath=String(entry.path||'').slice(0,4000);
+        const size=Math.max(0,Number(entry.size)||0);
+        const importId=Math.max(0,Number(entry.importId)||0);
+        const previous=current.get(device,rootPath,relativePath);
+        if(!previous||previous.hash!==hash||Number(previous.size)!==size||Number(previous.importId)!==importId)materialChange=true;
+        save.run(device,rootPath,relativePath,hash,size,importId,scanId,stamp);
       }
-      if(body.final===true)db.prepare('DELETE FROM protection_intents WHERE lower(device_name)=lower(?) AND scan_id<>?').run(device,scanId);
+      if(body.final===true){
+        const removed=db.prepare('DELETE FROM protection_intents WHERE lower(device_name)=lower(?) AND scan_id<>?').run(device,scanId);
+        if(Number(removed?.changes)||0)materialChange=true;
+      }
       db.exec('COMMIT');
     }catch(error){
       try{db.exec('ROLLBACK');}catch{}
       throw error;
     }
-    if(body.final===true)bumpCatalog();
+    if(materialChange)bumpCatalog();
     invalidate();
     json(res,200,{ok:true,accepted:entries.length,final:body.final===true});
     return true;
