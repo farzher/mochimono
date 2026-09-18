@@ -4,36 +4,20 @@ if (location.pathname.startsWith('/files')) {
   const style = document.createElement('style');
   style.textContent = `
     .client-drop-target{position:fixed;inset:12px;z-index:80;display:grid;place-items:center;border:2px dashed rgba(239,160,154,.55);border-radius:18px;background:rgba(13,12,14,.92);color:#f4eeea;opacity:0;pointer-events:none;transition:opacity .12s}.client-drop-target.show{opacity:1}.client-drop-target div{text-align:center}.client-drop-target strong{display:block;font:750 22px/1.2 Inter,system-ui,sans-serif}.client-drop-target span{display:block;margin-top:6px;color:#a79e9b;font:500 11px/1.3 Inter,system-ui,sans-serif}
-    .client-drop-choice{position:fixed;z-index:90;inset:0;display:grid;place-items:center;padding:18px;background:rgba(0,0,0,.62);font-family:Inter,system-ui,sans-serif}.client-drop-choice[hidden]{display:none!important}.client-drop-choice-card{width:min(460px,100%);padding:16px;border:1px solid #302b30;border-radius:14px;background:#171518;color:#f4eeea;box-shadow:0 24px 80px rgba(0,0,0,.58)}.client-drop-choice-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}.client-drop-choice-head strong{display:block;font-size:15px}.client-drop-choice-head span{display:block;margin-top:3px;color:#8f8583;font-size:11px}.client-drop-choice-close{border:0;background:transparent;color:#8f8583;font-size:20px;cursor:pointer}.client-drop-actions{display:grid;gap:7px}.client-drop-action{display:block;width:100%;padding:10px 11px;border:1px solid #2b272c;border-radius:9px;background:#1d1a1e;color:#d9d0cd;text-align:left;cursor:pointer}.client-drop-action:hover,.client-drop-action:focus-visible{border-color:#514348;background:#252126;color:#fff;outline:none}.client-drop-action.primary{border-color:#4a373b;background:#2a2023}.client-drop-action b,.client-drop-action span{display:block}.client-drop-action b{font-size:12px}.client-drop-action span{margin-top:2px;color:#8f8583;font-size:10px;font-weight:500}.client-drop-action:hover span,.client-drop-action:focus-visible span{color:#aaa19e}.client-drop-choice-note{margin-top:9px;color:#6f6867;font-size:10px;line-height:1.35}
     .client-import-result{position:fixed;z-index:81;right:18px;bottom:18px;width:min(430px,calc(100vw - 36px));padding:13px 14px;border:1px solid #302b30;border-radius:12px;background:#171518;color:#f4eeea;box-shadow:0 18px 60px rgba(0,0,0,.5);font:12px/1.4 Inter,system-ui,sans-serif}.client-import-result[hidden]{display:none!important}.client-import-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.client-import-head strong{font-size:13px}.client-import-close{border:0;background:transparent;color:#8f8583;font-size:18px;cursor:pointer}.client-import-progress{height:4px;margin:9px 0 6px;border-radius:999px;background:#292529;overflow:hidden}.client-import-progress i{display:block;height:100%;background:#efa09a;transition:width .15s}.client-import-meta{color:#aaa19e}.client-import-note{margin-top:3px;color:#746d6c;font-size:10px}.client-import-dupes{max-height:150px;margin-top:8px;overflow:auto}.client-import-examples{padding:5px 0;color:#817876;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.client-import-dupe{padding:6px 0;border-top:1px solid #262326}.client-import-dupe b{display:block;color:#e7dfdc;font-weight:650}.client-import-dupe span{display:block;color:#8f8583;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   `;
   document.head.append(style);
 
   const target = document.createElement('div');
   target.className = 'client-drop-target';
-  target.innerHTML = '<div><strong>Drop files</strong><span>Choose what Mochimono should do</span></div>';
+  target.innerHTML = '<div><strong>Add to Mochimono</strong><span>Files and folders are added once</span></div>';
   document.body.append(target);
-
-  const choice = document.createElement('div');
-  choice.className = 'client-drop-choice';
-  choice.hidden = true;
-  choice.innerHTML = `
-    <div class="client-drop-choice-card">
-      <div class="client-drop-choice-head"><div><strong data-drop-title></strong><span data-drop-meta></span></div><button class="client-drop-choice-close" aria-label="Cancel">×</button></div>
-      <div class="client-drop-actions">
-        <button class="client-drop-action primary" data-drop-copy><b>Copy to Mochimono</b><span>Use this drop directly · one-time Server copy · originals stay where they are</span></button>
-        <button class="client-drop-action" data-drop-browse><b>Browse this folder…</b><span>Confirm it once in the native picker · local only · nothing uploaded</span></button>
-        <button class="client-drop-action" data-drop-protect><b>Protect this folder…</b><span>Confirm it once in the native picker · local + Mochimono copy · watched</span></button>
-      </div>
-      <div class="client-drop-choice-note" data-drop-note></div>
-    </div>`;
-  document.body.append(choice);
 
   const result = document.createElement('div');
   result.className = 'client-import-result';
   result.hidden = true;
   result.innerHTML = `
-    <div class="client-import-head"><strong data-import-title>Copying to Mochimono</strong><button class="client-import-close" aria-label="Close">×</button></div>
+    <div class="client-import-head"><strong data-import-title>Adding to Mochimono</strong><button class="client-import-close" aria-label="Close">×</button></div>
     <div class="client-import-progress"><i data-import-bar></i></div>
     <div class="client-import-meta" data-import-meta></div>
     <div class="client-import-note" data-import-note></div>
@@ -115,41 +99,6 @@ if (location.pathname.startsWith('/files')) {
       if (!common.length) return '';
     }
     return common.join('/');
-  }
-
-  function droppedFolderHint(items) {
-    const roots = new Set();
-    let nested = false;
-    for (const item of items) {
-      const parts = normalizePath(item.path).split('/').filter(Boolean);
-      if (parts.length < 2) continue;
-      nested = true;
-      roots.add(parts[0]);
-      if (roots.size > 1) return '';
-    }
-    return nested ? [...roots][0] || '' : '';
-  }
-
-  function chooseIntent(files) {
-    const folder = droppedFolderHint(files);
-    const local = Boolean(folder);
-    const title = folder || (files.length === 1 ? files[0].file.name : `${files.length.toLocaleString()} files`);
-    choice.querySelector('[data-drop-title]').textContent = title;
-    choice.querySelector('[data-drop-meta]').textContent = `${files.length.toLocaleString()} file${files.length === 1 ? '' : 's'}`;
-    choice.querySelector('[data-drop-browse]').hidden = !local;
-    choice.querySelector('[data-drop-protect]').hidden = !local;
-    choice.querySelector('[data-drop-note]').textContent = local
-      ? 'Chrome gives Mochimono the dropped contents, but not the folder’s full disk path. Copy uses the drop directly; Local/Protect need one native folder confirmation.'
-      : 'Loose files can be copied directly. Persistent Local/Protect mode requires adding their folder instead.';
-    choice.hidden = false;
-
-    return new Promise(resolve => {
-      const finish = value => { choice.hidden = true; resolve(value); };
-      choice.querySelector('[data-drop-copy]').onclick = () => finish('copy');
-      choice.querySelector('[data-drop-browse]').onclick = () => finish('browse');
-      choice.querySelector('[data-drop-protect]').onclick = () => finish('protect');
-      choice.querySelector('.client-drop-choice-close').onclick = () => finish('cancel');
-    });
   }
 
   function priorText(source) {
@@ -235,16 +184,16 @@ if (location.pathname.startsWith('/files')) {
   async function importDropped(files) {
     if (!files.length) return;
     result.hidden = false;
-    result.querySelector('[data-import-title]').textContent = 'Copying to Mochimono';
+    result.querySelector('[data-import-title]').textContent = 'Adding to Mochimono';
     result.querySelector('[data-import-bar]').style.width = '0%';
     result.querySelector('[data-import-meta]').textContent = `${files.length.toLocaleString()} file${files.length === 1 ? '' : 's'}`;
-    result.querySelector('[data-import-note]').textContent = 'Uploading a separate copy. Local originals are not changed.';
+    result.querySelector('[data-import-note]').textContent = 'Adding once. Originals stay where they are.';
     result.querySelector('[data-import-dupes]').replaceChildren();
     showDroppedFiles(files);
 
     const label = files.length === 1 ? files[0].path : files[0].path.split('/')[0] || 'Drop';
     const started = await request('/api/client/import/start', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ label })
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ label, oneTime:true })
     });
     const importId = Number(started.importId) || 0;
     const liveStartedAt = Date.now();
@@ -273,11 +222,11 @@ if (location.pathname.startsWith('/files')) {
     flushLive();
     try { await window.mochimonoLibrary?.refresh?.(); } catch {}
     const handled = added + existing + ignored;
-    result.querySelector('[data-import-title]').textContent = 'Copied to Mochimono';
+    result.querySelector('[data-import-title]').textContent = 'Added to Mochimono';
     const parts = [`${handled.toLocaleString()} / ${files.length.toLocaleString()}`, `${added.toLocaleString()} new`];
     if (ignored) parts.push(`${ignored.toLocaleString()} ignored`);
     result.querySelector('[data-import-meta]').textContent = parts.join(' · ');
-    result.querySelector('[data-import-note]').textContent = 'Local originals unchanged · one-time copy · not watched.';
+    result.querySelector('[data-import-note]').textContent = 'Added once · not watched.';
 
     const duplicateBox = result.querySelector('[data-import-dupes]');
     duplicateBox.innerHTML = duplicates.length ? `
@@ -313,13 +262,7 @@ if (location.pathname.startsWith('/files')) {
     try {
       const files = await droppedFiles(event.dataTransfer);
       if (!files.length) return;
-      const intent = await chooseIntent(files);
-      if (intent === 'copy') await importDropped(files);
-      else if (intent === 'browse' || intent === 'protect') window.parent.postMessage({
-        type: 'mochimono-folder-intent',
-        mode: intent,
-        hint: droppedFolderHint(files)
-      }, location.origin);
+      await importDropped(files);
     } catch (error) {
       flushLive();
       result.hidden = false;
@@ -328,9 +271,5 @@ if (location.pathname.startsWith('/files')) {
       result.querySelector('[data-import-note]').textContent = '';
       result.querySelector('[data-import-bar]').style.width = '0%';
     }
-  });
-
-  document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !choice.hidden) choice.querySelector('.client-drop-choice-close').click();
   });
 }

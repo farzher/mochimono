@@ -9,6 +9,17 @@ Backup is intent-based. The protected universe is not "everything that happens t
 
 Everything else is outside the normal protection denominator.
 
+## Adding files
+
+Library drag-and-drop is deliberately simple:
+
+- dropping files or folders into Library is always a **one-time add** of the dropped contents;
+- the original local files are not watched after the add;
+- successfully added files are intentional **Remote only** files unless they also belong to a current protected Source;
+- ongoing folders are added and managed only from **Storage → Sources**.
+
+This keeps drag-and-drop predictable and keeps Sources reserved for persistent watched locations instead of mixing them with one-time imports.
+
 ## File lifecycle
 
 Every stored object has one backup lifecycle state.

@@ -74,7 +74,7 @@ async function startImport(req, res) {
   const rootPath = String(body.rootPath || label).slice(0, 2000);
   const scope = String(body.scope || '').toLowerCase() === 'all' ? 'all' : 'media';
   const id = randomUUID();
-  sessions.set(id, { importId, localOnly, createdAt: Date.now(), label, seen:new Set() });
+  sessions.set(id, { importId, localOnly, oneTime:body.oneTime === true, createdAt: Date.now(), label, seen:new Set() });
 
   if (!localOnly) {
     await api('/api/import-roots', {
@@ -143,6 +143,12 @@ async function importFile(req, res, url) {
         method: 'POST',
         body: { importId: session.importId, sources: [{ hash, path: relative, filename: name, mtime }] }
       });
+      if (session.oneTime) {
+        await api('/api/protection/lifecycle', {
+          method:'POST',
+          body:{ hashes:[hash], mode:'remote-only' }
+        });
+      }
     }
 
     return json(res, 200, { hash, name, path: relative, size, mime, mtime, existing: !missing, ignored, previous });
