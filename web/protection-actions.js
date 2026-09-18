@@ -112,8 +112,8 @@ function sectionHtml(state, hash) {
     <span>${esc(copy.name || copy.deviceName || copy.kind)}</span>
     <small>${esc(copyDescription(copy))}</small>
   </div>`).join('');
-  const badge=unlinked?'Needs review':remoteOnly?'Remote only':pending?'Backing up':state.meets?'Protected':'Needs backup';
-  const badgeClass=unlinked||pending||(!remoteOnly&&!state.meets)?'warn':'good';
+  const badge=unlinked?'Needs review':pending?'Backing up':state.meets?(remoteOnly?'Remote only':'Protected'):'Needs backup';
+  const badgeClass=unlinked||pending||!state.meets?'warn':'good';
 
   if(unlinked)return `<section class="viewer-info-section protection-detail" data-protection-section data-hash="${hash}">
     <div class="viewer-section-head"><h3>Backup</h3><span class="protection-state warn">Needs review</span></div>
