@@ -1,3 +1,5 @@
+import { installRailHover } from './rail-hover.js';
+
 const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
@@ -80,6 +82,10 @@ rail.className = 'date-rail similarity-rail';
 rail.hidden = true;
 rail.setAttribute('aria-label', 'Browse similarity groups');
 dateRail?.after(rail);
+installRailHover(rail, () => active ? ordered.length : 0, index => {
+  const group = groupAt(index);
+  return group ? `${group.size}×` : '';
+});
 
 function syncModeButtons() {
   for (const button of bar.querySelectorAll('[data-similarity-mode]')) button.classList.toggle('active', button.dataset.similarityMode === mode);

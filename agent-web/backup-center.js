@@ -113,7 +113,7 @@ if (storagePane && sourceSection) {
     const totalBytes=Number(summary.bytes)||0;
     const job=model.state.job?.status==='running'&&model.state.job?.type==='protection'?model.state.job:null;
     const progress=job?.progress||{};
-    const title=!total?'Nothing selected for backup':remaining?job?'Backing up':`${remaining.toLocaleString()} need backup`:'Everything is protected';
+    const title=!total?'No files in backup':remaining?job?'Backing up':`${remaining.toLocaleString()} need backup`:'Everything is protected';
     const parts=[];
     if(total)parts.push(`${protectedFiles.toLocaleString()} of ${total.toLocaleString()} protected`);
     if(preparing)parts.push(`${preparing.toLocaleString()} preparing`);

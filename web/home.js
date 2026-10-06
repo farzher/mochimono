@@ -4,6 +4,7 @@ const search = document.querySelector('#search');
 const source = document.querySelector('#source');
 const collection = document.querySelector('#collectionFilter');
 const locationFilter = document.querySelector('#locationFilter');
+const protectionFilter = document.querySelector('#protectionFilter');
 const type = document.querySelector('#typeFilter');
 const sort = document.querySelector('#sort');
 const views = document.querySelector('#views');
@@ -38,6 +39,7 @@ export function showAllFiles(historyMode = 'push') {
   if (search) search.value = '';
   if (collection) collection.value = '';
   if (locationFilter) locationFilter.value = '';
+  if (protectionFilter) protectionFilter.value = '';
   if (source) source.value = '';
   if (sort) sort.value = 'date-desc';
 
@@ -60,6 +62,7 @@ export function showAllFiles(historyMode = 'push') {
   dispatch(search, 'input');
   dispatch(collection);
   dispatch(locationFilter);
+  dispatch(protectionFilter);
   dispatch(source);
   dispatch(sort);
   dispatch(type);

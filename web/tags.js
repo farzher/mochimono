@@ -164,8 +164,9 @@ const sensitiveSelect = sensitiveLabel.querySelector('select');
 sensitiveSelect.value = sensitiveMode;
 const filterActions = document.createElement('div');
 filterActions.className = 'tag-filter-actions';
-filterActions.innerHTML = '<button type="button" data-manage-tags>Manage tags</button><button type="button" data-scan-sensitive>Scan sensitive</button>';
-filterPopover?.append(tagLabel, sensitiveLabel, filterActions);
+filterActions.innerHTML = '<button type="button" data-scan-sensitive title="Scan sensitive media" aria-label="Scan sensitive media">Scan</button>';
+filterPopover?.append(tagLabel, sensitiveLabel);
+document.querySelector('.library-filter-tools').append(filterActions);
 
 tagSelect.addEventListener('change', () => {
   tagFilterId = tagSelect.value;
@@ -691,7 +692,6 @@ managerEditor.addEventListener('click', async event => {
   }
 });
 
-filterActions.querySelector('[data-manage-tags]').addEventListener('click', () => openManager().catch(console.error));
 filterActions.querySelector('[data-scan-sensitive]').addEventListener('click', async () => {
   await openManager(String(sensitiveTag()?.id || ''));
   scanSensitive().catch(error => aiProgress(error.message));

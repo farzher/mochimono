@@ -1,7 +1,6 @@
 import ai from './ai-engine.js';
 
 const files = document.querySelector('#files');
-const search = document.querySelector('#search');
 const commandbar = document.querySelector('.commandbar');
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
@@ -43,7 +42,7 @@ if (commandbar && files) {
   toggle.className = 'ai-lab-toggle';
   toggle.textContent = 'AI';
   toggle.title = 'AI Lab · semantic search, AI similarity, auto groups, descriptions, and masks';
-  search?.after(toggle);
+  document.querySelector('.library-filter-tools')?.append(toggle);
 
   const viewerAi = document.createElement('button');
   viewerAi.type = 'button';
@@ -357,7 +356,10 @@ if (commandbar && files) {
   dialog.addEventListener('cancel', cancel);
   dialog.addEventListener('close', cancel);
   dialog.addEventListener('click', event => { if (event.target === dialog) { cancel(); dialog.close(); } });
-  toggle.addEventListener('click', () => openLab('', '').catch(error => { status.textContent = error.message; }));
+  toggle.addEventListener('click', () => {
+    document.querySelector('.library-filter-menu').open = false;
+    openLab('', '').catch(error => { status.textContent = error.message; });
+  });
   viewerAi.addEventListener('click', () => {
     const hash = viewerHash();
     const name = viewerName?.textContent || hash;

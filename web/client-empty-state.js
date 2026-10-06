@@ -4,7 +4,7 @@ if (document.documentElement.classList.contains('client-library')) {
   const empty = document.createElement('div');
   empty.className = 'client-library-empty';
   empty.hidden = true;
-  empty.innerHTML = '<button type="button">Open Storage to add files</button>';
+  empty.innerHTML = '<button type="button">Add files</button>';
   files?.after(empty);
 
   const style = document.createElement('style');

@@ -17,7 +17,7 @@ if (addToggle) {
 
   if (addPanel) addPanel.hidden = true;
   const addCopy = addToggle.querySelector('.storage-add-copy');
-  if (addCopy) addCopy.textContent = 'Add or drop folders';
+  if (addCopy) addCopy.textContent = 'Add folders';
   addToggle.title = 'Add folders or drop them here';
 
   const style = document.createElement('style');

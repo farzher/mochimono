@@ -147,7 +147,7 @@ if (folders) {
     return `<article class="storage-item folder-item browser-folder-item${busy?' source-busy':''}${queued?' source-queued':''}" data-browser-folder="${esc(source.id)}" data-source-cloud="${source.cloud?'1':'0'}" data-source-scope="${esc(source.scope)}" data-source-health="${health}">
       <a class="storage-folder-samples storage-source-link" href="#" title="Library">${[0,1,2].map(index=>previewCell(previews[index],index)).join('')}</a>
       <div class="storage-copy"><div class="storage-title"><strong title="${esc(source.rootPath||source.name)}">${titleHtml(source)}</strong></div><div class="storage-meta">${meta?`<span data-browser-stats>${esc(meta)}</span>`:''}<span class="browser-source-live" data-browser-live${liveText?'':" hidden"}>${esc(liveText)}</span></div></div>
-      <div class="item-actions"><button class="icon tiny" data-browser-remove aria-label="Remove" title="Remove">×</button></div>
+      <details class="source-action-menu"><summary aria-label="Folder actions" title="Folder actions">•••</summary><div class="item-actions"><button class="action-link" data-browser-remove>Remove source</button></div></details>
     </article>`;
   }
 

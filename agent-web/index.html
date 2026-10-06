@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#0d0c0e">
+  <meta name="theme-color" content="#121016">
   <title>Mochimono</title>
   <script>
     if (!localStorage.getItem('mochimono:client-tab') && !new URL(location.href).searchParams.has('file')) {
@@ -12,11 +12,12 @@
   </script>
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/client-shell.css">
+  <link rel="stylesheet" href="/files/design.css">
   <style>
     /* Native source cards get their preview strip asynchronously. Reserve the
        final geometry immediately so the Storage grid does not jump when it arrives. */
     #storagePane .folder-item:not(:has(.storage-folder-samples))::before{
-      content:"";display:block;width:100%;aspect-ratio:16/9;flex:0 0 auto;background:#171518
+      content:"";display:block;width:100%;aspect-ratio:16/9;flex:0 0 auto;background:var(--surface2)
     }
   </style>
 </head>
@@ -29,7 +30,7 @@
         <i><b id="serverStorageBar"></b></i>
       </div>
       <details class="client-menu">
-        <summary aria-label="Mochimono menu" title="More">•••</summary>
+        <summary aria-label="Settings and account" title="Settings and account"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m8 3 .5-1h3l.5 1 .5 1.5 1.5.8 1.6-.3 1.5 2.6-1.1 1.2v1.8l1.1 1.2-1.5 2.6-1.6-.3-1.5.8-.5 1.5-.5 1h-3l-.5-1-.5-1.5-1.5-.8-1.6.3-1.5-2.6 1.1-1.2V8.8L3.4 7.6l1.5-2.6 1.6.3 1.5-.8Z"/><circle cx="10" cy="9.7" r="2.7"/></svg></summary>
         <div class="client-menu-popover">
           <nav class="client-tabs" aria-label="Mochimono">
             <button data-client-tab="storage">Storage</button>
@@ -99,7 +100,7 @@
     <div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="startRestore" class="primary">Restore to Cloud</button></div>
   </dialog>
 
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="/core-entry.js"></script>
   <script>
     const homeBrand = document.querySelector('.client-header .app-brand');

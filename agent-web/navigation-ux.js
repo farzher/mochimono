@@ -4,6 +4,25 @@ const actions = document.querySelector('.client-head-actions');
 const storagePane = document.querySelector('#storagePane');
 const storageToggle = document.querySelector('[data-client-tab="storage"]');
 
+// Keep native folder menus dismissible without adding a custom menu widget.
+document.addEventListener('pointerdown', event => {
+  for (const menu of document.querySelectorAll('.source-action-menu[open]')) {
+    if (!menu.contains(event.target)) menu.open = false;
+  }
+});
+document.addEventListener('click', event => {
+  const menu = event.target.closest('.source-action-menu');
+  if (menu && event.target.closest('button')) menu.open = false;
+});
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  const menu = document.querySelector('.source-action-menu[open]');
+  if (!menu) return;
+  menu.open = false;
+  menu.querySelector('summary').focus();
+  event.preventDefault();
+});
+
 if (actions && storagePane && storageToggle) {
   const style = document.createElement('style');
   style.textContent = `

@@ -4,12 +4,12 @@ const mediaSizes = document.querySelector('#mediaSizeControl');
 const views = document.querySelector('#views');
 const filterMenu = document.querySelector('.library-filter-menu');
 const sizeMenu = document.querySelector('.library-size-menu');
-const viewMenu = document.querySelector('.library-view-menu');
 
 const controls = [
   document.querySelector('#source'),
   document.querySelector('#collectionFilter'),
   document.querySelector('#locationFilter'),
+  document.querySelector('#protectionFilter'),
   document.querySelector('#typeFilter'),
   document.querySelector('#tagFilter'),
   document.querySelector('#sort')
@@ -19,6 +19,7 @@ function activeCount() {
   let count = new URL(location.href).searchParams.has('folder') ? 1 : 0;
   const gridView = (views?.querySelector('[data-view].active')?.dataset.view || 'grid') === 'grid';
   for (const control of controls) {
+    if (control.hidden) continue;
     if (control.id === 'sort') {
       if (control.value && control.value !== 'date-desc') count++;
     } else if (control.id === 'typeFilter') {
@@ -30,6 +31,7 @@ function activeCount() {
 
 function sync() {
   if (!filterMenu || !search) return;
+  for (const control of controls) control.closest('label').hidden = control.hidden;
   const count = activeCount();
   const badge = filterMenu.querySelector('.library-filter-count');
   badge.hidden = count === 0;
@@ -53,11 +55,10 @@ mediaSizes?.addEventListener('click', event => {
 });
 views?.addEventListener('click', event => {
   if (!event.target.closest('[data-view]')) return;
-  if (viewMenu) viewMenu.open = false;
   sync();
 });
 
-const menus = [filterMenu, sizeMenu, viewMenu].filter(Boolean);
+const menus = [filterMenu, sizeMenu].filter(Boolean);
 for (const menu of menus) {
   menu.addEventListener('toggle', () => {
     if (!menu.open) return;
@@ -74,7 +75,21 @@ document.addEventListener('pointerdown', event => {
 }, true);
 
 document.addEventListener('keydown', event => {
+  if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey &&
+      !event.target.closest('input,textarea,select,[contenteditable="true"]') &&
+      !document.querySelector('dialog[open],.viewer:not([hidden])')) {
+    event.preventDefault();
+    search?.focus();
+    return;
+  }
   if (event.key !== 'Escape') return;
+  if (event.target === search) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    closePopovers();
+    search.blur();
+    return;
+  }
   const open = menus.find(menu => menu.open);
   if (!open) return;
   open.open = false;

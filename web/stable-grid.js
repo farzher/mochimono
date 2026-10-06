@@ -1000,6 +1000,7 @@ window.mochimonoStableGrid = {
   ensureIndex,
   scrollToIndex,
   visibleIndex,
+  railLabel,
   syncThumbnails:() => scheduleThumbnailPriority(true),
   state:() => ({
     active:owned,

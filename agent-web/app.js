@@ -156,7 +156,7 @@ function folderRow(folder) {
       <div class="item-progress" data-item-progress hidden></div>
       <button class="action-link" data-preview-failures="${esc(folder.path)}" hidden></button>
     </div>
-    <div class="item-actions"><button class="action-link" data-sync-folder="${esc(folder.path)}">Sync</button><button class="icon tiny" data-remove-folder="${esc(folder.path)}" aria-label="Stop syncing" title="Stop syncing">×</button></div>
+    <details class="source-action-menu"><summary aria-label="Folder actions" title="Folder actions">•••</summary><div class="item-actions"><button class="action-link" data-sync-folder="${esc(folder.path)}">Sync</button><button class="action-link" data-remove-folder="${esc(folder.path)}">Remove source</button></div></details>
   </article>`;
 }
 

@@ -1,5 +1,6 @@
 import { buildSearchText, fileKind as kind, matchesDetails, matchesSmart, normalizeText, queryTerms } from './search-query.js';
 import { sortRandom } from './random-sort.js';
+import { installRailHover } from './rail-hover.js';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
@@ -1340,6 +1341,10 @@ $('#mediaSize').addEventListener('input', event => {
 $('#views').addEventListener('click', event => { const button = event.target.closest('[data-view]'); if (button) setView(button.dataset.view); });
 
 const rail = $('#dateRail');
+installRailHover(rail,
+  () => view === 'grid' ? window.mochimonoStableGrid.count() : filtered.length,
+  index => view === 'grid' ? window.mochimonoStableGrid.railLabel(index) : railLabel(index)
+);
 rail.addEventListener('pointerdown', event => {
   if (view === 'grid') return;
   if (!rail.hidden) {

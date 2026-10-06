@@ -1,3 +1,5 @@
+import { installRailHover } from './rail-hover.js';
+
 const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
@@ -74,6 +76,15 @@ rail.className = 'date-rail ai-global-rail';
 rail.hidden = true;
 rail.setAttribute('aria-label', 'Browse AI order');
 dateRail?.after(rail);
+installRailHover(rail, () => active ? ordered.length : 0, index => {
+  if (!railEntries.length) return `${Math.round(index / Math.max(1, ordered.length - 1) * 100)}%`;
+  let label = railEntries[0].label;
+  for (const entry of railEntries) {
+    if (Number(entry.index) > index) break;
+    label = entry.label;
+  }
+  return String(label || '');
+});
 
 const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
 

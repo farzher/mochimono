@@ -1,3 +1,5 @@
+import { installRailHover } from './rail-hover.js';
+
 const files = document.querySelector('#files');
 const viewer = document.querySelector('#viewer');
 const viewerOpen = document.querySelector('#viewer-open');
@@ -75,6 +77,7 @@ visualRail.className = 'date-rail visual-rail';
 visualRail.hidden = true;
 visualRail.setAttribute('aria-label', 'Browse visual order');
 dateRail?.after(visualRail);
+installRailHover(visualRail, () => active ? ordered.length : 0, railLabelAt);
 
 function syncModeButtons() {
   for (const button of bar.querySelectorAll('[data-visual-mode]')) button.classList.toggle('active', button.dataset.visualMode === mode);

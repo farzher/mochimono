@@ -37,8 +37,7 @@ async function requestJson(url, options = {}) {
   return data;
 }
 
-// Tags should have an obvious home instead of living only inside the filter
-// popover. This opens the same manager; filtering remains under Filters.
+// Tag management sits alongside the tag filter.
 if (commandbar && !commandbar.querySelector('.command-tags')) {
   const button = document.createElement('button');
   button.type = 'button';
@@ -46,8 +45,11 @@ if (commandbar && !commandbar.querySelector('.command-tags')) {
   button.textContent = 'Tags';
   button.title = 'Manage tags and AI tagging';
   button.setAttribute('aria-label', button.title);
-  button.addEventListener('click', () => api.open().catch?.(console.error));
-  filterMenu?.before(button);
+  button.addEventListener('click', () => {
+    filterMenu.open = false;
+    api.open().catch?.(console.error);
+  });
+  document.querySelector('.library-filter-tools')?.append(button);
 }
 
 function currentHash() {

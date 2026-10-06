@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0d0c0e">
+  <meta name="theme-color" content="#121016">
   <title>Mochimono</title>
   <script>document.documentElement.classList.add('mochimono-library-booting');if(new URL(location.href).searchParams.has('file'))document.documentElement.classList.add('viewer-restore-pending')</script>
   <style>html.viewer-restore-pending,html.viewer-restore-pending body{background:#050505}html.viewer-restore-pending .shell{visibility:hidden}</style>
@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="/collections.css">
   <link rel="stylesheet" href="/tags.css">
   <link rel="stylesheet" href="/file-info.css">
+  <link rel="stylesheet" href="/design.css">
 </head>
 <body>
   <main class="shell">
@@ -30,12 +31,16 @@
     </section>
 
     <div id="app" hidden>
-      <section class="library">
+      <section class="library" aria-label="Library">
         <div class="commandbar">
-          <button id="homeButton" class="command-home" type="button" title="All files" aria-label="All files"><span class="mini" aria-hidden="true"></span></button>
-          <input id="search" class="search" type="search" placeholder="Search" title="Search normally, or use name:, path:, source:, location:, type:, ext:, or year:">
+          <button id="homeButton" class="command-home" type="button" title="Reset filters" aria-label="Reset filters"><span class="mini" aria-hidden="true"></span></button>
+          <label class="library-search">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.25"/><path d="m12.5 12.5 4 4"/></svg>
+            <input id="search" class="search" type="search" placeholder="Search" aria-label="Search library" title="Search normally, or use name:, path:, source:, location:, type:, ext:, or year:">
+            <kbd aria-hidden="true">/</kbd>
+          </label>
           <details class="library-filter-menu">
-            <summary title="Filters" aria-label="Filters"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 5.25h13M5.75 10h8.5M8 14.75h4"/></svg><span class="library-filter-count" hidden></span></summary>
+            <summary title="Filters" aria-label="Filters"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 5.25h13M5.75 10h8.5M8 14.75h4"/></svg><span class="filter-label">Filter</span><span class="library-filter-count" hidden></span></summary>
             <div class="library-filter-popover">
               <label><span>Origin</span><select id="source" aria-label="Origin"><option value="">Origin</option></select></label>
               <label><span>Groups</span><select id="collectionFilter" aria-label="Groups"><option value="">Groups</option></select></label>
@@ -43,9 +48,9 @@
               <label><span>Backup</span><select id="protectionFilter" aria-label="Backup state"><option value="">Any state</option><option value="managed">In backup</option><option value="current">Current sources</option><option value="protected">Protected</option><option value="needs-backup">Needs backup</option><option value="remote-only">Remote only</option><option value="unlinked">Unlinked</option></select></label>
               <label><span>Type</span><select id="typeFilter" aria-label="File type"><option value="">All files</option><option value="media">Media</option><option value="image">Images</option><option value="video">Video</option><option value="audio">Audio</option><option value="application">Docs</option><option value="other">Other</option></select></label>
               <label><span>Sort</span><select id="sort" aria-label="Sort"><option value="date-desc">Newest</option><option value="date-added">Recently added</option><option value="date-asc">Oldest</option><option value="size-desc">Largest</option></select></label>
+              <div class="library-filter-tools"></div>
             </div>
           </details>
-          <span id="fileCount" class="file-count" aria-live="polite"></span>
           <button id="selectFiles" class="select-toggle" hidden aria-hidden="true" tabindex="-1">Select</button>
           <details class="library-size-menu">
             <summary title="Preview size" aria-label="Preview size"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="4" width="12" height="12" rx="1.5"/></svg></summary>
@@ -60,16 +65,16 @@
               <button id="gridFolderToggle" class="grid-folders-toggle" type="button" title="Show folders in grid" aria-label="Show folders in grid"><span class="grid-folder-toggle-icon" aria-hidden="true"></span></button>
             </div>
           </details>
-          <details class="library-view-menu">
-            <summary title="View" aria-label="View"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="3.5" width="5" height="5" rx=".7"/><rect x="11.5" y="3.5" width="5" height="5" rx=".7"/><rect x="3.5" y="11.5" width="5" height="5" rx=".7"/><rect x="11.5" y="11.5" width="5" height="5" rx=".7"/></svg></summary>
-            <div class="library-view-popover">
+          <div class="library-view-switch">
+            <div class="library-view-options">
               <div id="views" class="views" aria-label="View">
                 <button data-view="grid" class="active" title="Grid" aria-label="Grid"><svg class="view-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3.25" y="3.25" width="5.5" height="5.5" rx=".8"/><rect x="11.25" y="3.25" width="5.5" height="5.5" rx=".8"/><rect x="3.25" y="11.25" width="5.5" height="5.5" rx=".8"/><rect x="11.25" y="11.25" width="5.5" height="5.5" rx=".8"/></svg></button>
                 <button data-view="list" title="List" aria-label="List"><svg class="view-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5.25h1M8 5.25h8M4 10h1M8 10h8M4 14.75h1M8 14.75h8"/></svg></button>
                 <button data-view="folders" title="Folders" aria-label="Folders"><svg class="view-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.75 6.25h5l1.6-2h3.2l1.25 2h3.45v9.5H2.75z"/></svg></button>
               </div>
             </div>
-          </details>
+          </div>
+          <span id="fileCount" class="file-count" aria-live="polite"></span>
           <div id="selectionBar" class="selection-bar" hidden>
             <strong id="selectionCount">0 selected</strong>
             <button id="selectAll" title="Select all" aria-label="Select all"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.2l3.1 3.1L16 4.8"/></svg></button>
