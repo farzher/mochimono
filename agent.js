@@ -21,6 +21,7 @@ const PORT = Number(process.env.MOCHIMONO_AGENT_PORT || 8643);
 const desiredHost = () => HOST_OVERRIDE || (settings.lanAccess ? '0.0.0.0' : '127.0.0.1');
 let activeHost = desiredHost();
 let deviceIdentityReconciled = false;
+let deviceIdentityWork = null;
 let providerThumbsPromise = null;
 let browseFoldersPromise = null;
 let clientImportPromise = null;
@@ -146,7 +147,7 @@ async function reconcileDeviceIdentity() {
   for (const alias of aliases) {
     if (!alias || alias.toLowerCase() === settings.device.toLowerCase()) continue;
     try {
-      await api('/api/device-identity/rename', { method:'POST', body:{ from:alias, to:settings.device } });
+      await api('/api/device-identity/rename', { method:'POST', body:{ from:alias, to:settings.device }, signal:AbortSignal.timeout(2000) });
       settings.deviceAliases = settings.deviceAliases.filter(item => item.toLowerCase() !== alias.toLowerCase());
     } catch {
       complete = false;
@@ -218,7 +219,11 @@ async function handleLocalApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/state') {
-    await reconcileDeviceIdentity();
+    if (!deviceIdentityWork && !deviceIdentityReconciled) {
+      deviceIdentityWork = reconcileDeviceIdentity().catch(error => console.warn('Device identity update:', error.message)).finally(() => { deviceIdentityWork = null; });
+    }
+    const remotePreviews = thumbnailAgentStatus();
+    const localPreviews = (await providerThumbs()).providerThumbnailQueueStatus();
     json(res, 200, {
       settings:{
         server:settings.server, hasToken:Boolean(settings.token), device:settings.device,
@@ -229,7 +234,11 @@ async function handleLocalApi(req, res, url) {
       },
       server:await serverState(),
       background:backgroundWorkStatus(),
-      previews:thumbnailAgentStatus(),
+      previews:{ ...remotePreviews,
+        active:remotePreviews.active + localPreviews.active,
+        urgent:remotePreviews.urgent + localPreviews.urgent,
+        queued:remotePreviews.queued + localPreviews.background,
+        waitingForIdle:remotePreviews.waitingForIdle || localPreviews.backgroundWaiting },
       job:currentJob()
     });
     return true;

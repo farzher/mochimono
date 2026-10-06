@@ -164,7 +164,7 @@ function progressData(job) {
   const totalBytes = Number(p.totalBytes) || 0;
   const doneBytes = Math.min(totalBytes, Number(p.doneBytes) || Number(p.copiedBytes) || 0);
   const total = Number(p.total) || 0;
-  const checked = Math.min(total || Infinity, Number(p.checked ?? p.hashed ?? p.scanned ?? p.processed) || 0);
+  const checked = Math.min(total || Infinity, Number(p.checked ?? (job.type === 'hash' ? p.hashed : p.scanned) ?? p.hashed ?? p.processed) || 0);
   const directPercent = job.percent == null ? null : Math.max(0, Math.min(100, Number(job.percent) || 0));
   const percent = totalBytes
     ? Math.max(0, Math.min(100, doneBytes / totalBytes * 100))
@@ -188,6 +188,8 @@ function progressData(job) {
   if (p.catalogHealthy === false) meta.push('backup catalog damaged');
   if (p.bad) meta.push(`${Number(p.bad).toLocaleString()} still damaged`);
   if (p.speedBps > 0) meta.push(`${bytes(p.speedBps)}/s`);
+  if (p.filesPerSecond > 0) meta.push(`${Number(p.filesPerSecond).toLocaleString()} files/s`);
+  if (p.elapsedSeconds > 0) meta.push(duration(p.elapsedSeconds));
   if (p.etaSeconds > 0) meta.push(`${duration(p.etaSeconds)} left`);
   const phase = job.cancelRequested ? 'Canceling…' : p.phase || job.phase || 'Working…';
   const title = operation ? `${operation} · ${phase}` : phase;
@@ -197,7 +199,7 @@ function progressData(job) {
     key:JSON.stringify([title, meta, p.current || '', percent, indeterminate, job.cancelRequested, job.cancelable]),
     html:`<div class="inline-progress-head"><strong>${esc(title)}</strong>${side}</div>
       <div class="progress-bar ${indeterminate ? 'indeterminate' : ''}"><i style="width:${indeterminate ? '32%' : `${Math.max(1, percent)}%`}"></i></div>
-      <div class="inline-progress-meta"><span>${esc(meta.join(' · '))}</span><span title="${esc(p.current || '')}">${esc(p.current || '')}</span></div>`
+      <div class="inline-progress-meta"><span>${esc(meta.join(' · '))}</span></div>${p.current?`<span class="inline-progress-current" title="${esc(p.current)}">${esc(p.current)}</span>`:''}`
   };
 }
 
@@ -239,7 +241,11 @@ function renderFolders(folders, job) {
   for (const row of $('#folders').querySelectorAll('[data-folder-path]')) {
     const folder = folders.find(item => samePath(item.path, row.dataset.folderPath));
     if (!folder) continue;
-    if(folder.protected===false)setRelativeTime(row.querySelector('[data-folder-status]'), folder.lastIndexed||folder.lastSynced, 'Not indexed yet');
+    if(folder.protected===false){
+      const status=row.querySelector('[data-folder-status]');
+      status.textContent=row.dataset.sourceOffline==='1'?'Offline':row.dataset.filesAvailable==='1'?'Ready':'Finding files';
+      status.className=`item-state ${row.dataset.sourceOffline==='1'?'warning':row.dataset.filesAvailable==='1'?'good':'working'}`;
+    }
     else{
       const status=row.querySelector('[data-folder-status]');
       status.textContent='Checking backup…';
@@ -295,12 +301,28 @@ async function refreshFolderStats() {
       row.querySelector('[data-folder-files]').textContent = `${Number(item.files).toLocaleString()} files`;
       row.querySelector('[data-folder-size]').textContent = bytes(item.bytes);
       row.querySelector('[data-folder-free]').textContent = `${bytes(item.freeBytes)} free`;
-      if (item.protected === false) setRelativeTime(row.querySelector('[data-folder-status]'), item.lastIndexed, 'Not indexed yet');
-      const diagnostics = item.diagnostics || {};
+      if (item.protected === false) {
+        const status = row.querySelector('[data-folder-status]');
+        row.dataset.filesAvailable = Number(item.files) > 0 ? '1' : '0';
+        row.dataset.sourceOffline = item.available === false ? '1' : '0';
+        if (item.available === false) {
+          status.textContent = 'Offline';
+          status.className = 'item-state warning';
+          status.title = 'Source unavailable';
+        } else if (Number(item.files) > 0) {
+          status.textContent = 'Ready';
+          status.className = 'item-state good';
+          status.title = item.lastIndexed ? `Last checked ${new Date(item.lastIndexed).toLocaleString()}` : '';
+        } else {
+          status.textContent = item.progress ? 'Finding files' : 'Empty';
+          status.className = `item-state ${item.progress ? 'working' : ''}`;
+        }
+      }
       const key = String(item.path || '').replace(/[\\/]+$/, '').toLowerCase();
-      const diagnosticJob = diagnostics.running && diagnostics.jobType === 'hash' ? {
-        type:'hash', kind:'Hash', label:`Hash ${pathName(item.path) || item.path}`, status:'running', cancelable:false,
-        progress:{ path:item.path, phase:'Hashing content', hashed:Number(diagnostics.hashProcessed) || 0, total:Number(diagnostics.hashTotal) || 0, indeterminate:!(Number(diagnostics.hashTotal) > 0) }
+      const diagnosticJob = item.progress ? {
+        type:item.hashing?'hash':'sync', kind:item.hashing?'Hash':'Index',
+        label:`${item.hashing?'Hash':'Index'} ${pathName(item.path) || item.path}`,
+        status:'running', cancelable:false, startedAt:item.startedAt, progress:item.progress
       } : null;
       renderItemProgress(row, diagnosticJob || folderActivity.get(key) || folderJob(item, currentJob));
       const ratio = item.capacityBytes ? Math.min(100, Number(item.bytes) / Number(item.capacityBytes) * 100) : 0;

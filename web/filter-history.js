@@ -31,7 +31,7 @@ function targetUrl() {
   const origin = String(source?.value || '');
   const kind = String(type?.value || '');
   const order = String(sort?.value || 'date-desc');
-  const location = String(where?.value || '');
+  const whereMode = String(where?.value || '');
 
   if (query) url.searchParams.set('q', query); else url.searchParams.delete('q');
   if (url.searchParams.has('source')) url.searchParams.delete('origin');
@@ -44,7 +44,7 @@ function targetUrl() {
   else url.searchParams.delete('type');
 
   if (order && order !== 'date-desc') url.searchParams.set('sort', order); else url.searchParams.delete('sort');
-  if (location) url.searchParams.set('where', location); else url.searchParams.delete('where');
+  if (whereMode) url.searchParams.set('where', whereMode); else url.searchParams.delete('where');
   return url;
 }
 

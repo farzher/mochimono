@@ -1,7 +1,6 @@
 const sortSelect=document.querySelector('#sort');
 const root=document.documentElement;
-const nativeSort=Array.prototype.sort;
-const functionSource=Function.prototype.toString;
+const randomKeys=new Map();
 let randomMode=false;
 let seed=0;
 let libraryWrapped=false;
@@ -11,19 +10,18 @@ function newSeed(){
   return((Math.random()*0xffffffff)>>>0)||1;
 }
 function mix(value){value^=value>>>16;value=Math.imul(value,0x7feb352d)>>>0;value^=value>>>15;value=Math.imul(value,0x846ca68b)>>>0;value^=value>>>16;return value>>>0}
-function randomKey(hash){let value=(2166136261^seed)>>>0;const text=String(hash||'');for(let i=0;i<text.length;i++){value^=text.charCodeAt(i);value=Math.imul(value,16777619)>>>0}return mix(value)}
-function isLibrarySort(items,compare){
-  if(!randomMode||typeof compare!=='function'||!items?.length)return false;
-  const first=items[0],last=items[items.length-1];
-  if(!first||!last||typeof first!=='object'||typeof last!=='object'||typeof first.hash!=='string'||typeof last.hash!=='string')return false;
-  const source=functionSource.call(compare).replace(/\s+/g,'');
-  return source.includes('a.hash.localeCompare(b.hash)')&&(source.includes('dateMs')||source.includes('timelineMs')||source.includes('b.size-a.size'));
+function randomKey(hash){
+  if(randomKeys.has(hash))return randomKeys.get(hash);
+  let value=(2166136261^seed)>>>0;const text=String(hash||'');for(let i=0;i<text.length;i++){value^=text.charCodeAt(i);value=Math.imul(value,16777619)>>>0}
+  const key=mix(value);randomKeys.set(hash,key);return key;
 }
-Array.prototype.sort=function(compare){
-  if(isLibrarySort(this,compare))return nativeSort.call(this,(a,b)=>randomKey(a.hash)-randomKey(b.hash)||String(a.hash).localeCompare(String(b.hash)));
-  return nativeSort.call(this,compare);
-};
-function setMode(enabled,fresh=false){randomMode=Boolean(enabled);if(randomMode&&(fresh||!seed))seed=newSeed();root.classList.toggle('random-sort-active',randomMode)}
+export function sortRandom(items){
+  if(!seed)seed=newSeed();
+  // Hash once per file, not twice for every comparison in an O(n log n) sort.
+  for(const item of items)randomKey(item.hash);
+  return items.sort((a,b)=>randomKeys.get(a.hash)-randomKeys.get(b.hash)||a.hash.localeCompare(b.hash));
+}
+function setMode(enabled,fresh=false){randomMode=Boolean(enabled);if(randomMode&&(fresh||!seed)){seed=newSeed();randomKeys.clear()}root.classList.toggle('random-sort-active',randomMode)}
 function installOption(){
   if(!sortSelect||sortSelect.querySelector('option[value="random"]'))return;
   const option=document.createElement('option');option.value='random';option.textContent='Random';

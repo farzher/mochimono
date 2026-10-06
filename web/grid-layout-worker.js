@@ -31,10 +31,11 @@ function buildItemData(items) {
 
   for (let index = 0; index < count; index++) {
     ratios[index] = mediaRatio(items[index], diagnostics);
-    const date = new Date(Number(items[index]?.[5]) || 0);
-    years[index] = date.getFullYear();
-    months[index] = date.getMonth();
-    days[index] = date.getDate();
+    const ms = Number(items[index]?.[5]) || 0;
+    const date = new Date(ms);
+    years[index] = ms ? date.getFullYear() : 0;
+    months[index] = ms ? date.getMonth() : 0;
+    days[index] = ms ? date.getDate() : 0;
     groupIds[index] = Number.isInteger(Number(items[index]?.[8])) ? Number(items[index][8]) : -1;
   }
   return { ratios, years, months, days, groupIds, diagnostics };
@@ -106,7 +107,7 @@ function layoutItems(items, config) {
       itemX[index] = x;
       itemW[index] = itemWidth;
 
-      if (dateGrouped) {
+      if (dateGrouped && years[index]) {
         const key = `${years[index]}-${months[index] + 1}-${days[index]}`;
         if (key !== previousDayKey) {
           dayStarts.push({ index, row, x, top:y, year:years[index], month:months[index], day:days[index] });
@@ -162,8 +163,10 @@ function layoutItems(items, config) {
         y += YEAR_HEIGHT;
         previousYear = year;
       }
-      headers.push({ kind:'month', year, month, top:y });
-      y += MONTH_HEIGHT;
+      if (year) {
+        headers.push({ kind:'month', year, month, top:y });
+        y += MONTH_HEIGHT;
+      }
       layoutRange(start, end);
       start = end;
     }

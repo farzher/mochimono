@@ -13,10 +13,9 @@ import { handleCompressionWorkApi } from './lib/compression-work.js';
 import { handleCloudImageOptimizeApi } from './lib/image-optimize-cloud.js';
 import { handleImageOptimizeApi } from './lib/image-optimize.js';
 import { handleVideoOptimizeApi } from './lib/video-optimize.js';
-import { acquireLiveLibraryWatchers } from './lib/live-library-watch.js';
 import { localDuplicateStats } from './lib/local-duplicate-stats.js';
 import { subscribeLocalCatalogChanges } from './lib/local-catalog-events.js';
-import { localCandidate, localCandidates, localCatalog, localLocations } from './lib/local-locations.js';
+import { localCandidate, localCandidates, localCatalog, localCatalogState, localLocations } from './lib/local-locations.js';
 import { providerThumbnail, providerThumbnailFailure, queueProviderThumbnail, serveProviderThumbnail } from './lib/provider-thumbs.js';
 import { queueRemoteThumbnail, thumbnailFailure } from './lib/thumbnail-agent.js';
 
@@ -85,7 +84,6 @@ function streamLocalCatalogEvents(req, res) {
   });
   res.write('retry: 5000\n\n');
   let closed = false;
-  const releaseWatchers = acquireLiveLibraryWatchers();
   const unsubscribe = subscribeLocalCatalogChanges(payload => {
     if (closed || res.destroyed || res.writableEnded) return;
     res.write(`event: catalog\ndata: ${JSON.stringify(payload)}\n\n`);
@@ -94,7 +92,6 @@ function streamLocalCatalogEvents(req, res) {
     if (closed) return;
     closed = true;
     unsubscribe();
-    releaseWatchers();
   };
   req.once('close', close);
   res.once('close', close);
@@ -107,7 +104,8 @@ async function serverThumbnails(hashes) {
     const response = await fetch(`${settings.server}/api/thumbs/check`, {
       method: 'POST',
       headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ hashes })
+      body: JSON.stringify({ hashes }),
+      signal:AbortSignal.timeout(3500)
     });
     if (!response.ok) throw new Error(`Thumbnail check failed (${response.status})`);
     const data = await response.json();
@@ -135,17 +133,22 @@ async function checkThumbnails(req, res) {
   const hashes = [...new Set(body.hashes.map(String).filter(hash => /^[a-f0-9]{64}$/.test(hash)))];
   const ready = new Map();
   const failures = new Map();
-  const locals = localCandidates(hashes);
-
   const providerEntries = await Promise.all(hashes.map(async hash => [hash, await providerThumbnail(hash)]));
   for (const [hash, thumb] of providerEntries) if (thumb) ready.set(hash, thumb);
+  if (body.cachedOnly === true) {
+    json(res, 200, { thumbnails:[...ready.values()].map(({ hash, width, height }) => ({ hash, width, height })) });
+    return;
+  }
 
+  // Cached previews do not need an original-file lookup. Keep index and drive
+  // work out of the ready-thumbnail path, especially for large libraries.
+  const locals = localCandidates(hashes.filter(hash => !ready.has(hash)));
   const queuedLocal = new Set();
   for (const hash of hashes) {
     if (ready.has(hash)) continue;
     const candidate = locals.get(hash);
     if (!candidate || providerThumbnailFailure(hash)) continue;
-    queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
+    queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background, owner:candidate.root });
     queuedLocal.add(hash);
   }
 
@@ -163,7 +166,7 @@ async function checkThumbnails(req, res) {
 
     if (queuedLocal.has(hash) && !providerFailure) continue;
     if (candidate && !providerFailure) {
-      queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background });
+      queueProviderThumbnail({ hash, filename: candidate.filename, mime: candidate.mime, candidate }, { background, owner:candidate.root });
       continue;
     }
     if (serverFile && !remoteFailure) {
@@ -190,7 +193,8 @@ async function serveLocalObject(req, res, candidate) {
   let info;
   try { info = await stat(candidate.path); }
   catch { return false; }
-  if (!info.isFile() || (candidate.size && Number(info.size) !== Number(candidate.size))) return false;
+  if (!info.isFile() || Number(info.size) !== Number(candidate.size) ||
+      (Number.isFinite(candidate.mtimeMs) && Math.trunc(info.mtimeMs) !== candidate.mtimeMs)) return false;
 
   const headers = {
     'content-type': candidate.mime || 'application/octet-stream',
@@ -351,10 +355,24 @@ export async function handleClientGateway(req, res, url) {
     json(res, 200, localDuplicateStats());
     return true;
   }
+  if (req.method === 'GET' && url.pathname === '/api/client/local-catalog/version') {
+    json(res, 200, localCatalogState());
+    return true;
+  }
   if (req.method === 'GET' && url.pathname === '/api/client/local-catalog') {
     const path = String(url.searchParams.get('path') || '');
-    const offset = url.searchParams.has('offset') ? url.searchParams.get('offset') : null;
-    json(res, 200, localCatalog(url.searchParams.get('limit'), path, offset));
+    const after = url.searchParams.get('after');
+    const catalog = localCatalog(url.searchParams.get('limit'), path, after, url.searchParams.get('media') === '1');
+    const media = catalog.files.filter(file => /^(image|video)\//.test(file.mime));
+    let cursor = 0;
+    await Promise.all(Array.from({ length:Math.min(16, media.length) }, async () => {
+      while (cursor < media.length) {
+        const file = media[cursor++];
+        const thumb = await providerThumbnail(file.hash);
+        if (thumb) { file.width = thumb.width; file.height = thumb.height; }
+      }
+    }));
+    json(res, 200, catalog);
     return true;
   }
   if (req.method === 'POST' && url.pathname === '/api/reveal-file') {

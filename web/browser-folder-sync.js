@@ -3,8 +3,6 @@ const DB_VERSION = 1;
 const SOURCES = 'sources';
 const FILES = 'files';
 const AUTO_SYNC_MS = 5 * 60 * 1000;
-const THUMB_EDGE = 1080;
-const THUMB_VERSION = 1;
 const MEDIA_EXTENSIONS = new Set([
   'jpg','jpeg','png','gif','webp','heic','heif','avif','bmp','tif','tiff',
   'mp4','m4v','mov','mkv','webm','avi','mpg','mpeg','m2v','mts','m2ts','3gp'
@@ -16,6 +14,7 @@ let syncPumpTimer = 0;
 let autoTimer = 0;
 let viewerBlobUrl = '';
 let viewerBlobHash = '';
+const fileLocations = new Map();
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -44,9 +43,9 @@ async function transaction(storeNames, mode, work) {
   });
 }
 
-function all(store) {
+function all(store, range) {
   return new Promise((resolve, reject) => {
-    const request = store.getAll();
+    const request = store.getAll(range);
     request.onsuccess = () => resolve(request.result || []);
     request.onerror = () => reject(request.error);
   });
@@ -90,12 +89,6 @@ function mediaFile(file, path) {
   const name = String(path || file?.name || '');
   const index = name.lastIndexOf('.');
   return index >= 0 && MEDIA_EXTENSIONS.has(name.slice(index + 1).toLowerCase());
-}
-
-function heicFile(file, path = '') {
-  const type = mimeFor(file, path).toLowerCase();
-  if (type === 'image/heic' || type === 'image/heif') return true;
-  return /\.(?:heic|heif)$/i.test(String(path || file?.name || ''));
 }
 
 function normalizeSource(source) {
@@ -145,7 +138,7 @@ async function publishProtectionIntents() {
   for (const source of sources) {
     for (const row of (await manifestFor(source.id)).values()) {
       const hash = String(row.hash || '');
-      if (!/^[a-f0-9]{64}$/.test(hash)) continue;
+      if (!row.cloudSynced || !/^[a-f0-9]{64}$/.test(hash)) continue;
       batch.push({
         rootPath:source.rootPath || source.name,
         path:String(row.path || ''),
@@ -189,8 +182,8 @@ async function manifestFor(id) {
   const prefix = `${id}\u0000`;
   const db = await openDb();
   try {
-    const rows = await all(db.transaction(FILES, 'readonly').objectStore(FILES));
-    return new Map(rows.filter(row => row.key.startsWith(prefix)).map(row => [row.path, row]));
+    const rows = await all(db.transaction(FILES, 'readonly').objectStore(FILES), IDBKeyRange.bound(prefix, `${prefix}\uffff`));
+    return new Map(rows.map(row => [row.path, row]));
   } finally { db.close(); }
 }
 
@@ -200,17 +193,8 @@ async function replaceManifest(id, rows) {
   await new Promise((resolve, reject) => {
     const tx = db.transaction(FILES, 'readwrite');
     const store = tx.objectStore(FILES);
-    const cursor = store.openCursor();
-    cursor.onsuccess = () => {
-      const value = cursor.result;
-      if (!value) {
-        for (const row of rows) store.put({ ...row, key:`${id}\u0000${row.path}` });
-        return;
-      }
-      if (String(value.key).startsWith(prefix)) value.delete();
-      value.continue();
-    };
-    cursor.onerror = () => reject(cursor.error);
+    store.delete(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
+    for (const row of rows) store.put({ ...row, key:`${id}\u0000${row.path}` });
     tx.oncomplete = () => { db.close(); resolve(); };
     tx.onerror = () => { db.close(); reject(tx.error); };
     tx.onabort = () => { db.close(); reject(tx.error || new Error('Could not save browser folder manifest')); };
@@ -338,203 +322,12 @@ async function addHandles(handles, scope = 'media', { sync = true } = {}) {
   return added;
 }
 
-function waitFor(target, event, timeout = 8000) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => done(new Error(`Timed out waiting for ${event}`)), timeout);
-    const done = error => {
-      clearTimeout(timer);
-      target.removeEventListener(event, loaded);
-      target.removeEventListener('error', failed);
-      error ? reject(error) : resolve();
-    };
-    const loaded = () => done();
-    const failed = () => done(new Error('Media could not be decoded'));
-    target.addEventListener(event, loaded, { once:true });
-    target.addEventListener('error', failed, { once:true });
-  });
-}
-
-const canvasFor = (width, height) => typeof OffscreenCanvas !== 'undefined'
-  ? new OffscreenCanvas(width, height)
-  : Object.assign(document.createElement('canvas'), { width, height });
-
-async function canvasBlob(canvas) {
-  const blob = 'convertToBlob' in canvas
-    ? await canvas.convertToBlob({ type:'image/webp', quality:.83 })
-    : await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .83));
-  if (!blob) throw new Error('Could not encode thumbnail');
-  return blob;
-}
-
-async function imageGeometry(file) {
-  let image;
-  let objectUrl = '';
-  try {
-    if ('createImageBitmap' in window) image = await createImageBitmap(file, { imageOrientation:'from-image' });
-    else {
-      image = new Image();
-      objectUrl = URL.createObjectURL(file);
-      image.src = objectUrl;
-      if (!image.complete) await waitFor(image, 'load');
-    }
-    return {
-      width:Math.max(0, Math.round(Number(image.width || image.naturalWidth) || 0)),
-      height:Math.max(0, Math.round(Number(image.height || image.naturalHeight) || 0))
-    };
-  } finally {
-    image?.close?.();
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
-  }
-}
-
-async function videoGeometry(file) {
-  const video = document.createElement('video');
-  const objectUrl = URL.createObjectURL(file);
-  video.muted = true;
-  video.playsInline = true;
-  video.preload = 'metadata';
-  video.src = objectUrl;
-  try {
-    if (video.readyState < 1) await waitFor(video, 'loadedmetadata');
-    return {
-      width:Math.max(0, Math.round(Number(video.videoWidth) || 0)),
-      height:Math.max(0, Math.round(Number(video.videoHeight) || 0))
-    };
-  } finally {
-    video.removeAttribute('src');
-    video.load();
-    URL.revokeObjectURL(objectUrl);
-  }
-}
-
-async function imageThumbnail(file) {
-  let image;
-  let objectUrl = '';
-  try {
-    if ('createImageBitmap' in window) image = await createImageBitmap(file, { imageOrientation:'from-image' });
-    else {
-      image = new Image();
-      objectUrl = URL.createObjectURL(file);
-      image.src = objectUrl;
-      if (!image.complete) await waitFor(image, 'load');
-    }
-    const width = Math.max(1, Math.round(Number(image.width || image.naturalWidth) || 1));
-    const height = Math.max(1, Math.round(Number(image.height || image.naturalHeight) || 1));
-    const scale = Math.min(1, THUMB_EDGE / Math.max(width, height));
-    const thumbWidth = Math.max(1, Math.round(width * scale));
-    const thumbHeight = Math.max(1, Math.round(height * scale));
-    const canvas = canvasFor(thumbWidth, thumbHeight);
-    canvas.getContext('2d', { alpha:false }).drawImage(image, 0, 0, thumbWidth, thumbHeight);
-    return { blob:await canvasBlob(canvas), width, height, thumbWidth, thumbHeight };
-  } finally {
-    image?.close?.();
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
-  }
-}
-
-async function videoThumbnail(file) {
-  const video = document.createElement('video');
-  const objectUrl = URL.createObjectURL(file);
-  video.muted = true;
-  video.playsInline = true;
-  video.preload = 'metadata';
-  video.src = objectUrl;
-  try {
-    if (video.readyState < 1) await waitFor(video, 'loadedmetadata');
-    if (!video.videoWidth || !video.videoHeight) throw new Error('Video has no frame size');
-    const width = Math.max(1, Math.round(Number(video.videoWidth) || 1));
-    const height = Math.max(1, Math.round(Number(video.videoHeight) || 1));
-    if (Number.isFinite(video.duration) && video.duration > .15) {
-      video.currentTime = Math.min(.5, Math.max(.05, video.duration * .1));
-      await waitFor(video, 'seeked');
-    }
-    if (video.readyState < 2) await waitFor(video, 'loadeddata');
-    const scale = Math.min(1, THUMB_EDGE / Math.max(width, height));
-    const thumbWidth = Math.max(1, Math.round(width * scale));
-    const thumbHeight = Math.max(1, Math.round(height * scale));
-    const canvas = canvasFor(thumbWidth, thumbHeight);
-    canvas.getContext('2d', { alpha:false }).drawImage(video, 0, 0, thumbWidth, thumbHeight);
-    return { blob:await canvasBlob(canvas), width, height, thumbWidth, thumbHeight };
-  } finally {
-    video.removeAttribute('src');
-    video.load();
-    URL.revokeObjectURL(objectUrl);
-  }
-}
-
-async function heicThumbnail(hash, file, path) {
-  const response = await fetch(`/api/client/browser-heic-thumb/${hash}`, {
-    method:'PUT',
-    headers:{ 'content-type':file.type || mimeFor(file, path) || 'image/heic' },
-    body:file
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || 'Could not decode HEIC thumbnail');
-  return {
-    width:Math.max(0, Math.round(Number(data.sourceWidth) || 0)),
-    height:Math.max(0, Math.round(Number(data.sourceHeight) || 0)),
-    thumbWidth:Math.max(0, Math.round(Number(data.width) || 0)),
-    thumbHeight:Math.max(0, Math.round(Number(data.height) || 0))
-  };
-}
-
-async function ensureThumbnail(hash, file, path, previous = null) {
-  if (!hash || !mediaFile(file, path)) return previous || {};
-  const existing = await fetch(`/api/thumbs/${hash}?v=${THUMB_VERSION}`, { method:'HEAD' }).catch(() => null);
-  if (existing?.ok && previous) return previous;
-  try {
-    const mime = mimeFor(file, path);
-    let result;
-    if (heicFile(file, path)) {
-      result = await heicThumbnail(hash, file, path);
-    } else if (existing?.ok) {
-      result = mime.startsWith('video/') ? await videoGeometry(file) : await imageGeometry(file);
-    } else {
-      const generated = mime.startsWith('video/') ? await videoThumbnail(file) : await imageThumbnail(file);
-      const response = await fetch(`/api/client/browser-thumb/${hash}`, {
-        method:'PUT',
-        headers:{
-          'content-type':'image/webp',
-          'x-mochimono-width':String(generated.thumbWidth),
-          'x-mochimono-height':String(generated.thumbHeight)
-        },
-        body:generated.blob
-      });
-      if (!response.ok) throw new Error('Could not save browser thumbnail');
-      result = generated;
-    }
-    const dimensions = {
-      width:Math.max(0, Math.round(Number(result?.width) || 0)),
-      height:Math.max(0, Math.round(Number(result?.height) || 0)),
-      thumbWidth:Math.max(0, Math.round(Number(result?.thumbWidth) || 0)),
-      thumbHeight:Math.max(0, Math.round(Number(result?.thumbHeight) || 0))
-    };
-    if (dimensions.width && dimensions.height) {
-      dispatchEvent(new CustomEvent('mochimono:browser-thumbnail-ready', { detail:{ hash, ...dimensions } }));
-    }
-    return dimensions;
-  } catch {
-    return previous || {};
-  }
-}
-
-async function publishGeometry(hash, dimensions, cloud) {
-  if (!cloud) return;
-  const width = Math.max(0, Math.round(Number(dimensions?.width) || 0));
-  const height = Math.max(0, Math.round(Number(dimensions?.height) || 0));
-  if (!width || !height) return;
-  await request(`/api/media-metadata/${hash}`, {
-    method:'POST',
-    headers:{ 'content-type':'application/json' },
-    body:JSON.stringify({ width, height })
-  }).catch(() => {});
-}
-
 function libraryFile(row, source) {
   const date = new Date(Number(row.lastModified) || Date.now()).toISOString();
   const filename = String(row.path || '').split('/').at(-1) || row.path;
   return {
     hash:row.hash,
+    replacesHash:row.replacesHash || '',
     size:Number(row.size) || 0,
     mime:row.mime || 'application/octet-stream',
     filename,
@@ -553,9 +346,23 @@ function libraryFile(row, source) {
 
 async function publishSource(source, rows = null) {
   const manifest = rows || [...(await manifestFor(source.id)).values()];
+  for (const row of manifest) if (row.hash) fileLocations.set(String(row.hash), { source, row });
   const files = manifest.filter(row => /^[a-f0-9]{64}$/.test(String(row.hash || ''))).map(row => libraryFile(row, source));
   if (files.length) window.mochimonoLibrary?.upsertMany?.(files);
   return files;
+}
+
+async function saveManifestBatch(id, rows) {
+  await transaction([FILES], 'readwrite', ({ files }) => {
+    for (const row of rows) files.put({ ...row, key:`${id}\u0000${row.path}` });
+  });
+  dispatchEvent(new CustomEvent('mochimono:browser-files-changed'));
+}
+
+async function localBrowserId(source, path, file) {
+  const value = `mochimono-browser-v1\0${source.id}\0${path}\0${file.size}\0${file.lastModified}`;
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
 async function syncSource(id, { userGesture = false } = {}) {
@@ -580,89 +387,97 @@ async function syncSource(id, { userGesture = false } = {}) {
   progress({},true);
   try {
     const previous = await manifestFor(source.id);
-    const started = await request('/api/client/import/start', {
-      method:'POST',
-      headers:{ 'content-type':'application/json' },
-      body:JSON.stringify({
-        label:source.name,
-        importId:source.importId || 0,
-        rootPath:source.rootPath || source.name,
-        scope:source.scope,
-        browser:true,
-        browserSourceId:source.id,
-        cloud:source.cloud === true
-      })
-    });
-    if (Number(started.importId) > 0) source.importId = Number(started.importId);
-
     const next = [];
+    const uploads = [];
+    let batch = [];
     let scanned = 0;
     let transferred = 0;
     let skipped = 0;
-    let seenBatch = [];
-    const flushSeen = async () => {
-      if (!seenBatch.length) return;
-      const paths = seenBatch;
-      seenBatch = [];
-      await request(`/api/client/import/seen?session=${encodeURIComponent(started.session)}`, {
-        method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ paths })
-      });
+    const flush = async () => {
+      if (!batch.length) return;
+      if (!await sourceById(source.id)) throw new Error('Folder removed');
+      const rows = batch;
+      batch = [];
+      await saveManifestBatch(source.id, rows);
+      await publishSource(source, rows);
+      queueSourcePreviews(rows);
+      await yieldUi();
     };
 
+    // Discover and publish first. Local folders never send originals to localhost
+    // just to identify them, and neither uploads nor image decoding gate access.
     for await (const item of filesUnder(source.handle)) {
+      if (source.scope !== 'all' && !mediaFile(null, item.path)) continue;
       const file = await item.handle.getFile();
-      if (source.scope !== 'all' && !mediaFile(file, item.path)) continue;
-      scanned++;
       const path = cleanRelative(item.path);
       const old = previous.get(path);
-      if(scanned===1||performance.now()-lastProgressAt>=120)progress({ scanned, transferred, skipped, current:path },true);
-      const same = old && old.hash && Number(old.size) === Number(file.size) && Number(old.lastModified) === Number(file.lastModified);
-      const canSkip = same && (!source.cloud || old.cloudSynced === true);
-
-      if (canSkip) {
-        const dimensions = source.cloud ? await ensureThumbnail(old.hash, file, path, old) : old;
-        next.push({ ...old, ...dimensions, path, size:file.size, lastModified:file.lastModified, mime:old.mime || mimeFor(file, path) });
-        seenBatch.push(path);
-        skipped++;
-        if (seenBatch.length >= 1000) await flushSeen();
-      } else {
-        await flushSeen();
-        const params = new URLSearchParams({
-          session:started.session,
-          path,
-          mtime:new Date(file.lastModified || Date.now()).toISOString()
-        });
-        const data = await request(`/api/client/import/file?${params}`, {
-          method:'PUT',
-          headers:{ 'x-mochimono-file-mime':file.type || 'application/octet-stream' },
-          body:file
-        });
-        const prior = old?.hash === data.hash ? old : null;
-        const dimensions = source.cloud ? await ensureThumbnail(data.hash, file, path, prior) : (prior || {});
-        if(source.cloud)await publishGeometry(data.hash, dimensions, data.ignored !== true);
-        next.push({
-          path,
-          size:file.size,
-          lastModified:file.lastModified,
-          hash:data.hash,
-          mime:data.mime || mimeFor(file, path),
-          width:Number(dimensions.width) || 0,
-          height:Number(dimensions.height) || 0,
-          thumbWidth:Number(dimensions.thumbWidth) || 0,
-          thumbHeight:Number(dimensions.thumbHeight) || 0,
-          cloudSynced:source.cloud === true && data.ignored !== true
-        });
-        transferred++;
+      const same = old?.hash && Number(old.size) === file.size && Number(old.lastModified) === file.lastModified;
+      const row = same ? { ...old } : {
+        path, size:file.size, lastModified:file.lastModified,
+        hash:await localBrowserId(source, path, file),
+        mime:mimeFor(file, path), cloudSynced:false
+      };
+      next.push(row);
+      batch.push(row);
+      if (source.cloud && !row.cloudSynced) uploads.push({ handle:item.handle, row });
+      else skipped++;
+      scanned++;
+      if (scanned === 1 || batch.length >= 64 || performance.now() - sliceStarted > 100) {
+        await flush();
+        sliceStarted = performance.now();
       }
-      progress({ scanned, transferred, skipped });
-      if(performance.now()-sliceStarted>14){
-        await yieldUi();
-        sliceStarted=performance.now();
-      }
+      progress({ scanned, transferred, skipped, current:path });
     }
-    await flushSeen();
-    const finished = await request(`/api/client/import/finish?session=${encodeURIComponent(started.session)}`, { method:'POST' });
+    await flush();
     await replaceManifest(source.id, next);
+    let finished = { removed:0 };
+
+    if (source.cloud) {
+      const started = await request('/api/client/import/start', {
+        method:'POST', headers:{ 'content-type':'application/json' },
+        body:JSON.stringify({ label:source.name, importId:source.importId || 0,
+          rootPath:source.rootPath || source.name, scope:source.scope, browser:true, cloud:true })
+      });
+      source.importId = Number(started.importId);
+      const currentSource = await sourceById(source.id);
+      if (!currentSource) throw new Error('Folder removed');
+      currentSource.importId = source.importId;
+      await saveSource(currentSource);
+      // Every path was discovered successfully before any remote pruning can run.
+      for (let offset = 0; offset < next.length; offset += 1000) {
+        await request(`/api/client/import/seen?session=${encodeURIComponent(started.session)}`, {
+          method:'POST', headers:{ 'content-type':'application/json' },
+          body:JSON.stringify({ paths:next.slice(offset, offset + 1000).map(row => row.path) })
+        });
+      }
+      let cursor = 0;
+      let uploadError = null;
+      await Promise.all(Array.from({ length:Math.min(2, uploads.length) }, async () => {
+        while (cursor < uploads.length && !uploadError) {
+          const { handle, row } = uploads[cursor++];
+          try {
+            if (!await sourceById(source.id)) throw new Error('Folder removed');
+            const file = await handle.getFile();
+            if (file.size !== row.size || file.lastModified !== row.lastModified) throw new Error(`File changed: ${row.path}`);
+            const params = new URLSearchParams({ session:started.session, path:row.path,
+              mtime:new Date(file.lastModified || Date.now()).toISOString() });
+            const data = await request(`/api/client/import/file?${params}`, {
+              method:'PUT', headers:{ 'x-mochimono-file-mime':row.mime }, body:file
+            });
+            row.replacesHash = row.hash;
+            row.hash = data.hash;
+            row.cloudSynced = data.ignored !== true;
+            await saveManifestBatch(source.id, [row]);
+            await publishSource(source, [row]);
+            queueSourcePreviews([row]);
+            transferred++;
+            progress({ phase:'uploading', scanned, transferred, skipped, current:row.path });
+          } catch (error) { uploadError ||= error; }
+        }
+      }));
+      if (uploadError) throw uploadError;
+      finished = await request(`/api/client/import/finish?session=${encodeURIComponent(started.session)}`, { method:'POST' });
+    }
     const latest=await sourceById(source.id);
     if(!latest){
       await replaceManifest(source.id,[]);
@@ -674,7 +489,7 @@ async function syncSource(id, { userGesture = false } = {}) {
     latest.lastError='';
     await saveSource(latest);
     await publishSource(latest,next);
-    if(!source.cloud)queueSourcePreviews(next);
+    queueSourcePreviews(next);
     if(source.cloud){
       await publishProtectionIntents();
       window.mochimonoLibrary?.refresh?.().catch?.(()=>{});
@@ -686,7 +501,7 @@ async function syncSource(id, { userGesture = false } = {}) {
     if(latest){
       latest.lastError=error.message||String(error);
       await saveSource(latest).catch(()=>{});
-    }
+    } else await replaceManifest(source.id, []).catch(() => {});
     emitSync({ id:source.id, name:latest?.name||source.name, state:'error', error:error.message||String(error) });
     throw error;
   } finally {
@@ -737,6 +552,8 @@ async function setCloud(id, enabled) {
 async function removeSource(id) {
   const source = await sourceById(id);
   if (!source) return false;
+  pendingSyncs.delete(String(id));
+  for (const [hash, entry] of fileLocations) if (entry.source.id === id) fileLocations.delete(hash);
   await transaction([SOURCES], 'readwrite', ({ sources }) => sources.delete(String(id)));
   await replaceManifest(String(id), []);
   if (source.cloud) await publishProtectionIntents();
@@ -838,13 +655,24 @@ async function fileAtPath(root, relative) {
 }
 
 async function browserFileForHash(hash) {
+  const known = fileLocations.get(String(hash));
+  if (known && await permission(known.source.handle, false) === 'granted') {
+    try {
+      const file = await fileAtPath(known.source.handle, known.row.path);
+      if (file.size === known.row.size && file.lastModified === known.row.lastModified) return file;
+    } catch {}
+    return null;
+  }
   const sources = await sourceList();
   sources.sort((a, b) => Number(a.cloud) - Number(b.cloud));
   for (const source of sources) {
     if (await permission(source.handle, false) !== 'granted') continue;
     for (const row of (await manifestFor(source.id)).values()) {
       if (String(row.hash) !== String(hash)) continue;
-      try { return await fileAtPath(source.handle, row.path); } catch {}
+      try {
+        const file = await fileAtPath(source.handle, row.path);
+        if (file.size === row.size && file.lastModified === row.lastModified) return file;
+      } catch {}
     }
   }
   return null;

@@ -7,7 +7,7 @@ const frame = document.querySelector('#filesFrame');
 if (host) {
   const RECENT_KEY = 'mochimono.activity.recent';
   const RECENT_OPEN_KEY = 'mochimono.activity.recent.open';
-  const MODE_LABEL = { off:'On view', idle:'Idle', max:'Always' };
+  const MODE_LABEL = { off:'Off', idle:'Idle', max:'Always' };
   let dialog = null;
   let button = null;
   let timer = 0;
@@ -32,6 +32,7 @@ if (host) {
     .activity-section{margin-top:22px}.activity-section-head{display:flex;align-items:center;gap:8px;margin:0 2px 9px;color:#c7beba;font-size:13px;font-weight:800}.activity-section-head b{min-width:22px;padding:2px 6px;border-radius:999px;background:#211e22;color:#8f8783;font-size:10px;font-weight:760;text-align:center}.activity-list{display:grid;gap:8px}
     .activity-row{display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:12px;align-items:center;min-width:0;padding:12px 13px;border:0;border-radius:14px;background:#141214;box-shadow:inset 0 0 0 1px #272327}.activity-row.running{background:#181315;box-shadow:inset 3px 0 0 #d98f89,inset 0 0 0 1px #30272a}.activity-row.error{box-shadow:inset 3px 0 0 #bc6e76,inset 0 0 0 1px #38272b}.activity-task-icon{width:40px;height:40px;display:grid;place-items:center;border-radius:11px;background:#211e22;color:#b8afab}.activity-row.running .activity-task-icon{background:#2a2023;color:#e3aaa5}.activity-task-icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.activity-row-main{min-width:0}.activity-row-head{min-width:0}.activity-row-head strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e9e0dc;font-size:14.5px;font-weight:790;letter-spacing:-.012em}.activity-detail{margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#958c88;font-size:11.5px;font-weight:560;font-variant-numeric:tabular-nums}.activity-progress{height:7px;margin-top:10px;overflow:hidden;border-radius:99px;background:#2a262a}.activity-progress i{display:block;height:100%;min-width:3px;border-radius:inherit;background:#df938d;transition:width .3s ease}.activity-progress.indeterminate i{width:34%;animation:activity-slide 1.25s ease-in-out infinite}.activity-side{display:flex;align-items:center;gap:7px;color:#8a817e;font-size:11px;font-weight:700;white-space:nowrap}.activity-percent{color:#cfc4c0;font-variant-numeric:tabular-nums}.activity-cancel{width:30px;height:30px;border:0;border-radius:8px;background:#211e22;color:#9c918d;padding:0;font-size:0}.activity-cancel:hover{background:#302b30;color:#f0e7e3}.activity-cancel:after{content:'×';font-size:17px}.activity-empty{padding:14px 2px;color:#827a77;font-size:12px}
     .activity-recent{margin-top:20px;padding-top:4px;border-top:1px solid #292529}.activity-recent .activity-list,.activity-recent .activity-empty{display:none}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{display:grid}.activity-recent .activity-section-head{margin:0;padding:12px 2px 2px;cursor:pointer;user-select:none}.activity-recent .activity-section-head:hover{color:#eee5e1}.activity-recent .activity-section-head:after{content:'›';margin-left:auto;font-size:19px;color:#8f8582;transform:rotate(90deg);transition:transform .15s}.activity-recent.open .activity-section-head:after{transform:rotate(-90deg)}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{margin-top:8px}.activity-recent .activity-row{grid-template-columns:34px minmax(0,1fr) auto;padding:9px 11px;border-radius:11px;background:#111012}.activity-recent .activity-task-icon{width:32px;height:32px;border-radius:9px}.activity-recent .activity-task-icon svg{width:18px;height:18px}.activity-recent .activity-row-head strong{font-size:13px}.activity-recent .activity-detail,.activity-recent .activity-progress{display:none}
+    .activity-current{margin-top:6px;color:#736a69;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.activity-detail{font-variant-numeric:tabular-nums}.activity-row.running .activity-row-main{min-height:54px}.activity-overview.working strong{font-size:20px}
     @keyframes activity-pulse{0%,100%{transform:scale(.72);opacity:.55}50%{transform:scale(1.2);opacity:1}}@keyframes activity-spin{to{transform:rotate(360deg)}}@keyframes activity-slide{0%{transform:translateX(-115%)}50%{transform:translateX(105%)}100%{transform:translateX(315%)}}
     @media(max-width:700px){.activity-button{padding:0 7px}.activity-button .activity-label{display:none}.activity-body{padding:14px}.activity-setting{align-items:stretch;flex-direction:column}.activity-mode-buttons{display:grid;grid-template-columns:repeat(3,1fr)}.activity-mode-buttons button{min-width:0}.activity-row{grid-template-columns:38px minmax(0,1fr) auto;padding:11px}.activity-task-icon{width:36px;height:36px}}
     @media(prefers-reduced-motion:reduce){.activity-gauge,.activity-progress i,.activity-orb i{animation:none!important;transition:none!important}}
@@ -135,7 +136,7 @@ if (host) {
     const totalBytes=Number(p.totalBytes)||0;
     const doneBytes=Math.min(totalBytes,Number(p.doneBytes)||Number(p.copiedBytes)||0);
     const total=Number(p.total)||0;
-    const checked=Number(p.checked??p.hashed??p.scanned)||0;
+    const checked=Number(p.checked??(p.phase==='Hashing content'?p.hashed:p.scanned)??p.hashed)||0;
     const percent=totalBytes?doneBytes/totalBytes*100:total?checked/total*100:null;
     const detail=[];
     if(p.phase)detail.push(p.phase);
@@ -144,6 +145,8 @@ if (host) {
     else if(p.scanned!=null)detail.push(`${Number(p.scanned).toLocaleString()} files`);
     if(p.copied!=null)detail.push(`${Number(p.copied).toLocaleString()} copied`);
     if(p.speedBps>0)detail.push(`${bytes(p.speedBps)}/s`);
+    if(p.filesPerSecond>0)detail.push(`${Number(p.filesPerSecond).toLocaleString()} files/s`);
+    if(p.elapsedSeconds>0)detail.push(duration(p.elapsedSeconds));
     if(p.etaSeconds>0)detail.push(`${duration(p.etaSeconds)} left`);
     return {percent,detail:detail.join(' · '),current:p.current||'',indeterminate:Boolean(p.indeterminate)||percent==null};
   }
@@ -159,19 +162,21 @@ if (host) {
       const globalHere=currentPath&&key===currentPath;
       if(diagnostics.running&&!globalHere){
         const hashing=diagnostics.jobType==='hash'||folder.hashing;
-        const done=Number(diagnostics.hashProcessed)||0;
-        const total=Number(diagnostics.hashTotal)||0;
+        const p=folder.progress||{};
+        const done=Number(hashing ? p.hashed ?? diagnostics.hashProcessed : p.checked ?? p.scanned)||0;
+        const total=Number(p.total)||0;
         active.push({
           id:`folder:${key}`,source:'folder',kind:hashing?'Hash':'Index',type:hashing?'hash':'sync',title:name,
           label:`${hashing?'Hash':'Index'} ${name}`,path,status:'running',cancelable:false,
-          detail:total?`${done.toLocaleString()} / ${total.toLocaleString()} files`:`${Number(folder.files||0).toLocaleString()} files found`,
-          percent:total?done/total*100:null,phase:hashing?'Hashing content':'Indexing files',
-          progress:{path,phase:hashing?'Hashing content':'Indexing files',hashed:hashing?done:undefined,checked:hashing?undefined:done,total,indeterminate:!total}
+          startedAt:folder.startedAt,
+          percent:total&&!p.indeterminate?done/total*100:null,
+          phase:p.phase||(hashing?'Hashing content':'Finding files'),
+          progress:{...p,path,phase:p.phase||(hashing?'Hashing content':'Finding files'),total,indeterminate:p.indeterminate??!total}
         });
       } else if(folder.pending&&!globalHere){
-        queued.push({id:`folder:${key}`,source:'folder',kind:folder.protected===false?'Index':'Sync',title:name,status:'queued',detail:folder.waitingForIdle?'Waiting until your PC is idle':'Waiting to start'});
+        queued.push({id:`folder:${key}`,source:'folder',kind:folder.protected===false?'Index':'Sync',title:name,status:folder.available===false?'blocked':'queued',detail:folder.available===false?'Drive offline':folder.waitingForIdle?'Waiting until your PC is idle':'Waiting to start'});
       }
-      if(folder.hashPending>0&&!folder.hashing)queued.push({id:`hash:${key}`,source:'folder',kind:'Hash',title:name,status:'queued',detail:`${Number(folder.hashPending).toLocaleString()} files${folder.hashWaiting?' · waiting until your PC is idle':''}`});
+      if(folder.hashPending>0&&!folder.hashing&&state?.settings?.thumbnailMode!=='off')queued.push({id:`hash:${key}`,source:'folder',kind:'Hash',title:name,status:folder.available===false?'blocked':'queued',detail:`${Number(folder.hashPending).toLocaleString()} files · ${folder.hashWaitReason||(folder.available===false?'Drive offline':folder.hashWaiting?'Waiting until your PC is idle':'Waiting to start')}`});
       if(folder.lastIndexed)recent.push({id:`recent-index:${key}:${folder.lastIndexed}`,source:'folder',kind:'Index',title:name,status:'done',finishedAt:folder.lastIndexed,detail:`${Number(folder.files||0).toLocaleString()} files indexed`});
     }
     return {active,queued,recent};
@@ -219,8 +224,10 @@ if (host) {
     }
 
     const previews=state?.previews||{};
-    const activeCount=Number(previews.active)||0;
-    const waitingCount=(Number(previews.urgent)||0)+(Number(previews.priority)||0)+(Number(previews.queued)||0);
+    const scopedActive=(stats?.folders||[]).reduce((sum,folder)=>sum+(Number(folder.previewQueueActive)||0),0);
+    const scopedWaiting=(stats?.folders||[]).reduce((sum,folder)=>sum+(Number(folder.previewQueueBackground)||0),0);
+    const activeCount=Math.max(0,(Number(previews.active)||0)-scopedActive);
+    const waitingCount=Math.max(0,(Number(previews.urgent)||0)+(Number(previews.priority)||0)+(Number(previews.queued)||0)-scopedWaiting);
     if(activeCount||waitingCount){
       const wait=state?.settings?.thumbnailMode==='off'?'Generated when viewed':previews.waitingForIdle?'Waiting until your PC is idle':'';
       const item={id:'thumbs:library',source:'preview',kind:'Thumbnail',title:'Library',status:activeCount?'running':'queued',detail:[activeCount?`${activeCount} generating`:'',waitingCount?`${waitingCount.toLocaleString()} waiting`:'',wait].filter(Boolean).join(' · '),phase:wait||'Generating thumbnails'};
@@ -262,7 +269,7 @@ if (host) {
     queued.push(...folders.queued,...thumbs.queued,...browser.queued,...squish.queued);
     recent.push(...(state?.job?.recent||[]).map(item=>jobItem(item,'history')),...savedRecent().map(item=>jobItem(item,'history')),...folders.recent,...squish.recent);
     const unique=[...new Map(recent.filter(item=>item.finishedAt).sort((a,b)=>new Date(b.finishedAt)-new Date(a.finishedAt)).map(item=>[item.id,item])).values()].slice(0,24);
-    return {state,active,queued,recent:unique};
+    return {state,active,queued:queued.filter(item=>item.status!=='blocked'),blocked:queued.filter(item=>item.status==='blocked'),recent:unique};
   }
 
   function markInteraction(){ interactionUntil=Date.now()+900; }
@@ -291,17 +298,19 @@ if (host) {
     const statusClass=item.status==='error'?'error':item.status==='running'?'running':'';
     const cancel=item.cancelable&&!recent?`<button class="activity-cancel" data-cancel="${esc(item.id)}" aria-label="Cancel"></button>`:'';
     const bar=!recent&&item.status==='running'?`<div class="activity-progress ${indeterminate?'indeterminate':''}"><i style="width:${indeterminate?'34%':`${Math.max(1,pct(percent))}%`}"></i></div>`:'';
-    const concise=compactDetail(item,detail);
+    const concise=item.progress?detail:compactDetail(item,detail);
+    const current=item.progress?.current||'';
     const sidePercent=!recent&&item.status==='running'&&!indeterminate?`<span class="activity-percent">${Math.round(pct(percent))}%</span>`:'';
     const sideTime=recent&&when?`<time>${esc(age(when))}</time>`:'';
     const kind=item.kind||'Work';
-    return `<div class="activity-row ${statusClass}"><div class="activity-task-icon" aria-hidden="true">${taskIcon(kind)}</div><div class="activity-row-main"><div class="activity-row-head"><strong>${esc(taskTitle(item))}</strong></div>${concise?`<div class="activity-detail">${esc(concise)}</div>`:''}${bar}</div><div class="activity-side">${sidePercent}${sideTime}${cancel}</div></div>`;
+    return `<div class="activity-row ${statusClass}"><div class="activity-task-icon" aria-hidden="true">${taskIcon(kind)}</div><div class="activity-row-main"><div class="activity-row-head"><strong>${esc(taskTitle(item))}</strong></div>${concise?`<div class="activity-detail">${esc(concise)}</div>`:''}${current&&!recent?`<div class="activity-current" title="${esc(current)}">${esc(current)}</div>`:''}${bar}</div><div class="activity-side">${sidePercent}${sideTime}${cancel}</div></div>`;
   }
 
   function overview(model){
     const active=model.active.length, queued=model.queued.length;
-    if(active)return {className:'working',title:'Working',detail:`${active} active${queued?` · ${queued} waiting`:''}`};
+    if(active){const primary=model.active[0];return {className:'working',title:primary.progress?.phase||primary.phase||taskTitle(primary),detail:`${active} active${queued?` · ${queued} waiting`:''}`};}
     if(queued)return {className:'waiting',title:'Waiting',detail:`${queued} queued`};
+    if(model.blocked?.length)return {className:'waiting',title:'Paused',detail:`${model.blocked.length} waiting for drives`};
     return {className:'',title:'Caught up',detail:'Nothing running'};
   }
 
@@ -342,9 +351,10 @@ if (host) {
     const status=overview(model);
     const html=`
       <div class="activity-overview ${status.className}"><div class="activity-orb" aria-hidden="true"><i></i></div><div><strong>${esc(status.title)}</strong><span>${esc(status.detail)}</span></div></div>
-      <div class="activity-setting"><strong>Thumbnails</strong><div class="activity-mode-buttons" role="group" aria-label="Thumbnail generation">${['off','idle','max'].map(value=>`<button type="button" data-mode="${value}" class="${mode===value?'active':''}">${esc(MODE_LABEL[value])}</button>`).join('')}</div></div>
+      <div class="activity-setting"><strong>Background work</strong><div class="activity-mode-buttons" role="group" aria-label="Background work">${['off','idle','max'].map(value=>`<button type="button" data-mode="${value}" class="${mode===value?'active':''}">${esc(MODE_LABEL[value])}</button>`).join('')}</div></div>
       ${active?`<section class="activity-section"><div class="activity-section-head">Now <b>${active}</b></div><div class="activity-list">${model.active.map(item=>row(item)).join('')}</div></section>`:''}
       ${queued?`<section class="activity-section"><div class="activity-section-head">Waiting <b>${queued}</b></div><div class="activity-list">${model.queued.map(item=>row(item)).join('')}</div></section>`:''}
+      ${model.blocked?.length?`<section class="activity-section"><div class="activity-section-head">Drive offline <b>${model.blocked.length}</b></div><div class="activity-list">${model.blocked.map(item=>row(item)).join('')}</div></section>`:''}
       <section class="activity-section activity-recent ${recentOpen?'open':''}"><div class="activity-section-head" data-recent-toggle aria-expanded="${recentOpen?'true':'false'}">Recent <b>${model.recent.length}</b></div>${model.recent.length?`<div class="activity-list">${model.recent.map(item=>row(item,true)).join('')}</div>`:'<div class="activity-empty">Nothing recent</div>'}</section>`;
     if(html===lastBodyHtml)return;
     const body=dialog.querySelector('[data-body]');

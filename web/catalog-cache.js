@@ -6,7 +6,7 @@ const SCHEMA = 1;
 const META_KEY = 'catalog';
 const WRITE_BATCH = 1500;
 const QUICK_FILES = 600;
-const QUICK_MEDIA = 5000;
+const QUICK_MEDIA = 600;
 const CLIENT = document.documentElement.classList.contains('client-library');
 
 let dbPromise = null;
@@ -68,6 +68,7 @@ function openDb() {
 
 function mergeGeometry(file) {
   if (!file) return file;
+  if (!isMediaFile(file)) return file;
   if (Number(file.width) > 0 && Number(file.height) > 0) return file;
   const hash = String(file.hash || '');
   const startup = window.mochimonoStartupGeometry?.get?.(hash);
@@ -86,7 +87,7 @@ function quickSnapshot(value = meta) {
   return {
     version:String(value.version),
     imports:Array.isArray(value.imports) ? value.imports : [],
-    files:value.quickFiles.map(mergeGeometry),
+    files:value.quickFiles.slice(0, QUICK_FILES + QUICK_MEDIA).map(mergeGeometry),
     totalCount:Number(value.count) || 0,
     savedAt:Number(value.savedAt) || 0,
     partial:true
@@ -121,9 +122,15 @@ async function loadFromDb() {
   const done = transactionDone(transaction);
   const files = await requestResult(transaction.objectStore('files').getAll()).catch(() => []);
   await done.catch(() => {});
-  if (files.length !== Number(storedMeta.count)) return null;
-  const next = files.map(mergeGeometry);
-  records = new Map(next.map(file => [String(file.hash), file]));
+  // An interrupted cache write is still a useful preview, but never current.
+  if (files.length !== Number(storedMeta.count)) storedMeta.localVersion = '';
+  const next = files;
+  const restored = new Map();
+  for (let index = 0; index < next.length; index++) {
+    next[index] = mergeGeometry(next[index]);
+    restored.set(String(next[index].hash), next[index]);
+  }
+  records = restored;
   meta = storedMeta;
   lastFullLoadMs = performance.now() - started;
   return {
@@ -203,18 +210,22 @@ function isMediaFile(file) {
 }
 
 function selectQuickFiles(files) {
-  const sorted = [...files].sort((a, b) => {
-    const aDate = Number(a.dateMs) || Date.parse(a.fileDate || a.createdAt || 0) || 0;
-    const bDate = Number(b.dateMs) || Date.parse(b.fileDate || b.createdAt || 0) || 0;
+  const compare = (a, b) => {
+    const aDate = Number(a.dateMs) || Date.parse(a.fileDate || a.createdAt || '') || 0;
+    const bDate = Number(b.dateMs) || Date.parse(b.fileDate || b.createdAt || '') || 0;
     return bDate - aDate || String(a.hash || '').localeCompare(String(b.hash || ''));
-  });
-  const selected = new Map(sorted.slice(0, QUICK_FILES).map(file => [String(file.hash), file]));
-  let media = 0;
-  for (const file of sorted) {
-    if (!isMediaFile(file)) continue;
-    selected.set(String(file.hash), file);
-    if (++media >= QUICK_MEDIA) break;
+  };
+  const newest = [], media = [];
+  for (const file of files) {
+    newest.push(file);
+    if (newest.length >= QUICK_FILES * 2) { newest.sort(compare); newest.length = QUICK_FILES; }
+    if (isMediaFile(file)) {
+      media.push(file);
+      if (media.length >= QUICK_MEDIA * 2) { media.sort(compare); media.length = QUICK_MEDIA; }
+    }
   }
+  const selected = new Map(newest.sort(compare).slice(0, QUICK_FILES).map(file => [String(file.hash), file]));
+  for (const file of media.sort(compare).slice(0, QUICK_MEDIA)) selected.set(String(file.hash), file);
   return [...selected.values()];
 }
 
@@ -228,31 +239,40 @@ async function saveNow(files, options = {}) {
   if (!db || !version || !Array.isArray(files)) return;
   const clean = files.filter(file => /^[a-f0-9]{64}$/.test(String(file?.hash || ''))).map(mergeGeometry);
 
-  {
-    const transaction = db.transaction(['files', 'meta'], 'readwrite');
-    transaction.objectStore('files').clear();
-    transaction.objectStore('meta').clear();
-    await transactionDone(transaction);
-  }
-  for (let offset = 0; offset < clean.length; offset += WRITE_BATCH) {
-    const transaction = db.transaction('files', 'readwrite');
-    const store = transaction.objectStore('files');
-    for (const file of clean.slice(offset, offset + WRITE_BATCH)) store.put(file);
-    await transactionDone(transaction);
-    await idle();
-  }
-
   const nextMeta = {
     key:META_KEY,
     schema:SCHEMA,
     version,
     imports:Array.isArray(options.imports) ? options.imports : [],
     count:clean.length,
+    localVersion:String(options.localVersion ?? meta?.localVersion ?? ''),
     quickFiles:selectQuickFiles(clean),
     savedAt:Date.now()
   };
+  const read = db.transaction('files', 'readonly');
+  const readDone = transactionDone(read);
+  const previousKeys = await requestResult(read.objectStore('files').getAllKeys());
+  await readDone;
+  // Keep the old rows usable throughout the write. A dirty version forces a
+  // refresh after interruption rather than making the next opening start empty.
+  meta = { ...nextMeta, localVersion:'' };
   {
     const transaction = db.transaction('meta', 'readwrite');
+    transaction.objectStore('meta').put(meta);
+    await transactionDone(transaction);
+  }
+  for (let offset = 0; offset < clean.length; offset += WRITE_BATCH) {
+    const transaction = db.transaction('files', 'readwrite');
+    const store = transaction.objectStore('files');
+    for (let index = offset; index < Math.min(clean.length, offset + WRITE_BATCH); index++) store.put(clean[index]);
+    await transactionDone(transaction);
+    await idle();
+  }
+  const hashes = new Set(clean.map(file => file.hash));
+  {
+    const transaction = db.transaction(['files', 'meta'], 'readwrite');
+    const store = transaction.objectStore('files');
+    for (const hash of previousKeys) if (!hashes.has(hash)) store.delete(hash);
     transaction.objectStore('meta').put(nextMeta);
     await transactionDone(transaction);
   }
@@ -276,7 +296,12 @@ function flushDimensions() {
 
 async function flushDimensionsNow() {
   if (!pendingGeometry.size) return;
-  if (!records.size) await load().catch(() => null);
+  if (!records.size) {
+    if (CLIENT) {
+      const quick = await loadQuick().catch(() => null);
+      if (quick) records = new Map(quick.files.map(file => [String(file.hash), file]));
+    } else await load().catch(() => null);
+  }
   if (!records.size) return;
   const batch = [...pendingGeometry];
   pendingGeometry.clear();
@@ -285,14 +310,16 @@ async function flushDimensionsNow() {
   const transaction = db.transaction(['files', 'meta'], 'readwrite');
   const store = transaction.objectStore('files');
   const changed = new Map();
-  for (const [hash, geometry] of batch) {
-    const previous = records.get(hash);
-    if (!previous) continue;
+  await Promise.all(batch.map(async ([hash, geometry]) => {
+    // The quick snapshot contains only a subset of the catalog. Update the
+    // stored row too, so dimensions learned farther down the grid survive.
+    const previous = records.get(hash) || await requestResult(store.get(hash));
+    if (!previous) return;
     const next = { ...previous, width:geometry.width, height:geometry.height };
     records.set(hash, next);
     changed.set(hash, geometry);
     store.put(next);
-  }
+  }));
   if (changed.size && meta?.version && Array.isArray(meta.quickFiles)) {
     meta = {
       ...meta,
@@ -349,6 +376,7 @@ window.mochimonoCatalogCache = {
   clear,
   state:() => ({
     version:meta?.version || '',
+    localVersion:meta?.localVersion || '',
     count:records.size,
     quickCount:Array.isArray(meta?.quickFiles) ? meta.quickFiles.length : 0,
     savedAt:Number(meta?.savedAt) || 0,

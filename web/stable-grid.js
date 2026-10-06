@@ -20,6 +20,8 @@ const worker = typeof Worker === 'function'
   : null;
 
 let model = null;
+let requestedModel = null;
+let reusableCards = null;
 let generation = 0;
 let building = false;
 let buildConfig = null;
@@ -176,20 +178,21 @@ function syncThumbnailPriority(force = false) {
   const range = thumbnailPriorityRange();
   if (!force && scrollDirection === lastThumbDirection && Math.abs(range.top - lastThumbPriorityY) < viewportHeight * THUMB_PRIORITY_STEP) return;
 
-  const cards = [];
+  const visible = [], ahead = [], behind = [];
   const priorityRows = rowRange(layout, range.start, range.end);
-  // The prediction window extends farther in the current scroll direction. When
-  // moving upward, walk that window from its bottom edge toward the top so the
-  // thumbnails closest to where the user is headed render first instead of the
-  // farthest/topmost rows filling in first.
   if (scrollDirection < 0) priorityRows.reverse();
   for (const rowId of priorityRows) {
     const row = renderedRows.get(rowId);
     if (!row) continue;
+    const top = Number(layout.rowTops[rowId]);
+    const bottom = top + Number(layout.rowHeights[rowId]);
+    const onScreen = bottom > range.top && top < range.top + viewportHeight;
+    const inDirection = scrollDirection < 0 ? bottom <= range.top : top >= range.top + viewportHeight;
+    const cards = onScreen ? visible : inDirection ? ahead : behind;
     for (const card of row.querySelectorAll('.media-card[data-hash]')) cards.push(card);
   }
 
-  window.mochimonoThumbnails?.prioritize?.(cards);
+  window.mochimonoThumbnails?.prioritize?.([...visible, ...ahead, ...behind], { visibleCount:visible.length });
   lastThumbPriorityY = range.top;
   lastThumbDirection = scrollDirection;
   metrics.thumbPriorityUpdates++;
@@ -231,6 +234,7 @@ function backupBadge(item) {
 }
 
 function dayInfo(ms) {
+  if (!Number(ms)) return { key:'unknown', label:'Unknown date' };
   const date = new Date(Number(ms) || 0);
   return {
     key:`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`,
@@ -270,6 +274,24 @@ function createRow(rowId) {
   let html = '';
   for (let index = start; index < start + count; index++) html += cardMarkup(index, height);
   row.innerHTML = html;
+  if (reusableCards) {
+    for (const placeholder of [...row.children]) {
+      const card = reusableCards.get(placeholder.dataset.hash);
+      if (!card || card.classList.contains('media-card') !== placeholder.classList.contains('media-card') ||
+          card.classList.contains('video-card') !== placeholder.classList.contains('video-card')) continue;
+      reusableCards.delete(placeholder.dataset.hash);
+      for (const attribute of placeholder.attributes) {
+        if (attribute.name !== 'class') card.setAttribute(attribute.name, attribute.value);
+      }
+      const previousBadge = card.querySelector('.file-backup-badge');
+      const nextBadge = placeholder.querySelector('.file-backup-badge');
+      if (previousBadge?.outerHTML !== nextBadge?.outerHTML) {
+        previousBadge?.remove();
+        if (nextBadge) card.append(nextBadge);
+      }
+      placeholder.replaceWith(card);
+    }
+  }
   return row;
 }
 
@@ -339,7 +361,7 @@ function buildHeaderLayer() {
     element.className = `stable-grid-heading ${yearHeader ? 'year-heading' : 'date-heading'}`;
     element.style.top = `${Number(header.top).toFixed(2)}px`;
     const label = yearHeader
-      ? String(year)
+      ? year ? String(year) : 'Unknown date'
       : new Date(year, month, 1).toLocaleDateString(undefined, { month:'long' });
     const key = yearHeader ? String(year) : `${year}-${String(month + 1).padStart(2,'0')}`;
     element.append(groupButton(yearHeader ? 'year' : 'month', key, label));
@@ -405,7 +427,8 @@ function railLabel(index) {
   const item = model?.items?.[Math.max(0, Math.min((model?.items?.length || 1) - 1, index))];
   if (!item) return '';
   if (model?.sort === 'size-desc') return formatBytes(item[6]);
-  const date = new Date(Number(item[5]) || 0);
+  if (!Number(item[5])) return 'Unknown date';
+  const date = new Date(Number(item[5]));
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString(undefined, { year:'numeric', month:'long' });
 }
 
@@ -427,16 +450,17 @@ function railEntries() {
   const groups = [];
   let previous = '';
   for (let index = 0; index < items.length; index++) {
-    const date = new Date(Number(items[index]?.[5]) || 0);
+    const ms = Number(items[index]?.[5]) || 0;
+    const date = new Date(ms);
     if (Number.isNaN(date.getTime())) continue;
-    const year = date.getFullYear();
+    const year = ms ? date.getFullYear() : 0;
     const key = `${year}-${date.getMonth()}`;
     if (key === previous) continue;
     previous = key;
     groups.push({
       index,
       year,
-      label:date.toLocaleDateString(undefined, { year:'numeric', month:'long' })
+      label:ms ? date.toLocaleDateString(undefined, { year:'numeric', month:'long' }) : 'Unknown date'
     });
   }
   const compact = groups.length > 18;
@@ -446,7 +470,7 @@ function railEntries() {
     lastYear = group.year;
     return {
       ...group,
-      short:compact && major ? String(group.year) : group.label,
+      short:compact && major && group.year ? String(group.year) : group.label,
       position:items.length === 1 ? 0 : group.index / (items.length - 1),
       major
     };
@@ -455,9 +479,10 @@ function railEntries() {
 
 function ensureRailShell() {
   if (!rail) return;
-  rail.hidden = !layout?.count;
-  document.documentElement.classList.toggle('library-scroll', Boolean(layout?.count));
-  if (!layout?.count) {
+  const showRail = Boolean(layout?.count) && model?.sort !== 'random';
+  rail.hidden = !showRail;
+  document.documentElement.classList.toggle('library-scroll', showRail);
+  if (!showRail) {
     railKey = '';
     rail.replaceChildren();
     return;
@@ -558,12 +583,16 @@ function installEmpty() {
   renderedRows.clear();
   document.documentElement.classList.add('stable-grid-owned');
   files.className = 'files grid stable-grid-files';
-  files.style.height = '1px';
-  const empty = document.createElement('div');
-  const loading = document.documentElement.classList.contains('mochimono-library-booting');
-  empty.className = `empty${loading ? ' loading' : ''}`;
-  empty.textContent = loading ? 'Loading…' : 'No files.';
-  files.replaceChildren(empty);
+  const loading = document.documentElement.classList.contains('mochimono-library-booting') ||
+    (window.mochimonoLocalCatalogLoading === true && !document.querySelector('#search')?.value);
+  files.style.height = loading ? `${Math.max(400, innerHeight * .65)}px` : '1px';
+  if (loading && window.mochimonoLibraryLoading) files.innerHTML = window.mochimonoLibraryLoading.skeleton();
+  else {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = loading ? 'Loading…' : 'No files.';
+    files.replaceChildren(empty);
+  }
   railKey = '';
   rail?.replaceChildren();
   if (rail) rail.hidden = true;
@@ -578,7 +607,15 @@ function installLayout(nextLayout) {
     return;
   }
 
-  for (const element of renderedRows.values()) window.mochimonoThumbnails?.release?.(element);
+  const oldRows = renderedRows;
+  const cards = [...oldRows.values()].flatMap(row => [...row.children]);
+  const anchorCard = buildConfig.model.preserveAnchor ? cards.find(card => {
+    const rect = card.getBoundingClientRect();
+    return rect.bottom > viewportTop && rect.top < innerHeight;
+  }) : null;
+  const anchor = anchorCard ? { hash:anchorCard.dataset.hash, top:anchorCard.getBoundingClientRect().top } : null;
+  reusableCards = new Map(cards.map(card => [card.dataset.hash, card]));
+  model = buildConfig.model;
   layout = nextLayout;
   pendingLayout = null;
   renderedRows = new Map();
@@ -593,7 +630,17 @@ function installLayout(nextLayout) {
   rowLayer = built.rows;
   headerLayer = built.headers;
   dayLayer = built.days;
+  measureViewport();
+  let targetScroll = scrollY;
+  if (anchor) {
+    const index = model.items.findIndex(item => item[0] === anchor.hash);
+    if (index >= 0) targetScroll = Math.max(0, filesDocumentTop + Number(layout.rowTops[layout.itemRows[index]]) - anchor.top);
+  }
+  materializeRows(rowsForScroll(layout, targetScroll, MOUNT_AHEAD, MOUNT_BEHIND).rows);
   files.replaceChildren(plane);
+  for (const row of oldRows.values()) window.mochimonoThumbnails?.release?.(row);
+  reusableCards = null;
+  if (Math.abs(scrollY - targetScroll) > 1) window.scrollTo({ top:targetScroll, behavior:'instant' });
   document.querySelector('#top-scroll-sentinel')?.setAttribute('hidden','');
   document.querySelector('#scroll-sentinel')?.setAttribute('hidden','');
   measureViewport();
@@ -601,7 +648,7 @@ function installLayout(nextLayout) {
   mountedEnd = 0;
   lastThumbPriorityY = -Infinity;
   ensureRailShell();
-  scheduleRows(true);
+  renderCurrent();
   window.dispatchEvent(new CustomEvent('mochimono:stable-grid-installed'));
 }
 
@@ -618,8 +665,10 @@ function applyPendingLayout() {
 }
 
 function build() {
-  if (!worker || !model) return;
-  if (!model.items.length) {
+  const snapshot = requestedModel || model;
+  if (!worker || !snapshot) return;
+  if (!snapshot.items.length) {
+    model = snapshot;
     generation++;
     building = false;
     pendingLayout = null;
@@ -634,15 +683,15 @@ function build() {
   }
   const target = currentTarget();
   const nextGeneration = ++generation;
-  buildConfig = { generation:nextGeneration, width, target, sort:model.sort, gap:ROW_GAP };
+  buildConfig = { generation:nextGeneration, width, target, sort:snapshot.sort, gap:ROW_GAP, model:snapshot };
   building = true;
   metrics.modelBuilds++;
   performance.mark?.(`mochimono-grid-build-${nextGeneration}-start`);
   worker.postMessage({
     type:'build',
     generation:nextGeneration,
-    config:{ width, target, sort:model.sort, gap:ROW_GAP },
-    items:model.items
+    config:{ width, target, sort:snapshot.sort, gap:ROW_GAP },
+    items:snapshot.items
   });
 }
 
@@ -693,21 +742,18 @@ function setModel(snapshot) {
     release();
     return false;
   }
+  requestedModel = snapshot;
   if (owned && layout && sameGeometrySequence(model, snapshot)) {
+    generation++;
+    building = false;
+    pendingLayout = null;
     model = snapshot;
     syncRenderedMetadata();
-    if (!snapshot.items.length && !layout.count) {
-      const empty = files?.querySelector(':scope > .empty');
-      if (empty) {
-        const loading = document.documentElement.classList.contains('mochimono-library-booting');
-        empty.classList.toggle('loading', loading);
-        empty.textContent = loading ? 'Loading…' : 'No files.';
-      }
-    }
+    if (!snapshot.items.length && !layout.count) installEmpty();
     metrics.metadataOnlyModels++;
     return true;
   }
-  model = snapshot;
+  if (!owned) model = snapshot;
   build();
   return true;
 }
@@ -716,6 +762,8 @@ function release() {
   generation++;
   building = false;
   model = null;
+  requestedModel = null;
+  reusableCards = null;
   layout = null;
   pendingLayout = null;
   clearTimeout(pendingTimer);

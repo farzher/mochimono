@@ -1,4 +1,5 @@
 import { buildSearchText, fileKind as kind, matchesDetails, matchesSmart, normalizeText, queryTerms } from './search-query.js';
+import { sortRandom } from './random-sort.js';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
@@ -15,6 +16,10 @@ const THUMB_VERSION = 3;
 let searchTimer = 0;
 let catalog = [];
 let catalogIndex = new Map();
+let catalogPaintTimer = 0;
+let catalogUpdateDepth = 0;
+let catalogNeedsPaint = false;
+const pendingCatalogRemovals = new Set();
 let catalogVersion = '';
 let filtered = [];
 let filteredIndex = new Map();
@@ -29,6 +34,8 @@ let type = '';
 let importId = '';
 let collectionHashes = null;
 let locationFilter = '';
+let sourcePath = '';
+const normalizedPath = value => String(value || '').replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase();
 let locationHashes = null;
 let protectionFilter = '';
 let view = 'grid';
@@ -153,7 +160,10 @@ function rememberFileDate(file) {
   return file;
 }
 
+const excludedLibraryPath = file => /(?:^|[\\/])\$recycle\.bin(?:[\\/]|$)/i.test(`${file.rootPath || ''}/${file.originalPath || ''}`);
+
 function normalizeFile(file) {
+  if (file.dateSource === 'filesystem.unknown') file = { ...file, fileDate:null, createdAt:null, addedAt:null };
   const importIds = Array.isArray(file.importIds) ? file.importIds.map(Number).filter(Boolean) : String(file.importIds || '').split(',').map(Number).filter(Boolean);
   const exactImportIds = Array.isArray(file.exactImportIds) ? file.exactImportIds.map(Number).filter(Boolean) : String(file.exactImportIds || '').split(',').map(Number).filter(Boolean);
   const fileDate = new Date(file.fileDate || file.createdAt || 0);
@@ -173,6 +183,7 @@ function normalizeFile(file) {
 }
 
 function adoptCachedFile(file) {
+  if (file?.dateSource === 'filesystem.unknown') return normalizeFile(file);
   if (!file || !Array.isArray(file.importIds) || !Array.isArray(file.exactImportIds) ||
       !Number.isFinite(Number(file.dateMs)) || !Number.isFinite(Number(file.addedMs))) return normalizeFile(file || {});
   return rememberFileDate(file);
@@ -212,12 +223,12 @@ function renderFileCount(count = filtered.length) {
 function timelineMs(file) { return sort === 'date-added' ? file.addedMs || file.dateMs || 0 : file.dateMs || 0; }
 const timelineDate = file => new Date(timelineMs(file));
 const fileDate = file => new Date(file.dateMs || 0);
-const shortDate = file => fileDate(file).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-const monthKey = file => `${timelineDate(file).getFullYear()}-${String(timelineDate(file).getMonth() + 1).padStart(2, '0')}`;
-const monthName = file => timelineDate(file).toLocaleDateString(undefined, { month: 'long' });
-const monthRailLabel = file => timelineDate(file).toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
-const dayKey = file => `${timelineDate(file).getFullYear()}-${String(timelineDate(file).getMonth() + 1).padStart(2, '0')}-${String(timelineDate(file).getDate()).padStart(2, '0')}`;
-const dayLabel = file => timelineDate(file).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+const shortDate = file => file.dateMs ? fileDate(file).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'Unknown date';
+const monthKey = file => timelineMs(file) ? `${timelineDate(file).getFullYear()}-${String(timelineDate(file).getMonth() + 1).padStart(2, '0')}` : 'unknown';
+const monthName = file => timelineMs(file) ? timelineDate(file).toLocaleDateString(undefined, { month: 'long' }) : 'Unknown date';
+const monthRailLabel = file => timelineMs(file) ? timelineDate(file).toLocaleDateString(undefined, { year: 'numeric', month: 'long' }) : 'Unknown date';
+const dayKey = file => timelineMs(file) ? `${timelineDate(file).getFullYear()}-${String(timelineDate(file).getMonth() + 1).padStart(2, '0')}-${String(timelineDate(file).getDate()).padStart(2, '0')}` : 'unknown';
+const dayLabel = file => timelineMs(file) ? timelineDate(file).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : 'Unknown date';
 
 function gridModel() {
   return {
@@ -236,8 +247,8 @@ function gridModel() {
   };
 }
 
-function publishGridModel() {
-  const snapshot = gridModel();
+function publishGridModel(preserveAnchor = false) {
+  const snapshot = { ...gridModel(), preserveAnchor };
   window.mochimonoGridModel = snapshot;
   window.mochimonoStableGrid?.setModel?.(snapshot);
   window.dispatchEvent(new CustomEvent('mochimono:grid-model', { detail:snapshot }));
@@ -249,7 +260,7 @@ function dateGroups(items) {
     const key = monthKey(file);
     const last = groups.at(-1);
     if (last?.key === key) last.files.push(file);
-    else groups.push({ key, year: timelineDate(file).getFullYear(), month: monthName(file), files: [file] });
+    else groups.push({ key, year: timelineMs(file) ? timelineDate(file).getFullYear() : 0, month: monthName(file), files: [file] });
   }
   return groups;
 }
@@ -259,7 +270,7 @@ function timelineGroups() {
   let previous = '';
   filtered.forEach((file, index) => {
     const key = monthKey(file);
-    if (key !== previous) result.push({ key, label: monthRailLabel(file), index, year: timelineDate(file).getFullYear() });
+    if (key !== previous) result.push({ key, label: monthRailLabel(file), index, year: timelineMs(file) ? timelineDate(file).getFullYear() : 0 });
     previous = key;
   });
   return result;
@@ -316,7 +327,7 @@ function syncYearHeadings() {
     const heading = section.querySelector(':scope > .year-heading');
     if (!heading) continue;
     if (year !== previousYear) {
-      heading.textContent = String(year);
+      heading.textContent = year ? String(year) : 'Unknown date';
       heading.hidden = false;
     } else {
       heading.textContent = '';
@@ -453,13 +464,14 @@ function renderFiles(preserve = false) {
   // The merged physical folder tree owns view=folders. Source/path folder state
   // remains available only as a Grid/List scope and must not render a second UI.
   if (view === 'folders') return;
+  if (!$('#viewer').hidden) { viewerDirty = true; return; }
   if (folderImportId) folderBreadcrumb();
   else { $('#folderbar').hidden = true; $('#folderbar').replaceChildren(); }
 
   if (view === 'grid') {
     topScrollSentinel.hidden = true;
     $('#scroll-sentinel').hidden = true;
-    publishGridModel();
+    publishGridModel(preserve);
     return;
   }
 
@@ -471,8 +483,9 @@ function renderFiles(preserve = false) {
 }
 
 function sortFiles(items) {
+  if (sort === 'random') return sortRandom(items);
   if (sort === 'date-added') return items.sort((a, b) => timelineMs(b) - timelineMs(a) || a.hash.localeCompare(b.hash));
-  if (sort === 'date-asc') return items.sort((a, b) => a.dateMs - b.dateMs || a.hash.localeCompare(b.hash));
+  if (sort === 'date-asc') return items.sort((a, b) => Number(!a.dateMs) - Number(!b.dateMs) || a.dateMs - b.dateMs || a.hash.localeCompare(b.hash));
   if (sort === 'size-desc') return items.sort((a, b) => b.size - a.size || a.filename.localeCompare(b.filename));
   return items.sort((a, b) => b.dateMs - a.dateMs || a.hash.localeCompare(b.hash));
 }
@@ -484,6 +497,7 @@ function applyFilters(reset = true, preserve = false, keepHash = '') {
   const sourceId = Number(importId) || 0;
   const folderHashes = folderImportId && folderPath && folderData ? new Set(folderData.files.map(file => file.hash)) : null;
   filtered = sortFiles(catalog.filter(file => {
+    if (sourcePath && ![file.rootPath, ...(file.localRoots || [])].some(path => normalizedPath(path) === sourcePath)) return false;
     if (!matchesType(file) || !matchesLocation(file) || !matchesProtection(file) || (collectionHashes && !collectionHashes.has(file.hash))) return false;
     if (sourceId && !file.importIds.includes(sourceId)) return false;
     if (folderHashes && !folderHashes.has(file.hash)) return false;
@@ -563,7 +577,7 @@ function railEntries() {
   return groups.map(group => {
     const major = !compact || group.year !== lastYear;
     lastYear = group.year;
-    return { index: group.index, label: group.label, short: compact && major ? String(group.year) : group.label, position: filtered.length === 1 ? 0 : group.index / (filtered.length - 1), major };
+    return { index: group.index, label: group.label, short: compact && major && group.year ? String(group.year) : group.label, position: filtered.length === 1 ? 0 : group.index / (filtered.length - 1), major };
   });
 }
 
@@ -683,7 +697,7 @@ async function fetchCatalog() {
       raw.push(...(page.files || []));
       after = page.nextAfter || '';
     } while (after);
-    await correctFileDates(raw);
+    if (!CLIENT) await correctFileDates(raw);
     const [importsData, end] = await Promise.all([importsPromise, request('/api/catalog/version')]);
     latest = { version: String(end.version || ''), imports: importsData.imports || [], files: raw.map(normalizeFile) };
     if (String(start.version || '') === latest.version) break;
@@ -696,7 +710,7 @@ function installSnapshot(snapshot, preserve = false) {
   const keepHash = anchor?.hash || (!$('#viewer').hidden ? selected?.hash : '');
   const learned = new Map(catalog.filter(file => file.width && file.height).map(file => [file.hash, [file.width, file.height]]));
   const cached = snapshot.normalized === true;
-  catalog = (snapshot.files || []).map(raw => {
+  catalog = (snapshot.files || []).filter(file => !excludedLibraryPath(file)).map(raw => {
     const file = cached ? adoptCachedFile(raw) : normalizeFile(raw);
     const dimensions = learned.get(file.hash);
     return dimensions && (!file.width || !file.height) ? { ...file, width: dimensions[0], height: dimensions[1] } : file;
@@ -713,8 +727,22 @@ async function syncCatalog(force = false) {
   const remoteVersion = String(remote.version || '');
   if (!force && catalogVersion && catalogVersion === remoteVersion) return false;
   const fresh = await fetchCatalog();
-  installSnapshot(fresh, Boolean(catalog.length));
-  window.mochimonoCatalogCache?.save?.(catalog, { version: fresh.version, imports: fresh.imports }).catch(error => console.warn('Could not save local catalog.', error));
+  if (CLIENT) {
+    imports = fresh.imports;
+    sourceNames = new Map(imports.map(item => [Number(item.id), String(item.sourceName || '')]));
+    catalogVersion = fresh.version;
+    renderImports();
+    await window.mochimonoCatalogRestored;
+    window.mochimonoLibrary.beginUpdates();
+    try {
+      for (let offset = 0; offset < fresh.files.length; offset += 5000) {
+        window.mochimonoLibrary.upsertMany(fresh.files.slice(offset, offset + 5000).map(file => ({ ...file, cloudBacked:true })), { normalized:true });
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    } finally { window.mochimonoLibrary.endUpdates(); }
+  } else installSnapshot(fresh, Boolean(catalog.length));
+  if (CLIENT) await window.mochimonoCatalogRestored;
+  if (!CLIENT || !window.mochimonoLocalCatalogLoading) window.mochimonoCatalogCache?.save?.(catalog.slice(), { version:fresh.version, imports:fresh.imports }).catch(error => console.warn('Could not save local catalog.', error));
   window.dispatchEvent(new CustomEvent('mochimono:catalog-updated', { detail: { version: fresh.version, count: catalog.length } }));
   return true;
 }
@@ -794,7 +822,18 @@ function setView(next) {
 }
 
 function setCollectionHashes(hashes) {
-  collectionHashes = hashes instanceof Set ? hashes : null;
+  const next = hashes instanceof Set ? hashes : null;
+  // Catalog updates already refresh the view. Reapplying the same scope must
+  // not sort the whole library or replace its grid during navigation.
+  if (collectionHashes === next) return;
+  if (collectionHashes && next && collectionHashes.size === next.size) {
+    let same = true;
+    for (const hash of next) {
+      if (!collectionHashes.has(hash)) { same = false; break; }
+    }
+    if (same) return;
+  }
+  collectionHashes = next;
   if (collectionHashes) {
     folderLoadGeneration++;
     folderImportId = '';
@@ -996,8 +1035,36 @@ async function loadDrives() {
   }).join('') || '<div class="empty">No backups.</div>';
 }
 
+function paintCatalogUpdates() {
+  catalogPaintTimer = 0;
+  if (catalogUpdateDepth || !catalogNeedsPaint) return;
+  if (CLIENT && window.frameElement && !window.frameElement.getClientRects().length) {
+    catalogPaintTimer = setTimeout(paintCatalogUpdates, 500);
+    return;
+  }
+  catalogNeedsPaint = false;
+  if (pendingCatalogRemovals.size) {
+    catalog = catalog.filter(file => !pendingCatalogRemovals.has(file.hash));
+    for (const hash of pendingCatalogRemovals) { searchIndex.delete(hash); fileDates.delete(hash); }
+    pendingCatalogRemovals.clear();
+    rebuildIndexes();
+  }
+  applyFilters(false, true, currentAnchor()?.hash || selected?.hash || '');
+}
+
 window.mochimonoLibrary = {
+  beginUpdates() { catalogUpdateDepth++; },
+  endUpdates() {
+    catalogUpdateDepth = Math.max(0, catalogUpdateDepth - 1);
+    if (!catalogUpdateDepth && catalogNeedsPaint) {
+      clearTimeout(catalogPaintTimer);
+      paintCatalogUpdates();
+    }
+  },
   setSort(value) { sort = String(value || 'date-desc'); $('#sort').value = sort; applyFilters(true); },
+  setSourcePath(path) { sourcePath = normalizedPath(path); applyFilters(true); },
+  finishLoading:finishBoot,
+  saveCache(options = {}) { return window.mochimonoCatalogCache?.save?.(catalog.slice(), { version:catalogVersion || 'agent-local', imports, ...options }).catch(error => console.warn('Could not save library cache.', error)); },
   setLocationFilter(mode, hashes = null) {
     locationFilter = String(mode || '');
     locationHashes = hashes instanceof Set ? hashes : hashes ? new Set(hashes) : null;
@@ -1028,36 +1095,62 @@ window.mochimonoLibrary = {
     applyFilters(false, true, anchor?.hash || '');
   },
   upsert(file) { this.upsertMany(file ? [file] : []); },
-  upsertMany(items) {
+  upsertMany(items, { normalized = false } = {}) {
     if (!items?.length) return;
-    const anchor = currentAnchor();
-    const keepHash = anchor?.hash || (!$('#viewer').hidden ? selected?.hash : '');
+    if (CLIENT) app.hidden = false;
     let changed = false;
     for (const raw of items) {
+      if (excludedLibraryPath(raw)) continue;
       const hash = String(raw?.hash || '');
       if (!hash) continue;
-      const index = catalogIndex.get(hash);
+      const replacedHash = String(raw.replacesHash || raw.localId || '');
+      const replacedIndex = replacedHash !== hash ? catalogIndex.get(replacedHash) : undefined;
+      const canonicalIndex = catalogIndex.get(hash);
+      const index = canonicalIndex ?? replacedIndex;
+      if (canonicalIndex !== undefined && replacedIndex !== undefined && canonicalIndex !== replacedIndex) pendingCatalogRemovals.add(replacedHash);
       if (Number.isInteger(index)) {
         const current = catalog[index];
+        if (current.hash !== hash) {
+          catalogIndex.delete(current.hash);
+          searchIndex.delete(current.hash);
+          fileDates.delete(current.hash);
+          catalogIndex.set(hash, index);
+        }
         const incoming={...raw};
+        if (!(Number(incoming.width) > 0 && Number(incoming.height) > 0) && current.width > 0 && current.height > 0) {
+          incoming.width = current.width;
+          incoming.height = current.height;
+        }
         if(incoming.backupIntent===true&&current.lifecycle==='current'){
           incoming.lifecycle='current';
           incoming.protectionState=current.protectionState;
           incoming.protectionLevel=current.protectionLevel;
           incoming.protected=current.protected;
         }
-        catalog[index] = normalizeFile({ ...current, ...incoming, searchText: [current.searchText, incoming.searchText].filter(Boolean).join(' ') });
-      } else catalog.push(normalizeFile(raw));
+        const localRoots = [...new Set([...(current.localRoots || []), ...(incoming.localRoots || []), current.rootPath, incoming.rootPath].filter(Boolean))];
+        const mergedImports = [...new Set([...(current.importIds || []), ...(incoming.importIds || [])])];
+        catalog[index] = normalizeFile({ ...current, ...incoming, localRoots, importIds:mergedImports,
+          searchText:incoming.searchText && current.searchText?.includes(incoming.searchText) ? current.searchText : [current.searchText, incoming.searchText].filter(Boolean).join(' ') });
+      } else {
+        catalogIndex.set(hash, catalog.length);
+        catalog.push(normalized ? adoptCachedFile(raw) : normalizeFile(raw));
+      }
+      if (!searchIndexDirty) {
+        const file = catalog[catalogIndex.get(hash)];
+        searchIndex.set(hash, `${buildSearchText(file, sourceNames)} ${locationSearch.get(hash) || ''}`.trim());
+      }
       changed = true;
     }
-    if (changed) {
-      rebuildIndexes();
-      applyFilters(false, true, keepHash);
+    if (changed && CLIENT) finishBoot();
+    if (changed) catalogNeedsPaint = true;
+    if (changed && !catalogUpdateDepth && !catalogPaintTimer) {
+      catalogPaintTimer = setTimeout(paintCatalogUpdates, catalog.length > 5000 ? 250 : 0);
     }
   },
   extend: extendWindow,
   refresh: () => syncCatalog(true),
   ensureIndex: ensureIndexRendered,
+  allHashes: () => catalog.map(file => file.hash),
   filteredHashes: () => filtered.map(file => file.hash),
   file: hash => catalogFile(hash),
   gridModel,
@@ -1072,7 +1165,8 @@ window.mochimonoLibrary = {
     catalog = catalog.filter(file => !removed.has(file.hash));
     for (const hash of removed) { searchIndex.delete(hash); locationSearch.delete(hash); fileDates.delete(hash); }
     rebuildIndexes();
-    if (view === 'folders') window.mochimonoFolderTree?.refresh?.();
+    if (catalogUpdateDepth) catalogNeedsPaint = true;
+    else if (view === 'folders') window.mochimonoFolderTree?.refresh?.();
     else applyFilters(false, true, anchor?.hash || '');
   },
   state: () => ({
@@ -1085,12 +1179,15 @@ window.mochimonoLibrary = {
     view,
     sort,
     locationFilter,
+    sourcePath,
     protectionFilter,
     version: catalogVersion,
     searchIndexed:!searchIndexDirty,
     stableGrid:view === 'grid'
   })
 };
+
+dispatchEvent(new CustomEvent('mochimono:library-ready'));
 
 async function restoreLocalCatalog() {
   const cache = window.mochimonoCatalogCache;
@@ -1116,17 +1213,36 @@ async function boot() {
   $('#mediaSize').value = mediaSize;
   document.documentElement.style.setProperty('--media-size', `${mediaSize}px`);
 
-  let restored = false;
-  if (CLIENT && !catalog.length) {
-    restored = await restoreLocalCatalog();
-    if (generation !== bootGeneration) return;
-    if (restored) {
-      login.hidden = true;
-      app.hidden = false;
-      logout.hidden = false;
-      finishBoot();
-    }
-  } else restored = Boolean(catalog.length);
+  if (CLIENT) {
+    login.hidden = true;
+    app.hidden = false;
+    logout.hidden = false;
+    window.mochimonoCatalogRestored = (async () => {
+      const cache = window.mochimonoCatalogCache;
+      const quick = await cache?.loadQuick?.();
+      if (generation !== bootGeneration) return;
+      if (quick?.files?.length) {
+        window.mochimonoLibrary.upsertMany(quick.files.filter(file => !catalogIndex.has(file.hash)), { normalized:true });
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      }
+      const snapshot = await cache?.load?.();
+      if (generation !== bootGeneration || !snapshot?.files?.length) return;
+      window.mochimonoLibrary.beginUpdates();
+      try {
+        for (let offset = 0; offset < snapshot.files.length; offset += 10_000) {
+          if (generation !== bootGeneration) return;
+          window.mochimonoLibrary.upsertMany(snapshot.files.slice(offset, offset + 10_000).filter(file => !catalogIndex.has(file.hash)), { normalized:true });
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+      } finally { window.mochimonoLibrary.endUpdates(); }
+      dispatchEvent(new CustomEvent('mochimono:catalog-cache-restored', { detail:{ count:catalog.length, version:snapshot.version } }));
+      return snapshot.files.length;
+    })().catch(error => console.warn('Catalog cache unavailable.', error));
+    // Cloud and backup metadata enrich the live index; they never gate first paint.
+    setTimeout(() => syncCatalog(false).catch(error => console.warn('Cloud catalog unavailable.', error)), 1500);
+    return;
+  }
+  let restored = Boolean(catalog.length);
 
   try {
     await request('/api/health');
@@ -1163,19 +1279,6 @@ async function boot() {
       login.hidden = true;
       app.hidden = false;
       return;
-    }
-    if (CLIENT && window.mochimonoOfflineCatalogReady) {
-      const offline = await Promise.resolve(window.mochimonoOfflineCatalogReady).catch(() => null);
-      if (generation !== bootGeneration) return;
-      if (offline?.files?.length) {
-        installSnapshot({ version:offline.version, imports:offline.imports, files:offline.files }, false);
-        login.hidden = true;
-        app.hidden = false;
-        logout.hidden = false;
-        finishBoot();
-        console.warn('Mochimono is offline; using the local catalog.', error);
-        return;
-      }
     }
     finishBoot();
     throw error;

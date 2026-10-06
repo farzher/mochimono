@@ -626,7 +626,7 @@ window.mochimonoThumbnails = {
   prepare,
   release,
   ensureHashes,
-  prioritize(cards) {
+  prioritize(cards, { visibleCount = Infinity } = {}) {
     const next = new Set();
     for (const card of Array.isArray(cards) ? cards : [cards]) if (card?.isConnected && kind(card)) next.add(card);
     let canceled = false;
@@ -635,14 +635,16 @@ window.mochimonoThumbnails = {
       canceled = cancelCardLoad(card) || canceled;
     }
     prioritized.clear();
+    let index = 0;
     for (const card of next) {
+      const tier = index++ < visibleCount ? 0 : 1;
       if (!preparedCards.has(card)) {
         preparedCards.add(card);
         indexCard(card);
       }
       prioritized.add(card);
-      prepareCard(card, 0, true);
-      queueCard(card, 0);
+      prepareCard(card, tier, true);
+      queueCard(card, tier);
     }
     if (canceled) pumpImageLoads();
     scheduleCheck(0);
@@ -675,7 +677,9 @@ if (files) {
   prepare(files);
   new MutationObserver(records => {
     for (const record of records) {
-      for (const node of record.removedNodes) if (node instanceof Element) release(node);
+      // Moving/reusing a card during layout is not an unmount. Cleaning up a
+      // connected card here strips its decoded image from the new grid.
+      for (const node of record.removedNodes) if (node instanceof Element && !node.isConnected) release(node);
       for (const node of record.addedNodes) if (node instanceof Element) prepare(node);
     }
   }).observe(files, { childList:true, subtree:true });

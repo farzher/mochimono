@@ -249,6 +249,7 @@ async function saveBrowserThumbnail(req, res, hash) {
     await rm(destination, { force:true });
     await rename(temp, destination);
     await writeFile(info, `${JSON.stringify({ version:BROWSER_THUMB_VERSION, width, height })}\n`);
+    process.emit('mochimono:browser-preview-saved', hash);
     json(res, 201, { ok:true, hash, size, width, height });
   } catch (error) {
     await rm(temp, { force:true }).catch(() => {});
@@ -348,6 +349,7 @@ async function saveBrowserHeicThumbnail(req, res, hash, url) {
     await rm(destination, { force:true });
     await rename(temp, destination);
     await writeFile(info, `${JSON.stringify({ version:BROWSER_THUMB_VERSION, width, height })}\n`);
+    process.emit('mochimono:browser-preview-saved', hash);
     json(res, 201, { ok:true, hash, size:result.data.length, width, height, sourceWidth, sourceHeight });
   } catch (error) {
     if (!res.headersSent) json(res, error.status || 500, { error:error.message || 'Could not decode HEIC thumbnail' });

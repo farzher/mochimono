@@ -4,8 +4,8 @@ import { availableParallelism } from 'node:os';
 const cpus = Math.max(1, availableParallelism());
 process.env.MOCHIMONO_THUMBNAIL_WORKERS ||= String(Math.max(2, Math.min(8, Math.ceil(cpus / 2))));
 process.env.MOCHIMONO_THUMBNAIL_VIDEO_WORKERS ||= String(Math.max(1, Math.min(2, Math.ceil(cpus / 4))));
-process.env.MOCHIMONO_PROVIDER_THUMBNAIL_WORKERS ||= String(cpus);
-process.env.MOCHIMONO_PROVIDER_THUMBNAIL_VIDEO_WORKERS ||= String(cpus);
+process.env.MOCHIMONO_PROVIDER_THUMBNAIL_WORKERS ||= String(Math.max(2, Math.min(8, Math.ceil(cpus / 2))));
+process.env.MOCHIMONO_PROVIDER_THUMBNAIL_VIDEO_WORKERS ||= '2';
 process.env.MOCHIMONO_PROVIDER_SHARP_WORKERS ||= process.env.MOCHIMONO_PROVIDER_THUMBNAIL_WORKERS;
 
 const providerThumbsUrl = new URL('./lib/provider-thumbs.js', import.meta.url).href;

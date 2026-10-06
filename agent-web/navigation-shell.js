@@ -1,5 +1,4 @@
 import './storage-clarity.js';
-import './storage-live-previews.js';
 
 const frame = document.querySelector('#filesFrame');
 const storagePane = document.querySelector('#storagePane');

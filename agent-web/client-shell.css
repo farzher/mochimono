@@ -27,7 +27,16 @@
 #storagePane .folder-item .storage-title strong{min-width:0;flex:1;display:flex;flex-direction:column-reverse;align-items:flex-start;gap:4px;font-weight:400;letter-spacing:0;cursor:pointer;overflow:hidden}
 .storage-path-name{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;color:#f0e9e5;font-size:16px;font-weight:740;letter-spacing:-.018em;line-height:1.2;white-space:nowrap}
 .storage-path-parent{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#77706e;font:10px/1.25 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
-#storagePane .folder-item .item-state{display:none!important}
+#storagePane .folder-item .item-state{display:inline-flex!important;align-items:center;gap:5px;padding:3px 7px;border:1px solid #ffffff09;border-radius:999px;background:#1d1b1e;color:#a59a97;font-size:9px;line-height:1.4}
+#storagePane .folder-item .item-state.good{background:#202820;color:#a8c3ad;border-color:#8eae941c}
+#storagePane .folder-item .item-state.working{background:#2c2024;color:#d5a5a2;border-color:#e99b9515}
+#storagePane .folder-item .item-state.warning{background:#29231c;color:#c5a47d;border-color:#c5a47d1a}
+#storagePane .folder-item .inline-progress-head strong{font-size:11px;font-weight:650}
+#storagePane .folder-item .inline-progress-meta{font-size:10.5px;font-variant-numeric:tabular-nums}
+#storagePane .folder-item .inline-progress-meta span{max-width:100%;text-align:left}
+#storagePane .folder-item .inline-progress-current{display:block;margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#746a6b;font:9px/1.4 ui-monospace,monospace}
+#storagePane .folder-item .progress-bar{height:3px;margin:8px 0}
+#storagePane .folder-item .progress-bar i{background:#d99691}
 #storagePane .folder-item .storage-meta{display:flex;align-items:center;min-width:0;margin-top:10px;gap:7px;color:#b2aaa6;font-size:12px;font-weight:600;line-height:1.2;letter-spacing:-.005em}
 #storagePane .folder-item .storage-meta span:nth-child(1),#storagePane .folder-item .storage-meta span:nth-child(3){color:#c8bfbb}
 #storagePane .folder-item .storage-meta span:nth-child(2){color:#5f595a;font-weight:400}

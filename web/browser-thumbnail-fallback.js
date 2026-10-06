@@ -116,6 +116,7 @@ async function fastBrowserFileForHash(hash) {
 }
 
 async function localBrowserFile(hash) {
+  if (window.mochimonoBrowserFolders?.fileForHash) return window.mochimonoBrowserFolders.fileForHash(hash);
   try { return await fastBrowserFileForHash(hash); }
   catch { return window.mochimonoBrowserFolders?.fileForHash?.(hash).catch?.(() => null) || null; }
 }
@@ -275,9 +276,9 @@ export function heicViewBlob(record, edge = 4096) {
 }
 
 async function generate(record) {
-  if (isHeicRecord(record)) return heicResult(record);
   const existing = await fetch(`/api/thumbs/${record.hash}?v=${VERSION}`, { method:'HEAD' }).catch(() => null);
   if (existing?.ok) return null;
+  if (isHeicRecord(record)) return heicResult(record);
   const result = record.kind === 'video' ? await videoResult(record) : await imageResult(record);
   const endpoint = result.local ? `/api/client/browser-thumb/${record.hash}` : `/api/thumbs/${record.hash}`;
   const headers = result.local ? {
@@ -346,9 +347,11 @@ export function queueBrowserThumbnail(record) {
   if (!record?.hash || !record.kind) return;
   const queued = isHeicRecord(record) ? { ...record, urgent:true } : record;
   queue.set(record.hash, queued);
+  if (queue.size > 128) queue.delete(queue.keys().next().value);
   schedule(queued.urgent ? 0 : 4000);
 }
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(100); });
 window.addEventListener('mochimono:browser-folders-changed', invalidateBrowserIndex, { passive:true });
+window.addEventListener('mochimono:browser-files-changed', invalidateBrowserIndex, { passive:true });
 warmBrowserIndex();

@@ -93,25 +93,8 @@ async function refreshTags(forceState = false) {
 
 async function allCatalogHashes() {
   if (allHashesCache) return new Set(allHashesCache);
-  const hashes = new Set();
-  try {
-    const snapshot = await window.mochimonoCatalogCache?.load?.();
-    for (const file of snapshot?.files || []) if (/^[a-f0-9]{64}$/.test(String(file?.hash || ''))) hashes.add(String(file.hash));
-  } catch {}
-  const expected = Number(window.mochimonoLibrary?.state?.()?.total) || 0;
-  if (!hashes.size || hashes.size < expected) {
-    try {
-      let after = '';
-      do {
-        const page = await json(`/api/catalog?limit=5000&after=${encodeURIComponent(after)}`);
-        for (const file of page.files || []) if (/^[a-f0-9]{64}$/.test(String(file?.hash || ''))) hashes.add(String(file.hash));
-        after = page.nextAfter || '';
-      } while (after);
-    } catch {}
-    for (const hash of window.mochimonoLibrary?.filteredHashes?.() || []) hashes.add(String(hash));
-  }
-  allHashesCache = hashes;
-  return new Set(hashes);
+  allHashesCache = new Set(window.mochimonoLibrary?.allHashes?.() || []);
+  return new Set(allHashesCache);
 }
 
 function intersect(left, right) {
@@ -168,7 +151,6 @@ function scheduleScope(delay = 0) {
 if (originalSetCollectionHashes) {
   window.mochimonoSetCollectionHashes = hashes => {
     baseCollectionHashes = hashes instanceof Set ? new Set(hashes) : hashes ? new Set(hashes) : null;
-    originalSetCollectionHashes(hashes);
     scheduleScope(0);
   };
 }

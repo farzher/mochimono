@@ -102,7 +102,7 @@ function installThumbnailGate() {
   const thumbnails = window.mochimonoThumbnails;
   if (!thumbnails?.prioritize || thumbnails.__rapidGridGate) return thumbnails;
   const prioritize = thumbnails.prioritize.bind(thumbnails);
-  thumbnails.prioritize = cards => rapid ? undefined : prioritize(cards);
+  thumbnails.prioritize = (...args) => rapid ? undefined : prioritize(...args);
   thumbnails.__rapidGridGate = true;
   return thumbnails;
 }

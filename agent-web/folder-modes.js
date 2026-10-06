@@ -8,9 +8,9 @@ let annotateQueued = false;
 let previewLoading = false;
 let previewLoadedAt = 0;
 let previewTimer = 0;
-let emptyPreviewRetries = 0;
 const previewSamples = new Map();
 const readyPreviewHashes = new Set();
+const failedPreviewHashes = new Set();
 
 const style = document.createElement('style');
 style.textContent = `
@@ -43,7 +43,16 @@ style.textContent = `
     background:rgba(0,0,0,.62);box-shadow:0 2px 10px rgba(0,0,0,.28);
     color:#fff;font-size:12px;padding-left:2px
   }
+  .storage-folder-samples{position:relative;background:#19161b}
+  .storage-folder-sample.pending{background:linear-gradient(120deg,#211d23 20%,#30252b 48%,#211d23 76%);background-size:250% 100%;animation:source-preview-shimmer 2.8s ease-in-out infinite}
+  .storage-folder-sample.pending .sample-glyph{opacity:.26;font-size:24px}
+  .storage-folder-sample .sample-name{display:none}
+  .storage-folder-samples:after{content:'View files →';position:absolute;right:10px;bottom:9px;padding:5px 8px;border:1px solid #ffffff14;border-radius:7px;background:#191418cf;color:#e2ceca;font-size:10px;font-weight:650;opacity:0;transition:opacity .15s}
+  .storage-folder-samples:hover:after,.storage-folder-samples:focus-visible:after{opacity:1}
+  .storage-folder-samples:not(.has-previews):after{content:'Preparing previews';opacity:1;right:auto;left:10px;background:#19141880;color:#a58e92}
   .storage-folder-samples:hover{outline:1px solid rgba(255,255,255,.18);outline-offset:1px}
+  @keyframes source-preview-shimmer{0%,100%{background-position:100% 0}50%{background-position:0 0}}
+  @media(prefers-reduced-motion:reduce){.storage-folder-sample.pending{animation:none}}
   @media(max-width:700px){
     .storage-folder-samples{width:126px;height:104px;border-radius:10px}
   }
@@ -182,7 +191,7 @@ function readyPreviewFiles(files) {
 }
 
 function previewCandidates(files) {
-  const ranked = rankPreviewFiles(files);
+  const ranked = rankPreviewFiles(files).filter(file => !failedPreviewHashes.has(String(file.hash)));
   const ready = [];
   const unchecked = [];
   for (const file of ranked) {
@@ -191,36 +200,15 @@ function previewCandidates(files) {
   return [...ready, ...unchecked];
 }
 
-function sampleGlyph(file) { return mediaKind(file) === 'video' ? '▶' : '▧'; }
+function sampleGlyph(file) { return mediaKind(file) === 'video' ? '▷' : '◇'; }
 function thumbUrl(hash) { return `/api/thumbs/${encodeURIComponent(hash)}`; }
-
-function nearlyBlackVideoThumb(img) {
-  try {
-    const canvas = document.createElement('canvas');
-    canvas.width = 24; canvas.height = 24;
-    const context = canvas.getContext('2d', { willReadFrequently:true });
-    context.drawImage(img, 0, 0, canvas.width, canvas.height);
-    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-    let dark = 0, luminance = 0;
-    const count = pixels.length / 4;
-    for (let i = 0; i < pixels.length; i += 4) {
-      const value = .2126 * pixels[i] + .7152 * pixels[i + 1] + .0722 * pixels[i + 2];
-      luminance += value;
-      if (value < 18) dark++;
-    }
-    return count > 0 && dark / count > .94 && luminance / count < 14;
-  } catch { return false; }
-}
 
 function installThumb(img, cell, hash, onReject) {
   img.addEventListener('load', () => {
-    if (cell.classList.contains('video') && nearlyBlackVideoThumb(img) && onReject) {
-      readyPreviewHashes.delete(hash);
-      onReject(cell);
-      return;
-    }
     readyPreviewHashes.add(hash);
+    cell.classList.remove('pending');
     cell.classList.add('thumb-ready');
+    cell.closest('.storage-folder-samples')?.classList.add('has-previews');
   });
   img.addEventListener('error', () => {
     cell.classList.remove('thumb-ready');
@@ -231,7 +219,7 @@ function installThumb(img, cell, hash, onReject) {
 
 function sampleCell(file, index, onReject) {
   const cell = document.createElement('span');
-  cell.className = 'storage-folder-sample';
+  cell.className = 'storage-folder-sample pending';
   if (!file) {
     if (index === 0) {
       const glyph = document.createElement('span');
@@ -247,7 +235,7 @@ function sampleCell(file, index, onReject) {
   const glyph = document.createElement('span'); glyph.className = 'sample-glyph'; glyph.textContent = sampleGlyph(file);
   const name = document.createElement('small'); name.className = 'sample-name'; name.textContent = filename;
   cell.append(glyph, name);
-  if (kind && /^[a-f0-9]{64}$/.test(hash)) {
+  if (kind && readyPreviewHashes.has(hash)) {
     const img = document.createElement('img');
     img.alt = ''; img.loading = 'eager'; img.decoding = 'async';
     installThumb(img, cell, hash, onReject);
@@ -271,7 +259,8 @@ function renderFolderPreview(row) {
   strip.removeAttribute('data-open-library-folder');
   strip.title = 'View in Library';
 
-  const key = candidates.slice(0, 16).map(file => `${readyPreviewHashes.has(String(file.hash || '')) ? 1 : 0}:${file.hash}:${file.filename}:${file.mime}`).join('|') || 'empty';
+  strip.classList.toggle('has-previews', candidates.some(file => readyPreviewHashes.has(String(file.hash))));
+  const key = candidates.slice(0, 3).map(file => `${readyPreviewHashes.has(String(file.hash || '')) ? 1 : 0}:${file.hash}:${file.filename}:${file.mime}`).join('|') || 'empty';
   if (strip.dataset.key === key) return;
   strip.dataset.key = key;
   let cursor = 0;
@@ -289,10 +278,12 @@ function renderFolderPreviews() {
   for (const row of folders?.querySelectorAll(':scope > [data-folder-path]') || []) renderFolderPreview(row);
 }
 
-function schedulePreviewRefresh(delay = 1600) {
-  if (emptyPreviewRetries >= 8) return;
-  clearTimeout(previewTimer);
-  previewTimer = setTimeout(() => refreshFolderPreviews(true).catch(() => {}), delay);
+function schedulePreviewRefresh(delay = 1200) {
+  if (previewTimer || storagePane?.hidden) return;
+  previewTimer = setTimeout(() => {
+    previewTimer = 0;
+    refreshFolderPreviews(true).catch(() => {});
+  }, delay);
 }
 
 async function liveSample(path) {
@@ -301,17 +292,20 @@ async function liveSample(path) {
 }
 
 async function refreshReadyPreviewHashes() {
-  const hashes = [...new Set([...previewSamples.values()].flatMap(sample => rankPreviewFiles(sample?.files).map(file => String(file.hash || ''))))];
-  if (!hashes.length) { readyPreviewHashes.clear(); return; }
-  const next = new Set();
+  // Only the three visible cells per source are urgent. Never queue every
+  // candidate, then immediately issue doomed image requests for missing files.
+  const hashes = [...new Set([...previewSamples.values()].flatMap(sample => previewCandidates(sample?.files).slice(0, 3).map(file => String(file.hash || ''))))];
+  if (!hashes.length) return;
+  const next = new Set(readyPreviewHashes);
   for (let offset = 0; offset < hashes.length; offset += 500) {
     const batch = hashes.slice(offset, offset + 500);
     try {
-      const data = await request('/api/thumbs/check', { method:'POST', body:JSON.stringify({ hashes:batch, background:true }) });
+      const data = await request('/api/thumbs/check', { method:'POST', body:JSON.stringify({ hashes:batch, background:false }) });
       for (const item of data.thumbnails || []) {
         const hash = String(item?.hash || '');
         if (hash) next.add(hash);
       }
+      for (const failure of data.failures || []) if (failure.terminal) failedPreviewHashes.add(String(failure.hash));
     } catch {
       for (const hash of batch) if (readyPreviewHashes.has(hash)) next.add(hash);
     }
@@ -321,7 +315,7 @@ async function refreshReadyPreviewHashes() {
 }
 
 async function refreshFolderPreviews(force = false) {
-  if (previewLoading || !folders) return;
+  if (previewLoading || !folders || storagePane?.hidden) return;
   const rows = [...folders.querySelectorAll(':scope > [data-folder-path]')];
   if (!rows.length) return;
   const empty = rows.some(row => !readyPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files).length);
@@ -347,11 +341,10 @@ async function refreshFolderPreviews(force = false) {
     await refreshReadyPreviewHashes();
     previewLoadedAt = Date.now();
     renderFolderPreviews();
-    const stillEmpty = rows.some(row => !readyPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files).length);
-    if (stillEmpty) { emptyPreviewRetries++; schedulePreviewRefresh(1800); }
-    else emptyPreviewRetries = 0;
+    const incomplete = rows.some(row => readyPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files).length < 3);
+    if (incomplete) schedulePreviewRefresh(1200);
   } catch {
-    emptyPreviewRetries++; schedulePreviewRefresh(2500);
+    schedulePreviewRefresh(2500);
   } finally { previewLoading = false; }
 }
 
@@ -408,7 +401,7 @@ folders?.addEventListener('click', async event => {
   event.preventDefault(); event.stopImmediatePropagation(); cloud.disabled = true;
   try {
     await request('/api/browse-folders/protect', { method:'POST', body:JSON.stringify({ path:cloud.dataset.protectFolder }) });
-    previewLoadedAt = 0; emptyPreviewRetries = 0; annotateSoon(); setTimeout(refreshLibrary, 250);
+    previewLoadedAt = 0; annotateSoon(); setTimeout(refreshLibrary, 250);
   } catch (error) { toast(error.message); }
   finally { cloud.disabled = false; }
 }, true);
@@ -416,8 +409,19 @@ folders?.addEventListener('click', async event => {
 if (folders) {
   new MutationObserver(records => {
     if (!records.some(record => record.addedNodes.length || record.removedNodes.length)) return;
-    emptyPreviewRetries = 0;
-    annotateSoon();
+    if (storagePane) new MutationObserver(() => {
+  if (storagePane.hidden) return;
+  renderFolderPreviews();
+  refreshFolderPreviews(true).catch(() => {});
+}).observe(storagePane, { attributes:true, attributeFilter:['hidden'] });
+
+window.addEventListener('message', event => {
+  if (event.source !== frame?.contentWindow || event.origin !== location.origin || event.data?.type !== 'mochimono-local-catalog-event' || storagePane?.hidden) return;
+  const needsPreviews = [...folders.querySelectorAll(':scope > [data-folder-path]')].some(row => readyPreviewFiles(previewSamples.get(pathKey(row.dataset.folderPath))?.files).length < 3);
+  if (needsPreviews) schedulePreviewRefresh(600);
+});
+
+annotateSoon();
   }).observe(folders, { childList:true });
 }
 
