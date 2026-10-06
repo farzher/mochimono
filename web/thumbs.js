@@ -6,14 +6,15 @@ const CHECK_LIMIT = 160;
 const RECHECK_DELAY = CLIENT ? 140 : 500;
 const CARD_PRELOAD_MARGIN = Math.max(900, Math.round(innerHeight * 2.25));
 const IMAGE_POOL_MAX = 512;
-const MAX_IMAGE_LOADS = 48;
-const NEAR_LOAD_LIMIT = 36;
+const MAX_IMAGE_LOADS = 16;
+const NEAR_LOAD_LIMIT = 4;
 
 const states = new Map();
 const cardsByHash = new Map();
 const dimensions = new Map();
 const nearby = new Set();
 const prioritized = new Set();
+const visible = new Set();
 const preparedCards = new WeakSet();
 const imagePool = new Map();
 const externalQueue = new Map();
@@ -95,6 +96,7 @@ function indexCard(card) {
 
 function unindexCard(card) {
   prioritized.delete(card);
+  visible.delete(card);
   nearby.delete(card);
   queuedCards.delete(card);
   const hash = String(card?.dataset?.hash || '');
@@ -131,7 +133,7 @@ function setFailedVisual(hash, failed, terminal = false) {
     if (failed) {
       pending(card);
       box.classList.add('thumb-failed');
-      box.title = terminal ? 'Thumbnail unavailable' : 'Thumbnail generation failed; retrying later';
+      box.title = terminal ? 'Thumbnail unavailable' : stateFor(hash).unavailable ? 'Source unavailable' : 'Waiting for thumbnail';
     } else {
       box.classList.remove('thumb-failed');
       box.removeAttribute('title');
@@ -147,21 +149,11 @@ function markFailed(hash, failure) {
   state.ready = false;
   state.loading = false;
   state.failed = true;
+  state.unavailable = failure?.unavailable === true;
   state.terminal = terminal;
   state.nextTry = retryAt;
   state.nextCheck = retryAt;
   setFailedVisual(hash, true, terminal);
-}
-
-function resetFailures() {
-  for (const [hash, state] of states) {
-    if (!state.failed) continue;
-    state.failed = false;
-    state.terminal = false;
-    state.nextCheck = 0;
-    state.nextTry = 0;
-    setFailedVisual(hash, false);
-  }
 }
 
 function touchPool(hash, image) {
@@ -267,6 +259,7 @@ async function revealLoadedImage(hash, card, image) {
   state.nextCheck = 0;
   state.nextTry = 0;
   settleHashWaiters(hash);
+  loadHash(hash);
 }
 
 function queueCard(card, tier = 1) {
@@ -287,7 +280,7 @@ function nextQueuedCard() {
       const card = loadWork[tier].shift();
       if (queuedCards.get(card) !== tier) continue;
       queuedCards.delete(card);
-      if (!card?.isConnected) continue;
+      if (!card?.isConnected || (!prioritized.has(card) && !nearby.has(card))) continue;
       return { card, tier };
     }
   }
@@ -331,17 +324,20 @@ function startImage(card, tier) {
   activeImageLoads++;
   image.onload = () => {
     finishNetwork(image);
-    if (image.isConnected && image.dataset.thumbHash === hash) revealLoadedImage(hash, card, image);
+    if (image.isConnected) revealLoadedImage(image.dataset.thumbHash, card, image);
   };
   image.onerror = () => {
     finishNetwork(image);
-    if (!image.isConnected || image.dataset.thumbHash !== hash) return;
+    const hash = image.dataset.thumbHash;
+    if (!image.isConnected || card.dataset.hash !== hash) return;
     image.remove();
     const failed = stateFor(hash);
     failed.ready = false;
     failed.loading = false;
     failed.nextTry = performance.now() + RECHECK_DELAY;
     failed.nextCheck = performance.now();
+    for (const candidate of cardsByHash.get(hash) || []) candidate.dataset.previewReady = '0';
+    window.mochimonoLibrary?.upsert?.({ hash, previewReady:false });
     pending(card);
     scheduleCheck(0);
   };
@@ -376,11 +372,45 @@ function prepareCard(card, tier = 1, direct = false) {
     return;
   }
   const state = stateFor(hash);
-  if (direct || state.ready) queueCard(card, tier);
+  if (direct && card.dataset.previewReady === '1') {
+    state.ready = true;
+    state.failed = state.terminal = false;
+    state.nextTry = state.nextCheck = 0;
+  }
+  if (state.ready) queueCard(card, tier);
   else {
     pending(card);
     state.nextCheck = Math.min(state.nextCheck || Infinity, performance.now());
     scheduleCheck(0);
+  }
+}
+
+function retargetCard(card, hash) {
+  hash = String(hash || '');
+  if (!hash || card.dataset.hash === hash) return;
+  const prepared = preparedCards.has(card);
+  const priority = prioritized.has(card), onScreen = visible.has(card), near = nearby.has(card);
+  if (prepared) unindexCard(card);
+  card.dataset.hash = hash;
+  const box = mediaBox(card);
+  const image = box?.querySelector('img.cached-thumb');
+  if (image) {
+    // Hash promotion changes the URL identity, not these already-read pixels.
+    image.dataset.thumbHash = hash;
+    const state = stateFor(hash);
+    state.ready = image.dataset.thumbDecoded === '1';
+    state.loading = image.dataset.thumbActive === '1';
+    state.failed = state.terminal = false;
+    state.nextTry = state.nextCheck = 0;
+    if (image.complete && image.naturalWidth) void revealLoadedImage(hash, card, image);
+  }
+  const placeholder = box?.querySelector('.video-thumb-pending');
+  if (placeholder) placeholder.dataset.videoThumb = hash;
+  if (prepared) {
+    indexCard(card);
+    if (priority) prioritized.add(card);
+    if (onScreen) visible.add(card);
+    if (near) nearby.add(card);
   }
 }
 
@@ -401,7 +431,7 @@ const cardObserver = files && typeof IntersectionObserver === 'function'
           continue;
         }
         nearby.add(card);
-        prepareCard(card, 0, false);
+        prepareCard(card, 1, false);
       }
       scheduleCheck(0);
     }, { rootMargin:`${CARD_PRELOAD_MARGIN}px 0px` })
@@ -427,7 +457,7 @@ function release(node) {
 function loadHash(hash) {
   for (const card of cardsByHash.get(String(hash || '')) || []) {
     if (!card.isConnected) continue;
-    if (prioritized.has(card)) queueCard(card, 0);
+    if (prioritized.has(card)) queueCard(card, visible.has(card) ? 0 : 1);
     else if (nearby.has(card)) queueCard(card, 1);
   }
 }
@@ -451,7 +481,10 @@ function scheduleCheck(delay = 50) {
 function scheduleOutstanding() {
   const now = performance.now();
   let next = Infinity;
-  if (externalQueue.size) next = now;
+  for (const hash of externalQueue.keys()) {
+    const state = stateFor(hash);
+    if (!state.ready && !state.terminal) next = Math.min(next, state.nextCheck || now);
+  }
   for (const card of cardCheckSet()) {
     if (!kind(card)) continue;
     const hash = String(card.dataset.hash || '');
@@ -505,12 +538,13 @@ async function checkBatch(hashes, background) {
   const ready = new Map((data.thumbnails || []).map(item => [String(item.hash), item]));
   const failures = new Map((data.failures || []).map(item => [String(item.hash), item]));
   const missingFromServer = new Set((data.missing || []).map(item => String(item.hash)));
+  const pendingByHash = new Map((data.pending || []).map(item => [String(item.hash), item]));
   const request = [];
   const now = performance.now();
   for (const hash of hashes) {
-    externalQueue.delete(hash);
     const item = ready.get(hash);
     const failure = failures.get(hash);
+    if (item || failure) externalQueue.delete(hash);
     const state = stateFor(hash);
     if (item) {
       state.ready = true;
@@ -529,7 +563,7 @@ async function checkBatch(hashes, background) {
       state.ready = false;
       state.failed = false;
       state.terminal = false;
-      state.nextCheck = now + RECHECK_DELAY;
+      state.nextCheck = now + Math.max(RECHECK_DELAY, Number(pendingByHash.get(hash)?.retryAfterMs) || 1000);
       setFailedVisual(hash, false);
       if (missingFromServer.has(hash)) request.push(hash);
     }
@@ -548,7 +582,8 @@ function candidateHashes() {
       externalQueue.delete(hash);
       continue;
     }
-    byHash.set(hash, { hash, urgent:item.background === false, due:0 });
+    if (now < (state.nextCheck || 0)) continue;
+    byHash.set(hash, { hash, urgent:item.background === false, due:state.nextCheck || 0 });
   }
   for (const card of cardCheckSet()) {
     if (!kind(card)) continue;
@@ -556,7 +591,7 @@ function candidateHashes() {
     if (!hash) continue;
     const state = stateFor(hash);
     if (state.ready || state.loading || state.terminal || now < (state.nextCheck || 0)) continue;
-    const urgent = prioritized.has(card);
+    const urgent = visible.has(card);
     const current = byHash.get(hash);
     if (!current) byHash.set(hash, { hash, urgent, due:state.nextCheck || 0 });
     else if (urgent) current.urgent = true;
@@ -625,6 +660,7 @@ function ensureHashes(hashes, options = {}) {
 window.mochimonoThumbnails = {
   prepare,
   release,
+  retarget:retargetCard,
   ensureHashes,
   prioritize(cards, { visibleCount = Infinity } = {}) {
     const next = new Set();
@@ -635,6 +671,7 @@ window.mochimonoThumbnails = {
       canceled = cancelCardLoad(card) || canceled;
     }
     prioritized.clear();
+    visible.clear();
     let index = 0;
     for (const card of next) {
       const tier = index++ < visibleCount ? 0 : 1;
@@ -643,8 +680,8 @@ window.mochimonoThumbnails = {
         indexCard(card);
       }
       prioritized.add(card);
+      if (tier === 0) visible.add(card);
       prepareCard(card, tier, true);
-      queueCard(card, tier);
     }
     if (canceled) pumpImageLoads();
     scheduleCheck(0);
@@ -656,6 +693,7 @@ window.mochimonoThumbnails = {
       canceled = cancelCardLoad(card) || canceled;
     }
     prioritized.clear();
+    visible.clear();
     if (canceled) pumpImageLoads();
   },
   state() {
@@ -694,7 +732,6 @@ if (files) {
     scheduleOutstanding();
   });
   window.addEventListener('mochimono:catalog-updated', () => {
-    resetFailures();
     scheduleOutstanding();
   });
   window.addEventListener('mochimono:browser-thumbnail-ready', event => {

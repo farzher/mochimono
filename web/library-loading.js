@@ -2,9 +2,10 @@ const CLIENT = document.documentElement.classList.contains('client-library');
 const files = document.querySelector('#files');
 const app = document.querySelector('#app');
 let banner;
-let hideTimer = 0;
 let loaded = 0;
-let libraryReady = false;
+let catalogReady = false;
+let loadDetail = {};
+let workDetail = null;
 
 export function skeleton() {
   return `<div class="library-skeleton" aria-hidden="true">${Array.from({ length:18 }, (_, i) => `<span style="--delay:${i % 4 * 120}ms"></span>`).join('')}</div>`;
@@ -21,27 +22,36 @@ function ensureBanner() {
   return banner;
 }
 
-export function updateLibraryLoad(detail = {}) {
+function render() {
   if (!CLIENT) return;
   const node = ensureBanner();
   if (!node) return;
-  clearTimeout(hideTimer);
-  if (libraryReady && !detail.error) { node.hidden = true; return; }
-  node.hidden = false;
-  loaded = Number(window.mochimonoLibrary?.state?.().total) || Number(detail.loaded) || loaded;
-  node.classList.toggle('complete', Boolean(detail.complete));
+  // Loading catalog rows and preparing their originals/previews are separate.
+  // A successful catalog fetch is never a claim that an import is finished.
+  const detail = loadDetail.error ? loadDetail : workDetail || (!catalogReady ? loadDetail : null);
+  node.hidden = !detail;
+  if (!detail) return;
+  loaded = Number(window.mochimonoLibrary?.state?.().total) || loaded;
   node.classList.toggle('error', Boolean(detail.error));
-  node.querySelector('strong').textContent = detail.error ? (libraryReady ? 'Library update failed' : 'Could not load library')
-    : detail.phase || (detail.complete ? 'Library ready' : loaded ? 'Loading library' : 'Opening library');
+  node.querySelector('strong').textContent = detail.error ? 'Library update failed' : detail.phase || (loaded ? 'Loading library' : 'Opening library');
   node.querySelector('span').textContent = detail.error || detail.message || (loaded ? `${loaded.toLocaleString()} files available` : '');
   node.querySelector('button').hidden = !detail.error;
-  if (detail.complete) hideTimer = setTimeout(() => { node.hidden = true; }, 2400);
+}
+
+export function updateLibraryLoad(detail = {}) {
+  loadDetail = detail;
+  if (detail.complete) catalogReady = true;
+  render();
+}
+
+export function updateLibraryWork(detail) {
+  workDetail = detail || null;
+  render();
 }
 
 window.mochimonoLibraryLoading = { skeleton, update:updateLibraryLoad };
 
 if (CLIENT) {
-  // The app frame is usable even with an empty cache or an unavailable server.
   if (app) app.hidden = false;
   document.querySelector('#login')?.setAttribute('hidden', '');
   document.documentElement.classList.remove('mochimono-quick-grid-pending');
@@ -49,9 +59,8 @@ if (CLIENT) {
   ensureBanner();
   const ready = () => {
     if (!window.mochimonoLibrary?.state?.().total) return;
-    libraryReady = true;
-    clearTimeout(hideTimer);
-    if (banner && !banner.classList.contains('error')) banner.hidden = true;
+    catalogReady = true;
+    render();
   };
   addEventListener('mochimono:catalog-cache-restored', ready);
   addEventListener('mochimono:local-catalog-ready', ready);

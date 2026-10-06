@@ -84,6 +84,7 @@ async function serveObject(req, res, hash) {
   try { info = await stat(objectPath(DATA_DIR, hash)); }
   catch { return json(res, 503, { error: 'Object is cataloged but missing from primary storage' }); }
 
+  if (!info.isFile() || info.size !== row.size) return json(res, 503, { error:'Primary object size does not match its catalog' });
   const headers = { 'content-type': row.mime, 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=3600' };
   const range = req.headers.range;
   if (!range) {
@@ -111,12 +112,6 @@ async function serveObject(req, res, hash) {
   res.writeHead(206, { ...headers, 'content-range': `bytes ${start}-${end}/${info.size}`, 'content-length': end - start + 1 });
   if (req.method === 'HEAD') return res.end();
   readObject(DATA_DIR, hash, { start, end }).pipe(res);
-}
-
-function hashSet(sql, hashes) {
-  if (!hashes.length) return new Set();
-  const marks = hashes.map(() => '?').join(',');
-  return new Set(db.prepare(`${sql} (${marks})`).all(...hashes).map(row => row.hash));
 }
 
 async function handleCoreApi(req, res, url) {
@@ -207,29 +202,11 @@ async function handleCoreApi(req, res, url) {
     return json(res, 200, { source, path, folders, files });
   }
 
-  if (req.method === 'POST' && url.pathname === '/api/objects/check') {
-    const body = await readJson(req);
-    if (!Array.isArray(body.hashes) || body.hashes.length > 1000) return json(res, 400, { error: 'hashes must be an array of at most 1000 SHA-256 hashes' });
-    const hashes = body.hashes.map(String);
-    for (const hash of hashes) if (!validHash(hash)) return json(res, 400, { error: `Invalid hash: ${hash}` });
-    const unique = [...new Set(hashes)];
-    const ignored = hashSet('SELECT hash FROM ignored_hashes WHERE hash IN', unique);
-    const active = hashSet("SELECT o.hash FROM objects o WHERE o.state = 'active' AND NOT EXISTS (SELECT 1 FROM object_integrity oi WHERE oi.hash = o.hash AND oi.status != 'healthy') AND o.hash IN", unique);
-    const result = { known: [], missing: [], ignored: [] };
-    for (const hash of hashes) {
-      if (ignored.has(hash)) result.ignored.push(hash);
-      else if (active.has(hash)) result.known.push(hash);
-      else result.missing.push(hash);
-    }
-    return json(res, 200, result);
-  }
-
   const objectMatch = /^\/api\/objects\/([a-f0-9]{64})$/.exec(url.pathname);
   if (objectMatch && req.method === 'PUT') {
     const hash = objectMatch[1];
     try {
-      const bad = db.prepare("SELECT 1 FROM object_integrity WHERE hash = ? AND status != 'healthy'").get(hash);
-      const stored = await writeVerifiedObject({ root: DATA_DIR, hash, input: req, replace: Boolean(bad) });
+      const stored = await writeVerifiedObject({ root:DATA_DIR, hash, input:req });
       const mime = String(req.headers['x-mochimono-mime'] || 'application/octet-stream').slice(0, 200);
       db.prepare(`
         INSERT INTO objects(hash, size, mime, state, created_at) VALUES(?, ?, ?, 'active', ?)

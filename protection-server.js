@@ -1,5 +1,6 @@
 import { db, json, now, readJson, DATA_DIR } from './lib/server-context.js';
-import { removeObject } from './lib/store.js';
+import { objectPath, removeObject } from './lib/store.js';
+import { stat } from 'node:fs/promises';
 import { cleanupThumbnail } from './thumbnail-server.js';
 
 const LEVELS = ['disposable', 'normal', 'important', 'critical'];
@@ -617,6 +618,7 @@ export async function handleProtectionServer(req, res, url) {
     const unique = [...new Set(hashes)];
     const suppressed = new Set();
     const active = new Set();
+    const candidates = [];
     for (let offset = 0; offset < unique.length; offset += 400) {
       const chunk = unique.slice(offset, offset + 400);
       if (!chunk.length) continue;
@@ -630,11 +632,19 @@ export async function handleProtectionServer(req, res, url) {
         )
       `).all(...chunk)) suppressed.add(row.hash);
       for (const row of db.prepare(`
-        SELECT o.hash FROM objects o
+        SELECT o.hash,o.size FROM objects o
         WHERE o.state='active' AND o.hash IN (${marks})
           AND NOT EXISTS(SELECT 1 FROM object_integrity oi WHERE oi.hash=o.hash AND oi.status!='healthy')
-      `).all(...chunk)) active.add(row.hash);
+      `).all(...chunk)) candidates.push(row);
     }
+    let at = 0;
+    await Promise.all(Array.from({ length:Math.min(8,candidates.length) }, async () => {
+      while (at < candidates.length) {
+        const row = candidates[at++];
+        const info = await stat(objectPath(DATA_DIR,row.hash)).catch(() => null);
+        if (info?.isFile() && info.size === row.size) active.add(row.hash);
+      }
+    }));
     const result = { known: [], missing: [], ignored: [] };
     for (const hash of hashes) {
       if (suppressed.has(hash)) result.ignored.push(hash);

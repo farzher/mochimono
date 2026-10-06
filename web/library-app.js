@@ -242,7 +242,9 @@ function gridModel() {
       Number(file.height) || 0,
       timelineMs(file),
       Number(file.size) || 0,
-      backupBadgeState(file)
+      backupBadgeState(file),
+      file.previewReady === true,
+      String(file.localId || file.hash || '')
     ])
   };
 }
@@ -1110,6 +1112,12 @@ window.mochimonoLibrary = {
       if (canonicalIndex !== undefined && replacedIndex !== undefined && canonicalIndex !== replacedIndex) pendingCatalogRemovals.add(replacedHash);
       if (Number.isInteger(index)) {
         const current = catalog[index];
+        if (current.hash === hash && Object.entries(raw).every(([key, value]) => {
+          if ((key === 'width' || key === 'height') && !(Number(value) > 0) && current[key] > 0) return true;
+          if (key === 'searchText') return !value || current.searchText?.includes(value);
+          if (Array.isArray(value)) return Array.isArray(current[key]) && value.length === current[key].length && value.every((item, at) => item === current[key][at]);
+          return current[key] === value;
+        })) continue;
         if (current.hash !== hash) {
           catalogIndex.delete(current.hash);
           searchIndex.delete(current.hash);
@@ -1117,6 +1125,7 @@ window.mochimonoLibrary = {
           catalogIndex.set(hash, index);
         }
         const incoming={...raw};
+        incoming.localId ||= current.localId || (current.hash !== hash ? current.hash : '');
         if (!(Number(incoming.width) > 0 && Number(incoming.height) > 0) && current.width > 0 && current.height > 0) {
           incoming.width = current.width;
           incoming.height = current.height;
@@ -1144,7 +1153,7 @@ window.mochimonoLibrary = {
     if (changed && CLIENT) finishBoot();
     if (changed) catalogNeedsPaint = true;
     if (changed && !catalogUpdateDepth && !catalogPaintTimer) {
-      catalogPaintTimer = setTimeout(paintCatalogUpdates, catalog.length > 5000 ? 250 : 0);
+      catalogPaintTimer = setTimeout(paintCatalogUpdates, 500);
     }
   },
   extend: extendWindow,
@@ -1228,10 +1237,17 @@ async function boot() {
       const snapshot = await cache?.load?.();
       if (generation !== bootGeneration || !snapshot?.files?.length) return;
       window.mochimonoLibrary.beginUpdates();
+      let paintedAt = performance.now();
       try {
-        for (let offset = 0; offset < snapshot.files.length; offset += 10_000) {
+        for (let offset = 0; offset < snapshot.files.length; offset += 1500) {
           if (generation !== bootGeneration) return;
-          window.mochimonoLibrary.upsertMany(snapshot.files.slice(offset, offset + 10_000).filter(file => !catalogIndex.has(file.hash)), { normalized:true });
+          window.mochimonoLibrary.upsertMany(snapshot.files.slice(offset, offset + 1500).filter(file => !catalogIndex.has(file.hash)), { normalized:true });
+          if (performance.now() - paintedAt >= 2000) {
+            window.mochimonoLibrary.endUpdates();
+            await new Promise(resolve => setTimeout(resolve, 0));
+            window.mochimonoLibrary.beginUpdates();
+            paintedAt = performance.now();
+          }
           await new Promise(resolve => setTimeout(resolve, 0));
         }
       } finally { window.mochimonoLibrary.endUpdates(); }

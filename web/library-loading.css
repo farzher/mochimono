@@ -3,7 +3,6 @@
 .library-loading-status>strong{color:#e0d5d2;font-weight:650}
 .library-loading-status>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .library-loading-status>i{width:7px;height:7px;flex:none;border-radius:50%;background:#e99b95;box-shadow:0 0 0 4px #e99b9510;animation:library-loading-pulse 1.6s ease-in-out infinite}
-.library-loading-status.complete>i{background:#8eae94;box-shadow:0 0 0 4px #8eae9410;animation:none}
 .library-loading-status.error>i{background:#d8a075;animation:none}
 .library-loading-status>button{margin-left:auto;padding:5px 10px;border:1px solid #47373a;border-radius:7px;background:#281d20;color:#efb5ae;font-size:11px}
 .library-skeleton{grid-column:1/-1;display:grid;width:100%;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:5px;padding-top:8px;min-height:55vh}

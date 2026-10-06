@@ -118,18 +118,25 @@ async function loadFromDb() {
   if (!db) return null;
   const storedMeta = validMeta(meta) ? meta : await readMeta(db);
   if (!storedMeta) return null;
-  const transaction = db.transaction('files', 'readonly');
-  const done = transactionDone(transaction);
-  const files = await requestResult(transaction.objectStore('files').getAll()).catch(() => []);
-  await done.catch(() => {});
-  // An interrupted cache write is still a useful preview, but never current.
-  if (files.length !== Number(storedMeta.count)) storedMeta.localVersion = '';
-  const next = files;
+  const next = [];
   const restored = new Map();
-  for (let index = 0; index < next.length; index++) {
-    next[index] = mergeGeometry(next[index]);
-    restored.set(String(next[index].hash), next[index]);
+  let after = '';
+  for (;;) {
+    const transaction = db.transaction('files', 'readonly');
+    const done = transactionDone(transaction);
+    const page = await requestResult(transaction.objectStore('files').getAll(after ? IDBKeyRange.lowerBound(after, true) : null, 1000));
+    await done;
+    for (const file of page) {
+      const merged = mergeGeometry(file);
+      next.push(merged);
+      restored.set(String(merged.hash), merged);
+    }
+    if (page.length < 1000) break;
+    after = page.at(-1).hash;
+    await new Promise(resolve => setTimeout(resolve, 0));
   }
+  // An interrupted cache write is still a useful preview, but never current.
+  if (next.length !== Number(storedMeta.count)) storedMeta.localVersion = '';
   records = restored;
   meta = storedMeta;
   lastFullLoadMs = performance.now() - started;
@@ -209,14 +216,16 @@ function isMediaFile(file) {
   return MEDIA_EXTENSIONS.has(extension);
 }
 
-function selectQuickFiles(files) {
+async function selectQuickFiles(files) {
   const compare = (a, b) => {
-    const aDate = Number(a.dateMs) || Date.parse(a.fileDate || a.createdAt || '') || 0;
-    const bDate = Number(b.dateMs) || Date.parse(b.fileDate || b.createdAt || '') || 0;
+    const aDate = Number.isFinite(a.dateMs) ? a.dateMs : Date.parse(a.fileDate || a.createdAt || '') || 0;
+    const bDate = Number.isFinite(b.dateMs) ? b.dateMs : Date.parse(b.fileDate || b.createdAt || '') || 0;
     return bDate - aDate || String(a.hash || '').localeCompare(String(b.hash || ''));
   };
   const newest = [], media = [];
-  for (const file of files) {
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index];
+    if (index && index % 5000 === 0) await idle();
     newest.push(file);
     if (newest.length >= QUICK_FILES * 2) { newest.sort(compare); newest.length = QUICK_FILES; }
     if (isMediaFile(file)) {
@@ -237,7 +246,13 @@ async function saveNow(files, options = {}) {
   const db = await openDb();
   const version = String(options.version || '');
   if (!db || !version || !Array.isArray(files)) return;
-  const clean = files.filter(file => /^[a-f0-9]{64}$/.test(String(file?.hash || ''))).map(mergeGeometry);
+  const clean = [];
+  for (let offset = 0; offset < files.length; offset += WRITE_BATCH) {
+    for (const file of files.slice(offset, offset + WRITE_BATCH)) {
+      if (/^[a-f0-9]{64}$/.test(String(file?.hash || ''))) clean.push(mergeGeometry(file));
+    }
+    await idle();
+  }
 
   const nextMeta = {
     key:META_KEY,
@@ -246,13 +261,9 @@ async function saveNow(files, options = {}) {
     imports:Array.isArray(options.imports) ? options.imports : [],
     count:clean.length,
     localVersion:String(options.localVersion ?? meta?.localVersion ?? ''),
-    quickFiles:selectQuickFiles(clean),
+    quickFiles:await selectQuickFiles(clean),
     savedAt:Date.now()
   };
-  const read = db.transaction('files', 'readonly');
-  const readDone = transactionDone(read);
-  const previousKeys = await requestResult(read.objectStore('files').getAllKeys());
-  await readDone;
   // Keep the old rows usable throughout the write. A dirty version forces a
   // refresh after interruption rather than making the next opening start empty.
   meta = { ...nextMeta, localVersion:'' };
@@ -268,16 +279,30 @@ async function saveNow(files, options = {}) {
     await transactionDone(transaction);
     await idle();
   }
-  const hashes = new Set(clean.map(file => file.hash));
-  {
-    const transaction = db.transaction(['files', 'meta'], 'readwrite');
+  const restored = new Map();
+  for (let offset = 0; offset < clean.length; offset += WRITE_BATCH) {
+    for (const file of clean.slice(offset, offset + WRITE_BATCH)) restored.set(String(file.hash), file);
+    await idle();
+  }
+  let after = '';
+  for (;;) {
+    const transaction = db.transaction('files', 'readwrite');
+    const done = transactionDone(transaction);
     const store = transaction.objectStore('files');
-    for (const hash of previousKeys) if (!hashes.has(hash)) store.delete(hash);
+    const keys = await requestResult(store.getAllKeys(after ? IDBKeyRange.lowerBound(after, true) : null, WRITE_BATCH));
+    for (const hash of keys) if (!restored.has(hash)) store.delete(hash);
+    await done;
+    if (keys.length < WRITE_BATCH) break;
+    after = keys.at(-1);
+    await idle();
+  }
+  {
+    const transaction = db.transaction('meta', 'readwrite');
     transaction.objectStore('meta').put(nextMeta);
     await transactionDone(transaction);
   }
   meta = nextMeta;
-  records = new Map(clean.map(file => [String(file.hash), file]));
+  records = restored;
 }
 
 function scheduleGeometryWrite() {

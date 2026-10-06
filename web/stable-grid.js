@@ -254,10 +254,10 @@ function cardMarkup(index, rowHeight) {
   const dataHeight = Number(sourceHeight) || Math.max(1, rowHeight);
   const ratio = Math.max(.65, Math.min(2.1, dataWidth / dataHeight));
   const day = dayInfo(dateMs);
-  const common = `data-hash="${escapeHtml(hash)}" data-filename="${escapeHtml(filename)}" data-day="${day.key}" data-day-label="${escapeHtml(day.label)}" style="left:${x.toFixed(2)}px;width:${width.toFixed(2)}px;height:${Number(rowHeight).toFixed(2)}px;flex-basis:${width.toFixed(2)}px;--ratio:${ratio}" title="${escapeHtml(filename)}"`;
+  const common = `data-hash="${escapeHtml(hash)}" data-local-id="${escapeHtml(item[9] || hash)}" data-filename="${escapeHtml(filename)}" data-day="${day.key}" data-day-label="${escapeHtml(day.label)}" style="left:${x.toFixed(2)}px;width:${width.toFixed(2)}px;height:${Number(rowHeight).toFixed(2)}px;flex-basis:${width.toFixed(2)}px;--ratio:${ratio}" title="${escapeHtml(filename)}"`;
 
   if (media) {
-    return `<button class="file-card media-card ${video ? 'video-card' : ''}" ${common} data-width="${dataWidth}" data-height="${dataHeight}"><div class="thumb media-thumb"><span class="video-thumb-pending" data-video-thumb="${escapeHtml(hash)}"></span>${video ? '<span class="play-badge">▶</span>' : ''}</div>${backupBadge(item)}</button>`;
+    return `<button class="file-card media-card ${video ? 'video-card' : ''}" ${common} data-width="${dataWidth}" data-height="${dataHeight}" data-preview-ready="${item[8] ? '1' : '0'}"><div class="thumb media-thumb"><span class="video-thumb-pending" data-video-thumb="${escapeHtml(hash)}"></span>${video ? '<span class="play-badge">▶</span>' : ''}</div>${backupBadge(item)}</button>`;
   }
   return `<button class="file-card" ${common}><div class="thumb"><div class="file-icon ${escapeHtml(itemType(item))}">${iconFor(itemType(item))}</div></div>${backupBadge(item)}</button>`;
 }
@@ -274,12 +274,15 @@ function createRow(rowId) {
   let html = '';
   for (let index = start; index < start + count; index++) html += cardMarkup(index, height);
   row.innerHTML = html;
+  insertRow(row, rowId);
   if (reusableCards) {
     for (const placeholder of [...row.children]) {
-      const card = reusableCards.get(placeholder.dataset.hash);
+      const card = reusableCards.get(placeholder.dataset.hash) || reusableCards.get(placeholder.dataset.localId);
       if (!card || card.classList.contains('media-card') !== placeholder.classList.contains('media-card') ||
           card.classList.contains('video-card') !== placeholder.classList.contains('video-card')) continue;
-      reusableCards.delete(placeholder.dataset.hash);
+      reusableCards.delete(card.dataset.hash);
+      reusableCards.delete(card.dataset.localId);
+      window.mochimonoThumbnails?.retarget?.(card, placeholder.dataset.hash);
       for (const attribute of placeholder.attributes) {
         if (attribute.name !== 'class') card.setAttribute(attribute.name, attribute.value);
       }
@@ -314,7 +317,6 @@ function materializeRows(rowIds) {
     if (!Number.isInteger(id) || id < 0 || id >= layout.rowTops.length || renderedRows.has(id)) continue;
     const row = createRow(id);
     renderedRows.set(id, row);
-    insertRow(row, id);
     window.mochimonoThumbnails?.prepare?.(row);
     mounted++;
   }
@@ -613,8 +615,12 @@ function installLayout(nextLayout) {
     const rect = card.getBoundingClientRect();
     return rect.bottom > viewportTop && rect.top < innerHeight;
   }) : null;
-  const anchor = anchorCard ? { hash:anchorCard.dataset.hash, top:anchorCard.getBoundingClientRect().top } : null;
-  reusableCards = new Map(cards.map(card => [card.dataset.hash, card]));
+  const anchor = anchorCard ? { hash:anchorCard.dataset.hash, localId:anchorCard.dataset.localId, top:anchorCard.getBoundingClientRect().top } : null;
+  reusableCards = new Map();
+  for (const card of cards) {
+    reusableCards.set(card.dataset.hash, card);
+    if (card.dataset.localId) reusableCards.set(card.dataset.localId, card);
+  }
   model = buildConfig.model;
   layout = nextLayout;
   pendingLayout = null;
@@ -625,20 +631,31 @@ function installLayout(nextLayout) {
   files.className = 'files grid stable-grid-files';
   files.style.height = `${Math.ceil(layout.totalHeight)}px`;
 
-  const built = makePlane();
-  plane = built.plane;
-  rowLayer = built.rows;
-  headerLayer = built.headers;
-  dayLayer = built.days;
+  if (plane?.isConnected) {
+    // Keep the live plane mounted. Reconcile cards into connected rows instead
+    // of detaching every decoded image on each import/geometry update.
+    const nextHeaders = buildHeaderLayer();
+    headerLayer.replaceWith(nextHeaders);
+    headerLayer = nextHeaders;
+  } else {
+    const built = makePlane();
+    plane = built.plane;
+    rowLayer = built.rows;
+    headerLayer = built.headers;
+    dayLayer = built.days;
+    files.replaceChildren(plane);
+  }
   measureViewport();
   let targetScroll = scrollY;
   if (anchor) {
-    const index = model.items.findIndex(item => item[0] === anchor.hash);
+    const index = model.items.findIndex(item => item[0] === anchor.hash || (anchor.localId && item[9] === anchor.localId));
     if (index >= 0) targetScroll = Math.max(0, filesDocumentTop + Number(layout.rowTops[layout.itemRows[index]]) - anchor.top);
   }
   materializeRows(rowsForScroll(layout, targetScroll, MOUNT_AHEAD, MOUNT_BEHIND).rows);
-  files.replaceChildren(plane);
-  for (const row of oldRows.values()) window.mochimonoThumbnails?.release?.(row);
+  for (const row of oldRows.values()) {
+    window.mochimonoThumbnails?.release?.(row);
+    row.remove();
+  }
   reusableCards = null;
   if (Math.abs(scrollY - targetScroll) > 1) window.scrollTo({ top:targetScroll, behavior:'instant' });
   document.querySelector('#top-scroll-sentinel')?.setAttribute('hidden','');
@@ -711,7 +728,7 @@ function sameGeometrySequence(previous, next) {
   for (let index = 0; index < before.length; index++) {
     const left = before[index];
     const right = after[index];
-    if (String(left?.[0] || '') !== String(right?.[0] || '') ||
+    if (String(left?.[9] || left?.[0] || '') !== String(right?.[9] || right?.[0] || '') ||
         String(left?.[1] || '') !== String(right?.[1] || '') ||
         String(left?.[2] || '') !== String(right?.[2] || '') ||
         Math.abs(geometryRatio(left) - geometryRatio(right)) > 1e-6 ||
@@ -730,9 +747,19 @@ function syncRenderedMetadata() {
       const item=model.items[start+offset];
       const card=row.children[offset];
       if(!item||!card)continue;
-      card.querySelector('.file-backup-badge')?.remove();
-      const html=backupBadge(item);
-      if(html)card.insertAdjacentHTML('beforeend',html);
+      window.mochimonoThumbnails?.retarget?.(card, item[0]);
+      card.dataset.localId = item[9] || item[0];
+      card.dataset.previewReady = item[8] ? '1' : '0';
+      if (item[3] > 0 && item[4] > 0) {
+        card.dataset.width = item[3];
+        card.dataset.height = item[4];
+      }
+      const badge = card.querySelector('.file-backup-badge');
+      const html = backupBadge(item);
+      if ((badge?.outerHTML || '') !== html) {
+        badge?.remove();
+        if (html) card.insertAdjacentHTML('beforeend', html);
+      }
     }
   }
 }
@@ -749,6 +776,7 @@ function setModel(snapshot) {
     pendingLayout = null;
     model = snapshot;
     syncRenderedMetadata();
+    scheduleThumbnailPriority(true);
     if (!snapshot.items.length && !layout.count) installEmpty();
     metrics.metadataOnlyModels++;
     return true;

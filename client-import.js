@@ -7,6 +7,7 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { CONFIG_DIR, api, json, readJson, settings } from './lib/agent-context.js';
 import { decodeHeic } from './lib/heic.js';
+import { withDriveRead } from './lib/drive-read.js';
 import { localFolderTree } from './lib/local-folder-tree.js';
 import { localCandidate } from './lib/local-locations.js';
 import { mimeFor } from './lib/mime.js';
@@ -296,7 +297,8 @@ async function serveLocalHeicView(req, res, hash, url) {
     return true;
   }
   try {
-    const result = await decodeHeic(candidate.path, { edge, quality:90, effort:1, priority:true, portable:false });
+    const result = await withDriveRead(candidate.path,
+      () => decodeHeic(candidate.path, { edge, quality:90, effort:1, priority:true, portable:false }), { priority:true });
     sendHeicView(res, hash, edge, result, etag);
   } catch (error) {
     if (!res.headersSent) json(res, error.status || 500, { error:error.message || 'Could not decode HEIC image' });

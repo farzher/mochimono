@@ -210,7 +210,7 @@ export async function handleCompressionServer(req, res, url) {
     const [originalHash, renditionHash] = upload.slice(1);
     if (!knownOriginal(originalHash)) return json(res, 404, { error:'Original object not found' });
     try {
-      const stored = await writeVerifiedObject({ root:RENDITION_ROOT, hash:renditionHash, input:req, replace:true });
+      const stored = await writeVerifiedObject({ root:RENDITION_ROOT, hash:renditionHash, input:req });
       return json(res, 201, { hash:renditionHash, size:stored.size });
     } catch (error) { return json(res, 400, { error:error.message }); }
   }

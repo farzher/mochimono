@@ -27,10 +27,10 @@ html.grid-interaction-active #files .file-context-badge{opacity:0!important;tran
 .stable-grid-row .media-thumb{background:#242326}
 .stable-grid-row .video-thumb-pending{background:#242326!important}
 
-/* Newly decoded thumbnails reveal quickly; decoded nodes reused from the pool are already ready and stay instant. */
-.stable-grid-row .cached-thumb{transition:none!important}
-.stable-grid-row .cached-thumb[data-thumb-decoded="1"]:not([data-thumb-pooled="1"]){animation:grid-thumb-reveal 120ms cubic-bezier(.2,.8,.2,1)!important}
-@keyframes grid-thumb-reveal{from{opacity:.12}to{opacity:1}}
+/* Decode changes opacity once. Moving a ready card must never replay a reveal. */
+.stable-grid-row .cached-thumb{transition:opacity 120ms ease-out!important}
+.stable-grid-row .cached-thumb[data-thumb-pooled="1"]{transition:none!important}
+@media(prefers-reduced-motion:reduce){.stable-grid-row .cached-thumb{transition:none!important}}
 
 .file-card{position:relative}
 .protection-badge{pointer-events:none;white-space:nowrap;font-weight:750;letter-spacing:.01em}

@@ -8,8 +8,6 @@ process.env.MOCHIMONO_PROVIDER_THUMBNAIL_WORKERS ||= String(Math.max(2, Math.min
 process.env.MOCHIMONO_PROVIDER_THUMBNAIL_VIDEO_WORKERS ||= '2';
 process.env.MOCHIMONO_PROVIDER_SHARP_WORKERS ||= process.env.MOCHIMONO_PROVIDER_THUMBNAIL_WORKERS;
 
-const providerThumbsUrl = new URL('./lib/provider-thumbs.js', import.meta.url).href;
-const providerSharpProxyUrl = new URL('./lib/sharp-provider-proxy.js', import.meta.url).href;
 const agentSyncUrl = new URL('./lib/agent-sync.js', import.meta.url).href;
 const agentUrl = new URL('./agent.js', import.meta.url).href;
 const clientGatewayUrl = new URL('./client-gateway.js', import.meta.url).href;
@@ -25,9 +23,6 @@ const experimentalGatewayImports = new Set([
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
-    if (specifier === 'sharp' && context.parentURL === providerThumbsUrl) {
-      return { url:providerSharpProxyUrl, shortCircuit:true };
-    }
     if ((specifier === './thumbnail-agent.js' && context.parentURL === agentSyncUrl) ||
         (specifier === './lib/thumbnail-agent.js' && context.parentURL === agentUrl)) {
       return { url:thumbnailLazyUrl, shortCircuit:true };

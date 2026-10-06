@@ -129,19 +129,20 @@ function missingMetadata(url) {
   if (imports.length > 100) throw Object.assign(new Error('Too many imports'), { status: 400 });
   const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') || 100)));
   const marks = imports.map(() => '?').join(',');
+  const after = String(url.searchParams.get('after') || '');
   const objects = db.prepare(`
     SELECT o.hash, o.size, o.mime
     FROM sources s
     JOIN objects o ON o.hash = s.object_hash
     LEFT JOIN media_metadata mm ON mm.object_hash = o.hash
-    WHERE s.import_id IN (${marks}) AND o.state = 'active'
+    WHERE s.import_id IN (${marks}) AND o.state = 'active' AND o.hash > ?
       AND (mm.object_hash IS NULL OR COALESCE(mm.geometry_checked, 0) = 0)
       AND (o.mime LIKE 'image/%' OR o.mime LIKE 'video/%' OR ${mediaExtensionsSql()})
     GROUP BY o.hash, o.size, o.mime
-    ORDER BY o.size ASC, o.hash
+    ORDER BY o.hash
     LIMIT ?
-  `).all(...imports, limit);
-  if (!objects.length) return [];
+  `).all(...imports, after, limit);
+  if (!objects.length) return { files:[], nextAfter:null };
 
   const hashes = objects.map(item => item.hash);
   const hashMarks = hashes.map(() => '?').join(',');
@@ -156,7 +157,8 @@ function missingMetadata(url) {
     if (!byHash.has(source.hash)) byHash.set(source.hash, []);
     byHash.get(source.hash).push(source);
   }
-  return objects.map(item => ({ ...item, sources: byHash.get(item.hash) || [] }));
+  return { files:objects.map(item => ({ ...item, sources:byHash.get(item.hash) || [] })),
+    nextAfter:objects.length === limit ? objects.at(-1).hash : null };
 }
 
 function details(hash) {
@@ -265,7 +267,7 @@ export async function handleMetadata(req, res, url) {
     return true;
   }
   if (req.method === 'GET' && url.pathname === '/api/media-metadata/missing') {
-    json(res, 200, { files: missingMetadata(url) });
+    json(res, 200, missingMetadata(url));
     return true;
   }
 

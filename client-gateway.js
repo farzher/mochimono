@@ -6,7 +6,8 @@ import { platform } from 'node:os';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { json, pathKey, readJson, settings } from './lib/agent-context.js';
+import { json, pathKey, readJson, serverState, settings } from './lib/agent-context.js';
+import { driveReadStream } from './lib/drive-read.js';
 import { backupThumbnailCandidates } from './lib/backup-thumb-candidates.js';
 import { handleClientProviderApi } from './lib/client-providers.js';
 import { handleCompressionWorkApi } from './lib/compression-work.js';
@@ -15,7 +16,7 @@ import { handleImageOptimizeApi } from './lib/image-optimize.js';
 import { handleVideoOptimizeApi } from './lib/video-optimize.js';
 import { localDuplicateStats } from './lib/local-duplicate-stats.js';
 import { subscribeLocalCatalogChanges } from './lib/local-catalog-events.js';
-import { localCandidate, localCandidates, localCatalog, localCatalogState, localLocations } from './lib/local-locations.js';
+import { localCandidate, localCandidates, localCatalog, localCatalogState, localLocations, localLocationSnapshot } from './lib/local-locations.js';
 import { providerThumbnail, providerThumbnailFailure, queueProviderThumbnail, serveProviderThumbnail } from './lib/provider-thumbs.js';
 import { queueRemoteThumbnail, thumbnailFailure } from './lib/thumbnail-agent.js';
 
@@ -99,7 +100,7 @@ function streamLocalCatalogEvents(req, res) {
 
 async function serverThumbnails(hashes) {
   const empty = () => ({ ready: new Map(), missing: new Map() });
-  if (!settings.token || !hashes.length) return empty();
+  if (!settings.token || !hashes.length || !(await serverState()).online) return empty();
   try {
     const response = await fetch(`${settings.server}/api/thumbs/check`, {
       method: 'POST',
@@ -153,7 +154,8 @@ async function checkThumbnails(req, res) {
   }
 
   const remoteHashes = hashes.filter(hash => !ready.has(hash) && (!locals.has(hash) || providerThumbnailFailure(hash)));
-  const remote = await serverThumbnails(remoteHashes);
+  // Do not hold ready, disconnected-drive previews behind a Cloud timeout.
+  const remote = ready.size ? { ready:new Map(), missing:new Map() } : await serverThumbnails(remoteHashes);
   for (const [hash, thumb] of remote.ready) if (!ready.has(hash)) ready.set(hash, thumb);
 
   const unresolved = [];
@@ -176,7 +178,10 @@ async function checkThumbnails(req, res) {
 
     const failure = serverFile ? (remoteFailure || providerFailure) : providerFailure;
     if (failure) failures.set(hash, failure);
-    else unresolved.push(hash);
+    else {
+      unresolved.push(hash);
+      failures.set(hash, { hash, unavailable:true, retryAfterMs:30_000 });
+    }
   }
   queueBackupThumbnails(unresolved, background);
 
@@ -185,11 +190,12 @@ async function checkThumbnails(req, res) {
       hash: item.hash, width: Number(item.width) || 0, height: Number(item.height) || 0,
       duration: item.duration == null ? null : Number(item.duration)
     })),
-    failures: [...failures.values()]
+    failures: [...failures.values()],
+    pending:hashes.filter(hash => !ready.has(hash) && !failures.has(hash)).map(hash => ({ hash, retryAfterMs:1000 }))
   });
 }
 
-async function serveLocalObject(req, res, candidate) {
+async function serveLocalObject(req, res, candidate, priority = true) {
   let info;
   try { info = await stat(candidate.path); }
   catch { return false; }
@@ -208,7 +214,7 @@ async function serveLocalObject(req, res, candidate) {
   if (!range) {
     res.writeHead(200, { ...headers, 'content-length': info.size });
     if (req.method === 'HEAD') { res.end(); return true; }
-    const source = createReadStream(candidate.path);
+    const source = driveReadStream(candidate.path, { end:info.size - 1, priority });
     try { await pipeline(source, res); } catch {}
     return true;
   }
@@ -237,7 +243,7 @@ async function serveLocalObject(req, res, candidate) {
     'content-length': end - start + 1
   });
   if (req.method === 'HEAD') { res.end(); return true; }
-  const source = createReadStream(candidate.path, { start, end });
+  const source = driveReadStream(candidate.path, { start, end, priority });
   try { await pipeline(source, res); } catch {}
   return true;
 }
@@ -348,7 +354,7 @@ export async function handleClientGateway(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/client/locations') {
     const hash = String(url.searchParams.get('hash') || '');
     if (hash && !/^[a-f0-9]{64}$/.test(hash)) json(res, 400, { error: 'Invalid SHA-256 hash' });
-    else json(res, 200, localLocations(hash));
+    else json(res, 200, hash ? localLocations(hash) : await localLocationSnapshot());
     return true;
   }
   if (req.method === 'GET' && url.pathname === '/api/client/duplicate-stats') {
@@ -369,6 +375,7 @@ export async function handleClientGateway(req, res, url) {
       while (cursor < media.length) {
         const file = media[cursor++];
         const thumb = await providerThumbnail(file.hash);
+        file.previewReady = Boolean(thumb);
         if (thumb) { file.width = thumb.width; file.height = thumb.height; }
       }
     }));
@@ -417,7 +424,7 @@ export async function handleClientGateway(req, res, url) {
   const object = /^\/api\/objects\/([a-f0-9]{64})$/.exec(url.pathname);
   if (object && (req.method === 'GET' || req.method === 'HEAD')) {
     const candidate = localCandidate(object[1]);
-    if (candidate && await serveLocalObject(req, res, candidate)) return true;
+    if (candidate && await serveLocalObject(req, res, candidate, url.searchParams.get('background') !== '1')) return true;
   }
 
   const thumb = /^\/api\/thumbs\/([a-f0-9]{64})$/.exec(url.pathname);

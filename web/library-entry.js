@@ -1,9 +1,9 @@
-import { updateLibraryLoad } from './library-loading.js';
+import { updateLibraryLoad, updateLibraryWork } from './library-loading.js';
 
 const CLIENT = document.documentElement.classList.contains('client-library');
 const nativeFetch = window.fetch.bind(window);
 const FIRST_PAGE = 240;
-const PAGE = 5000;
+const PAGE = 1000;
 let generation = 0;
 let loading = null;
 let events = null;
@@ -62,15 +62,15 @@ async function loadLocalLibrary() {
   const seen = activeSeen = new Set();
   updateLibraryLoad();
   // This first request does not wait for settings, Cloud, IndexedDB, or a scan.
-  const first = page({ media:true }, '', FIRST_PAGE);
+  const requested = new URL(location.href).searchParams.get('folder') || '';
+  const first = page({ media:true, path:requested }, '', FIRST_PAGE);
   const versionRequest = json('/api/client/local-catalog/version').catch(() => ({ version:'', sources:[] }));
   const initial = await first;
   if (token !== generation) return;
-  if (!window.mochimonoLibrary.state().total) publish(initial.files);
+  publish(initial.files);
   const restoredCount = await window.mochimonoCatalogRestored;
   const { version, sources:configuredSources } = await versionRequest;
   if (token !== generation) return;
-  const requested = new URL(location.href).searchParams.get('folder') || '';
   const sources = configuredSources || [];
   if (!sources.length) sources.push({ path:'', importId:0 });
   sources.sort((a, b) => Number(pathKey(b.path) === pathKey(requested)) - Number(pathKey(a.path) === pathKey(requested)));
@@ -88,6 +88,7 @@ async function loadLocalLibrary() {
   window.mochimonoLibrary.beginUpdates();
   try {
     const remaining = [];
+    let paintedAt = performance.now();
     // Give every source a first page before loading the rest of a large drive.
     for (const source of sources) {
       const data = await page(source, '', FIRST_PAGE);
@@ -107,6 +108,12 @@ async function loadLocalLibrary() {
       if (token !== generation) return;
       publish(data.files, item.source);
       if (data.nextCursor) remaining.push({ ...item, cursor:data.nextCursor });
+      if (performance.now() - paintedAt >= 2000) {
+        window.mochimonoLibrary.endUpdates();
+        await turn(0);
+        window.mochimonoLibrary.beginUpdates();
+        paintedAt = performance.now();
+      }
       await turn(0);
     }
     window.mochimonoLibrary.remove(cachedLocalHashes.filter(hash => !seen.has(hash) && !window.mochimonoLibrary.file(hash)?.cloudBacked));
@@ -155,13 +162,30 @@ async function pollProgress() {
   if (document.hidden) return;
   try {
     const data = await json('/api/folder-stats');
-    const working = (data.folders || []).find(folder => folder.progress && !folder.hashing);
+    const folders = data.folders || [];
+    const working = folders.find(folder => folder.pending && !folder.hashing) ||
+      folders.find(folder => folder.hashing || folder.previewWarming || folder.previewQueueActive || folder.previewQueueBackground || folder.hashPending > 0);
     if (working) {
-      const p = working.progress;
+      const p = working.progress || {};
       const name = String(working.path).replace(/[\\/]+$/, '').split(/[\\/]/).at(-1);
-      const count = Number(p.scanned || 0).toLocaleString();
-      updateLibraryLoad({ phase:p.phase || 'Checking files', message:`${name} · ${count} checked${p.filesPerSecond ? ` · ${Number(p.filesPerSecond).toLocaleString()}/s` : ''}` });
-    } else if (!loading) updateLibraryLoad({ complete:true });
+      let phase, metric;
+      if (working.available === false) {
+        phase = 'Source offline';
+      } else if (working.pending && !working.hashing) {
+        phase = p.phase && p.phase !== 'Done' ? p.phase : 'Finding files';
+        metric = `${Number(p.scanned || working.files || 0).toLocaleString()} files`;
+      } else if (working.hashing) {
+        phase = 'Hashing content';
+        metric = `${Number(p.hashed || 0).toLocaleString()} hashed`;
+      } else if (working.previewWarming || working.previewQueueActive || working.previewQueueBackground) {
+        phase = working.previewPhase === 'waiting' ? 'Waiting to retry thumbnails' : 'Preparing thumbnails';
+        metric = `${Number(working.previewGenerated || 0).toLocaleString()} generated`;
+      } else {
+        phase = 'Content hashes pending';
+        metric = `${Number(working.hashPending || 0).toLocaleString()} remaining`;
+      }
+      updateLibraryWork({ phase, message:[name, metric].filter(Boolean).join(' · ') });
+    } else updateLibraryWork(null);
   } catch (error) {
     if (!loading && !window.mochimonoLibrary.state().total) updateLibraryLoad({ error:error.message });
   } finally { pollTimer = setTimeout(pollProgress, loading ? 2000 : 5000); }

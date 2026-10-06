@@ -340,6 +340,8 @@ function libraryFile(row, source) {
     height:Number(row.height) || 0,
     searchText:`${source.name} ${source.rootPath || ''} ${row.path}`,
     serverStored:Boolean(source.cloud && row.cloudSynced),
+    contentHashReady:Boolean(row.contentHashReady || row.cloudSynced),
+    backupIntent:source.cloud === true,
     browserSourceId:source.id
   };
 }
@@ -418,8 +420,8 @@ async function syncSource(id, { userGesture = false } = {}) {
         mime:mimeFor(file, path), cloudSynced:false
       };
       next.push(row);
-      batch.push(row);
-      if (source.cloud && !row.cloudSynced) uploads.push({ handle:item.handle, row });
+      if (!same) batch.push(row);
+      if (source.cloud) uploads.push({ handle:item.handle, row });
       else skipped++;
       scanned++;
       if (scanned === 1 || batch.length >= 64 || performance.now() - sliceStarted > 100) {
@@ -450,11 +452,19 @@ async function syncSource(id, { userGesture = false } = {}) {
           body:JSON.stringify({ paths:next.slice(offset, offset + 1000).map(row => row.path) })
         });
       }
+      const known = uploads.filter(item => item.row.cloudSynced);
+      const missing = new Set();
+      for (let offset = 0; offset < known.length; offset += 1000) {
+        const checked = await request('/api/objects/check', { method:'POST', headers:{ 'content-type':'application/json' },
+          body:JSON.stringify({ hashes:known.slice(offset, offset + 1000).map(item => item.row.hash) }) });
+        for (const hash of checked.missing || []) missing.add(hash);
+      }
+      const pendingUploads = uploads.filter(item => !item.row.cloudSynced || missing.has(item.row.hash));
       let cursor = 0;
       let uploadError = null;
-      await Promise.all(Array.from({ length:Math.min(2, uploads.length) }, async () => {
-        while (cursor < uploads.length && !uploadError) {
-          const { handle, row } = uploads[cursor++];
+      await Promise.all(Array.from({ length:Math.min(1, pendingUploads.length) }, async () => {
+        while (cursor < pendingUploads.length && !uploadError) {
+          const { handle, row } = pendingUploads[cursor++];
           try {
             if (!await sourceById(source.id)) throw new Error('Folder removed');
             const file = await handle.getFile();
@@ -466,6 +476,7 @@ async function syncSource(id, { userGesture = false } = {}) {
             });
             row.replacesHash = row.hash;
             row.hash = data.hash;
+            row.contentHashReady = true;
             row.cloudSynced = data.ignored !== true;
             await saveManifestBatch(source.id, [row]);
             await publishSource(source, [row]);
@@ -489,7 +500,6 @@ async function syncSource(id, { userGesture = false } = {}) {
     latest.lastError='';
     await saveSource(latest);
     await publishSource(latest,next);
-    queueSourcePreviews(next);
     if(source.cloud){
       await publishProtectionIntents();
       window.mochimonoLibrary?.refresh?.().catch?.(()=>{});

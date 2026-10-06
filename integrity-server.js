@@ -208,7 +208,7 @@ export async function handleIntegrity(req, res, url) {
       return true;
     }
     try {
-      const stored = await writeVerifiedObject({ root: DATA_DIR, hash, input: req, replace: true });
+      const stored = await writeVerifiedObject({ root:DATA_DIR, hash, input:req });
       if (Number(stored.size) !== Number(row.size)) throw new Error(`Size mismatch: expected ${row.size}, got ${stored.size}`);
       recordResult(hash, 'healthy');
       json(res, 200, { ok: true, hash, size: stored.size, repairedAt: now() });

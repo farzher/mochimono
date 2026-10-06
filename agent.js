@@ -341,6 +341,19 @@ async function handleLocalApi(req, res, url) {
     return true;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/browse-folders/thumbnail-failures') {
+    const path = url.searchParams.get('path');
+    json(res, 200, { failures:await (await browseFolders()).browseThumbnailFailures(path) });
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/browse-folders/thumbnails/retry') {
+    const body = await readJson(req);
+    const retried = await (await browseFolders(true)).retryBrowseThumbnails(body.path);
+    json(res, 200, { retried });
+    return true;
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/folders') {
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error:'Choose a folder' });
