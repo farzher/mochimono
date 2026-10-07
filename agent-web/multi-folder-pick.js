@@ -1,18 +1,15 @@
+import { reviewFolders } from './folder-review.js';
+
 const input = document.querySelector('#importPath');
 const choose = document.querySelector('#chooseImport');
 const addPanel = document.querySelector('#folderAdd');
 const addToggle = document.querySelector('#showFolderAdd');
-const frame = document.querySelector('#filesFrame');
-const folders = document.querySelector('#folders');
 const folderSection = document.querySelector('.storage-folders-section');
 
 if (addToggle) {
   let browserSelection = new Set();
   let browserPath = '';
   let browserData = null;
-  let adding = false;
-  let addMode = 'local';
-  let addScope = 'media';
   let dragDepth = 0;
 
   if (addPanel) addPanel.hidden = true;
@@ -43,21 +40,13 @@ if (addToggle) {
     <div class="dialog-head"><h3 data-browser-title>Add folders</h3><button type="button" class="icon" data-browser-close>×</button></div>
     <div class="folder-browser-path"><input data-browser-path aria-label="Folder path"><button type="button" class="secondary" data-browser-go>Go</button></div>
     <div class="folder-browser-tools"><button type="button" class="action-link" data-browser-up>↑ Up</button><label class="folder-browser-current"><input type="checkbox" data-browser-current> This folder</label></div>
-    <div class="folder-browser-mode" role="group" aria-label="Folder storage">
-      <button type="button" data-browser-mode="local" class="active"><strong>Local</strong><span>Index on this device</span></button>
-      <button type="button" data-browser-mode="cloud"><strong>Cloud</strong><span>Index + sync a Cloud copy</span></button>
-    </div>
-    <div class="folder-browser-scope" role="group" aria-label="Files to index">
-      <button type="button" data-browser-scope="media" class="active"><strong>Media</strong><span>Photos + videos</span></button>
-      <button type="button" data-browser-scope="all"><strong>Everything</strong><span>All files</span></button>
-    </div>
     <div class="folder-browser-list" data-browser-list><div class="folder-browser-empty">Loading…</div></div>
     <div class="folder-browser-footer"><span class="folder-browser-count" data-browser-count>Select folders</span><span class="spacer"></span><button type="button" class="secondary" data-browser-cancel>Cancel</button><button type="button" class="primary folder-browser-add" data-browser-confirm disabled>Add</button></div>`;
   document.body.append(browser);
 
   const dropOverlay = document.createElement('div');
   dropOverlay.className = 'folder-drop-overlay';
-  dropOverlay.innerHTML = '<div class="folder-drop-copy"><strong>Drop folders into Mochimono</strong><span>Choose Local or Cloud before anything starts.</span></div>';
+  dropOverlay.innerHTML = '<div class="folder-drop-copy"><strong>Drop folders into Mochimono</strong><span>Review contents before starting backup.</span></div>';
   document.body.append(dropOverlay);
 
   const browserTitle = browser.querySelector('[data-browser-title]');
@@ -67,8 +56,6 @@ if (addToggle) {
   const browserCount = browser.querySelector('[data-browser-count]');
   const browserUp = browser.querySelector('[data-browser-up]');
   const browserConfirm = browser.querySelector('[data-browser-confirm]');
-  const browserModes = [...browser.querySelectorAll('[data-browser-mode]')];
-  const browserScopes = [...browser.querySelectorAll('[data-browser-scope]')];
 
   const clean = value => String(value || '').trim().replace(/[\\/]+$/, '');
   const key = value => clean(value).toLowerCase();
@@ -97,15 +84,12 @@ if (addToggle) {
     if (checked && clean(path)) browserSelection.add(clean(path));
     updateCount();
   }
-  function setMode(mode) { addMode = mode === 'cloud' ? 'cloud' : 'local'; browserModes.forEach(button => button.classList.toggle('active', button.dataset.browserMode === addMode)); updateCount(); }
-  function setScope(scope) { addScope = scope === 'all' ? 'all' : 'media'; browserScopes.forEach(button => button.classList.toggle('active', button.dataset.browserScope === addScope)); updateCount(); }
-
   function updateCount() {
-    const count = browserSelection.size, mode = addMode === 'cloud' ? 'Cloud' : 'Local', scope = addScope === 'all' ? 'Everything' : 'Media';
-    browserCount.textContent = count ? `${count.toLocaleString()} selected · ${mode} · ${scope}` : `Select folders · ${mode} · ${scope}`;
-    browserTitle.textContent = count ? `Add ${count.toLocaleString()} folder${count === 1 ? '' : 's'}` : 'Add folders';
-    browserConfirm.disabled = !count || adding;
-    browserConfirm.textContent = adding ? (addMode === 'cloud' ? 'Adding to queue…' : 'Adding to queue…') : 'Add';
+    const count = browserSelection.size;
+    browserCount.textContent = count ? `${count.toLocaleString()} selected` : 'Select folders';
+    browserTitle.textContent = 'Choose folders';
+    browserConfirm.disabled = !count;
+    browserConfirm.textContent = 'Review';
   }
 
   function renderBrowser() {
@@ -133,31 +117,17 @@ if (addToggle) {
     event?.preventDefault(); event?.stopImmediatePropagation();
     const initial = [...new Set((initialPaths || []).map(clean).filter(Boolean))];
     if (browser.open) { for (const path of initial) setSelected(path, true); return; }
-    browserSelection = new Set(initial); browserData = null; adding = false; setMode('local'); setScope('media'); browser.showModal(); updateCount();
+    browserSelection = new Set(initial); browserData = null; browser.showModal(); updateCount();
     const start = initial[0] || browserPath || clean(input?.value);
     await loadBrowser(start);
   }
 
-  function refreshNow(paths = []) {
-    folders?.dispatchEvent(new MouseEvent('click', { bubbles:true }));
-    frame?.contentWindow?.mochimonoClientBridge?.followLocalIndex?.(paths);
-    setTimeout(() => { frame?.contentWindow?.mochimonoLibrary?.refresh?.().catch?.(() => {}); frame?.contentWindow?.mochimonoLocations?.refresh?.().catch?.(() => {}); }, 180);
-  }
-
   async function addSelected(event) {
-    event?.preventDefault(); event?.stopImmediatePropagation(); if (adding || !browserSelection.size) return;
-    adding = true; updateCount();
-    const paths = [...browserSelection], addedPaths = [], failed = []; let added = 0;
-    const endpoint = addMode === 'cloud' ? '/api/folders' : '/api/browse-folders';
-    for (const path of paths) {
-      try { await request(endpoint, { method:'POST', body:JSON.stringify({ path, scope:addScope }) }); added++; addedPaths.push(path); }
-      catch (error) { failed.push({ path, error:error.message }); }
-    }
-    adding = false;
-    if (failed.length) { browserSelection = new Set(failed.map(item => item.path)); updateCount(); renderBrowser(); toast(`${added ? `${added} queued · ` : ''}${failed.length} failed: ${failed[0].error}`); if (added) refreshNow(addedPaths); return; }
-    browser.close(); if (input) input.value = ''; refreshNow(addedPaths);
-    const mode = addMode === 'cloud' ? 'Cloud' : 'Local', scope = addScope === 'all' ? 'Everything' : 'Media';
-    toast(`${added.toLocaleString()} folder${added === 1 ? '' : 's'} queued · ${mode} · ${scope}`);
+    event?.preventDefault(); event?.stopImmediatePropagation();
+    if (!browserSelection.size) return;
+    const paths = [...browserSelection];
+    browser.close();
+    await reviewFolders(paths);
   }
 
   function uriPath(uri) {
@@ -184,8 +154,6 @@ if (addToggle) {
   addToggle.addEventListener('click', openBrowser, true); choose?.addEventListener('click', openBrowser, true);
   browser.addEventListener('change', event => { const checkbox = event.target.closest('[data-select-path]'); if (checkbox) setSelected(checkbox.dataset.selectPath, checkbox.checked); if (event.target === browserCurrent && browserPath) setSelected(browserPath, browserCurrent.checked); });
   browser.addEventListener('click', event => {
-    const mode = event.target.closest('[data-browser-mode]'); if (mode) return setMode(mode.dataset.browserMode);
-    const scope = event.target.closest('[data-browser-scope]'); if (scope) return setScope(scope.dataset.browserScope);
     const open = event.target.closest('[data-open-path]'); if (open) return void loadBrowser(open.dataset.openPath);
     if (event.target.closest('[data-browser-up]')) return void loadBrowser(browserUp.dataset.path);
     if (event.target.closest('[data-browser-go]')) return void loadBrowser(browserPathInput.value.trim());
@@ -193,7 +161,7 @@ if (addToggle) {
     if (event.target.closest('[data-browser-confirm]')) return void addSelected(event);
   });
   browserPathInput.addEventListener('keydown', event => { if (event.key !== 'Enter') return; event.preventDefault(); loadBrowser(browserPathInput.value.trim()); });
-  browser.addEventListener('cancel', () => { browserSelection.clear(); browserData = null; adding = false; });
+  browser.addEventListener('cancel', () => { browserSelection.clear(); browserData = null; });
 
   folderSection?.addEventListener('dragenter', event => { if (!dragHasFolders(event)) return; event.preventDefault(); dragDepth++; showDrop(true); });
   folderSection?.addEventListener('dragover', event => { if (!dragHasFolders(event)) return; event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'; showDrop(true); });

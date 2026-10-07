@@ -39,9 +39,9 @@ function loadLibrary(url = '') {
 }
 
 if (brand && manageButton) {
-  manageButton.textContent = 'Storage';
-  manageButton.title = 'Storage and protection';
-  manageButton.setAttribute('aria-label', 'Storage and protection');
+  manageButton.textContent = 'Backup';
+  manageButton.title = 'Backup';
+  manageButton.setAttribute('aria-label', 'Backup');
   brand.tabIndex = 0;
   brand.setAttribute('role', 'button');
   brand.title = 'Library';
@@ -62,15 +62,19 @@ function showTab(name) {
   localStorage.setItem(TAB_KEY, files ? 'files' : 'storage');
   if (manageButton) {
     manageButton.classList.toggle('active', !files);
-    manageButton.textContent = files ? 'Storage' : 'Library';
-    manageButton.title = files ? 'Storage and protection' : 'Back to library';
+    manageButton.textContent = 'Backup';
+    manageButton.title = 'Backup';
+    manageButton.setAttribute('aria-current',files ? 'false' : 'page');
+    document.querySelector('[data-library-home]')?.classList.toggle('active',files);
     manageButton.setAttribute('aria-label', manageButton.title);
   }
   clientMenu?.removeAttribute('open');
   syncHeaderScroll();
 }
 
-manageButton?.addEventListener('click', () => showTab(storagePane.hidden ? 'storage' : 'files'));
+window.mochimonoClientTabs = { show:showTab };
+manageButton?.addEventListener('click', () => showTab('storage'));
+document.querySelector('[data-library-home]')?.addEventListener('click',() => brand?.click());
 brand?.addEventListener('click', () => showTab('files'));
 brand?.addEventListener('keydown', event => {
   if (event.key !== 'Enter' && event.code !== 'Space') return;

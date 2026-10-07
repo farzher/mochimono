@@ -1,4 +1,5 @@
 import { db, json, now, readJson } from './lib/server-context.js';
+import { protectionAfterRemovingCopy } from './protection-server.js';
 
 const AGENT_PRESENCE_MAX_AGE_MS = 3 * 60 * 1000;
 
@@ -72,7 +73,8 @@ function verifiedOriginalSafety(hash, locationId) {
     }
   }
 
-  return { safe:alternatives.length > 0, currentVerified:true, alternatives };
+  const remaining = protectionAfterRemovingCopy(hash, currentDrive || locationId);
+  return { safe:alternatives.length > 0 && remaining?.meets === true, currentVerified:true, alternatives, remaining };
 }
 
 export async function handleRepresentationPolicyServer(req, res, url) {

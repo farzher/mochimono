@@ -87,13 +87,13 @@ function applyPageFromUrl() {
   const showingStorage = !storagePane.hidden;
   if (wantStorage === showingStorage) return;
   restoringPage = true;
-  try { manageButton.click(); }
+  try { window.mochimonoClientTabs.show(wantStorage ? 'storage' : 'files'); }
   finally { restoringPage = false; }
 }
 
 manageButton?.addEventListener('click', () => {
   if (restoringPage) return;
-  pushPage(storagePane.hidden ? 'files' : 'storage');
+  pushPage('storage');
 });
 
 function libraryHomeUrl() {
@@ -177,7 +177,7 @@ async function openSourceFolder(row, link) {
     scope.commit(result.path, 'replace');
     if (!storagePane.hidden) {
       restoringPage = true;
-      try { manageButton?.click(); }
+      try { window.mochimonoClientTabs.show('files'); }
       finally { restoringPage = false; }
     }
     child.focus();

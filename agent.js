@@ -6,13 +6,15 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
 import { api, cancelJob, currentJob, DEVICE, json, pathKey, persistSettings, preemptBackgroundJob, readJson, serverState, settings, startJob } from './lib/agent-context.js';
-import { backgroundWorkStatus } from './lib/background-work.js';
+import { backgroundWorkStatus, noteBackgroundActivity } from './lib/background-work.js';
+import { setWorkFocus, noteWorkRequested } from './lib/work-demand.js';
 import { addFolder, folderFor, folderStats, queueFolderSync, removeFolder, startSyncService } from './lib/agent-sync.js';
 import { backupContents, backupDisconnect, backupInit, backupLocations, backupRestore, backupStatus, backupVerify } from './lib/agent-backups.js';
 import { invalidateClientProviders } from './lib/client-provider-cache.js';
 import { pickFolder } from './lib/folder-picker.js';
 import { handleSourceExclusions } from './lib/source-exclusion-routes.js';
 import { thumbnailAgentStatus } from './lib/thumbnail-agent.js';
+import { handleProtectionAgent } from './lib/protection-agent.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'agent-web');
@@ -218,6 +220,15 @@ async function handleLocalApi(req, res, url) {
     return true;
   }
 
+  if(req.method==='POST'&&url.pathname==='/api/work/focus'){
+    const body=await readJson(req);
+    const id=String(body.id || '');
+    if(!/^[a-z0-9-]{8,80}$/i.test(id)){json(res,400,{error:'Window identity required'});return true;}
+    if(!Number.isSafeInteger(body.sequence)||body.sequence<0){json(res,400,{error:'Focus sequence required'});return true;}
+    setWorkFocus(id,body.focused===true,body.sequence);
+    if(body.focused!==true)noteBackgroundActivity();
+    json(res,200,{ok:true});return true;
+  }
   if (req.method === 'GET' && url.pathname === '/api/state') {
     if (!deviceIdentityWork && !deviceIdentityReconciled) {
       deviceIdentityWork = reconcileDeviceIdentity().catch(error => console.warn('Device identity update:', error.message)).finally(() => { deviceIdentityWork = null; });
@@ -227,7 +238,7 @@ async function handleLocalApi(req, res, url) {
     json(res, 200, {
       settings:{
         server:settings.server, hasToken:Boolean(settings.token), device:settings.device,
-        uploadWorkers:settings.uploadWorkers, thumbnailMode:settings.thumbnailMode, folders:visibleFolders(),
+        uploadWorkers:settings.uploadWorkers, folders:visibleFolders(),
         lanAccess:activeHost !== '127.0.0.1' && activeHost !== 'localhost',
         lanAccessLocked:Boolean(HOST_OVERRIDE),
         lanUrls:lanUrls()
@@ -254,7 +265,6 @@ async function handleLocalApi(req, res, url) {
     const previousDevice = settings.device;
     const previousServer = settings.server;
     const previousToken = settings.token;
-    const previousThumbnailMode = settings.thumbnailMode;
     const previousLanAccess = settings.lanAccess;
     if (body.server !== undefined) settings.server = String(body.server || 'http://127.0.0.1:8642').trim().replace(/\/$/, '');
     if (body.token !== undefined) settings.token = String(body.token || '');
@@ -268,17 +278,11 @@ async function handleLocalApi(req, res, url) {
       if (![1, 2, 4].includes(workers)) return json(res, 400, { error:'Upload concurrency must be 1, 2, or 4' });
       settings.uploadWorkers = workers;
     }
-    if (body.thumbnailMode !== undefined) {
-      const mode = String(body.thumbnailMode || '');
-      if (!['off', 'idle', 'max'].includes(mode)) return json(res, 400, { error:'Background mode must be off, idle, or max' });
-      settings.thumbnailMode = mode;
-    }
     if (body.lanAccess !== undefined && !HOST_OVERRIDE) settings.lanAccess = body.lanAccess === true;
     await persistSettings();
 
     const connectionChanged = settings.server !== previousServer || settings.token !== previousToken;
     const deviceChanged = settings.device !== previousDevice;
-    const previewModeChanged = settings.thumbnailMode !== previousThumbnailMode;
     const lanChanged = !HOST_OVERRIDE && settings.lanAccess !== previousLanAccess;
     if (connectionChanged || deviceChanged) deviceIdentityReconciled = false;
     await reconcileDeviceIdentity();
@@ -288,12 +292,8 @@ async function handleLocalApi(req, res, url) {
       await Promise.allSettled(ids.map(id => api(`/api/imports/${id}`, { method:'POST', body:{ sourceName:settings.device } })));
     }
     if (settings.token && (connectionChanged || deviceChanged)) settings.folders.forEach(folder => queueFolderSync(folder.path, undefined, 0));
-    if (previewModeChanged) {
-      (await providerThumbs()).refreshProviderThumbnailPolicy();
-      if (settings.browseFolders.length || browseFoldersPromise) (await browseFolders()).refreshBrowsePreviewPolicy(previousThumbnailMode);
-    }
     if (connectionChanged || deviceChanged) invalidateClientProviders();
-    json(res, 200, { ok:true, thumbnailMode:settings.thumbnailMode, lanAccess:settings.lanAccess });
+    json(res, 200, { ok:true, lanAccess:settings.lanAccess });
     if (lanChanged) setTimeout(() => rebindServer(desiredHost()).catch(error => console.error('Could not change LAN access:', error)), 40);
     return true;
   }
@@ -355,10 +355,11 @@ async function handleLocalApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/folders') {
+    noteWorkRequested();
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error:'Choose a folder' });
     else {
-      const folder = await addFolder(body.path, body.scope);
+      const folder = await addFolder(body.path, body.scope, body.level);
       ensureSyncService();
       invalidateClientProviders();
       json(res, 200, { folder });
@@ -366,7 +367,21 @@ async function handleLocalApi(req, res, url) {
     return true;
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/folders/browse') {
+    noteWorkRequested();
+    const body = await readJson(req);
+    if (!body.path) json(res,400,{ error:'Folder required' });
+    else {
+      if (folderFor(body.path)) await removeFolder(body.path,true);
+      const folder = await (await browseFolders(true)).addBrowseFolder(body.path,body.scope || 'all');
+      invalidateClientProviders();
+      json(res,200,{ folder });
+    }
+    return true;
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/folders/sync') {
+    noteWorkRequested();
     const body = await readJson(req);
     const protectedFolder = body.path ? folderFor(body.path) : null;
     const browseFolder = body.path ? configuredBrowsePath(body.path) : null;
@@ -398,6 +413,7 @@ async function handleLocalApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/browse-folders') {
+    noteWorkRequested();
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error:'Choose a folder' });
     else {
@@ -409,6 +425,7 @@ async function handleLocalApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/browse-folders/index') {
+    noteWorkRequested();
     const body = await readJson(req);
     const path = body.path ? configuredBrowsePath(body.path) : null;
     if (!path) json(res, 404, { error:'Folder not found' });
@@ -421,10 +438,11 @@ async function handleLocalApi(req, res, url) {
   }
 
   if (req.method === 'POST' && url.pathname === '/api/browse-folders/protect') {
+    noteWorkRequested();
     const body = await readJson(req);
     if (!body.path) json(res, 400, { error:'Folder required' });
     else {
-      const folder = await (await browseFolders(true)).protectBrowseFolder(body.path, addFolder);
+      const folder = await (await browseFolders(true)).protectBrowseFolder(body.path, (path,scope) => addFolder(path,scope,body.level));
       ensureSyncService();
       invalidateClientProviders();
       json(res, 200, { folder });
@@ -513,6 +531,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     if (url.pathname.startsWith('/api/')) {
+      if (await handleProtectionAgent(req, res, url)) return;
       if (await handleLocalApi(req, res, url)) return;
       if (await handleLazyClientImport(req, res, url)) return;
       if (await handleLazyClientGateway(req, res, url)) return;

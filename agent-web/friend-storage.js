@@ -100,7 +100,7 @@ if (storagePane) {
 
   function showRecovery(target) {
     secretDialog.querySelector('[data-secret-title]').textContent = `${target.name || 'Friend backup'} recovery key`;
-    secretDialog.querySelector('[data-secret-copy]').innerHTML = `<code class="friend-secret">${esc(target.recoveryKey || '')}</code><button class="action-link" data-copy-secret="${esc(target.recoveryKey || '')}">Copy</button>`;
+    secretDialog.querySelector('[data-secret-copy]').innerHTML = `<code class="friend-secret">${esc(target.recoveryKey || '')}</code><button class="action-link" data-copy-secret="${esc(target.recoveryKey || '')}">Copy</button><p class="backup-note">Keep this key outside this PC. Without it, your friend’s encrypted copies cannot be recovered after losing this PC.</p><button class="primary" data-saved-key="${esc(target.id)}" ${target.keySaved?'disabled':''}>${target.keySaved?'Key saved outside this PC':'I saved this key outside this PC'}</button>`;
     secretDialog.showModal();
   }
 
@@ -175,6 +175,18 @@ if (storagePane) {
     }
     return false;
   }
+
+  secretDialog.addEventListener('click',async event=>{
+    const button=event.target.closest('[data-saved-key]');
+    if(!button)return;
+    button.disabled=true;
+    try{
+      await local(`/local/friend-backups/${encodeURIComponent(button.dataset.savedKey)}/key-saved`,{method:'POST',body:{confirm:true}});
+      await refresh();secretDialog.close();
+      window.dispatchEvent(new CustomEvent('mochimono:protection-changed'));
+      toast('Recovery key saved · ready for backup');
+    }catch(error){toast(error.message);button.disabled=false;}
+  });
 
   addDialog.querySelectorAll('[data-friend-close]').forEach(button => button.onclick = () => addDialog.close());
   offerDialog.querySelectorAll('[data-offer-close]').forEach(button => button.onclick = () => offerDialog.close());

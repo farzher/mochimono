@@ -38,10 +38,15 @@ body :is(button, a, summary, [role="button"]):focus-visible {
 }
 body :is(input, select):not([type="checkbox"]):not([type="range"]):not([type="hidden"]) {
   min-height: 42px; border: 1px solid var(--line); border-radius: 9px;
-  background: var(--bg); color: var(--text); font-size: 13px;
+  background-color: var(--bg); color: var(--text); font-size: 13px;
+}
+body select:not([multiple]):not([size]) {
+  appearance: none; padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%23b5aabb' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: right 12px center; background-size: 12px 12px; background-repeat: no-repeat;
 }
 body input::placeholder { color: var(--muted2); }
-body :is(input, select):focus { background: var(--surface); border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
+body :is(input, select):focus { background-color: var(--surface); border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
 body :is(input, select, textarea):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 body input[type="checkbox"], body input[type="range"] { accent-color: var(--accent); }
 body .primary { min-height: 40px; border-radius: 9px; background: var(--accent); color: var(--on-accent); font-weight: 600; box-shadow: inset 0 1px 0 #ffffff20; }
@@ -179,17 +184,14 @@ body .client-library-empty button:hover { background: var(--surface2); }
 
 /* Sources: previews first, details second, controls last. */
 body #storagePane { width: min(1220px, calc(100% - 64px)); padding: 40px 0 80px; gap: 32px; }
-body #storagePane .storage-folders-section { grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 20px; }
 body .storage-section-heading { margin: 0 0 16px; }
 body .storage-section-heading h2, body .backup-center-head h2 { color: var(--text); font-size: 18px; font-weight: 500; letter-spacing: -.025em; }
 body .storage-folders-section > .storage-section-heading { margin-bottom: 8px; }
-body .storage-folders-section > .storage-section-heading h2 { font-size: 32px; font-weight: 450; letter-spacing: -.045em; }
 body #storagePane .folder-item { border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: inset 0 1px 0 #ffffff04; }
 body #storagePane .folder-item:hover, body #storagePane .folder-item:focus-within { border-color: var(--accent-line); background: var(--surface); box-shadow: var(--shadow); }
 body #storagePane .folder-item .storage-folder-samples { aspect-ratio: 2 / 1; gap: 3px !important; background: var(--bg); }
 body #storagePane .folder-item:not(:has(.storage-folder-samples))::before { aspect-ratio: 2 / 1; background: var(--surface2); }
 body #storagePane .folder-item .storage-folder-sample { background: var(--surface2); }
-body #storagePane .folder-item .storage-copy { padding: 18px; min-height: 150px; }
 body #storagePane .folder-item .storage-title strong { flex-direction: column !important; align-items: flex-start !important; gap: 5px !important; }
 body #storagePane .folder-item .storage-path-name { max-width: 100%; color: var(--text); font-size: 16px; font-weight: 550; letter-spacing: -.02em; }
 body #storagePane .folder-item .storage-path-parent { width: 100%; color: var(--muted2); font-family: inherit; font-size: 10px; line-height: 1.4; }
@@ -200,12 +202,6 @@ body #storagePane .folder-item .item-state.warning { color: var(--amber); backgr
 body #storagePane .folder-item .storage-meta { margin-top: 12px; color: var(--muted); font-size: 11px; font-weight: 400; }
 body #storagePane .folder-item .storage-meta span:nth-child(1), body #storagePane .folder-item .storage-meta span:nth-child(3) { color: var(--muted); }
 body #storagePane .folder-item .source-controls { margin-top: 16px; padding-top: 12px; border-color: var(--line); }
-body #storagePane .source-control-group { gap: 3px; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; }
-body #storagePane .source-control { width: 36px; height: 32px; border-radius: 6px; color: var(--muted2); }
-body #storagePane .source-control:hover { background: var(--surface2); color: var(--text); }
-body #storagePane .source-control.active { background: var(--accent-soft); color: var(--accent); }
-body #storagePane .source-control.fixed { background: transparent; color: var(--muted); }
-body #storagePane .source-control.sync { background: transparent; color: var(--muted); }
 body #storagePane .source-action-menu { position: absolute; z-index: 5; top: 10px; right: 10px; }
 body #storagePane .source-action-menu > summary { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #ffffff20; border-radius: 9px; background: #121016dd; color: var(--text); font-size: 12px; letter-spacing: 1px; cursor: pointer; list-style: none; }
 body #storagePane .source-action-menu > summary::-webkit-details-marker { display: none; }
@@ -217,49 +213,31 @@ body #storagePane .folder-item .item-progress { border-color: var(--line); }
 body #storagePane .folder-item .inline-progress-head strong { color: var(--muted); font-size: 11px; font-weight: 500; }
 body #storagePane .folder-item .inline-progress-meta { color: var(--muted2); font-size: 10px; }
 body #storagePane .folder-item .progress-bar i { background: var(--accent); }
-body .storage-add-folder { align-self: start; min-height: 0; padding: 22px !important; border: 1px dashed #ffffff26; border-radius: 14px; background: transparent; }
-body .storage-add-folder:hover { background: var(--surface); border-color: var(--accent-line); }
-body .storage-add-folder .storage-add-visual { aspect-ratio: auto; width: 40px !important; height: 40px !important; margin-bottom: 20px; border: 1px solid var(--line) !important; border-radius: 10px !important; background: var(--surface); color: var(--accent); font-size: 24px; font-weight: 300; }
-body .storage-add-folder:hover .storage-add-visual { background: var(--surface2); color: var(--text); }
-body .storage-add-folder .storage-add-copy { min-height: 0; padding: 0; color: var(--muted); font-size: 13px; font-weight: 500; }
-body .storage-add-folder:hover .storage-add-copy { color: var(--text); }
 
 /* Backup and destinations use quieter, compact panels. */
 body .backup-center, body .managed-storage-section { margin-top: 4px; padding-top: 28px; border-color: var(--line); }
-body .backup-center-head { margin-bottom: 16px; }
-body .backup-center-manage { min-height: 40px; border: 1px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 500; }
-body .backup-center-manage:hover { background: var(--surface2); color: var(--text); }
-body .backup-health { grid-template-columns: 54px minmax(0, 1fr) auto; gap: 18px; padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: none; }
-body .backup-health-ring { width: 52px; height: 52px; background: conic-gradient(var(--ring) var(--p), var(--surface3) 0); }
-body .backup-health-ring::after { inset: 4px; background: var(--surface); }
-body .backup-health-ring b { color: var(--text); font-size: 12px; font-weight: 500; }
-body .backup-health-title { color: var(--text); font-size: 17px; font-weight: 500; letter-spacing: -.02em; }
-body .backup-health-sub { color: var(--muted); font-size: 12px; font-weight: 400; }
-body .backup-review { background: var(--surface); border: 1px solid #d3a06730; box-shadow: none; }
 body .managed-storage-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 16px; }
-body .managed-storage-card { position: relative; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+body .managed-storage-card { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 178px; padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); text-align: center; }
 body .managed-storage-card:hover, body .managed-storage-card:focus-visible { border-color: var(--accent-line); background: var(--surface); }
-body .managed-storage-visual { height: 80px; padding: 18px 18px 0; place-items: start; border: 0; background: transparent; }
+body .managed-storage-visual { width: 100%; height: 44px; padding: 0; place-items: center; border: 0; background: transparent; }
 body .managed-storage-icon { width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface2); color: var(--accent); }
 body .managed-storage-icon.mochimono { border: 0; }
-body .managed-storage-icon.mochimono .mini { transform: none; }
+body .managed-storage-icon.mochimono .mini { transform: scale(1.2); }
 body .managed-storage-icon svg { width: 24px; height: 24px; }
-body .managed-storage-copy { padding: 0 18px 18px; }
+body .managed-storage-copy { width: 100%; padding: 0; }
+body .managed-storage-title { justify-content: center; }
 body .managed-storage-title strong { color: var(--text); font-size: 14px; font-weight: 500; }
 body .managed-storage-dot { width: 5px; height: 5px; background: var(--green); }
 body .managed-storage-meta { color: var(--muted2); font-size: 11px; font-weight: 400; }
-body .managed-storage-space { margin-top: 18px; color: var(--muted); font-size: 11px; font-weight: 400; }
+body .managed-storage-space { justify-content: center; flex-wrap: wrap; gap: 6px 12px; margin-top: 14px; color: var(--muted); font-size: 11px; font-weight: 400; }
+body .managed-storage-space > span:empty { display: none; }
 body .managed-storage-space .free { color: var(--muted); }
 body .managed-storage-meter { height: 3px; margin-top: 10px; background: var(--surface3); }
 body .managed-storage-meter i { background: var(--accent); }
 body .managed-storage-add { border-style: dashed; background: transparent; }
-body .managed-storage-add-mark { width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 10px; color: var(--accent); background: var(--surface); font-size: 24px; }
-body .managed-storage-add .managed-storage-copy { min-height: 60px; }
-body .managed-app-storage { border-color: var(--line); }
-body .managed-app-cache { flex-wrap: wrap; }
-body .managed-app-cache .managed-storage-meta { max-width: min(420px, 45vw); }
-body .managed-app-storage > span { font-weight: 500; color: var(--muted2); }
-body .managed-app-cache:hover { background: var(--surface); }
+body .managed-storage-add-mark { width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 10px; color: var(--accent); background: var(--surface); }
+body .managed-storage-add-mark svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; }
+body .managed-storage-add .managed-storage-copy { min-height: 0; justify-content: center; }
 
 /* Dialogs: native focus management, contained scrolling, consistent surfaces. */
 body dialog {
@@ -403,7 +381,6 @@ body .library-loading-status > button { background: var(--accent-soft); border-c
   body .shell { width: calc(100% - 32px); padding-top: 16px; }
   html.client-library body .shell { padding-top: 80px !important; }
   body .topbar { margin-bottom: 24px; }
-  body .storage-folders-section > .storage-section-heading h2 { font-size: 28px; }
   body .commandbar { top: 8px; gap: 6px; padding: 6px; }
   body .command-home { flex-basis: 36px; width: 36px; height: 42px; }
   body .commandbar .library-search .search { height: 42px; min-height: 42px; padding-right: 12px; padding-left: 34px; font-size: 12px; }
@@ -433,9 +410,6 @@ body .library-loading-status > button { background: var(--accent-soft); border-c
   body .backup-health-title { font-size: 15px; }
   body .backup-health-actions:empty { display: none; }
   body .managed-storage-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); }
-  body .managed-app-storage { align-items: flex-start; flex-direction: column; gap: 8px; }
-  body .managed-app-cache { max-width: 100%; padding-left: 0; }
-  body .managed-app-cache .managed-storage-meta { max-width: calc(100vw - 48px); }
   body dialog { padding: 20px; max-height: calc(100dvh - 24px); }
   body .viewer-bar { height: 60px; padding: 8px; gap: 6px; }
   body .viewer-title strong { max-width: 38vw; font-size: 11px; }

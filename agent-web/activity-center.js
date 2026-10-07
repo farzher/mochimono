@@ -8,7 +8,6 @@ const frame = document.querySelector('#filesFrame');
 if (host) {
   const RECENT_KEY = 'mochimono.activity.recent';
   const RECENT_OPEN_KEY = 'mochimono.activity.recent.open';
-  const MODE_LABEL = { off:'Off', idle:'Idle', max:'Always' };
   let dialog = null;
   let button = null;
   let timer = 0;
@@ -36,7 +35,6 @@ if (host) {
     .activity-count{color:#cfc3bf;font-size:11px;font-variant-numeric:tabular-nums}
     .activity-dialog{width:min(680px,calc(100vw - 24px));max-height:min(820px,calc(100dvh - 24px));padding:0;overflow:hidden}.activity-dialog .dialog-head{padding:17px 20px 14px;border-bottom:1px solid #292529}.activity-dialog .dialog-head h3{font-size:18px;font-weight:820;letter-spacing:-.02em}.activity-body{max-height:calc(min(820px,100dvh - 24px) - 60px);overflow:auto;overscroll-behavior:contain;padding:20px;scrollbar-gutter:stable}
     .activity-overview{display:grid;grid-template-columns:54px minmax(0,1fr);gap:14px;align-items:center;padding:16px 17px;border-radius:16px;background:#151316;box-shadow:inset 0 0 0 1px #2b272b}.activity-orb{width:50px;height:50px;display:grid;place-items:center;border-radius:15px;background:#211e22}.activity-orb i{width:15px;height:15px;border:3px solid #777073;border-radius:50%}.activity-overview.working .activity-orb{background:#281d20}.activity-overview.working .activity-orb i{border-color:#e99b95;border-right-color:transparent;animation:activity-spin 1s linear infinite}.activity-overview.waiting .activity-orb i{border:0;width:12px;height:12px;background:#b08c68;box-shadow:0 0 0 7px rgba(176,140,104,.1)}.activity-overview strong{display:block;color:#f1e9e5;font-size:22px;font-weight:820;letter-spacing:-.03em}.activity-overview span{display:block;margin-top:3px;color:#988f8b;font-size:13px;font-weight:620}
-    .activity-setting{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:12px;padding:10px 12px 10px 15px;border-radius:13px;background:#111012}.activity-setting>strong{color:#d8cfcb;font-size:13px;font-weight:760}.activity-mode-buttons{display:flex;gap:4px;padding:3px;border-radius:10px;background:#1d1a1e}.activity-mode-buttons button{height:34px;min-width:72px;padding:0 11px;border:0;border-radius:7px;background:transparent;color:#8d8581;font-size:11.5px;font-weight:760;white-space:nowrap}.activity-mode-buttons button:hover{color:#e2d9d5}.activity-mode-buttons button.active{background:#373136;color:#f3ebe7;box-shadow:0 1px 4px rgba(0,0,0,.22)}
     .activity-section{margin-top:22px}.activity-section-head{display:flex;align-items:center;gap:8px;margin:0 2px 9px;color:#c7beba;font-size:13px;font-weight:800}.activity-section-head b{min-width:22px;padding:2px 6px;border-radius:999px;background:#211e22;color:#8f8783;font-size:10px;font-weight:760;text-align:center}.activity-list{display:grid;gap:8px}
     .activity-row{display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:12px;align-items:center;min-width:0;padding:12px 13px;border:0;border-radius:14px;background:#141214;box-shadow:inset 0 0 0 1px #272327}.activity-row.running{background:#181315;box-shadow:inset 3px 0 0 #d98f89,inset 0 0 0 1px #30272a}.activity-row.error{box-shadow:inset 3px 0 0 #bc6e76,inset 0 0 0 1px #38272b}.activity-task-icon{width:40px;height:40px;display:grid;place-items:center;border-radius:11px;background:#211e22;color:#b8afab}.activity-row.running .activity-task-icon{background:#2a2023;color:#e3aaa5}.activity-task-icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.activity-row-main{min-width:0}.activity-row-head{min-width:0}.activity-row-head strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e9e0dc;font-size:14.5px;font-weight:790;letter-spacing:-.012em}.activity-detail{margin-top:3px;white-space:normal;line-height:1.5;color:#958c88;font-size:11.5px;font-weight:560;font-variant-numeric:tabular-nums}.activity-progress{height:7px;margin-top:10px;overflow:hidden;border-radius:99px;background:#2a262a}.activity-progress i{display:block;height:100%;min-width:3px;border-radius:inherit;background:#df938d;transition:width .3s ease}.activity-progress.indeterminate i{width:34%;animation:activity-slide 1.25s ease-in-out infinite}.activity-side{display:flex;align-items:center;gap:7px;color:#8a817e;font-size:11px;font-weight:700;white-space:nowrap}.activity-percent{color:#cfc4c0;font-variant-numeric:tabular-nums}.activity-cancel{width:30px;height:30px;border:0;border-radius:8px;background:#211e22;color:#9c918d;padding:0;font-size:0}.activity-cancel:hover{background:#302b30;color:#f0e7e3}.activity-cancel:after{content:'×';font-size:17px}.activity-empty{padding:14px 2px;color:#827a77;font-size:12px}
     .activity-recent{margin-top:20px;padding-top:4px;border-top:1px solid #292529}.activity-recent .activity-list,.activity-recent .activity-empty{display:none}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{display:grid}.activity-recent .activity-section-head{margin:0;padding:12px 2px 2px;cursor:pointer;user-select:none}.activity-recent .activity-section-head:hover{color:#eee5e1}.activity-recent .activity-section-head:after{content:'›';margin-left:auto;font-size:19px;color:#8f8582;transform:rotate(90deg);transition:transform .15s}.activity-recent.open .activity-section-head:after{transform:rotate(-90deg)}.activity-recent.open .activity-list,.activity-recent.open .activity-empty{margin-top:8px}.activity-recent .activity-row{grid-template-columns:34px minmax(0,1fr) auto;padding:9px 11px;border-radius:11px;background:#111012}.activity-recent .activity-task-icon{width:32px;height:32px;border-radius:9px}.activity-recent .activity-task-icon svg{width:18px;height:18px}.activity-recent .activity-row-head strong{font-size:13px}.activity-recent .activity-detail,.activity-recent .activity-progress{display:none}
@@ -192,7 +190,7 @@ if (host) {
       } else if(folder.pending&&!globalHere){
         queued.push({id:`folder:${key}`,source:'folder',kind:folder.protected===false?'Index':'Sync',title:name,path,status:folder.available===false?'blocked':'queued',detail:folder.available===false?'Drive offline':folder.waitingForIdle?'Waiting until your PC is idle':'Waiting to start'});
       }
-      if(folder.hashPending>0&&!folder.hashing&&state?.settings?.thumbnailMode!=='off')queued.push({id:`hash:${key}`,source:'folder',kind:'Hash',title:name,path,phase:folder.hashWaitReason||(folder.available===false?'Drive offline':folder.hashWaiting?'Waiting for idle':'Waiting to start'),remaining:Number(folder.hashPending),status:folder.available===false?'blocked':'queued',detail:`${Number(folder.hashPending).toLocaleString()} files · ${folder.hashWaitReason||(folder.available===false?'Drive offline':folder.hashWaiting?'Waiting until your PC is idle':'Waiting to start')}`});
+      if(folder.hashPending>0&&!folder.hashing)queued.push({id:`hash:${key}`,source:'folder',kind:'Hash',title:name,path,phase:folder.hashWaitReason||(folder.available===false?'Drive offline':folder.hashWaiting?'Waiting for idle':'Waiting to start'),remaining:Number(folder.hashPending),status:folder.available===false?'blocked':'queued',detail:`${Number(folder.hashPending).toLocaleString()} files · ${folder.hashWaitReason||(folder.available===false?'Drive offline':folder.hashWaiting?'Waiting until your PC is idle':'Waiting to start')}`});
       if(folder.lastIndexed)recent.push({id:`recent-index:${key}:${folder.lastIndexed}`,source:'folder',kind:'Index',title:name,status:'done',finishedAt:folder.lastIndexed,detail:`${Number(folder.files||0).toLocaleString()} files indexed`});
     }
     return {active,queued,recent};
@@ -221,9 +219,8 @@ if (host) {
       const unit='ready';
       const unavailable=folder.previewPhase==='unavailable'||folder.available===false;
       const blocked=folder.previewPhase==='waiting';
-      const paused=state?.settings?.thumbnailMode==='off';
-      const phase=unavailable?'Drive offline':blocked?'Waiting to retry':paused?'Background work is off':waiting?'Waiting for idle':driveBlocked?'Waiting for drive':activeCount||queuedCount?'Generating':checking?'Checking thumbnails':'Generating';
-      const status=unavailable||blocked?'blocked':paused||waiting||driveBlocked?'queued':'running';
+      const phase=unavailable?'Drive offline':blocked?'Waiting to retry':waiting?'Waiting for idle':driveBlocked?'Waiting for drive':activeCount||queuedCount?'Generating':checking?'Checking thumbnails':'Generating';
+      const status=unavailable||blocked?'blocked':waiting||driveBlocked?'queued':'running';
       const detail=[phase];
       if(progressTotal)detail.push(`${Math.min(done,progressTotal).toLocaleString()} / ${progressTotal.toLocaleString()} ${unit}`);
       else {
@@ -251,7 +248,7 @@ if (host) {
       (uploading?active:queued).push(item);
     }
     if(activeCount||waitingCount){
-      const wait=state?.settings?.thumbnailMode==='off'?'Generated when viewed':previews.waitingForIdle?'Waiting until your PC is idle':'';
+      const wait=previews.waitingForIdle?'Waiting until your PC is idle':'';
       const item={id:'thumbs:library',source:'preview',kind:'Thumbnail',title:'Library',status:activeCount?'running':'queued',detail:[activeCount?`${activeCount} generating`:'',waitingCount?`${waitingCount.toLocaleString()} waiting`:'',wait].filter(Boolean).join(' · '),phase:wait||'Generating thumbnails'};
       (activeCount?active:queued).push(item);
     }
@@ -304,7 +301,6 @@ if (host) {
     document.body.append(dialog);
     const body=dialog.querySelector('[data-body]');
     body.innerHTML=`<div class="activity-overview"><div class="activity-orb" aria-hidden="true"><i></i></div><div><strong></strong><span></span></div></div>
-      <div class="activity-setting"><strong>Background work</strong><div class="activity-mode-buttons" role="group" aria-label="Background work">${['off','idle','max'].map(value=>`<button type="button" data-mode="${value}">${esc(MODE_LABEL[value])}</button>`).join('')}</div></div>
       ${[['active','Now'],['queued','Waiting'],['blocked','Paused'],['issues','Unavailable thumbnails']].map(([key,label])=>`<section class="activity-section" data-section="${key}" hidden><div class="activity-section-head">${label} <b></b></div><div class="activity-list"></div></section>`).join('')}
       <section class="activity-section activity-recent" data-section="recent"><div class="activity-section-head" data-recent-toggle>Recent <b></b></div><div class="activity-list"></div><div class="activity-empty">Nothing recent</div></section>`;
     body.addEventListener('wheel',markInteraction,{passive:true});
@@ -416,17 +412,15 @@ if (host) {
     button.title=[summary||'Nothing running',...details].join('\n');
     button.setAttribute('aria-label',`Activity · ${summary||'Nothing running'}`);
     window.dispatchEvent(new CustomEvent('mochimono:activity-model',{detail:model}));
-    window.dispatchEvent(new CustomEvent('mochimono:background-state',{detail:{mode:model.state?.settings?.thumbnailMode||'idle',allowed:Boolean(model.state?.background?.allowed)}}));
+    window.dispatchEvent(new CustomEvent('mochimono:background-state',{detail:{mode:model.state?.background?.mode||'idle',allowed:Boolean(model.state?.background?.allowed)}}));
     if(!dialog?.open||Date.now()<interactionUntil)return;
 
-    const mode=model.state?.settings?.thumbnailMode||'idle';
     const status=overview(model);
     const body=dialog.querySelector('[data-body]');
     const overviewNode=body.querySelector('.activity-overview');
     overviewNode.className=`activity-overview ${status.className}`;
     overviewNode.querySelector('strong').textContent=status.title;
     overviewNode.querySelector('span').textContent=status.detail;
-    for(const modeButton of body.querySelectorAll('[data-mode]'))modeButton.classList.toggle('active',modeButton.dataset.mode===mode);
     for(const key of ['active','queued','blocked','issues','recent'])syncRows(body.querySelector(`[data-section="${key}"]`),model[key]||[],key==='recent');
     const recent=body.querySelector('.activity-recent');
     recent.classList.toggle('open',recentOpen);
@@ -442,12 +436,6 @@ if (host) {
       sessionStorage.setItem(RECENT_OPEN_KEY,recentOpen?'1':'0');
       recent.closest('.activity-recent')?.classList.toggle('open',recentOpen);
       recent.setAttribute('aria-expanded',recentOpen?'true':'false');
-      return;
-    }
-    const modeButton=event.target.closest('[data-mode]');
-    if(modeButton){
-      const buttons=[...dialog.querySelectorAll('[data-mode]')];buttons.forEach(item=>item.disabled=true);
-      try{await request('/api/settings',{method:'POST',body:{thumbnailMode:modeButton.dataset.mode}});schedule(0);}catch(error){toast(error.message);}finally{buttons.forEach(item=>item.disabled=false);}
       return;
     }
     const cancel=event.target.closest('[data-cancel]'); if(!cancel)return;
@@ -525,7 +513,7 @@ if (host) {
   }
 
   function schedule(delay=0){clearTimeout(timer);timer=setTimeout(refresh,Math.max(0,delay));}
-  button.onclick=()=>{const box=ensureDialog();button.classList.add('active');if(!box.open)box.showModal();button.setAttribute('aria-expanded','true');render(lastModel||{state:{settings:{thumbnailMode:'idle'}},active:[],queued:[],recent:savedRecent()});schedule(0);};
+  button.onclick=()=>{const box=ensureDialog();button.classList.add('active');if(!box.open)box.showModal();button.setAttribute('aria-expanded','true');render(lastModel||{state:{background:{mode:'idle'}},active:[],queued:[],recent:savedRecent()});schedule(0);};
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)schedule(100);});
   window.addEventListener('focus',()=>schedule(100));
   window.addEventListener('mochimono:storage-changed',()=>schedule(0));

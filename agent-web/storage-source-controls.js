@@ -1,217 +1,126 @@
+import { backupRequest, reviewFolders, setFolderGoal, sourcesChanged } from './folder-review.js';
+
 const folders = document.querySelector('#folders');
-const toastNode = document.querySelector('#toast');
-
-if (folders) {
-  const style = document.createElement('style');
-  style.textContent = `
-    #storagePane .folder-item .storage-modes{display:none!important}
-    #storagePane .folder-item .item-actions [data-sync-folder],
-    #storagePane .folder-item .item-actions [data-protect-folder],
-    #storagePane .browser-folder-item .item-actions [data-browser-scope],
-    #storagePane .browser-folder-item .item-actions [data-browser-cloud],
-    #storagePane .browser-folder-item .item-actions [data-browser-sync],
-    #storagePane .browser-folder-item .item-actions [data-browser-path]{display:none!important}
-    #storagePane .folder-item .source-controls{display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:11px;border-top:1px solid #292429}
-    #storagePane .source-control-group{display:flex;align-items:center;gap:2px;padding:2px;border-radius:8px;background:#1a171b}
-    #storagePane .source-control{width:31px;height:27px;display:grid;place-items:center;padding:0;border:0;border-radius:6px;background:transparent;color:#6f6869;cursor:pointer}
-    #storagePane .source-control:hover{background:#272328;color:#d8cfcb}
-    #storagePane .source-control.active{background:#30272c;color:#efa09a}
-    #storagePane .source-control.fixed{cursor:default;color:#b2a9a6;background:#242125}
-    #storagePane .source-control:disabled{opacity:.42;cursor:wait}
-    #storagePane .source-control svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.45;stroke-linecap:round;stroke-linejoin:round}
-    #storagePane .source-control.sync{margin-left:auto;background:transparent;color:#837b79}
-    #storagePane .source-control.sync:hover{background:#272328;color:#eee5e1}
-    #storagePane .folder-item.source-busy .source-control.sync svg{animation:source-spin .9s linear infinite}
-    #storagePane .source-health{width:7px;height:7px;margin-left:1px;border-radius:50%;background:#5f595a}
-    #storagePane .source-health.ok{background:#7d9d84}.source-health.warn{background:#c28f76}.source-health.bad{background:#b96e72}
-    #storagePane .folder-browser-mode span,#storagePane .folder-browser-scope span,.multi-folder-browser .folder-browser-mode span,.multi-folder-browser .folder-browser-scope span,.folder-drop-copy span,.folder-mode-option span,.folder-mode-note{display:none!important}
-    .multi-folder-browser .folder-browser-mode,.multi-folder-browser .folder-browser-scope{display:flex!important;gap:3px!important;padding-bottom:8px!important}
-    .multi-folder-browser .folder-browser-mode button,.multi-folder-browser .folder-browser-scope button{min-height:34px!important;display:flex!important;align-items:center!important;justify-content:center!important;padding:6px 13px!important;text-align:center!important}
-    .multi-folder-browser .folder-browser-mode strong,.multi-folder-browser .folder-browser-scope strong{font-size:10px!important}
-    .multi-folder-browser .folder-browser-count{display:none!important}
-    #protectionDashboard .protection-copy>span{display:none!important}
-    #protectionDashboard .protection-main{padding-top:5px!important;padding-bottom:5px!important}
-    .storage-shortcut{display:none!important}
-    @keyframes source-spin{to{transform:rotate(360deg)}}
-    @media(prefers-reduced-motion:reduce){#storagePane .folder-item.source-busy .source-control.sync svg{animation:none!important}}
-  `;
-  document.head.append(style);
-
-  const icon = {
-    local:'<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="10" rx="1.5"/><path d="M7 17h6M10 14v3"/></svg>',
-    cloud:'<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.2 15.2h8a3 3 0 0 0 .5-5.95A4.8 4.8 0 0 0 5.5 8a3.6 3.6 0 0 0 .7 7.2z"/></svg>',
-    media:'<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.5"/><circle cx="7" cy="8" r="1.2"/><path d="M4.5 14l4-4 2.4 2.3 1.8-1.8 2.8 3.5"/></svg>',
-    all:'<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 3.5h6l3 3v10H6z"/><path d="M12 3.5v3h3M3.5 6.5v10h9"/></svg>',
-    sync:'<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 7A6 6 0 0 0 5.2 5.5L3.5 7.2"/><path d="M3.5 3.8v3.4h3.4M4.5 13A6 6 0 0 0 14.8 14.5l1.7-1.7"/><path d="M16.5 16.2v-3.4h-3.4"/></svg>'
-  };
-
-  const pathKey = value => String(value || '').trim().replace(/[\\/]+$/, '').toLowerCase();
-  let native = new Map();
-  let refreshTimer = 0;
-  let refreshing = false;
-
-  function toast(text) {
-    if (!toastNode) return;
-    toastNode.textContent = text;
-    toastNode.classList.add('show');
-    clearTimeout(toastNode.timer);
-    toastNode.timer = setTimeout(() => toastNode.classList.remove('show'), 2400);
-  }
-
-  async function request(path, options = {}) {
-    const response = await fetch(path, {
-      cache:'no-store',
-      ...options,
-      headers:{ 'content-type':'application/json', ...(options.headers || {}) },
-      body:options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || response.statusText);
-    return data;
-  }
-
-  function controls(row, cloud, scope, health = '') {
-    let node = row.querySelector(':scope .source-controls');
-    if (!node) {
-      node = document.createElement('div');
-      node.className = 'source-controls';
-      node.innerHTML = `
-        <div class="source-control-group">
-          <span class="source-control fixed" title="Local" aria-label="Local">${icon.local}</span>
-          <button type="button" class="source-control" data-source-cloud-toggle title="Cloud" aria-label="Cloud">${icon.cloud}</button>
-        </div>
-        <div class="source-control-group">
-          <button type="button" class="source-control" data-source-scope="media" title="Media" aria-label="Media">${icon.media}</button>
-          <button type="button" class="source-control" data-source-scope="all" title="All files" aria-label="All files">${icon.all}</button>
-        </div>
-        <i class="source-health" hidden></i>
-        <button type="button" class="source-control sync" data-source-sync title="Refresh" aria-label="Refresh">${icon.sync}</button>`;
-      row.querySelector('.storage-copy')?.append(node);
-    }
-    row.dataset.sourceCloud = cloud ? '1' : '0';
-    row.dataset.sourceScope = scope === 'all' ? 'all' : 'media';
-    const cloudButton = node.querySelector('[data-source-cloud-toggle]');
-    cloudButton.classList.toggle('active', Boolean(cloud));
-    cloudButton.setAttribute('aria-pressed', cloud ? 'true' : 'false');
-    for (const button of node.querySelectorAll('[data-source-scope]')) {
-      const active = button.dataset.sourceScope === row.dataset.sourceScope;
-      button.classList.toggle('active', active);
-      button.setAttribute('aria-pressed', active ? 'true' : 'false');
-    }
-    const dot = node.querySelector('.source-health');
-    if (health) {
-      dot.hidden = false;
-      dot.className = `source-health ${health}`;
-      dot.title = health === 'ok' ? 'Ready' : health === 'warn' ? 'Needs permission' : 'Error';
-    } else dot.hidden = true;
-  }
-
-  function decorateBrowserRows() {
-    for (const row of folders.querySelectorAll(':scope > [data-browser-folder]')) {
-      controls(row, row.dataset.sourceCloud === '1', row.dataset.sourceScope || 'media', row.dataset.sourceHealth || '');
-    }
-  }
-
-  function decorateNativeRows() {
-    for (const row of folders.querySelectorAll(':scope > [data-folder-path]:not([data-browser-folder])')) {
-      const source = native.get(pathKey(row.dataset.folderPath));
-      if (!source) continue;
-      controls(row, source.protected !== false, source.scope === 'all' ? 'all' : 'media');
-    }
-  }
-
-  async function refresh() {
-    clearTimeout(refreshTimer);
-    refreshTimer = 0;
-    decorateBrowserRows();
-    if (refreshing) return;
-    refreshing = true;
-    try {
-      const state = await request('/api/state');
-      native = new Map((state?.settings?.folders || []).map(source => [pathKey(source.path), source]));
-      decorateNativeRows();
-    } catch {}
-    finally { refreshing = false; }
-  }
-
-  function schedule(delay = 0) {
-    clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(refresh, Math.max(0, delay));
-  }
-
-  function lock(row, locked) {
-    row?.querySelectorAll('.source-controls button').forEach(button => button.disabled = locked);
-    row?.classList.toggle('source-busy', locked);
-  }
-
-  async function setNativeCloud(row, enabled) {
-    const path = row.dataset.folderPath;
-    const source = native.get(pathKey(path));
-    if (!source) throw new Error('Folder unavailable');
-    if (enabled) {
-      await request('/api/browse-folders/protect', { method:'POST', body:{ path } });
-    } else {
-      const scope = source.scope === 'all' ? 'all' : 'media';
-      await request('/api/folders/remove', { method:'POST', body:{ path } });
-      try { await request('/api/browse-folders', { method:'POST', body:{ path, scope } }); }
-      catch (error) {
-        await request('/api/folders', { method:'POST', body:{ path, scope } }).catch(() => {});
-        throw error;
-      }
-    }
-  }
-
-  async function setNativeScope(row, scope) {
-    const path = row.dataset.folderPath;
-    const source = native.get(pathKey(path));
-    if (!source) throw new Error('Folder unavailable');
-    await request(source.protected === false ? '/api/browse-folders' : '/api/folders', { method:'POST', body:{ path, scope } });
-  }
-
-  folders.addEventListener('click', async event => {
-    const row = event.target.closest('.folder-item');
-    const button = event.target.closest('.source-control');
-    if (!row || !button) return;
-    const browserId = row.dataset.browserFolder || '';
-    const shell = window.mochimonoBrowserFolderShell;
-    try {
-      lock(row, true);
-      if (button.matches('[data-source-cloud-toggle]')) {
-        const enabled = row.dataset.sourceCloud !== '1';
-        if (browserId) {
-          if (!shell?.setCloud) throw new Error('Browser folder is still loading');
-          await shell.setCloud(browserId, enabled);
-        } else await setNativeCloud(row, enabled);
-      } else if (button.matches('[data-source-scope]')) {
-        const scope = button.dataset.sourceScope;
-        if (scope === row.dataset.sourceScope) return;
-        if (browserId) {
-          if (!shell?.setScope) throw new Error('Browser folder is still loading');
-          await shell.setScope(browserId, scope);
-        } else await setNativeScope(row, scope);
-      } else if (button.matches('[data-source-sync]')) {
-        if (browserId) {
-          if (!shell?.sync) throw new Error('Browser folder is still loading');
-          shell.sync(browserId).catch(error => toast(error.message));
-        } else {
-          await request('/api/folders/sync', { method:'POST', body:{ path:row.dataset.folderPath } });
-        }
-      }
-    } catch (error) { toast(error.message); }
-    finally {
-      lock(row, false);
-      schedule(0);
-      window.dispatchEvent(new CustomEvent('mochimono:sources-changed'));
-    }
-  }, true);
-
-  new MutationObserver(records => {
-    if (records.some(record => record.addedNodes.length || record.removedNodes.length)) schedule(20);
-  }).observe(folders, { childList:true, subtree:false });
-  window.addEventListener('mochimono:sources-changed', () => schedule(0));
-
-  // Remove wording that duplicates the visual controls.
-  for (const node of document.querySelectorAll('[data-browser-scope="all"] strong')) node.textContent = 'All';
-  schedule(0);
-  window.mochimonoSourceControls = { refresh:() => schedule(0) };
+const pathKey = value => String(value || '').replace(/[\\/]+$/,'').toLowerCase();
+const labels = {browse:'Browse only',normal:'Back up',important:'Important',critical:'Important',disposable:'One copy',checking:'Goal unavailable'};
+let native = new Map(), rules = new Map(), rulesReady = false, refreshing = false, timer = 0, current = null, saving = false;
+const dialog = document.createElement('dialog');
+dialog.className = 'small-dialog source-settings-dialog';
+dialog.innerHTML = `<div class="dialog-head"><h3 data-source-title>Folder</h3><button class="icon" data-source-close aria-label="Close">×</button></div>
+  <p class="source-settings-path" data-source-path></p>
+  <div class="backup-fields"><label>Backup goal<select data-source-goal aria-label="Backup goal"></select></label>
+  <label data-source-selection-label>Include<select data-source-selection aria-label="Files included"><option value="all">All files</option><option value="media">Photos & videos</option></select></label></div>
+  <p class="backup-note" data-source-goal-detail></p><p class="backup-error" data-source-warning></p><p class="backup-error" role="status" data-source-error></p>
+  <div class="dialog-actions"><button class="secondary" data-source-refresh>Scan now</button><div class="spacer"></div><button class="primary" data-source-save>Save</button></div>`;
+document.body.append(dialog);
+function toast(text) {
+  const node = document.querySelector('#toast');
+  if (!node) return;
+  node.textContent = text; node.classList.add('show'); clearTimeout(node.timer);
+  node.timer = setTimeout(() => node.classList.remove('show'),3500);
 }
+function decorate(row, source) {
+  const browser = Boolean(row.dataset.browserFolder);
+  const enabled = browser ? row.dataset.sourceCloud === '1' : source.protected !== false;
+  const scope = browser ? row.dataset.sourceScope || 'all' : source.scope || 'all';
+  const goal = enabled ? rules.get(Number(source.importId)) || source.protectionLevel || 'normal' : 'browse';
+  const known = browser || !enabled || source.protectionLevel || !source.importId || rulesReady;
+  row.dataset.sourceCloud = enabled ? '1' : '0'; row.dataset.sourceScope = scope;
+  row.dataset.sourceGoal = known ? goal : 'checking';
+  let node = row.querySelector('.source-controls');
+  if (!node) {
+    node = document.createElement('div'); node.className = 'source-controls';
+    node.innerHTML = '<button type="button" class="source-goal-button" data-source-settings><span data-source-goal-name></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg></button><span class="source-selection-badge" hidden>Photos & videos</span>';
+    row.querySelector('.storage-copy')?.append(node);
+  }
+  node.querySelector('[data-source-goal-name]').textContent = labels[row.dataset.sourceGoal] || 'Back up';
+  node.querySelector('[data-source-settings]').title = 'Folder settings';
+  node.querySelector('.source-selection-badge').hidden = scope !== 'media';
+  let health = row.querySelector('[data-folder-status]');
+  if (browser && !health) { health = document.createElement('span'); health.dataset.folderStatus = ''; row.querySelector('.storage-title')?.append(health); }
+  if (browser) {
+    health.className = 'item-state warning';
+    health.textContent = enabled ? 'Check coverage' : 'Not backed up';
+    health.title = row.dataset.sourceHealth === 'warn' ? 'Folder permission required' : row.dataset.sourceHealth === 'bad' ? 'Folder scan failed' : '';
+  }
+}
+async function refresh() {
+  clearTimeout(timer);
+  if (refreshing || !folders) return;
+  refreshing = true;
+  try {
+    const state = await backupRequest('/api/state');
+    native = new Map((state.settings?.folders || []).map(source => [pathKey(source.path),source]));
+    for (const row of folders.querySelectorAll(':scope > .folder-item')) {
+      const source = native.get(pathKey(row.dataset.folderPath));
+      if (source || row.dataset.browserFolder) decorate(row,source || {});
+    }
+  } catch (failure) { console.warn('Folder controls:',failure.message); }
+  finally { refreshing = false; }
+}
+function schedule() { clearTimeout(timer); timer = setTimeout(refresh,50); }
+function updateEditor() {
+  const goal = dialog.querySelector('[data-source-goal]').value;
+  const scope = dialog.querySelector('[data-source-selection]').value;
+  dialog.querySelector('[data-source-goal-detail]').textContent = {browse:'No automatic backup',normal:'2 Originals · independent storage',important:'3 Originals · off-site',disposable:'1 Original · no redundancy',checking:'Backup goal could not be checked'}[goal] || '';
+  dialog.querySelector('[data-source-warning]').textContent = goal !== 'browse' && scope === 'media' ? 'Other files excluded' : '';
+  dialog.querySelector('[data-source-selection-label]').firstChild.textContent = goal === 'browse' ? 'Library includes' : 'Backup includes';
+  dialog.querySelector('[data-source-save]').textContent = current?.enabled === false && goal !== 'browse' ? 'Start backup' : 'Save';
+}
+function openSettings(row) {
+  const goal = row.dataset.sourceGoal || 'checking';
+  current = {path:row.dataset.folderPath,browserId:row.dataset.browserFolder,enabled:row.dataset.sourceCloud==='1',scope:row.dataset.sourceScope || 'all'};
+  dialog.querySelector('[data-source-title]').textContent = row.querySelector('.storage-path-name')?.textContent.trim() || row.querySelector('.storage-title strong')?.textContent.trim() || 'Folder';
+  dialog.querySelector('[data-source-path]').textContent = row.dataset.folderPath || row.querySelector('.storage-title strong')?.title || '';
+  const select = dialog.querySelector('[data-source-goal]');
+  select.replaceChildren(...['browse','normal',...(!current.browserId?['important']:[]),...(goal==='disposable'?['disposable']:[]),...(goal==='checking'?['checking']:[])].map(value=>new Option(labels[value],value)));
+  select.value = goal === 'critical' ? 'important' : goal;
+  dialog.querySelector('[data-source-selection]').value = current.scope;
+  dialog.querySelectorAll('select,[data-source-save]').forEach(node=>node.disabled=goal==='checking');
+  dialog.querySelector('[data-source-error]').textContent = '';
+  dialog.querySelector('[data-source-refresh]').textContent = current.enabled ? 'Back up now' : 'Scan now';
+  updateEditor();dialog.showModal();
+}
+folders?.addEventListener('click',event=>{
+  const button=event.target.closest('[data-source-settings]');
+  if(button)openSettings(button.closest('.folder-item'));
+});
+dialog.querySelector('[data-source-close]').onclick=()=>{if(!saving)dialog.close();};
+dialog.addEventListener('cancel',event=>{if(saving)event.preventDefault();});
+dialog.addEventListener('change',updateEditor);
+dialog.querySelector('[data-source-save]').onclick=async()=>{
+  if(saving||!current)return;
+  const {path,browserId,enabled,scope:oldScope}=current;
+  const goal=dialog.querySelector('[data-source-goal]').value,scope=dialog.querySelector('[data-source-selection]').value;
+  saving=true;dialog.querySelectorAll('button,select').forEach(node=>node.disabled=true);
+  try{
+    if(!browserId&&!enabled&&goal!=='browse'){dialog.close();await reviewFolders([path],{goal,scope});return;}
+    if(goal==='browse'&&enabled&&!confirm('Stop backup? Managed copies are kept. Source files are unchanged.'))return;
+    if(scope==='media'&&oldScope!=='media'&&enabled&&!confirm('Exclude documents and other files? Existing copies are kept.'))return;
+    if(browserId){
+      const shell=window.mochimonoBrowserFolderShell;
+      if(!shell)throw new Error('Folder is still loading');
+      if(!enabled&&goal!=='browse'&&!confirm(`Start backing up ${scope==='all'?'all files':'photos and videos'}?`))return;
+      if(scope!==oldScope)await shell.setScope(browserId,scope);
+      if((goal!=='browse')!==enabled)await shell.setCloud(browserId,goal!=='browse');
+    }else await setFolderGoal(path,scope,goal);
+    dialog.close();sourcesChanged();
+  }catch(failure){dialog.querySelector('[data-source-error]').textContent=failure.message;}
+  finally{saving=false;dialog.querySelectorAll('button,select').forEach(node=>node.disabled=false);schedule();}
+};
+dialog.querySelector('[data-source-refresh]').onclick=async event=>{
+  event.target.disabled=true;
+  try{
+    if(current.browserId)await window.mochimonoBrowserFolderShell.sync(current.browserId);
+    else await backupRequest('/api/folders/sync',{method:'POST',body:{path:current.path}});
+    dialog.close();sourcesChanged();
+  }catch(failure){toast(failure.message);}
+  finally{event.target.disabled=false;}
+};
+if(folders)new MutationObserver(schedule).observe(folders,{childList:true});
+window.addEventListener('mochimono:sources-changed',schedule);
+window.addEventListener('mochimono:backup-state',event=>{
+  rules=new Map((event.detail.rules || []).map(rule=>[Number(rule.scopeId),rule.level]));rulesReady=Boolean(event.detail.summary);schedule();
+});
+window.mochimonoSourceControls={refresh:schedule};
+schedule();

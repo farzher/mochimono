@@ -13,16 +13,28 @@ import { handleCollections } from './collections-server.js';
 import { handleBackupPolicy, getDrive } from './backup-policy-server.js';
 import { handleMetadata } from './metadata-server.js';
 import { handleIntegrity } from './integrity-server.js';
+import { handleCompressionServer } from './compression-server.js';
+import { handleRepresentationPolicyServer } from './representation-policy-server.js';
+import { handleSourceScopeServer } from './source-scope-server.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WEB_DIR = join(ROOT, 'web');
 const PORT = Number(process.env.PORT || 8642);
 const HOST = process.env.HOST || '127.0.0.1';
-const featureRoutes = [handleThumbnails, handleCollections, handleBackupPolicy, handleMetadata, handleIntegrity];
+const featureRoutes = [handleThumbnails, handleCollections, handleBackupPolicy, handleSourceScopeServer, handleCompressionServer, handleRepresentationPolicyServer, handleMetadata, handleIntegrity];
 
 if (!TOKEN) {
   console.error('MOCHIMONO_TOKEN is required.');
   process.exit(1);
+}
+
+function hashSet(sql, hashes) {
+  const found=new Set();
+  for(let offset=0;offset<hashes.length;offset+=400){
+    const batch=hashes.slice(offset,offset+400);
+    for(const row of db.prepare(`${sql} (${batch.map(()=>'?').join(',')})`).all(...batch))found.add(row.hash);
+  }
+  return found;
 }
 
 function fileTypeSql(type, alias = 'o') {

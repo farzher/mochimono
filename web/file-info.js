@@ -174,8 +174,9 @@ function renderPanel(data, local, groups) {
   const editableGroups = data.serverStored !== false;
 
   panel.innerHTML = `<div class="viewer-info-head"><div><strong>${escapeHtml(filename)}</strong><span>${escapeHtml(bytes(object.size))}</span></div><button type="button" data-info-close aria-label="Close details">×</button></div>
-    <section class="viewer-info-section">
-      <h3>Where</h3>
+    <section class="viewer-info-section" data-copy-section>
+      <h3>Copies</h3>
+      ${data.serverStored === false ? '<p class="viewer-info-empty">Not backed up · known local paths only</p>' : '<p class="viewer-info-empty">Checking Original protection…</p>'}
       ${renderCopies(data, local)}
     </section>
     <section class="viewer-info-section viewer-origins">
@@ -331,6 +332,8 @@ if (viewerOpen) new MutationObserver(refresh).observe(viewerOpen, { attributes: 
 if (viewerCollections) new MutationObserver(() => {
   if (panel && !panel.hidden && currentHash()) load(true);
 }).observe(viewerCollections, { childList: true, subtree: true });
+
+window.mochimonoFileInfo = { copyDetails:hash => summaryFor(hash) };
 
 window.addEventListener('mochimono:locations-updated', () => {
   summaryCache.clear();

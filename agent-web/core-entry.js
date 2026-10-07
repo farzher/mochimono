@@ -1,5 +1,6 @@
 import './fetch-coalescer.js';
 import './dialog-behavior.js';
+import './work-focus.js';
 import './client-shell.js';
 import './app.js';
 import './lan-access.js';

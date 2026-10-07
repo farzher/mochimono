@@ -1,7 +1,6 @@
 const folders = document.querySelector('#folders');
 const frame = document.querySelector('#filesFrame');
 const storagePane = document.querySelector('#storagePane');
-const storageButton = document.querySelector('[data-client-tab="storage"]');
 
 let annotating = false;
 let annotateQueued = false;
@@ -383,7 +382,7 @@ async function openLibraryFolder(row) {
   if (gridButton && !gridButton.classList.contains('active')) gridButton.click();
   await library.openFolder(importId, '');
   child.scrollTo({ top:0, left:0, behavior:'auto' });
-  if (storagePane && !storagePane.hidden) storageButton?.click();
+  if (storagePane && !storagePane.hidden) window.mochimonoClientTabs?.show('files');
   child.focus();
 }
 

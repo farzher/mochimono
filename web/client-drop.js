@@ -92,7 +92,7 @@ if (location.pathname.startsWith('/files')) {
     result.querySelector('[data-import-dupes]').replaceChildren();
 
     const api = await browserFoldersApi();
-    const added = await api.addHandles(handles, 'media', { sync:true });
+    const added = await api.addHandles(handles, 'all', { sync:true });
     result.querySelector('[data-import-title]').textContent = added.length === 1 ? 'Local folder added' : `${added.length.toLocaleString()} local folders added`;
     result.querySelector('[data-import-bar]').style.width = '100%';
     result.querySelector('[data-import-meta]').textContent = added.map(source => source.name).join(' · ');

@@ -151,7 +151,7 @@ function folderRow(folder) {
   return `<article class="storage-item folder-item" data-folder-path="${esc(folder.path)}" data-folder-protected="${folder.protected!==false?'1':'0'}">
     <div class="storage-copy">
       <div class="storage-title"><strong title="${esc(folder.path)}">${esc(folder.path)}</strong><time class="item-state" data-folder-status>—</time></div>
-      <div class="storage-meta"><span data-folder-files>— indexed files</span><span>·</span><span data-folder-size>—</span><span>·</span><span data-folder-free>— free</span></div>
+      <div class="storage-meta"><span data-folder-files>— files</span><span>·</span><span data-folder-size>—</span><span>·</span><span data-folder-free>— free</span></div>
       <div class="storage-meter"><i data-folder-meter></i></div>
       <div class="item-progress" data-item-progress hidden></div>
       <button class="action-link" data-preview-failures="${esc(folder.path)}" hidden></button>
@@ -296,8 +296,8 @@ function sourceStatus(row, folder) {
     failures.hidden = !count;
     failures.textContent = `${count.toLocaleString()} thumbnail ${folder.previewWarming ? 'failures' : 'unavailable'}`;
   }
-  status.textContent = offline ? 'Offline' : indexing ? (folder.progress?.phase === 'Checking files' ? 'Checking files' : 'Finding files') : previews ? 'Preparing thumbnails' : hashing ? (folder.hashing ? 'Hashing content' : 'Hashes pending') : folder.lastIndexed ? (folder.files ? 'Ready' : 'Empty') : 'Checking…';
-  status.className = `item-state ${offline ? 'warning' : indexing || previews || hashing || !folder.lastIndexed ? 'working' : 'good'}`;
+  status.textContent = 'Not backed up';
+  status.className = 'item-state warning';
   status.title = offline ? 'Source unavailable' : previews ? 'Thumbnail work is unfinished' : hashing ? folder.hashWaitReason || 'Content hashes are unfinished' : folder.lastIndexed ? `Last indexed ${new Date(folder.lastIndexed).toLocaleString()}` : '';
 }
 
@@ -354,19 +354,23 @@ function renderFolderProtection(summary) {
     const preparing=Number(source.preparingFiles)||0;
     const needs=Number(source.needsProtection)||0;
     const remaining=Math.max(0,files-protectedFiles);
-    if(!files){
-      status.textContent='No files';
-    }else if(preparing||Number(source.pendingFiles)||folderActivity.get(String(row.dataset.folderPath||'').replace(/[\\/]+$/,'').toLowerCase())){
-      status.textContent='Backing up';
+    const stats=folderStatsByPath.get(String(row.dataset.folderPath||'').replace(/[\\/]+$/,'').toLowerCase());
+    if(!stats || stats.available===false || stats.lastError || !stats.lastSynced || stats.pending){
+      status.textContent=stats?.available===false?'Source unavailable':stats?.lastError?'Scan incomplete':'Checking contents';
+      status.classList.add('warning');
+    }else if(!files){
+      status.textContent='No selected files';
+    }else if(preparing||Number(source.pendingFiles)){
+      status.textContent='Waiting for backup';
       status.classList.add('working');
     }else if(needs||remaining){
       status.textContent='Needs backup';
       status.classList.add('warning');
     }else{
-      status.textContent='Protected';
+      status.textContent=source.oneCopyFiles===files?'One copy':source.oneCopyFiles?'Goals met':'Backed up';
       status.classList.add('good');
     }
-    status.title=`${protectedFiles.toLocaleString()} of ${files.toLocaleString()} protected`;
+    status.title=`${protectedFiles.toLocaleString()} of ${files.toLocaleString()} selected files meet their Original goal`;
   }
 }
 
@@ -378,7 +382,7 @@ async function refreshFolderStats() {
       folderStatsByPath.set(String(item.path || '').replace(/[\\/]+$/, '').toLowerCase(), item);
       const row = [...$('#folders').querySelectorAll('[data-folder-path]')].find(node => samePath(node.dataset.folderPath, item.path));
       if (!row) continue;
-      row.querySelector('[data-folder-files]').textContent = `${Number(item.files).toLocaleString()} indexed files`;
+      row.querySelector('[data-folder-files]').textContent = `${Number(item.files).toLocaleString()} ${Number(item.files)===1?'file':'files'}`;
       row.querySelector('[data-folder-size]').textContent = bytes(item.bytes);
       row.querySelector('[data-folder-free]').textContent = `${bytes(item.freeBytes)} free`;
       if (item.protected === false) {
@@ -709,7 +713,7 @@ $('#removeBackup').onclick = async () => {
   try {
     const backup=backupLocations.find(item=>samePath(item.path,backupPath));
     const id=String(backup?.meta?.id||'');
-    const impact=id?await req(`/api/protection/locations/${encodeURIComponent(id)}/impact`).catch(()=>null):null;
+    const impact=id?await req(`/api/protection/locations/${encodeURIComponent(id)}/impact`):null;
     const affected=Number(impact?.newlyUnderProtected)||0;
     const copies=Number(impact?.files)||0;
     const consequence=affected
@@ -781,6 +785,7 @@ if (storagePane) {
 }
 
 window.addEventListener('mochimono:protection-summary',event=>renderFolderProtection(event.detail||{}));
+window.addEventListener('mochimono:sources-changed',()=>{ wakeState(); refreshFolderStats(); });
 
 window.addEventListener('mochimono:activity-model', event => {
   folderActivity.clear();
@@ -804,7 +809,7 @@ window.addEventListener('mochimono:activity-model', event => {
     const stats = folderStatsByPath.get(path);
     if (stats) {
       sourceStatus(row, stats);
-      row.querySelector('[data-folder-files]').textContent = `${Number(stats.files || 0).toLocaleString()} indexed files`;
+      row.querySelector('[data-folder-files]').textContent = `${Number(stats.files || 0).toLocaleString()} ${Number(stats.files)===1?'file':'files'}`;
       row.querySelector('[data-folder-size]').textContent = bytes(stats.bytes);
     }
   }

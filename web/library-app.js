@@ -119,7 +119,8 @@ function matchesProtection(file) {
   const lifecycle=String(file.lifecycle||'');
   if(protectionFilter==='managed')return lifecycle==='current'||lifecycle==='remote-only'||file.backupIntent===true;
   if(protectionFilter==='current')return lifecycle==='current'||file.backupIntent===true;
-  if(protectionFilter==='protected')return lifecycle!=='unlinked'&&(state==='protected'||file.protected===true);
+  if(protectionFilter==='not-backed-up')return !file.backupIntent && !lifecycle && file.serverStored===false;
+  if(protectionFilter==='protected')return file.protectionLevel!=='disposable'&&lifecycle!=='unlinked'&&(state==='protected'||file.protected===true);
   if(protectionFilter==='needs-backup')return lifecycle!=='unlinked'&&(['needs-backup','pending','preparing'].includes(state)||(lifecycle==='remote-only'&&file.protected===false));
   if(protectionFilter==='remote-only')return lifecycle==='remote-only';
   if(protectionFilter==='unlinked')return lifecycle==='unlinked';
@@ -287,21 +288,23 @@ function backupBadgeState(file) {
   const lifecycle=String(file.lifecycle||'');
   const state=String(file.protectionState||'');
   if(lifecycle==='unlinked')return 'unlinked';
-  if(lifecycle==='remote-only')return file.protected===false?'needs-backup':'remote-only';
+  if(lifecycle==='remote-only')return file.protected===false?'needs-backup':file.protectionLevel==='disposable'?'one-copy':'remote-only';
   if(['preparing','pending'].includes(state))return 'backing-up';
-  if(state==='protected'||file.protected===true)return 'protected';
+  if(state==='protected'||file.protected===true)return file.protectionLevel==='disposable'?'one-copy':'protected';
   if(lifecycle==='current'||file.backupIntent===true)return 'needs-backup';
-  return '';
+  return file.serverStored===false?'not-backed-up':'';
 }
 
 function backupBadgeMarkup(file) {
   const state=backupBadgeState(file);
   if(!state)return '';
   const value={
-    protected:['✓','Protected'],
+    protected:['✓','Backed up'],
+    'one-copy':['1','One copy · no redundancy'],
+    'not-backed-up':['—','Not backed up'],
     'backing-up':['↻','Backing up'],
     'needs-backup':['!','Needs backup'],
-    'remote-only':['☁','Remote only'],
+    'remote-only':['☁','Stored without a source'],
     unlinked:['?','Needs review']
   }[state];
   return `<span class="file-backup-badge ${state}" title="${value[1]}" aria-label="${value[1]}">${value[0]}</span>`;

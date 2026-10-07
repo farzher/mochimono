@@ -36,7 +36,7 @@ registerHooks({
 });
 
 const { startProtectionAgent } = await import('./lib/protection-agent.js');
-startProtectionAgent().catch(error => console.error('Protection agent failed', error));
+await startProtectionAgent().catch(error => console.error('Protection agent failed', error));
 
 // Bring up backup/protection first. Library media services stay unloaded until
 // the Library is actually opened; experimental media routes stay lazy even then.

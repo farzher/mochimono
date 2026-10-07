@@ -14,8 +14,11 @@ Everything else is outside the normal protection denominator.
 Drag-and-drop has two predictable meanings:
 
 - dropping a **folder** into Library or Sources adds it as a persistent **Local** Source;
-- dropped folders default to **Media** scope and are indexed locally without uploading their contents;
-- the same Source card can later enable backup or switch to All files;
+- native folder setup scans locally, then reviews a goal and file selection before uploading;
+- new folders default to **All files**; browser-handle drops are indexed locally without automatic Original uploads;
+- labeled folder controls distinguish **Browse only**, **Back up**, and **Important** from the files included;
+- **Photos & videos only** is an explicit selection and warns that documents and other files are not backed up;
+- changing Library display filters does not change folder backup selection;
 - dropping **loose files** into Library is a one-time managed add;
 - successfully added loose files are intentional **Remote only** files unless they also belong to a current protected Source.
 
@@ -31,7 +34,7 @@ The file belongs to a protected source folder now.
 
 Current files participate in normal backup health and automatic protection.
 
-Before the content hash exists or the primary Mochimono copy has finished uploading, the UI may show **Preparing** or **Backing up**. Once the file is stored, its protection target is evaluated normally.
+Before the content hash exists or the primary Mochimono copy has finished uploading, the UI shows pending coverage, such as **Waiting for backup**. Once the file is stored, its protection target is evaluated normally.
 
 ### Remote only
 
@@ -72,16 +75,26 @@ Source replica inventory is separate. It describes physical local copies that ca
 
 ## Protection
 
-Protection is durability: how many independent recoverable copies must exist.
+Protection is Original durability: how many independent verified Original copies must exist. Smaller media copies are displayed separately and do not satisfy Original protection.
+
+The overview reports selected files, browse-only folders, deliberately trashed/ignored source contents, One copy goals, and incomplete/unavailable folder checks separately. It never calls an unchecked latest source or a deliberately unselected folder fully backed up.
 
 | UI name | Internal level | Target |
 | --- | --- | --- |
-| One copy | `disposable` | 1 verified copy |
-| Standard | `normal` | 2 verified copies on 2 devices |
-| Important | `important` | 3 verified copies, including a remote copy across 2 places |
-| Critical | `critical` | 3 verified copies on 3 devices, including a remote copy across 2 places |
+| One copy | `disposable` | 1 verified Original storage domain; no redundancy promise |
+| Back up | `normal` | 2 independent Original storage domains, including a managed backup |
+| Important | `important` | 3 independent Original storage domains, including a managed off-site Original across 2 explicitly named places |
+| 3 + off-site | `critical` | Same Original requirements as Important |
 
-Standard is the default. Folders set inherited protection; individual files may override it.
+Back up is the default when enabling backup. Folders set inherited protection; individual files may override it. Browse only requests no automatic backup. One copy remains an explicit lower target and is not labeled Backed up.
+
+Physical disk identities group partitions and directories/repositories on the same disk, including server storage on the source disk. Windows uses physical disk UniqueId, with volume-serial checks to invalidate cached mappings after drive changes. Linux uses available physical block-device WWID/serial information; ambiguous virtual/network storage stays unidentified. Machine grouping uses a supported hardware UUID, never a hostname or user-visible device name.
+
+Explicitly named, genuinely different physical places also prove independence. Unidentified managed storage is grouped conservatively: several paths at one place do not imply extra drives, and unplaced known disks can overlap unidentified storage. An unidentified source inventory does not inherit its PC’s place as proof of where its file bytes live. Per-file source-drive inventory is still needed for multi-drive/unsupported sources.
+
+Physical places are explicitly named in Backup/location settings, with existing names suggested. Hostnames, URLs, and Friend Drive pairing do not establish off-site safety. Connected, identified local drives use this PC’s place; remembered disconnected locations can be assigned separately. The latest confirmed place follows a known physical disk across repository aliases.
+
+Source inventory is not counted as verified while a multi-batch publication is incomplete. New local/friend backup replicas are not reported complete until their recovery metadata has been saved. Encrypted copies require acknowledgement that their recovery key is saved outside this PC; this is not an automated recovery-kit validation.
 
 A destination marked **Do not rely on** stays visible but does not satisfy protection.
 
@@ -98,11 +111,13 @@ A backup destination may use:
 - **Original + Squished**
 - **Squished only**
 
-A verified Squished-only version counts as one recovery copy at that physical destination. It does not count as a second independent copy when an Original is on the same drive.
+A verified Squished version is an extra smaller copy, not an Original protection copy. Original + Squished on one disk never provides independent redundancy.
 
-Before removing an Original from a Squished-only backup, Mochimono creates and verifies the Squished version and requires another verified Original elsewhere. Protection also requires at least one Original recovery copy overall.
+Before removing an Original from a Squished-only backup, Mochimono creates and verifies the Squished version and requires the **entire remaining Original protection target** to stay satisfied.
 
-File details disclose whether a known recovery copy is Original or Squished.
+Backup location settings expose Originals and Originals + smaller copies. Existing smaller-only settings are disclosed, but new smaller-only setup is not offered before independent smaller-copy recovery is implemented. Current Restore re-imports Originals into Mochimono; it is not yet standalone folder or smaller-copy recovery.
+
+File details use one Copies panel for the Original target, all known physical copies, smaller representations, verification, and known source paths.
 
 ## Destination eligibility
 
@@ -159,7 +174,9 @@ Per-source health is derived from the same intent/protection model. A protected 
 
 Background Protection uses the same planner after refreshing source inventory.
 
-For Squished-only backup destinations, normal Protection may first place an Original. Representation reconciliation then creates and verifies the Squished version and removes that drive's Original only when another Original exists elsewhere. The verified Squished copy continues to satisfy that physical recovery slot, so Protection does not immediately recreate the Original.
+Smaller copies never replace a missing Original protection slot. Representation reconciliation may remove a managed Original only when the remaining Originals still satisfy the full goal. If that is not possible, the Original remains.
+
+Newly placed local/friend replica records are published after the repository catalog or encrypted catalog/manifest has been saved. A failed metadata save must not turn freshly copied bytes into a completed backup.
 
 Offline destinations remain remembered. Destructive operations use stricter reachable-copy checks when required.
 
@@ -172,8 +189,8 @@ Examples:
 - Removing a protected source explains that its files stop being Current and that existing Mochimono copies are not automatically erased. Source-less stored objects move to Unlinked review unless they were already deliberately Remote only.
 - Disconnecting or forgetting a backup destination reports how many managed files would fall below their requested protection level.
 - Marking a destination **Do not rely on** reports the same protection impact.
-- Enabling **Squished only** states that a verified Squished copy may replace the Original on that destination once the safety conditions are met.
-- Freeing a local source requires the remaining reachable copies to satisfy the protection target and requires a reachable verified Original.
+- Changing smaller-media placement keeps Original protection separate and revokes destructive retention before returning to additive/original storage.
+- Freeing a local source requires the remaining reachable copies to satisfy the protection target and requires a reachable verified Original. The source’s actual content hash is checked before moving it to Trash.
 
 ## Storage UI
 
@@ -191,16 +208,23 @@ Library is the file-level source of truth rather than a separate backup browser.
 
 Every file can carry the same lifecycle/protection state used by Backup. Library exposes filters for:
 
-- In backup;
+- Selected for backup;
 - Current sources;
-- Protected;
+- Backed up;
 - Needs backup;
-- Remote only;
-- Unlinked.
+- Not backed up;
+- Stored without a source;
+- Needs review.
 
 Backup aggregate rows open those exact Library views.
 
-File cards may show a compact status for Protected, Backing up, Needs backup, Remote only, or Needs review.
+File cards may show Backed up, One copy, Waiting for backup, Needs backup, Not backed up, Stored without a source, or Needs review.
+
+## Automatic backup
+
+Automatic backup is On or Paused. Paused stops automatic Original source uploads and additional local/Friend placement; locally indexing folders remains possible. Explicit Back up now overrides the pause. Work scheduling is automatic: focused Mochimono windows run promptly; unattended indexing, previews, hashing, and backups wait for 60 seconds of inactivity and low CPU use. Work yields between items and transfer chunks when activity returns; media workers use low process priority. Browser folders participate in the Backup screen’s manual action before destination placement starts.
+
+Friend Drive setup requires saving the recovery key outside this PC before upload. Full recovery-kit export and standalone recovery remain unfinished.
 
 ## Placement policy
 
@@ -210,9 +234,10 @@ The replacement is destination eligibility inside Protection. Future placement r
 
 ## Safety rules
 
-- Keep at least one verified Original in the protection model.
+- Require the requested independent Original redundancy, including a managed backup for Back up/Important.
+- Smaller copies never make missing Original redundancy look complete.
 - Require a reachable verified Original before freeing the last local source.
-- Create and verify Squished before removing an Original from that backup.
+- Create and verify Squished before removing an Original from that backup, and preserve the remaining full Original target.
 - Never count Original + Squished on one physical device as two independent copies.
 - Never count a destination marked Do not rely on.
 - Never call an unverified copy protected.
@@ -220,9 +245,19 @@ The replacement is destination eligibility inside Protection. Future placement r
 - Never automatically replicate Unlinked files.
 - Never free a local source merely because an offline copy exists.
 - Trash/deletion propagates deliberately; replication must not resurrect intentionally deleted objects.
+- Permanent managed-copy deletion does not implicitly delete working source paths. Purged bytes are suppressed from automatic re-upload using the ignored-content record.
 
 ## Remaining work
 
-1. Retire the legacy per-drive collection scope completely and move any useful advanced placement rules into Protection.
-2. Add destination capacity/preference rules for power users without making manual placement the default.
-3. Add recovery-impact views such as what survives if this PC, drive, or site disappears.
+The UI now has Library/Backup navigation, scan/review folder setup, labeled goals, honest selected/unselected coverage, and consolidated file/location controls. The full redesign is tracked in `BACKUP-UX-PLAN.md`.
+
+Still required:
+
+1. Genuine local-only backup plans and direct source-to-destination copying. Browse only is **not** a local-only backup; enabled backup still stores primary Originals.
+2. Inherited subfolder rules and per-plan destination restrictions.
+3. Standalone restore to ordinary folders, including independent local/friend and smaller-copy recovery.
+4. Path/version history, retention, pinning, and a saved Friend Drive recovery kit.
+5. Per-file physical source-drive inventory, richer capacity/priority rules, and disaster-impact views.
+6. Retire the legacy per-drive collection scope completely, finish scoped deletion across Friend providers, and finish merging suppression status into raw local-index Library rows.
+
+No history retention or standalone disaster recovery is advertised by the shipped UI yet.

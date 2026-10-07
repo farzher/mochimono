@@ -10,6 +10,13 @@ const MEDIA_EXTENSIONS = new Set([
 
 let activeSync = null;
 const pendingSyncs = new Set();
+const pendingOptions = new Map();
+let activeController = null;
+let manualUpload = false;
+window.addEventListener('mochimono:backup-mode-changed',event=>{
+  if(event.detail==='paused'&&!manualUpload)activeController?.abort(new Error('Automatic backup paused'));
+  if(event.detail!=='paused')autoSync().catch(()=>{});
+});
 let syncPumpTimer = 0;
 let autoTimer = 0;
 let viewerBlobUrl = '';
@@ -220,9 +227,11 @@ function emitSync(detail) {
   dispatchEvent(new CustomEvent('mochimono:browser-folder-sync', { detail }));
 }
 
-function queueSourceSync(id,name='') {
+function queueSourceSync(id,name='',options={}) {
   id=String(id||'');
-  if(!id||pendingSyncs.has(id))return;
+  if(!id)return;
+  pendingOptions.set(id,{...pendingOptions.get(id),...options});
+  if(pendingSyncs.has(id))return;
   pendingSyncs.add(id);
   if(activeSync===id)return;
   emitSync({ id, name:String(name||''), state:'queued' });
@@ -238,7 +247,8 @@ async function pumpSourceSyncs() {
   }
   const id=pendingSyncs.values().next().value;
   pendingSyncs.delete(id);
-  try{await syncSource(id);}catch{}
+  const options=pendingOptions.get(id)||{};pendingOptions.delete(id);
+  try{await syncSource(id,options);}catch{}
   if(pendingSyncs.size)syncPumpTimer=setTimeout(pumpSourceSyncs,0);
 }
 
@@ -276,7 +286,7 @@ async function sameHandle(left, right) {
   return left.name === right.name;
 }
 
-async function addHandle(handle, scope = 'media') {
+async function addHandle(handle, scope = 'all') {
   if (!handle || handle.kind !== 'directory') throw new Error('Drop a folder to sync it');
   const sources = await sourceList();
   for (const existing of sources) {
@@ -303,7 +313,7 @@ async function addHandle(handle, scope = 'media') {
   });
 }
 
-async function addHandles(handles, scope = 'media', { sync = true } = {}) {
+async function addHandles(handles, scope = 'all', { sync = true } = {}) {
   const added = [];
   for (const handle of handles || []) {
     if (handle?.kind !== 'directory') continue;
@@ -367,7 +377,7 @@ async function localBrowserId(source, path, file) {
   return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
-async function syncSource(id, { userGesture = false } = {}) {
+async function syncSource(id, { userGesture = false, forceUpload = false } = {}) {
   const source = await sourceById(id);
   if (!source) throw new Error('Browser folder not found');
   if (activeSync) throw new Error(activeSync===source.id?'This folder is already indexing':'Another browser folder is indexing');
@@ -378,6 +388,9 @@ async function syncSource(id, { userGesture = false } = {}) {
   }
 
   activeSync = source.id;
+  activeController=new AbortController();
+  const signal=activeController.signal;
+  manualUpload=forceUpload;
   let lastProgressAt=0;
   let sliceStarted=performance.now();
   const progress=(detail={},force=false)=>{
@@ -388,6 +401,8 @@ async function syncSource(id, { userGesture = false } = {}) {
   };
   progress({},true);
   try {
+    const mode=source.cloud&&!forceUpload ? await request('/api/client/protection/settings').catch(()=>null) : null;
+    const upload=source.cloud&&(forceUpload||(mode&&mode.background!=='paused'));
     const previous = await manifestFor(source.id);
     const next = [];
     const uploads = [];
@@ -409,6 +424,7 @@ async function syncSource(id, { userGesture = false } = {}) {
     // Discover and publish first. Local folders never send originals to localhost
     // just to identify them, and neither uploads nor image decoding gate access.
     for await (const item of filesUnder(source.handle)) {
+      signal.throwIfAborted();
       if (source.scope !== 'all' && !mediaFile(null, item.path)) continue;
       const file = await item.handle.getFile();
       const path = cleanRelative(item.path);
@@ -421,7 +437,7 @@ async function syncSource(id, { userGesture = false } = {}) {
       };
       next.push(row);
       if (!same) batch.push(row);
-      if (source.cloud) uploads.push({ handle:item.handle, row });
+      if (upload) uploads.push({ handle:item.handle, row });
       else skipped++;
       scanned++;
       if (scanned === 1 || batch.length >= 64 || performance.now() - sliceStarted > 100) {
@@ -434,7 +450,8 @@ async function syncSource(id, { userGesture = false } = {}) {
     await replaceManifest(source.id, next);
     let finished = { removed:0 };
 
-    if (source.cloud) {
+    if (upload) {
+      signal.throwIfAborted();
       const started = await request('/api/client/import/start', {
         method:'POST', headers:{ 'content-type':'application/json' },
         body:JSON.stringify({ label:source.name, importId:source.importId || 0,
@@ -466,13 +483,18 @@ async function syncSource(id, { userGesture = false } = {}) {
         while (cursor < pendingUploads.length && !uploadError) {
           const { handle, row } = pendingUploads[cursor++];
           try {
+            signal.throwIfAborted();
+            if(!forceUpload){
+              const currentMode=await request('/api/client/protection/settings');
+              if(currentMode.background==='paused')throw new Error('Automatic backup paused');
+            }
             if (!await sourceById(source.id)) throw new Error('Folder removed');
             const file = await handle.getFile();
             if (file.size !== row.size || file.lastModified !== row.lastModified) throw new Error(`File changed: ${row.path}`);
             const params = new URLSearchParams({ session:started.session, path:row.path,
               mtime:new Date(file.lastModified || Date.now()).toISOString() });
             const data = await request(`/api/client/import/file?${params}`, {
-              method:'PUT', headers:{ 'x-mochimono-file-mime':row.mime }, body:file
+              method:'PUT', headers:{ 'x-mochimono-file-mime':row.mime }, body:file, signal
             });
             row.replacesHash = row.hash;
             row.hash = data.hash;
@@ -516,6 +538,7 @@ async function syncSource(id, { userGesture = false } = {}) {
     throw error;
   } finally {
     activeSync = null;
+    activeController=null;manualUpload=false;
     if(pendingSyncs.size&&!syncPumpTimer)syncPumpTimer=setTimeout(pumpSourceSyncs,0);
   }
 }
@@ -748,7 +771,7 @@ async function restoreBrowserFiles() {
 }
 
 async function autoSync() {
-  if (document.visibilityState !== 'visible') return;
+  if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
   const sources = await sourceList().catch(() => []);
   const now = Date.now();
   for (const source of sources) {
@@ -782,8 +805,12 @@ window.mochimonoBrowserFolders = {
   list:describeSources,
   names:async ()=> (await sourceList()).map(source=>({id:source.id,name:source.name})),
   sync:async (id,options={})=>{
-    if(activeSync){queueSourceSync(id);return {queued:true};}
+    if(activeSync){queueSourceSync(id,'',options);return {queued:true};}
     return syncSource(id,options);
+  },
+  syncAll:async()=>{
+    while(activeSync)await new Promise(resolve=>setTimeout(resolve,100));
+    for(const source of (await sourceList()).filter(source=>source.cloud))await syncSource(source.id,{userGesture:true,forceUpload:true});
   },
   setRootPath,
   setScope,

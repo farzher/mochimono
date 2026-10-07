@@ -7,10 +7,10 @@ if (storagePane && sourceSection && backupSection) {
   const host = location.hostname.includes(':') ? `[${location.hostname}]` : location.hostname;
   const friendOrigin = `http://${host}:8644`;
   let locations = [];
-  let localCache = null;
   let backups = [];
   let friendBackups = [];
   let shares = [];
+  let remembered = [];
   let timer = 0;
   let busy = false;
 
@@ -30,7 +30,6 @@ if (storagePane && sourceSection && backupSection) {
     .managed-storage-copy{padding:13px 14px 14px}.managed-storage-title{display:flex;align-items:center;gap:8px;min-width:0}.managed-storage-title strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#f0e8e4;font-size:16px;font-weight:760}.managed-storage-dot{width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:#78b98a}.offline .managed-storage-dot{background:#71696a}
     .managed-storage-meta{display:block;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8b8380;font-size:12px;font-weight:560}.managed-storage-space{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:11px;color:#a89f9b;font-size:12px;font-weight:680}.managed-storage-space .free{color:#d4cbc7}.managed-storage-meter{display:block;height:5px;margin-top:7px;overflow:hidden;border-radius:999px;background:#292529}.managed-storage-meter i{display:block;height:100%;border-radius:inherit;background:#d99892}.managed-storage-card[data-location-type="friend"] .managed-storage-meter i{background:#9184c5}
     .managed-storage-add{border-style:dashed;background:#100f11}.managed-storage-add-mark{width:48px;height:48px;display:grid;place-items:center;border:1px dashed #4a4347;border-radius:13px;color:#777073;font-size:29px;font-weight:250}.managed-storage-add:hover .managed-storage-add-mark{border-color:#665b61;color:#b8aeaa}.managed-storage-add .managed-storage-copy{min-height:62px;display:flex;align-items:center}
-    .managed-app-storage{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:17px;padding-top:15px;border-top:1px solid #211e21}.managed-app-storage[hidden]{display:none!important}.managed-app-storage>span{color:#756d6a;font-size:11px;font-weight:730}.managed-app-cache{min-width:0;display:flex;align-items:center;gap:9px;padding:6px 8px;border:0;border-radius:8px;background:transparent;color:#918885;text-align:left}.managed-app-cache:hover{background:#171518;color:#d7ceca}.managed-app-cache strong{color:#b8afab;font-size:11.5px;font-weight:760}.managed-app-cache .managed-storage-meta{display:inline;margin:0;max-width:420px;font-size:10.5px}.managed-app-cache .managed-storage-space{display:flex;margin:0;font-size:10.5px}.managed-app-cache .managed-storage-space .free{display:none}
     .managed-storage-shares{margin-top:20px;padding-top:17px;border-top:1px solid #211e21}.managed-storage-shares[hidden]{display:none!important}.managed-storage-shares h3{margin:0 0 9px;color:#c9bfbb;font-size:14px;font-weight:740}.managed-storage-share-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}.managed-storage-share{display:flex;align-items:center;gap:9px;min-width:0;padding:11px 12px;border:1px solid #292529;border-radius:11px;background:#111012;color:#968d89;font-size:12px}.managed-storage-share strong{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#ddd4d0;font-size:13px}
     .storage-location-dialog{width:min(540px,calc(100vw - 28px))}.storage-location-inspect{display:grid;gap:14px}.storage-location-inspect-head{display:grid;grid-template-columns:46px minmax(0,1fr);gap:12px;align-items:center}.storage-location-inspect-icon{width:46px;height:46px;display:grid;place-items:center;border-radius:11px;background:#19171a;color:#aaa19e}.storage-location-inspect-icon.mochimono{background:transparent}.storage-location-inspect-icon.mochimono .mini{transform:scale(1.3)}.storage-location-inspect-icon svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}.storage-location-inspect-head strong{display:block;color:#ebe3df;font-size:15px}.storage-location-inspect-head span{display:block;margin-top:2px;color:#8c8380;font-size:12px}
     .storage-location-capacity{display:grid;gap:7px}.storage-location-capacity-head{display:flex;justify-content:space-between;gap:12px;color:#9a918e;font-size:12px}.storage-location-capacity-head strong{color:#d9d0cc;font-size:13px}.storage-location-capacity-track{height:6px;overflow:hidden;border-radius:999px;background:#292529}.storage-location-capacity-track i{display:block;height:100%;border-radius:inherit;background:#dc9690}.storage-location-detail-list{display:grid;margin:0}.storage-location-detail{display:grid;grid-template-columns:90px minmax(0,1fr);gap:12px;padding:9px 0;border-top:1px solid #242124;font-size:13px}.storage-location-detail:first-child{border-top:0}.storage-location-detail dt{color:#817976}.storage-location-detail dd{margin:0;min-width:0;overflow-wrap:anywhere;color:#c9c0bc}.storage-location-actions{display:flex;gap:7px;flex-wrap:wrap}
@@ -41,17 +40,18 @@ if (storagePane && sourceSection && backupSection) {
 
   const heading = document.createElement('div');
   heading.className = 'storage-section-heading';
-  heading.innerHTML = '<h2>Sources</h2>';
+  heading.innerHTML = '<h2>Folders</h2>';
   sourceSection.prepend(heading);
+  const addFolders=document.querySelector('#showFolderAdd');
+  if(addFolders)heading.append(addFolders);
 
   const section = document.createElement('section');
   section.className = 'managed-storage-section';
-  section.innerHTML = '<div class="storage-section-heading"><h2>Storage</h2></div><div class="managed-storage-grid" data-storage-grid></div><div class="managed-storage-shares" data-storage-shares hidden><h3>Shared</h3><div class="managed-storage-share-list" data-share-list></div></div><div class="managed-app-storage" data-app-storage hidden><span>App storage</span><button class="managed-app-cache" type="button" data-location-id="local-cache"><strong>Local cache</strong><span class="managed-storage-meta"></span><span class="managed-storage-space"><span>Measuring…</span><span class="free"></span></span></button></div>';
+  section.innerHTML = '<div class="storage-section-heading"><h2>Locations</h2></div><div class="managed-storage-grid" data-storage-grid></div><div class="managed-storage-shares" data-storage-shares hidden><h3>Space shared with friends</h3><div class="managed-storage-share-list" data-share-list></div></div>';
   sourceSection.after(section);
   const grid = section.querySelector('[data-storage-grid]');
   const sharesBlock = section.querySelector('[data-storage-shares]');
   const shareList = section.querySelector('[data-share-list]');
-  const appStorage = section.querySelector('[data-app-storage]');
 
   const inspectDialog = document.createElement('dialog');
   inspectDialog.className = 'small-dialog storage-location-dialog';
@@ -120,7 +120,7 @@ if (storagePane && sourceSection && backupSection) {
   for (const node of addDialog.querySelectorAll('[data-icon]')) node.innerHTML = icon(node.dataset.icon).replace(/^<span[^>]*>|<\/span>$/g, '');
 
   function title(location) {
-    if (location.type === 'cloud') return 'Mochimono storage';
+    if (location.type === 'cloud') return 'Mochimono';
     if (location.type === 'local') return location.name || 'Local cache';
     return location.name || (location.type === 'friend' ? 'Friend drive' : 'Backup');
   }
@@ -134,6 +134,7 @@ if (storagePane && sourceSection && backupSection) {
       } catch { return 'Connected'; }
     }
     if (location.type === 'local' || location.type === 'backup') return location.path || 'This device';
+    if (location.type === 'friend' && location.target?.keySaved === false) return 'Save recovery key before backup';
     if (location.type === 'friend') return [location.peerName || 'Friend', location.connection === 'relayed' ? 'Relayed' : location.connection === 'direct' ? 'Direct' : ''].filter(Boolean).join(' · ');
     return '';
   }
@@ -145,13 +146,15 @@ if (storagePane && sourceSection && backupSection) {
   }
   function card(location) {
     const u = usage(location);
+    const id=location.type==='cloud'?'primary':location.protectionId || location.backup?.meta?.id || location.targetId;
+    const place=remembered.find(item=>item.id===id)?.place || '';
+    const caption=!location.online?'Offline':location.target?.keySaved===false?'Save recovery key':place || (location.type==='friend'?'Friend Drive':location.type==='backup'?'Backup drive':'Server');
     return `<button class="managed-storage-card ${location.online ? '' : 'offline'}" type="button" data-location-id="${esc(location.id)}" data-location-type="${esc(location.type)}">
-      <div class="managed-storage-visual">${icon(location.type)}</div><div class="managed-storage-copy"><div class="managed-storage-title"><i class="managed-storage-dot"></i><strong>${esc(title(location))}</strong></div><span class="managed-storage-meta">${esc(secondary(location))}</span><div class="managed-storage-space"><span>${u.used ? `${bytes(u.used)} used` : ''}</span><span class="free">${location.online ? (u.free ? `${bytes(u.free)} free` : 'Online') : 'Offline'}</span></div>${u.used && u.free ? `<span class="managed-storage-meter"><i style="width:${u.percent}%"></i></span>` : ''}</div>
+      <div class="managed-storage-visual">${icon(location.type)}</div><div class="managed-storage-copy"><div class="managed-storage-title"><i class="managed-storage-dot"></i><strong>${esc(title(location))}</strong></div><span class="managed-storage-meta">${esc(caption)}</span><div class="managed-storage-space"><span>${u.used ? `${bytes(u.used)} used` : ''}</span><span class="free">${location.online ? (u.free ? `${bytes(u.free)} free` : 'Online') : ''}</span></div>${u.used && u.free ? `<span class="managed-storage-meter"><i style="width:${u.percent}%"></i></span>` : ''}</div>
     </button>`;
   }
   function render() {
-    grid.innerHTML = locations.map(card).join('') + '<button class="managed-storage-card managed-storage-add" type="button" data-add-storage><div class="managed-storage-visual"><span class="managed-storage-add-mark">＋</span></div><div class="managed-storage-copy"><div class="managed-storage-title"><strong>Add storage</strong></div></div></button>';
-    appStorage.hidden=!localCache;
+    grid.innerHTML = locations.map(card).join('') + '<button class="managed-storage-card managed-storage-add" type="button" data-add-storage><div class="managed-storage-visual"><span class="managed-storage-add-mark" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"/></svg></span></div><div class="managed-storage-copy"><div class="managed-storage-title"><strong>Add location</strong></div></div></button>';
     sharesBlock.hidden = !shares.length;
     shareList.innerHTML = shares.map(share => `<button class="managed-storage-share" type="button" data-share-id="${esc(share.id)}"><strong>${esc(share.name || 'Shared space')}</strong><span>${esc(share.paired ? share.peerName || 'Friend' : 'Not paired')}${Number(share.storage?.usedBytes) ? ` · ${bytes(share.storage.usedBytes)}` : ''}</span></button>`).join('');
   }
@@ -164,8 +167,18 @@ if (storagePane && sourceSection && backupSection) {
     return document.querySelector(`#backups [data-backup-index="${Number(location.backupIndex)}"] ${selector}`);
   }
 
-  function openLocation(location) {
+  async function openLocation(location) {
     const u = usage(location);
+    const protectionId = location.type === 'cloud' ? 'primary' : location.type === 'backup' ? location.protectionId || location.backup?.meta?.id : location.type === 'friend' ? location.targetId : '';
+    let protection, snapshot, settingsError = '';
+    if (protectionId) {
+      try {
+        const [data,storage] = await Promise.all([main('/api/protection/locations'),main('/api/compression/storage-snapshot')]);
+        protection = data.locations?.find(item => item.id === protectionId);
+        if(protection?.failureDomain)protection.sharedWith=data.locations.filter(item=>item.id!==protectionId&&item.failureDomain===protection.failureDomain).map(item=>item.name);
+        snapshot = storage;
+      } catch (error) { settingsError = error.message; }
+    }
     const details = [];
     let actions = '';
     if (location.type === 'cloud') {
@@ -182,7 +195,10 @@ if (storagePane && sourceSection && backupSection) {
         row('Verified', backup.meta?.lastVerifiedAt ? age(backup.meta.lastVerifiedAt) : 'Never')
       );
       const hasFiles = Number(backup.local?.count || 0) > 0;
-      actions = `<button class="primary" data-action="backup-verify" ${hasFiles && location.online ? '' : 'disabled'}>Verify</button><button class="secondary" data-action="backup-restore" ${hasFiles ? '' : 'disabled'}>Restore</button><button class="secondary" data-action="backup-edit">Edit</button>`;
+      if(location.remembered){
+        details.push(row('Status','Offline · remembered backup'),row('Last seen',location.lastSeen?age(location.lastSeen):'Unknown'));
+        actions='<button class="secondary" data-action="forget-backup">Forget location</button>';
+      }else actions = `<button class="primary" data-action="backup-verify" ${hasFiles && location.online ? '' : 'disabled'}>Verify</button><button class="secondary" data-action="backup-restore" ${hasFiles ? '' : 'disabled'}>Restore</button><button class="secondary" data-action="backup-edit">Edit</button>`;
     } else if (location.type === 'friend') {
       const target = location.target || {};
       details.push(row('Friend', target.peerName || location.peerName || 'Friend'), row('Link', location.online ? (location.connection === 'relayed' ? 'Relayed' : 'Direct') : 'Offline'), row('Updated', target.lastBackupAt ? age(target.lastBackupAt) : 'Never'), row('Verified', target.lastVerifiedAt ? age(target.lastVerifiedAt) : 'Never'));
@@ -192,7 +208,18 @@ if (storagePane && sourceSection && backupSection) {
     inspectDialog.dataset.locationId = location.id;
     delete inspectDialog.dataset.shareId;
     inspectDialog.querySelector('[data-inspect-title]').textContent = title(location);
-    inspectDialog.querySelector('[data-inspect-body]').innerHTML = `<div class="storage-location-inspect"><div class="storage-location-inspect-head">${icon(location.type, true)}<div><strong>${esc(title(location))}</strong><span>${esc(secondary(location))}</span></div></div>${(u.used || u.free) ? `<div class="storage-location-capacity"><div class="storage-location-capacity-head"><strong>${u.used ? `${bytes(u.used)} used` : ''}</strong><span>${u.free ? `${bytes(u.free)} free` : ''}</span></div>${u.used && u.free ? `<div class="storage-location-capacity-track"><i style="width:${u.percent}%"></i></div>` : ''}</div>` : ''}<dl class="storage-location-detail-list">${details.join('')}</dl>${actions ? `<div class="storage-location-actions">${actions}</div>` : ''}</div>`;
+    const mode = media => {
+      const id=`backup:${protectionId}`;
+      if (!snapshot?.policies?.some(item=>item.locationId===id&&item.mediaType===media&&item.representation==='compact')) return 'original';
+      return snapshot.retention?.some(item=>item.locationId===id&&item.mediaType===media&&item.allowOriginalRemoval) ? 'compact-only' : 'compact';
+    };
+    const mediaControls = location.type === 'backup' && protection ? `<details><summary>Smaller media copies</summary><p class="backup-note">Extra smaller copies do not satisfy Original backup goals. Restore currently restores Originals.</p><div class="backup-fields">${['image','video'].map(media=>`<label>${media==='image'?'Images':'Videos'}<select data-location-media="${media}"><option value="original">Originals</option><option value="compact">Originals + smaller copies</option>${mode(media)==='compact-only'?'<option value="compact-only" disabled>Smaller only · Original missing</option>':''}</select></label>`).join('')}</div></details>` : '';
+    const settings = protection ? `<div data-protection-id="${esc(protectionId)}"><div class="backup-fields"><label>Physical place<input data-location-place list="backupPlaceNames" placeholder="Unknown · e.g. Home or Alex’s home" maxlength="120" value="${esc(protection.place || '')}"></label><label>Protection<select data-location-reliance><option value="normal">Counts toward backup</option><option value="low">Do not rely on</option></select></label></div><p class="backup-note">Use the same place name for locations in the same home. ${protection.sharedWith?.length ? `Same physical disk as ${esc(protection.sharedWith.join(', '))}; not an independent extra copy.` : protection.failureDomain ? 'Physical disk identity known.' : 'Disk identity unknown; no additional independent copies are assumed at the same place.'}</p>${protection.encrypted&&protection.recoveryReady!==true?'<p class="backup-error">Save the recovery key outside this PC before this location can count toward backup.</p>':''}${mediaControls}<button class="secondary" data-action="save-protection">Save backup settings</button><p class="backup-error" data-location-error role="status"></p></div>` : settingsError ? `<p class="backup-error">Backup settings unavailable: ${esc(settingsError)}</p>` : '';
+    inspectDialog.querySelector('[data-inspect-body]').innerHTML = `<div class="storage-location-inspect"><div class="storage-location-inspect-head">${icon(location.type, true)}<div><strong>${esc(title(location))}</strong><span>${esc(secondary(location))}</span></div></div>${(u.used || u.free) ? `<div class="storage-location-capacity"><div class="storage-location-capacity-head"><strong>${u.used ? `${bytes(u.used)} used` : ''}</strong><span>${u.free ? `${bytes(u.free)} free` : ''}</span></div>${u.used && u.free ? `<div class="storage-location-capacity-track"><i style="width:${u.percent}%"></i></div>` : ''}</div>` : ''}<dl class="storage-location-detail-list">${details.join('')}</dl>${settings}${actions ? `<div class="storage-location-actions">${actions}</div>` : ''}</div>`;
+    if (protection) {
+      inspectDialog.querySelector('[data-location-reliance]').value = protection.reliability === 'low' ? 'low' : 'normal';
+      for (const select of inspectDialog.querySelectorAll('[data-location-media]')) select.value=mode(select.dataset.locationMedia);
+    }
     if (!inspectDialog.open) inspectDialog.showModal();
   }
 
@@ -219,6 +246,42 @@ if (storagePane && sourceSection && backupSection) {
   async function handleAction(action) {
     const current = locations.find(item => item.id === inspectDialog.dataset.locationId);
     const share = shares.find(item => item.id === inspectDialog.dataset.shareId);
+    if(action==='forget-backup'&&current?.remembered){
+      const id=current.protectionId;
+      const impact=await main(`/api/protection/locations/${encodeURIComponent(id)}/impact`);
+      if(!confirm(`Forget ${current.name}? ${Number(impact.newlyUnderProtected || 0).toLocaleString()} files will fall below their Original goal. Files on the physical drive are not erased.`))return;
+      await request('','/api/client/protection/backup/forget',{method:'POST',body:{id}});
+      inspectDialog.close();await refresh();window.dispatchEvent(new CustomEvent('mochimono:protection-changed'));
+      return;
+    }
+    if (action === 'save-protection') {
+      const box=inspectDialog.querySelector('[data-protection-id]');
+      const id=box?.dataset.protectionId;
+      if(!id)return;
+      const error=box.querySelector('[data-location-error]');
+      const button=box.querySelector('[data-action="save-protection"]');
+      button.disabled=true;error.textContent='';
+      try {
+        const reliability=box.querySelector('[data-location-reliance]').value;
+        if(reliability==='low'){
+          const impact=await main(`/api/protection/locations/${encodeURIComponent(id)}/impact`);
+          if(impact.newlyUnderProtected&&!confirm(`${Number(impact.newlyUnderProtected).toLocaleString()} files will no longer meet their Original backup goal. Stop relying on this location? No copies are deleted.`))return;
+        }
+        await request('','/api/client/protection/location',{method:'POST',body:{id,place:box.querySelector('[data-location-place]').value,reliability}});
+        for(const select of box.querySelectorAll('[data-location-media]')){
+          if(select.value==='compact-only')continue;
+          const locationId=`backup:${id}`,mediaType=select.dataset.locationMedia;
+          // Disable destructive retention before changing representation preference.
+          await main('/api/compression/retention',{method:'POST',body:{locationId,mediaType,allowOriginalRemoval:false}});
+          await main('/api/compression/storage-policy',{method:'POST',body:{locationId,mediaType,representation:select.value}});
+        }
+        window.dispatchEvent(new CustomEvent('mochimono:protection-changed'));
+        toast('Backup settings saved');
+        await openLocation(current);
+      }catch(failure){error.textContent=failure.message;}
+      finally{button.disabled=false;}
+      return;
+    }
     if (action === 'cloud') {
       inspectDialog.close();
       const dialog = document.querySelector('#connectionDialog');
@@ -261,7 +324,6 @@ if (storagePane && sourceSection && backupSection) {
     const cloud = raw.find(item => item.type === 'cloud');
     const stats = state?.server?.online ? state.server.stats : null;
     output.push(cloud ? { ...cloud, server:state?.settings?.server || '' } : stats ? { id:'cloud', type:'cloud', name:'Cloud', online:true, server:state?.settings?.server || '', capacityBytes:Number(stats.capacityBytes) || 0, freeBytes:Number(stats.freeBytes) || 0, mochimonoBytes:Number(stats.bytes) || 0 } : { id:'cloud', type:'cloud', name:'Cloud', online:false, server:state?.settings?.server || '' });
-    localCache=raw.find(item=>item.type==='local')||null;
     for (let index = 0; index < backups.length; index++) {
       const backup = backups[index];
       const rawBackup = raw.find(item => item.type === 'backup' && pathKey(item.path) === pathKey(backup.path));
@@ -299,8 +361,8 @@ if (storagePane && sourceSection && backupSection) {
     busy = true;
     let active = false;
     try {
-      const [stateResult, backupResult, rawResult, friendResult, shareResult] = await Promise.allSettled([
-        main('/api/state'), main('/api/backups'), local('/local/storage-locations'), local('/local/friend-backups'), local('/local/friend-shares')
+      const [stateResult, backupResult, rawResult, friendResult, shareResult, protectionResult] = await Promise.allSettled([
+        main('/api/state'), main('/api/backups'), local('/local/storage-locations'), local('/local/friend-backups'), local('/local/friend-shares'), main('/api/protection/locations')
       ]);
       const state = stateResult.status === 'fulfilled' ? stateResult.value : null;
       backups = backupResult.status === 'fulfilled' ? backupResult.value.backups || [] : [];
@@ -308,6 +370,11 @@ if (storagePane && sourceSection && backupSection) {
       shares = shareResult.status === 'fulfilled' ? shareResult.value.shares || [] : [];
       const raw = rawResult.status === 'fulfilled' ? rawResult.value.locations || [] : fallbackLocations(state);
       locations = mergeLocations(raw, state);
+      if(protectionResult.status==='fulfilled')remembered=protectionResult.value.locations || [];
+      const attached=new Set(backups.map(backup=>backup.meta?.id));
+      for(const location of remembered.filter(item=>item.kind==='backup'&&!attached.has(item.id))){
+        locations.push({id:`remembered:${location.id}`,protectionId:location.id,type:'backup',name:location.name,online:false,remembered:true,lastSeen:location.lastSeen});
+      }
       render();
       active = state?.job?.status === 'running';
     } finally {
@@ -324,7 +391,7 @@ if (storagePane && sourceSection && backupSection) {
     if (event.target.closest('[data-add-storage]')) { if (!addDialog.open) addDialog.showModal(); return; }
     const node = event.target.closest('[data-location-id]');
     const item = node && locations.find(location => location.id === node.dataset.locationId);
-    if (item) openLocation(item);
+    if (item) openLocation(item).catch(error=>toast(error.message));
   });
   shareList.addEventListener('click', event => {
     const node = event.target.closest('[data-share-id]');

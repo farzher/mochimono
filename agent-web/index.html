@@ -13,17 +13,12 @@
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/client-shell.css">
   <link rel="stylesheet" href="/files/design.css">
-  <style>
-    /* Native source cards get their preview strip asynchronously. Reserve the
-       final geometry immediately so the Storage grid does not jump when it arrives. */
-    #storagePane .folder-item:not(:has(.storage-folder-samples))::before{
-      content:"";display:block;width:100%;aspect-ratio:16/9;flex:0 0 auto;background:var(--surface2)
-    }
-  </style>
+  <link rel="stylesheet" href="/backup-ux.css">
 </head>
 <body>
   <header class="client-header">
     <div class="app-brand"><span class="mini" aria-hidden="true"></span><h1>Mochimono</h1></div>
+    <nav class="client-primary-nav" aria-label="Mochimono"><button data-library-home>Library</button><button data-client-tab="storage">Backup</button></nav>
     <div class="client-head-actions">
       <div id="serverStorage" class="client-storage" hidden title="Cloud storage">
         <span id="serverStorageText"></span>
@@ -32,11 +27,7 @@
       <details class="client-menu">
         <summary aria-label="Settings and account" title="Settings and account"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m8 3 .5-1h3l.5 1 .5 1.5 1.5.8 1.6-.3 1.5 2.6-1.1 1.2v1.8l1.1 1.2-1.5 2.6-1.6-.3-1.5.8-.5 1.5-.5 1h-3l-.5-1-.5-1.5-1.5-.8-1.6.3-1.5-2.6 1.1-1.2V8.8L3.4 7.6l1.5-2.6 1.6.3 1.5-.8Z"/><circle cx="10" cy="9.7" r="2.7"/></svg></summary>
         <div class="client-menu-popover">
-          <nav class="client-tabs" aria-label="Mochimono">
-            <button data-client-tab="storage">Storage</button>
-          </nav>
           <button id="deviceButton" class="device-button"><span class="menu-label">Settings</span><span id="deviceLabel"></span></button>
-          <button id="clientProtection" class="device-button"><span class="menu-label">Protection</span></button>
           <button id="clientConnect" class="client-logout" hidden>Connect Cloud</button>
           <button id="clientLogout" class="client-logout" hidden>Log out</button>
         </div>
@@ -62,7 +53,7 @@
         </div>
       </div>
       <div id="folders" class="item-list"><div class="muted">Loading…</div></div>
-      <button id="showFolderAdd" class="storage-add-card storage-add-folder" title="Add folder"><span class="storage-add-visual" aria-hidden="true">＋</span><span class="storage-add-copy">Add folder</span></button>
+      <button id="showFolderAdd" class="storage-add-card storage-add-folder" title="Add folder"><span class="storage-add-visual" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"/></svg></span><span class="storage-add-copy">Add folder</span></button>
     </section>
 
     <section id="activityCard" class="background-work" hidden><div id="activity"></div></section>
@@ -97,7 +88,7 @@
   <dialog id="restoreDialog">
     <div class="dialog-head"><div><h3>Restore</h3><div id="restoreBackupLabel" class="picker-path"></div></div><button class="icon" data-close>×</button></div>
     <div id="restoreSummary" class="restore-summary">Loading…</div><div id="restoreSources" class="restore-sources"></div><div id="restoreFiles" class="restore-files"></div>
-    <div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="startRestore" class="primary">Restore to Cloud</button></div>
+    <div class="dialog-actions"><div class="spacer"></div><button data-close class="secondary">Cancel</button><button id="startRestore" class="primary">Restore to Mochimono</button></div>
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

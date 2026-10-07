@@ -144,7 +144,7 @@ if (folders) {
     const busy=live?.state==='running';
     const queued=live?.state==='queued';
     const liveText=busy?`Indexing · ${Number(live.scanned||0).toLocaleString()} files`:queued?'Waiting to index':'';
-    return `<article class="storage-item folder-item browser-folder-item${busy?' source-busy':''}${queued?' source-queued':''}" data-browser-folder="${esc(source.id)}" data-source-cloud="${source.cloud?'1':'0'}" data-source-scope="${esc(source.scope)}" data-source-health="${health}">
+    return `<article class="storage-item folder-item browser-folder-item${busy?' source-busy':''}${queued?' source-queued':''}" data-browser-folder="${esc(source.id)}" data-source-cloud="${source.cloud?'1':'0'}" data-source-scope="${esc(source.scope)}" data-source-health="${health}" data-source-checked="${source.lastSynced?'1':'0'}">
       <a class="storage-folder-samples storage-source-link" href="#" title="Library">${[0,1,2].map(index=>previewCell(previews[index],index)).join('')}</a>
       <div class="storage-copy"><div class="storage-title"><strong title="${esc(source.rootPath||source.name)}">${titleHtml(source)}</strong></div><div class="storage-meta">${meta?`<span data-browser-stats>${esc(meta)}</span>`:''}<span class="browser-source-live" data-browser-live${liveText?'':" hidden"}>${esc(liveText)}</span></div></div>
       <details class="source-action-menu"><summary aria-label="Folder actions" title="Folder actions">•••</summary><div class="item-actions"><button class="action-link" data-browser-remove>Remove source</button></div></details>
@@ -153,7 +153,7 @@ if (folders) {
 
   function sourceKey(source) {
     const detail=detailCache.get(String(source.id));
-    return [source.id,source.name,source.rootPath,source.scope,Boolean(source.cloud),source.lastError||'',detail?.permission||'',detail?.files??null,detail?.bytes??null,(detail?.previews||[]).map(item=>item.hash),liveSyncs.has(String(source.id))];
+    return [source.id,source.name,source.rootPath,source.scope,Boolean(source.cloud),source.lastError||'',source.lastSynced||'',detail?.permission||'',detail?.files??null,detail?.bytes??null,(detail?.previews||[]).map(item=>item.hash),liveSyncs.has(String(source.id))];
   }
 
   function render(sources) {
@@ -211,12 +211,12 @@ if (folders) {
   }
 
   async function setCloud(id,enabled) {
-    const api=await ensureApi();await api.setCloud(id,enabled);schedule(0,false);if(enabled)api.sync(id,{userGesture:true}).catch(()=>{});
+    const api=await ensureApi();await api.setCloud(id,enabled);schedule(0,false);if(enabled)api.sync(id,{userGesture:true,forceUpload:true}).catch(()=>{});
   }
   async function setScope(id,scope) {
     const api=await ensureApi();await api.setScope(id,scope);schedule(0,false);api.sync(id,{userGesture:true}).catch(()=>{});
   }
-  async function sync(id) { return (await ensureApi()).sync(id,{userGesture:true}); }
+  async function sync(id) { return (await ensureApi()).sync(id,{userGesture:true,forceUpload:true}); }
 
   function updateLiveRow(id,detail) {
     const row=folders.querySelector(`[data-browser-folder="${CSS.escape(String(id))}"]`);
@@ -287,7 +287,7 @@ if (folders) {
     try{
       const handles=await directoryHandles(event.dataTransfer);
       if(!handles.length)throw new Error('Drop a folder here.');
-      await (await ensureApi()).addHandles(handles,'media',{sync:true});
+      await (await ensureApi()).addHandles(handles,'all',{sync:true});
       renderedKey='';schedule(0,true);
       window.dispatchEvent(new CustomEvent('mochimono:sources-changed'));
       toast(handles.length===1?`${handles[0].name} added · indexing`:`${handles.length} folders added · indexing`);

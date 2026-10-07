@@ -1,4 +1,4 @@
-const CONTROL = 'http://127.0.0.1:8645';
+const CONTROL = '';
 
 async function request(base, path, options = {}) {
   const response = await fetch(`${base}${path}`, {
@@ -38,12 +38,8 @@ async function removeFolder(path) {
 
   if (folder?.protected !== false && importId) {
     const cleanup = await server(`/api/protection/imports/${importId}/cleanup`);
-    if (!confirm(`Stop protecting ${path}?\n\nThe original folder will not be deleted.`)) return;
-    let trashExclusive = false;
-    if (cleanup.exclusiveFiles) {
-      trashExclusive = confirm(`${Number(cleanup.exclusiveFiles).toLocaleString()} files (${bytes(cleanup.exclusiveBytes)}) are stored by Mochimono only because of this folder.\n\nMove those extra Mochimono copies to Trash?`);
-    }
-    await server(`/api/protection/imports/${importId}/cleanup`, { method:'POST', body:{ trashExclusive } });
+    if (!confirm(`Remove ${path} from Mochimono?\n\nYour source files are unchanged. ${Number(cleanup.exclusiveFiles || 0).toLocaleString()} stored files may need review. Existing managed copies are kept.`)) return;
+    await server(`/api/protection/imports/${importId}/cleanup`, { method:'POST', body:{ trashExclusive:false } });
   }
 
   await server('/api/folders/remove', { method:'POST', body:{ path } });
